@@ -20,13 +20,15 @@ build() {
     # busca /usr por conta própria). --disable-bootstrap: um estágio só, com o
     # zig cc como compilador semente. --without-headers/--with-newlib: constrói
     # o compilador + libgcc estático sem depender de um libc-alvo que ainda não
-    # existe. Passo seguinte da cadeia: glibc compilada com este gcc, e então
+    # existe. --disable-lto: sem o LTO plugin (liblto_plugin.so), que o ld
+    # estático não consegue carregar (dlopen) — e a passada 1 não usa LTO.
+    # Passo seguinte da cadeia: glibc compilada com este gcc, e então
     # uma passada 2 (linguagens c,c++, sem --without-headers) hospedada na glibc.
     mkdir -p build && cd build
     ../configure --prefix=/usr \
         --target=x86_64-distropica-linux-gnu \
         --disable-bootstrap --disable-multilib --disable-nls \
-        --disable-shared --disable-threads \
+        --disable-shared --disable-threads --disable-lto \
         --without-headers --with-newlib --enable-languages=c \
         --with-gmp="$ROOT/usr" --with-mpfr="$ROOT/usr" --with-mpc="$ROOT/usr" \
         --disable-dependency-tracking

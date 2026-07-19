@@ -1,20 +1,23 @@
 NAME=glibc
 VERSION=2.42
 KIND=source
-BUILD_DEPS="gcc linux-headers binutils bison gawk"
-ABOUT="FRONTEIRA — NÃO VERIFICADA. A ABI glibc: o objetivo do Estágio 2 e o divisor de águas do projeto (a partir dela os binários vendor dinâmicos rodam). Compilada com o gcc-pass1. É o build mais delicado do sistema — exige bison, gawk e python além do cross-gcc. Esta receita é o esqueleto LFS-like; a integração completa (sysroot, ld.so, /etc/ld.so.conf, o /lib64/ld-linux-x86-64.so.2 resolvendo) ainda precisa ser fechada e testada em boot."
+BUILD_DEPS="gcc linux-headers binutils bison gawk python"
+ABOUT="FRONTEIRA — em progresso. A ABI glibc: o objetivo do Estágio 2 e o divisor de águas do projeto (a partir dela os binários vendor dinâmicos rodam). Compilada com o gcc da passada 1 — que a própria configure da glibc declarou 'sufficient to build libc'. configure passa por completo (2026-07-19); make em validação. python é BUILD_DEP: a glibc exige Python no build (compilado estático, MODULE_BUILDTYPE=static). Falta fechar: verificar o make/install completos, ld.so e a passada 2 do gcc."
 LICENSE="LGPL-2.1-or-later AND GPL-2.0-or-later"
 SRC="https://ftp.gnu.org/gnu/glibc/glibc-$VERSION.tar.xz"
 SHA256=d1775e32e4628e64ef930f435b67bb63af7599acb6be2b335b9f19f16509f17f
 
 build() {
     tar -xJf "$DL" --strip-components=1
-    # glibc exige build fora da árvore. Usa o cross-gcc da passada 1 e os
-    # cabeçalhos do kernel já instalados. --with-headers aponta a uapi em /usr.
+    # glibc exige build fora da árvore. Usa o gcc da passada 1 (CC) e o awk
+    # do build (BUILD_CC=cc, o zig cc, para ferramentas que rodam no build).
+    # -fno-use-linker-plugin: o gcc não passa o LTO plugin ao ld (que estático
+    # não o carrega); redundante com --disable-lto do gcc, mas robusto.
+    # --with-headers aponta a uapi do kernel em /usr.
     mkdir -p build && cd build
     ../configure --prefix=/usr \
         --host=x86_64-distropica-linux-gnu --build="$(../scripts/config.guess)" \
-        CC=x86_64-distropica-linux-gnu-gcc \
+        CC="x86_64-distropica-linux-gnu-gcc -fno-use-linker-plugin" BUILD_CC=cc \
         --enable-kernel=5.4 --with-headers="$ROOT/usr/include" \
         --disable-nscd libc_cv_slibdir=/usr/lib
     make -j"$JOBS"
