@@ -1,0 +1,12 @@
+NAME=ripgrep
+VERSION=15.2.0
+KIND=binary
+ABOUT="grep do mundo novo; musl estático oficial do upstream — roda desde o E0"
+LICENSE=MIT
+SRC="https://github.com/BurntSushi/ripgrep/releases/download/$VERSION/ripgrep-$VERSION-x86_64-unknown-linux-musl.tar.gz"
+SHA256=33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c
+LINKS="rg=rg"
+
+install_pkg() {
+    tar -xzf "$DL" --strip-components=1 -C "$PREFIX"
+}

@@ -1,0 +1,17 @@
+NAME=busybox
+VERSION=1.35.0
+KIND=binary
+ABOUT="canivete do estágio 0; binário oficial de busybox.net (2022) — recompilar da fonte no E1"
+LICENSE=GPL-2.0-only
+SRC="https://www.busybox.net/downloads/binaries/$VERSION-x86_64-linux-musl/busybox"
+SHA256=6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348
+
+install_pkg() {
+    mkdir -p "$PREFIX/bin"
+    cp "$DL" "$PREFIX/bin/busybox"
+    chmod 755 "$PREFIX/bin/busybox"
+    # applets como symlinks; o farm padrão do minitrue expõe tudo em /usr/bin
+    for a in $("$PREFIX/bin/busybox" --list); do
+        ln -s busybox "$PREFIX/bin/$a"
+    done
+}

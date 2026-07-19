@@ -1,0 +1,14 @@
+NAME=zig
+VERSION=0.16.0
+KIND=binary
+ABOUT="toolchain Zig; zig cc -target x86_64-linux-musl é o compilador C do mundo-fonte pré-E2"
+LICENSE=MIT
+SRC="https://ziglang.org/download/$VERSION/zig-x86_64-linux-$VERSION.tar.xz"
+SHA256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+SIG="$SRC.minisig"
+SIGKEY="RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
+LINKS="zig=zig"
+
+install_pkg() {
+    tar -xJf "$DL" --strip-components=1 -C "$PREFIX"
+}
