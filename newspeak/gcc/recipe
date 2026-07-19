@@ -3,13 +3,19 @@ VERSION=15.3.0
 KIND=source
 DEPS="binutils gmp mpfr mpc"
 BUILD_DEPS="linux-headers gawk"
-ABOUT="FRONTEIRA — parcial. O compilador C/C++. gawk é BUILD_DEP obrigatório: o gerador de opções do gcc (optc-gen.awk) produz options.cc malformado sob o awk do busybox (o #error '0Wimplicit...' do teste de 2026-07-19). Com gawk, o compilador (make all-gcc) compila sob zig cc. Falta fechar: a transição musl->glibc, que exige a passada 1 estilo LFS (cross-toolchain com triplet próprio + sysroot) e depois uma passada 2 após a glibc."
+ABOUT="FRONTEIRA — parcial. O compilador C/C++. gawk 5.3.2 é BUILD_DEP obrigatório (o 5.4.1 gera options.cc malformado). gcov-tool é isolado da passada 1 (compila um .c com o compilador C++; zig c++/clang respeita a extensão .c e o compila como C, quebrando nos headers C++ do gcc — e não faz parte do compilador mínimo). Com isso o compilador (make all-gcc) compila sob zig cc. Falta fechar: a transição musl->glibc, que exige a passada 1 estilo LFS (cross-toolchain com triplet próprio + sysroot) e depois uma passada 2 após a glibc."
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/gcc/gcc-$VERSION/gcc-$VERSION.tar.xz"
 SHA256=fa59c1beef8995f27c4d71c1df227587189315d3e6faff1bb4306e61b0c530eb
 
 build() {
     tar -xJf "$DL" --strip-components=1
+    # Isola o gcov-tool da passada 1 (retira-o de LANGUAGES): seu
+    # libgcov-driver-tool.o compila um .c com o compilador C++, e o zig c++
+    # (clang) compila .c como C — quebra nos headers C++ do gcc (system.h:
+    # 'class'). g++ forçaria C++; não vale patchar isso na passada 1, onde o
+    # gcov-tool nem é necessário. gcov e gcov-dump continuam.
+    sed -i 's/ gcov-tool\$(exeext)//' gcc/Makefile.in
     # As três libs matemáticas são achadas em /usr via --with-* (zig cc não
     # busca /usr por conta própria). --disable-bootstrap: um estágio só, com o
     # zig cc como compilador semente. --without-headers/--with-newlib: constrói
