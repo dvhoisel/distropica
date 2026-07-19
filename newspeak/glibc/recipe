@@ -2,7 +2,7 @@ NAME=glibc
 VERSION=2.42
 KIND=source
 BUILD_DEPS="gcc linux-headers binutils bison gawk python"
-ABOUT="FRONTEIRA — em progresso. A ABI glibc: o objetivo do Estágio 2 e o divisor de águas do projeto (a partir dela os binários vendor dinâmicos rodam). Compilada com o gcc da passada 1 — que a própria configure da glibc declarou 'sufficient to build libc'. configure passa por completo (2026-07-19); make em validação. python é BUILD_DEP: a glibc exige Python no build (compilado estático, MODULE_BUILDTYPE=static). Falta fechar: verificar o make/install completos, ld.so e a passada 2 do gcc."
+ABOUT="A ABI glibc — o divisor de águas do Estágio 2. COMPILA com o gcc da passada 1 (verificado 2026-07-19): libc.so.6 (2.42), ld-linux-x86-64.so.2, libm/libpthread/libdl saem como ELFs válidos. python é BUILD_DEP (a glibc exige Python no build). Ressalvas: o gcc-passada-1 (feito por zig cc/clang) é flaky — ICE segfault aleatório na math; um loop de make atravessa. O único não-compilável é links-dso-program.cc (helper de teste C++; pass-1 é só C). Falta fechar: make install no rootfs, symlinks do ld.so, e a passada 2 do gcc (que traz C++ e um gcc estável)."
 LICENSE="LGPL-2.1-or-later AND GPL-2.0-or-later"
 SRC="https://ftp.gnu.org/gnu/glibc/glibc-$VERSION.tar.xz"
 SHA256=d1775e32e4628e64ef930f435b67bb63af7599acb6be2b335b9f19f16509f17f

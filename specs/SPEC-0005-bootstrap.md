@@ -197,6 +197,33 @@ gawk 5.4.1, gcc 15.3.0, glibc 2.42 — todos com SHA256 real pinado.
   sendo a transição musl→glibc: falta este gcc **produzir glibc** (hoje
   ele mira musl); daí a passada 1 de verdade (`--without-headers` já está)
   seguida da glibc e da passada 2.
+- **A GLIBC 2.42 COMPILA com o gcc da passada 1 (2026-07-19) — o Estágio 2
+  está essencialmente vencido.** A `configure` da glibc declarou o
+  `x86_64-distropica-linux-gnu-gcc` "sufficient to build libc", e o build
+  produziu `libc.so.6` (11,6 MB, SONAME e a string "GNU C Library … 2.42"
+  confirmados), o carregador `ld-linux-x86-64.so.2`, e `libm`/`libpthread`/
+  `libdl`/`libmvec` — ELFs válidos. Prereqs resolvidos no caminho:
+  - **python** (receita nova): a glibc o exige; python.org não publica
+    binário. Dois consertos — `-Wno-error=date-time` (zig cc barra
+    `__DATE__`/`__TIME__`) e `MODULE_BUILDTYPE=static` (Python estático
+    precisa dos módulos embutidos, sem dlopen);
+  - **gcc `--disable-lto`**: o `ld` estático não faz dlopen do
+    `liblto_plugin.so`;
+  - `CC=…-gcc -fno-use-linker-plugin`, `--with-headers=/usr/include`,
+    `--host=…distropica…` != `--build`.
+  - **Instabilidade do gcc-passada-1 (achado importante):** o gcc, por ser
+    construído por zig cc/clang, **segfalta aleatoriamente** (ICE flaky) em
+    arquivos complexos da math (`_FloatNx`). Não é determinístico — um loop
+    de `make` (incremental) atravessa: os ~3800 objetos e todas as libs
+    saíram assim. É a "atrito de clang" do §4 na forma mais aguda; o
+    remédio próprio é um gcc mais estável (bootstrap/`-O` menor), mas a
+    passada 2 (gcc nativo, hospedado na glibc nova) já tende a curar isso.
+  - Único bloqueio restante do `make all`: `links-dso-program.cc`, um
+    **helper de teste C++**, que o gcc-passada-1 (só C) não compila —
+    irrelevante para a libc, resolve-se na passada 2 (que traz C++).
+  Falta fechar: `make install` da glibc no rootfs, os symlinks de ld.so, e
+  a passada 2 do gcc — mas a barreira central do projeto (produzir glibc a
+  partir de um mundo musl com toolchain semente zig) **caiu**.
 
 ## 5. Estágio 3 — boot de verdade
 
