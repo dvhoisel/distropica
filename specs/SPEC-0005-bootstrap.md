@@ -184,14 +184,19 @@ gawk 5.4.1, gcc 15.3.0, glibc 2.42 — todos com SHA256 real pinado.
   o compilador inteiro sob zig cc**: `cc1` (237 MB) e `xgcc` (12 MB)
   compilam e **linkam**. Marco real: o GCC 15.3.0 compila de ponta a
   ponta com a toolchain semente.
-- **Novo muro (o de fundo, agora explícito):** o auto-teste do `all-gcc`
-  tenta **executar** o `cc1` e falha — `posix_spawn: No such file or
-  directory`. O `cc1` existe mas foi linkado **dinâmico contra a musl**,
-  e o loader da musl não está no rootfs (todo o resto é estático). Não é
-  o gcov-tool nem o gawk: é a questão de **como o compilador roda**.
-  Caminhos: linkar o `cc1` estático (`-static`, casa com o sistema
-  estático) ou instalar o runtime musl; e desligar o self-test na passada
-  1 (LFS não o roda). Depois disso, o nó final continua sendo musl→glibc.
+- **cc1 estático + self-test desligado (2026-07-19) — a passada 1 do gcc
+  FUNCIONA:** o `cc1` saía dinâmico contra a musl (interpretador
+  `/lib/ld-musl-x86_64.so.1`, ausente no rootfs), então o self-test do
+  `all-gcc` não conseguia executá-lo. Conserto: `LDFLAGS=-static` (linka
+  `cc1`/`xgcc` estáticos — as libs matemáticas têm `.a` em /usr/lib) e
+  `SELFTEST_TARGETS=` (esvazia `selftest`, que é prereq de `all.internal`;
+  a passada 1 não roda self-test, à la LFS). Resultado verificado: o
+  `all-gcc` completa, o `cc1` é estático e **roda no rootfs**, e
+  `xgcc`+`cc1` **compilam um `.c` em `.s`**. Marco: há um GCC 15.3.0
+  executável, construído por zig cc, no rootfs musl. O nó final continua
+  sendo a transição musl→glibc: falta este gcc **produzir glibc** (hoje
+  ele mira musl); daí a passada 1 de verdade (`--without-headers` já está)
+  seguida da glibc e da passada 2.
 
 ## 5. Estágio 3 — boot de verdade
 

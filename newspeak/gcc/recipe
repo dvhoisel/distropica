@@ -3,7 +3,7 @@ VERSION=15.3.0
 KIND=source
 DEPS="binutils gmp mpfr mpc"
 BUILD_DEPS="linux-headers gawk"
-ABOUT="FRONTEIRA — parcial. O compilador C/C++. gawk 5.3.2 é BUILD_DEP obrigatório (o 5.4.1 gera options.cc malformado). gcov-tool é isolado da passada 1 (compila um .c com o compilador C++; zig c++/clang respeita a extensão .c e o compila como C, quebrando nos headers C++ do gcc — e não faz parte do compilador mínimo). Com isso o compilador (make all-gcc) compila sob zig cc. Falta fechar: a transição musl->glibc, que exige a passada 1 estilo LFS (cross-toolchain com triplet próprio + sysroot) e depois uma passada 2 após a glibc."
+ABOUT="FRONTEIRA — parcial. O compilador C/C++. gawk 5.3.2 é BUILD_DEP obrigatório (o 5.4.1 gera options.cc malformado). gcov-tool é isolado da passada 1 (compila um .c com o compilador C++; zig c++/clang respeita a extensão .c e o compila como C, quebrando nos headers C++ do gcc — e não faz parte do compilador mínimo). Com isso o all-gcc compila sob zig cc E o compilador roda: cc1/xgcc linkados estáticos (LDFLAGS=-static) executam no rootfs e compilam .c->.s (verificado 2026-07-19). Falta fechar: a transição musl->glibc, que exige a passada 1 estilo LFS (cross-toolchain com triplet próprio + sysroot) e depois uma passada 2 após a glibc."
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/gcc/gcc-$VERSION/gcc-$VERSION.tar.xz"
 SHA256=fa59c1beef8995f27c4d71c1df227587189315d3e6faff1bb4306e61b0c530eb
@@ -30,6 +30,10 @@ build() {
         --without-headers --with-newlib --enable-languages=c \
         --with-gmp="$ROOT/usr" --with-mpfr="$ROOT/usr" --with-mpc="$ROOT/usr" \
         --disable-dependency-tracking
-    make -j"$JOBS" all-gcc all-target-libgcc
-    make install-gcc install-target-libgcc DESTDIR="$STAGE"
+    # LDFLAGS=-static: o cc1/xgcc linkam estáticos, para rodarem no rootfs
+    # (que não tem loader musl instalado; o resto do sistema é estático).
+    # SELFTEST_TARGETS=: desliga o self-test do all-gcc (a passada 1 não o
+    # roda, à la LFS) — ele tentaria executar o cc1 durante o build.
+    make -j"$JOBS" all-gcc all-target-libgcc LDFLAGS=-static SELFTEST_TARGETS=
+    make install-gcc install-target-libgcc DESTDIR="$STAGE" SELFTEST_TARGETS=
 }
