@@ -177,9 +177,21 @@ gawk 5.4.1, gcc 15.3.0, glibc 2.42 — todos com SHA256 real pinado.
   sob zig cc (frontend + otimizadores + analisador, 57 mil linhas). O
   novo (e distinto) muro é auxiliar: `libgcov-driver-tool.o`
   (`gcov-tool`) compila como C mas inclui headers C++ do gcc (`unknown
-  type name 'class'`) — não é musl. Próximo passo do gcc: desabilitar/
-  isolar o `gcov-tool` na passada 1 (não faz parte do compilador mínimo).
-  A questão musl→glibc segue sendo o nó final, depois deste.
+  type name 'class'`) — não é musl, é uma diferença de driver: `g++`
+  força C++ em `.c`, o `zig c++` (clang) respeita a extensão.
+- **gcov-tool isolado (2026-07-19):** retirado de `LANGUAGES` via sed no
+  `Makefile.in` (gcov e gcov-dump ficam). Com isso o `all-gcc` **constrói
+  o compilador inteiro sob zig cc**: `cc1` (237 MB) e `xgcc` (12 MB)
+  compilam e **linkam**. Marco real: o GCC 15.3.0 compila de ponta a
+  ponta com a toolchain semente.
+- **Novo muro (o de fundo, agora explícito):** o auto-teste do `all-gcc`
+  tenta **executar** o `cc1` e falha — `posix_spawn: No such file or
+  directory`. O `cc1` existe mas foi linkado **dinâmico contra a musl**,
+  e o loader da musl não está no rootfs (todo o resto é estático). Não é
+  o gcov-tool nem o gawk: é a questão de **como o compilador roda**.
+  Caminhos: linkar o `cc1` estático (`-static`, casa com o sistema
+  estático) ou instalar o runtime musl; e desligar o self-test na passada
+  1 (LFS não o roda). Depois disso, o nó final continua sendo musl→glibc.
 
 ## 5. Estágio 3 — boot de verdade
 
