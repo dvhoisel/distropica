@@ -1,0 +1,29 @@
+NAME=gcc
+VERSION=15.3.0
+KIND=source
+DEPS="binutils gmp mpfr mpc"
+BUILD_DEPS="linux-headers"
+ABOUT="FRONTEIRA — NÃO VERIFICADA. O compilador C/C++. É o maior risco do projeto (SPEC-0005 §4): (1) gcc hospedado por clang/zig cc e (2) sobretudo a transição musl->glibc. Esta receita é a passada 1 estilo LFS (cross-toolchain com triplet próprio, --without-headers) — ponto de partida, ainda não deu build de ponta a ponta. A cadeia real precisa de binutils-pass1 com o mesmo triplet e de gcc-pass2 após a glibc."
+LICENSE=GPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/gcc/gcc-$VERSION/gcc-$VERSION.tar.xz"
+SHA256=fa59c1beef8995f27c4d71c1df227587189315d3e6faff1bb4306e61b0c530eb
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    # As três libs matemáticas são achadas em /usr via --with-* (zig cc não
+    # busca /usr por conta própria). --disable-bootstrap: um estágio só, com o
+    # zig cc como compilador semente. --without-headers/--with-newlib: constrói
+    # o compilador + libgcc estático sem depender de um libc-alvo que ainda não
+    # existe. Passo seguinte da cadeia: glibc compilada com este gcc, e então
+    # uma passada 2 (linguagens c,c++, sem --without-headers) hospedada na glibc.
+    mkdir -p build && cd build
+    ../configure --prefix=/usr \
+        --target=x86_64-distropica-linux-gnu \
+        --disable-bootstrap --disable-multilib --disable-nls \
+        --disable-shared --disable-threads \
+        --without-headers --with-newlib --enable-languages=c \
+        --with-gmp="$ROOT/usr" --with-mpfr="$ROOT/usr" --with-mpc="$ROOT/usr" \
+        --disable-dependency-tracking
+    make -j"$JOBS" all-gcc all-target-libgcc
+    make install-gcc install-target-libgcc DESTDIR="$STAGE"
+}

@@ -1,0 +1,16 @@
+NAME=bison
+VERSION=3.8
+KIND=source
+DEPS=m4
+BUILD_DEPS=binutils
+ABOUT="gerador de parsers LALR; a glibc precisa dele no build. Invoca m4 em runtime"
+LICENSE=GPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/bison/bison-$VERSION.tar.xz"
+SHA256=1e0a14a8bf52d878e500c33d291026b9ebe969c27b3998d4b4285ab6dbce4527
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    ./configure --prefix=/usr --disable-nls --disable-dependency-tracking
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+}

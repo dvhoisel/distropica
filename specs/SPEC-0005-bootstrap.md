@@ -127,6 +127,33 @@ roda.
 - Python mínimo da fonte antes da glibc (o build da glibc exige Python):
   validar que o Python de bootstrap compila contra musl com zig cc.
 
+**Conjunto de versões fixado (2026-07-19):** linux-headers 6.12.96,
+m4 1.4.21, binutils 2.45, gmp 6.3.0, mpfr 4.2.2, mpc 1.3.1, bison 3.8,
+gawk 5.4.1, gcc 15.3.0, glibc 2.42 — todos com SHA256 real pinado.
+
+**Registro da fundação do Estágio 2 (2026-07-19).** Compilados com
+`zig cc` DE DENTRO do chroot e encadeados por DEPS/BUILD_DEPS:
+- **verificados de ponta a ponta:** linux-headers, m4, binutils, gmp,
+  mpfr, mpc, bison, gawk. Achados que viraram desenho:
+  - `make` é a ferramenta essencial do E1 — entrou no `stage0` (todo
+    build de fonte a invoca);
+  - o **busybox virou PROVISIONAL** (SPEC-0003): binutils tomou `ar`/
+    `strings`, gawk tomou `awk`, sem doublethink — pré-condição para
+    instalar qualquer GNU homônimo de applet;
+  - binutils exige `--disable-gprofng` (o profiler assume glibc:
+    `dlvsym`, `GLIBC_2.17`);
+  - o gmp precisa de `m4` (asm) **e** do `nm` do binutils (configure) —
+    daí `binutils` antes de `gmp`;
+  - `zig cc` não busca `/usr/include`; mpfr/mpc/gcc acham as libs via
+    `--with-gmp`/`--with-mpfr`/`--with-mpc` apontando `$ROOT/usr`.
+- **fronteira ainda aberta (gcc + glibc):** a passada 1 do gcc estilo
+  LFS usa triplet próprio `x86_64-distropica-linux-gnu`, o que exige
+  **binutils-pass1 com o mesmo triplet** (hoje só há binutils nativo;
+  aliases cross foram um paliativo de teste) e um modelo de **sysroot**
+  que difere do "instala em /usr" do minitrue. A transição musl→glibc é
+  o nó real. Falta ainda `python` (prereq da glibc). Recipes `gcc`/
+  `glibc` commitadas como esqueleto marcado, não como build fechado.
+
 ## 5. Estágio 3 — boot de verdade
 
 **Entregável:** Distrópica dá boot em QEMU até login.

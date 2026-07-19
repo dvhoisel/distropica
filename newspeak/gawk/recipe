@@ -1,0 +1,15 @@
+NAME=gawk
+VERSION=5.4.1
+KIND=source
+BUILD_DEPS=binutils
+ABOUT="AWK do GNU; a glibc usa scripts de build que o awk do busybox não cobre inteiramente"
+LICENSE=GPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/gawk/gawk-$VERSION.tar.xz"
+SHA256=07f6f7342b7febe4313fc2c2542ad93d64fe20ad8717200109f105a826f5fd37
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    ./configure --prefix=/usr --disable-nls --disable-dependency-tracking
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+}
