@@ -1,11 +1,11 @@
 NAME=gawk
-VERSION=5.4.1
+VERSION=5.3.2
 KIND=source
 BUILD_DEPS=binutils
-ABOUT="AWK do GNU; a glibc usa scripts de build que o awk do busybox não cobre inteiramente"
+ABOUT="AWK do GNU; a glibc e o gerador de opções do gcc usam scripts awk que o busybox não cobre. PINADO em 5.3.2 de propósito: o 5.4.1 tem uma regressão — um elemento de array não-inicializado comparado a \"\" e depois concatenado vira \"0\" (quebra optc-gen.awk do gcc; SPEC-0005 §4). 5.3.2 é sadio."
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/gawk/gawk-$VERSION.tar.xz"
-SHA256=07f6f7342b7febe4313fc2c2542ad93d64fe20ad8717200109f105a826f5fd37
+SHA256=f8c3486509de705192138b00ef2c00bbbdd0e84c30d5c07d23fc73a9dc4cc9cc
 
 build() {
     tar -xJf "$DL" --strip-components=1

@@ -156,14 +156,21 @@ gawk 5.4.1, gcc 15.3.0, glibc 2.42 — todos com SHA256 real pinado.
 - **Sinal do gcc (teste `make all-gcc`, 2026-07-19):** o `zig cc`
   compilou a **maior parte do GCC 15.3.0** — libcpp, libiberty, o
   frontend C e quase todos os passes de otimização, ~62 mil linhas de
-  log, centenas de `.cc`, **sem erro** — e parou num ponto estreito: o
-  `options.o` (código gerado da máquina de opções) com
-  `#error … Wimplicit-function-declaration does not have a Var() flag`.
-  Conclusão: "gcc sob clang é possível, com atrito de flags" (§4) está
-  confirmado, e o atrito NÃO está na compilação do compilador (que
-  passou), mas na geração das opções — provável ajuste em
-  `--enable`/`.opt` ou patch em `files/`. É o próximo obstáculo concreto
-  a atacar antes mesmo da questão musl→glibc.
+  log, centenas de `.cc`, **sem erro** — e parou no `options.o` com
+  `#error 0Wimplicit-function-declaration does not have a Var() flag`.
+  Conclusão importante: o atrito NÃO está em compilar o compilador (que
+  passou), mas na **geração das opções por awk**.
+- **Causa-raiz do `options.o` (destravado em 2026-07-19):** era uma
+  **regressão do gawk 5.4.1**, não do zig cc. Em 5.4.1, um elemento de
+  array **não-inicializado**, comparado a `""` e depois concatenado,
+  vira `"0"` em vez de `""` (reproduz até em `-O0`, logo não é
+  miscompilação). O `optc-gen.awk` do gcc usa exatamente esse idioma
+  (`if (enables[x]=="") …; enables[x]=enables[x] opt ";"`), gerando
+  nomes de opção com `0` colado → `#error` espúrio. **Conserto durável:
+  pinar gawk 5.3.2** (sadio, verificado no mesmo caso) em vez de remendar
+  cada script awk do gcc/glibc — cura a doença na origem. Lição de
+  método: fixar versões de ferramenta de bootstrap com cuidado, e
+  desconfiar de releases muito novos (o 5.4.1 é de 2026).
 
 ## 5. Estágio 3 — boot de verdade
 
