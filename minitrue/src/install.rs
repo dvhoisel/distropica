@@ -3,7 +3,7 @@ use crate::{fail, fetch, iso_now, Ctx};
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -46,17 +46,21 @@ fn collect(
 }
 
 fn install_one(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
-    if r.kind == Kind::Source {
-        return fail(1, format!("{}: mundo B (fonte) chega no Marco 0.2", r.name));
-    }
     if r.requires_glibc && !ctx.root.join("usr/lib/ld-linux-x86-64.so.2").exists() {
         return fail(
             5,
             format!("{}: exige a ABI glibc, que só existe após o Estágio 2 (SPEC-0005 §4)", r.name),
         );
     }
+    match r.kind {
+        Kind::Binary => install_binary(ctx, r, explicit),
+        Kind::Source => install_source(ctx, r, explicit),
+    }
+}
 
-    // Idempotência: registro na versão da receita e current coerente = nada a fazer.
+// ---------- mundo A: binário do mantenedor ----------
+
+fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     let rec_dir = ctx.records_dir().join(&r.name);
     let opt = ctx.opt(&r.name);
     if let Some(meta) = read_meta(&rec_dir) {
@@ -72,7 +76,6 @@ fn install_one(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     println!("retificando os registros: {} {}", r.name, r.version);
     let artifacts = fetch::ensure_artifacts(ctx, r)?;
 
-    // install_pkg() em staging dentro de /opt/<nome>, rename atômico ao final.
     fs::create_dir_all(&opt)?;
     let staging = opt.join(format!(".{}.tmp", r.version));
     let _ = fs::remove_dir_all(&staging);
@@ -99,16 +102,16 @@ fn install_one(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     }
     let out = cmd.output().map_err(|e| crate::Fail { code: 1, msg: format!("sh indisponível: {e}") })?;
     if !out.status.success() {
-        fs::create_dir_all(ctx.room101())?;
-        let log = ctx.room101().join(format!("{}-{}.log", r.name, r.version));
-        let mut body = out.stdout.clone();
-        body.extend_from_slice(&out.stderr);
-        fs::write(&log, body)?;
+        room101(ctx, r, &out.stdout, &out.stderr)?;
         let _ = fs::remove_dir_all(&staging);
         let _ = fs::remove_dir_all(&work);
         return fail(
             1,
-            format!("{}: install_pkg falhou — o interrogatório completo está em {}", r.name, log.display()),
+            format!(
+                "{}: install_pkg falhou — o interrogatório completo está em {}",
+                r.name,
+                ctx.room101().join(format!("{}-{}.log", r.name, r.version)).display()
+            ),
         );
     }
     let _ = fs::remove_dir_all(&work);
@@ -120,13 +123,11 @@ fn install_one(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     }
     fs::rename(&staging, &verdir)?;
 
-    // Flip atômico do current.
     let tmp_cur = opt.join(".current.tmp");
     let _ = fs::remove_file(&tmp_cur);
     symlink(&r.version, &tmp_cur)?;
     fs::rename(&tmp_cur, opt.join("current"))?;
 
-    // Farm de links: LINKS da receita, ou tudo de bin/ do prefixo.
     let pairs: Vec<(String, String)> = if r.links.is_empty() {
         let bin = verdir.join("bin");
         let mut v = Vec::new();
@@ -142,16 +143,12 @@ fn install_one(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         r.links.clone()
     };
 
-    let old_links: HashSet<String> = read_manifest(&rec_dir)
-        .into_iter()
-        .filter(|l| l.starts_with("/usr/"))
-        .collect();
+    let old_links: HashSet<String> =
+        read_manifest(&rec_dir).into_iter().filter(|l| l.starts_with("/usr/")).collect();
     let claims = all_manifests(ctx);
     fs::create_dir_all(ctx.usr_bin())?;
-    let mut manifest: Vec<String> = vec![
-        format!("/opt/{}/{}", r.name, r.version),
-        format!("/opt/{}/current", r.name),
-    ];
+    let mut manifest: Vec<String> =
+        vec![format!("/opt/{}/{}", r.name, r.version), format!("/opt/{}/current", r.name)];
     for (cmdname, rel) in &pairs {
         let linkpath = ctx.usr_bin().join(cmdname);
         let target = format!("../../opt/{}/current/{}", r.name, rel);
@@ -176,7 +173,6 @@ fn install_one(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         manifest.push(virt);
     }
 
-    // Upgrade: links antigos que saíram do conjunto são recolhidos.
     for l in &old_links {
         if !manifest.contains(l) {
             let p = ctx.root.join(l.trim_start_matches('/'));
@@ -188,8 +184,8 @@ fn install_one(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         }
     }
 
-    // Retenção corrente+1 (SPEC-0003 §5).
-    let keep: HashSet<String> = [Some(r.version.clone()), previous.clone()].into_iter().flatten().collect();
+    let keep: HashSet<String> =
+        [Some(r.version.clone()), previous.clone()].into_iter().flatten().collect();
     if let Ok(entries) = fs::read_dir(&opt) {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
@@ -204,27 +200,255 @@ fn install_one(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         }
     }
 
-    // O registro: meta, manifest, recipe — texto puro, um fato por linha.
-    fs::create_dir_all(&rec_dir)?;
-    manifest.sort();
-    let meta = format!(
-        "NAME={}\nVERSION={}\nKIND=binary\nWORLD=A\nSHA256={}\nDEPS={}\nINSTALLED_AT={}\n",
-        r.name,
-        r.version,
-        r.sha256.join(" "),
-        r.deps.join(" "),
-        iso_now()
-    );
-    fs::write(rec_dir.join("meta"), meta)?;
-    fs::write(rec_dir.join("manifest"), manifest.join("\n") + "\n")?;
-    fs::copy(&r.path, rec_dir.join("recipe"))?;
-    fs::copy(&r.path, rec_dir.join(format!("recipe@{}", r.version)))?;
-    fs::write(rec_dir.join(format!("manifest@{}", r.version)), manifest.join("\n") + "\n")?;
-
+    write_record(&rec_dir, r, "A", &mut manifest)?;
     if explicit {
         world_add(ctx, &r.name)?;
     }
     println!("{} {} — retificado. doubleplusgood.", r.name, r.version);
+    Ok(())
+}
+
+// ---------- mundo B: compilado da fonte ----------
+
+/// Monta um diretório de shims cc/ld/ar/ranlib que fazem `zig` se passar pela
+/// toolchain de C corrente (SPEC-0005: pré-E2 é zig+musl). É o que o contrato
+/// da receita chama de $CC — a receita não sabe se por baixo é zig ou gcc.
+fn setup_toolchain(ctx: &Ctx, work: &Path) -> Result<PathBuf> {
+    let zig = ctx.root.join("opt/zig/current/zig");
+    if !zig.exists() {
+        return fail(5, "mundo B pré-E2 exige a toolchain zig — `minitrue rectify zig` antes");
+    }
+    let zig_abs = zig.canonicalize()?;
+    let z = zig_abs.display();
+    let tc = work.join(".tc");
+    fs::create_dir_all(&tc)?;
+    let shims = [
+        ("cc", format!("#!/bin/sh\nexec \"{z}\" cc -target x86_64-linux-musl \"$@\"\n")),
+        ("gcc", format!("#!/bin/sh\nexec \"{z}\" cc -target x86_64-linux-musl \"$@\"\n")),
+        ("c++", format!("#!/bin/sh\nexec \"{z}\" c++ -target x86_64-linux-musl \"$@\"\n")),
+        ("g++", format!("#!/bin/sh\nexec \"{z}\" c++ -target x86_64-linux-musl \"$@\"\n")),
+        // configure só sonda a existência de `ld` no PATH; o link real é interno ao zig cc.
+        ("ld", format!("#!/bin/sh\nexec \"{z}\" ld.lld \"$@\"\n")),
+        ("ar", format!("#!/bin/sh\nexec \"{z}\" ar \"$@\"\n")),
+        ("ranlib", format!("#!/bin/sh\nexec \"{z}\" ranlib \"$@\"\n")),
+    ];
+    for (name, body) in shims {
+        let p = tc.join(name);
+        fs::write(&p, body)?;
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(tc)
+}
+
+fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
+    let rec_dir = ctx.records_dir().join(&r.name);
+    if let Some(meta) = read_meta(&rec_dir) {
+        if meta.get("VERSION") == Some(&r.version) {
+            println!("os registros já estão corretos: {} {}", r.name, r.version);
+            return Ok(());
+        }
+    }
+
+    println!("retificando os registros (fonte): {} {}", r.name, r.version);
+    let artifacts = fetch::ensure_artifacts(ctx, r)?;
+
+    let work = ctx.root.join("tmp").join(format!("minitrue-build-{}", r.name));
+    let _ = fs::remove_dir_all(&work);
+    let src_dir = work.join("src");
+    let stage = work.join("stage");
+    fs::create_dir_all(&src_dir)?;
+    fs::create_dir_all(&stage)?;
+    let tc = setup_toolchain(ctx, &work)?;
+    let zcache = ctx.cache_dir().join("zig");
+    fs::create_dir_all(&zcache)?;
+
+    let path = format!("{}:{}", tc.display(), std::env::var("PATH").unwrap_or_default());
+    let mut cmd = Command::new("sh");
+    cmd.arg("-ec")
+        .arg(". \"$RECIPE\"\nbuild")
+        .current_dir(&src_dir)
+        .env("RECIPE", &r.path)
+        .env("STAGE", &stage)
+        .env("WORK", &work)
+        .env("ROOT", &ctx.root)
+        .env("JOBS", ctx.jobs.to_string())
+        .env("PATH", &path)
+        .env("CC", "cc")
+        .env("CXX", "c++")
+        .env("LD", "ld")
+        .env("AR", "ar")
+        .env("RANLIB", "ranlib")
+        .env("HOME", &work)
+        .env("ZIG_GLOBAL_CACHE_DIR", &zcache);
+    for (i, (p, _)) in artifacts.iter().enumerate() {
+        let abs = p.canonicalize()?;
+        if i == 0 {
+            cmd.env("DL", &abs);
+        }
+        cmd.env(format!("DL_{}", i + 1), &abs);
+    }
+    let out = cmd.output().map_err(|e| crate::Fail { code: 1, msg: format!("sh indisponível: {e}") })?;
+    if !out.status.success() {
+        room101(ctx, r, &out.stdout, &out.stderr)?;
+        let _ = fs::remove_dir_all(&work);
+        return fail(
+            1,
+            format!(
+                "{}: build() falhou — o interrogatório completo está em {}",
+                r.name,
+                ctx.room101().join(format!("{}-{}.log", r.name, r.version)).display()
+            ),
+        );
+    }
+
+    // Coleta o que foi para o staging (pré-ordem: pais antes dos filhos).
+    let mut entries = Vec::new();
+    walk(&stage, &stage, &mut entries)?;
+
+    // Colisão (doublethink): confere alvos contra os manifestos dos outros.
+    let claims = all_manifests(ctx);
+    for (_, rel, ft) in &entries {
+        if ft.is_dir() {
+            continue;
+        }
+        let virt = virt_path(rel);
+        if let Some((n, v, _)) =
+            claims.iter().find(|(n, _, set)| *n != r.name && set.contains(&virt))
+        {
+            let _ = fs::remove_dir_all(&work);
+            return fail(4, format!("doublethink detectado: {virt} já pertence a {n} {v}"));
+        }
+    }
+
+    // Sincroniza staging → root, com desvio de /etc para /usr/share/factory.
+    let mut manifest: Vec<String> = Vec::new();
+    for (src, rel, ft) in &entries {
+        if let Some(sub) = rel.strip_prefix("etc/") {
+            // Nenhum pacote é dono de /etc: o default vai para a fábrica…
+            let factory = ctx.root.join("usr/share/factory/etc").join(sub);
+            mkparent(&factory)?;
+            let _ = fs::remove_file(&factory);
+            if ft.is_symlink() {
+                symlink(fs::read_link(src)?, &factory)?;
+            } else if !ft.is_dir() {
+                fs::copy(src, &factory)?;
+            } else {
+                fs::create_dir_all(&factory)?;
+            }
+            if !ft.is_dir() {
+                manifest.push(format!("/usr/share/factory/etc/{sub}"));
+                // …e é materializado em /etc só se o administrador ainda não decidiu.
+                materialize_etc(ctx, &factory, sub)?;
+            }
+        } else {
+            let dst = ctx.root.join(rel);
+            if ft.is_dir() {
+                fs::create_dir_all(&dst)?;
+            } else {
+                mkparent(&dst)?;
+                let _ = fs::remove_file(&dst);
+                if ft.is_symlink() {
+                    symlink(fs::read_link(src)?, &dst)?;
+                } else {
+                    fs::copy(src, &dst)?;
+                }
+                manifest.push(virt_path(rel));
+            }
+        }
+    }
+
+    // Upgrade: recolhe caminhos do manifesto antigo que sumiram do novo.
+    let new_set: HashSet<&String> = manifest.iter().collect();
+    for old in read_manifest(&rec_dir) {
+        if !new_set.contains(&old) {
+            let p = ctx.root.join(old.trim_start_matches('/'));
+            let _ = fs::remove_file(&p);
+            if let Some(par) = p.parent() {
+                prune_empty(&ctx.root, par);
+            }
+        }
+    }
+    let _ = fs::remove_dir_all(&work);
+
+    write_record(&rec_dir, r, "B", &mut manifest)?;
+    if explicit {
+        world_add(ctx, &r.name)?;
+    }
+    println!("{} {} — compilado e retificado. doubleplusgood.", r.name, r.version);
+    Ok(())
+}
+
+/// Materializa um default de fábrica em /etc conforme a política do admin
+/// (Clear Linux + `.new` do Slackware): copia se ausente; se o admin já mexeu,
+/// grava `<arquivo>.new` ao lado e avisa. O /etc vivo não entra no manifesto.
+fn materialize_etc(ctx: &Ctx, factory: &Path, sub: &str) -> Result<()> {
+    let live = ctx.root.join("etc").join(sub);
+    if !live.exists() {
+        mkparent(&live)?;
+        fs::copy(factory, &live)?;
+        return Ok(());
+    }
+    let same = fs::read(&live).ok() == fs::read(factory).ok();
+    if !same {
+        let new = live.with_file_name(format!(
+            "{}.new",
+            live.file_name().unwrap().to_string_lossy()
+        ));
+        fs::copy(factory, &new)?;
+        eprintln!(
+            "  aviso: /etc/{sub} foi modificado pelo administrador; novo default em {}",
+            new.display()
+        );
+    }
+    Ok(())
+}
+
+fn walk(base: &Path, dir: &Path, out: &mut Vec<(PathBuf, String, fs::FileType)>) -> Result<()> {
+    let mut entries: Vec<_> = fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
+    entries.sort_by_key(|e| e.file_name());
+    for e in entries {
+        let path = e.path();
+        let rel = path.strip_prefix(base).unwrap().to_string_lossy().into_owned();
+        let ft = fs::symlink_metadata(&path)?.file_type();
+        out.push((path.clone(), rel, ft));
+        if ft.is_dir() {
+            walk(base, &path, out)?;
+        }
+    }
+    Ok(())
+}
+
+fn virt_path(rel: &str) -> String {
+    format!("/{rel}")
+}
+
+fn mkparent(p: &Path) -> Result<()> {
+    if let Some(par) = p.parent() {
+        fs::create_dir_all(par)?;
+    }
+    Ok(())
+}
+
+fn prune_empty(root: &Path, start: &Path) {
+    let mut p = start.to_path_buf();
+    while p.starts_with(root) && p != *root {
+        let empty = fs::read_dir(&p).map(|mut d| d.next().is_none()).unwrap_or(false);
+        if !empty || fs::remove_dir(&p).is_err() {
+            break;
+        }
+        match p.parent() {
+            Some(par) => p = par.to_path_buf(),
+            None => break,
+        }
+    }
+}
+
+fn room101(ctx: &Ctx, r: &Recipe, stdout: &[u8], stderr: &[u8]) -> Result<()> {
+    fs::create_dir_all(ctx.room101())?;
+    let log = ctx.room101().join(format!("{}-{}.log", r.name, r.version));
+    let mut body = stdout.to_vec();
+    body.extend_from_slice(stderr);
+    fs::write(&log, body)?;
     Ok(())
 }
 
@@ -248,17 +472,32 @@ pub fn memoryhole(ctx: &Ctx, names: &[String]) -> Result<()> {
                 return fail(1, format!("{name} ainda sustenta {other} — memoryhole recusado"));
             }
         }
-        for line in read_manifest(&rec_dir) {
-            if let Some(rest) = line.strip_prefix("/usr/") {
-                let p = ctx.root.join("usr").join(rest);
-                if let Ok(t) = fs::read_link(&p) {
-                    if t.to_string_lossy().contains(&format!("/opt/{name}/")) {
-                        let _ = fs::remove_file(&p);
+
+        let world = read_meta(&rec_dir).and_then(|m| m.get("WORLD").cloned()).unwrap_or_else(|| "A".into());
+        if world == "A" {
+            for line in read_manifest(&rec_dir) {
+                if line.starts_with("/usr/") {
+                    let p = ctx.root.join(line.trim_start_matches('/'));
+                    if let Ok(t) = fs::read_link(&p) {
+                        if t.to_string_lossy().contains(&format!("/opt/{name}/")) {
+                            let _ = fs::remove_file(&p);
+                        }
                     }
                 }
             }
+            let _ = fs::remove_dir_all(ctx.opt(name));
+        } else {
+            let mut paths = read_manifest(&rec_dir);
+            paths.sort();
+            for line in paths.iter().rev() {
+                let p = ctx.root.join(line.trim_start_matches('/'));
+                let _ = fs::remove_file(&p);
+                if let Some(par) = p.parent() {
+                    prune_empty(&ctx.root, par);
+                }
+            }
         }
-        let _ = fs::remove_dir_all(ctx.opt(name));
+
         fs::remove_dir_all(&rec_dir)?;
         world_remove(ctx, name)?;
         println!("{name} nunca existiu.");
@@ -309,7 +548,6 @@ pub fn verify(ctx: &Ctx) -> Result<()> {
             }
         }
     }
-    // Direção inversa: links em /usr/bin apontando para /opt sem dono.
     if let Ok(entries) = fs::read_dir(ctx.usr_bin()) {
         for e in entries.flatten() {
             let p = e.path();
@@ -340,6 +578,28 @@ pub fn newspeak_show(ctx: &Ctx, name: &str) -> Result<()> {
 }
 
 // ---------- registros e world ----------
+
+fn write_record(rec_dir: &Path, r: &Recipe, world: &str, manifest: &mut Vec<String>) -> Result<()> {
+    fs::create_dir_all(rec_dir)?;
+    manifest.sort();
+    manifest.dedup();
+    let meta = format!(
+        "NAME={}\nVERSION={}\nKIND={}\nWORLD={}\nSHA256={}\nDEPS={}\nINSTALLED_AT={}\n",
+        r.name,
+        r.version,
+        if r.kind == Kind::Binary { "binary" } else { "source" },
+        world,
+        r.sha256.join(" "),
+        r.deps.join(" "),
+        iso_now()
+    );
+    fs::write(rec_dir.join("meta"), meta)?;
+    fs::write(rec_dir.join("manifest"), manifest.join("\n") + "\n")?;
+    fs::copy(&r.path, rec_dir.join("recipe"))?;
+    fs::copy(&r.path, rec_dir.join(format!("recipe@{}", r.version)))?;
+    fs::write(rec_dir.join(format!("manifest@{}", r.version)), manifest.join("\n") + "\n")?;
+    Ok(())
+}
 
 fn read_meta(rec_dir: &Path) -> Option<HashMap<String, String>> {
     let txt = fs::read_to_string(rec_dir.join("meta")).ok()?;

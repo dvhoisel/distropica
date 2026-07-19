@@ -1,0 +1,16 @@
+NAME=make
+VERSION=4.4.1
+KIND=source
+ABOUT="GNU não publica binário; o primeiro build do mundo-fonte. build.sh existe justamente para compilar make sem make. O upstream assina com OpenPGP (.sig); o pino será a assinatura quando a verificação PGP chegar (Marco 0.2) — por ora, o SHA256."
+LICENSE=GPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/make/make-$VERSION.tar.gz"
+SHA256=dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    # pré-E2: sem gettext (musl), e rastreio de dependências pressupõe um make
+    # que ainda não existe (SPEC-0004 §3, verificado no spike de 2026-07-19)
+    ./configure --prefix=/usr --disable-nls --disable-dependency-tracking
+    ./build.sh
+    ./make install DESTDIR="$STAGE"
+}
