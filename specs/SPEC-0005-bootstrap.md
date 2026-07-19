@@ -258,6 +258,22 @@ gawk 5.4.1, gcc 15.3.0, glibc 2.42 — todos com SHA256 real pinado.
   libstdc++ e depois o pass-2 com headers glibc coerentes), ou (b) patch/
   ajuste da `configure`/`auto-host.h`. Ambas são trabalho substancial; a
   passada 2 fica como a próxima fronteira, com o diagnóstico já feito.
+- **Rebuild do pass-1 com c,c++ (2026-07-19) — bloqueado pelo MESMO muro,
+  e a causa é estrutural.** A receita foi atualizada para
+  `--enable-languages=c,c++` (config correta). Mas o build agora falha no
+  `build/gengenrtl.o` com exatamente o conflito do pass-2: `auto-host.h`
+  define `#define rlim_t` (fallback bogus da configure) que colide com o
+  `typedef` da musl, mais `sbrk`/`strsignal`. **Chave:** o build C-only do
+  pass-1 funcionou **antes** da glibc estar instalada; depois de instalá-la
+  em `/usr/include`, a `configure` do GCC — mesmo no build cross com zig cc
+  -target musl — mis-detecta esses tipos e gera o `auto-host.h` quebrado.
+  Ou seja, **instalar a glibc contaminou o ambiente de build do
+  gcc-por-zig-cc**. É a separação de sysroot que o LFS mantém (ferramentas
+  temporárias isoladas do sistema final) e que o nosso modelo de rootfs
+  único não faz. Correção real (próxima fronteira): construir a toolchain
+  num sysroot/prefixo isolado (à la `/tools` do LFS) para que a `configure`
+  do gcc não enxergue a glibc do sistema — reestruturação do bootstrap, não
+  um ajuste pontual. O diagnóstico está fechado; a implementação, não.
 
 ## 5. Estágio 3 — boot de verdade
 

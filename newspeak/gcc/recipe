@@ -3,7 +3,7 @@ VERSION=15.3.0
 KIND=source
 DEPS="binutils gmp mpfr mpc"
 BUILD_DEPS="linux-headers gawk"
-ABOUT="FRONTEIRA — parcial. O compilador C/C++. gawk 5.3.2 é BUILD_DEP obrigatório (o 5.4.1 gera options.cc malformado). gcov-tool é isolado da passada 1 (compila um .c com o compilador C++; zig c++/clang respeita a extensão .c e o compila como C, quebrando nos headers C++ do gcc — e não faz parte do compilador mínimo). Com isso o all-gcc compila sob zig cc E o compilador roda: cc1/xgcc linkados estáticos (LDFLAGS=-static) executam no rootfs e compilam .c->.s (verificado 2026-07-19). Falta fechar: a transição musl->glibc, que exige a passada 1 estilo LFS (cross-toolchain com triplet próprio + sysroot) e depois uma passada 2 após a glibc."
+ABOUT="FRONTEIRA. O compilador C/C++ da passada 1 (cross, --without-headers). gawk 5.3.2 é BUILD_DEP (o 5.4.1 gera options.cc malformado); gcov-tool isolado de LANGUAGES; cc1 estático (LDFLAGS=-static). A versão c-only DESTA config compilou sob zig cc e a glibc 2.42 saiu dela. RESSALVA (2026-07-19): reconfigurar para c,c++ é a config correta p/ a passada 2, mas o rebuild falha quando a GLIBC JÁ ESTÁ INSTALADA — a configure do GCC passa a mis-detectar rlim_t/sbrk/strsignal e gera auto-host.h que colide com os headers musl do zig cc (build/gengenrtl.o). Causa estrutural: falta isolar o build da toolchain num sysroot separado (à la /tools do LFS), senão a glibc do sistema contamina a configure. Ver SPEC-0005 §4."
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/gcc/gcc-$VERSION/gcc-$VERSION.tar.xz"
 SHA256=fa59c1beef8995f27c4d71c1df227587189315d3e6faff1bb4306e61b0c530eb
@@ -29,13 +29,15 @@ build() {
         --target=x86_64-distropica-linux-gnu \
         --disable-bootstrap --disable-multilib --disable-nls \
         --disable-shared --disable-threads --disable-lto \
-        --without-headers --with-newlib --enable-languages=c \
+        --without-headers --with-newlib --enable-languages=c,c++ \
         --with-gmp="$ROOT/usr" --with-mpfr="$ROOT/usr" --with-mpc="$ROOT/usr" \
         --disable-dependency-tracking
     # LDFLAGS=-static: o cc1/xgcc linkam estáticos, para rodarem no rootfs
     # (que não tem loader musl instalado; o resto do sistema é estático).
     # SELFTEST_TARGETS=: desliga o self-test do all-gcc (a passada 1 não o
     # roda, à la LFS) — ele tentaria executar o cc1 durante o build.
+    # c,c++: build o compilador (cc1 + cc1plus) e a libgcc mínima. libstdc++
+    # NÃO entra aqui (--without-headers); vem depois, com a glibc instalada.
     make -j"$JOBS" all-gcc all-target-libgcc LDFLAGS=-static SELFTEST_TARGETS=
     make install-gcc install-target-libgcc DESTDIR="$STAGE" SELFTEST_TARGETS=
 }
