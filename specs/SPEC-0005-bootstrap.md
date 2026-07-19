@@ -241,6 +241,23 @@ gawk 5.4.1, gcc 15.3.0, glibc 2.42 — todos com SHA256 real pinado.
   nativo c,c++ hospedado na glibc, construído por zig c++ (dá gcc/g++ +
   libstdc++ sobre a glibc). Estabilidade plena do gcc só com um bootstrap
   self-hosted (gcc compilando a si mesmo) — trabalho seguinte.
+- **Tentativa de pass-2 (2026-07-19) — muro caracterizado, não vencido.**
+  Três causas-raiz atacadas em sequência: (1) os shims `cc/c++` do zig
+  precisam responder opções do driver gcc (`-print-multi-os-directory`);
+  (2) `zig cc -target …-musl` traz headers **musl** que conflitam com as
+  premissas glibc do `system.h` do GCC → trocar para `-target …-gnu`
+  (headers glibc) resolve; (3) o zig **não linka glibc estático** → os
+  binários do gcc saem dinâmicos (rodam, pois a glibc está instalada —
+  verificado: um exe zig-gnu dinâmico executou). Restou o muro de fundo:
+  a **`configure` do GCC, sondada por zig cc, mis-detecta** `rlim_t`,
+  `sbrk`, `strsignal` e gera um `auto-host.h` cujas definições-fallback
+  **conflitam com os headers glibc reais** (`typedef __rlim_t long` etc.).
+  Ou seja: um gcc glibc nativo construído pela semente clang esbarra na
+  auto-detecção do próprio GCC. Saídas: (a) o caminho LFS correto — um
+  **gcc-passada-1 COM C++** (rebuild do pass-1 com `c,c++`, que aí compila
+  libstdc++ e depois o pass-2 com headers glibc coerentes), ou (b) patch/
+  ajuste da `configure`/`auto-host.h`. Ambas são trabalho substancial; a
+  passada 2 fica como a próxima fronteira, com o diagnóstico já feito.
 
 ## 5. Estágio 3 — boot de verdade
 
