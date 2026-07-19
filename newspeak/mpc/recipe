@@ -1,0 +1,17 @@
+NAME=mpc
+VERSION=1.3.1
+KIND=source
+DEPS="gmp mpfr"
+BUILD_DEPS=binutils
+ABOUT="aritmética complexa de precisão arbitrária; a terceira biblioteca matemática que o gcc exige"
+LICENSE=LGPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/mpc/mpc-$VERSION.tar.gz"
+SHA256=ab642492f5cf882b74aa0cb730cd410a81edcdbec895183ce930e706c1c759b8
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    ./configure --prefix=/usr --disable-nls --disable-dependency-tracking \
+        --with-gmp="$ROOT/usr" --with-mpfr="$ROOT/usr"
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+}

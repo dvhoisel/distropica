@@ -53,8 +53,9 @@ echo "-- [3/6] árvore newspeak --"
 rm -rf "$ROOTFS/var/lib/minitrue/newspeak"
 cp -a "$REPO/newspeak" "$ROOTFS/var/lib/minitrue/newspeak"
 
-echo "-- [4/6] rectify busybox zig --"
+echo "-- [4/6] rectify busybox zig + make (make é a ferramenta essencial do E1) --"
 "$MT" --root "$ROOTFS" rectify busybox zig
+"$MT" --root "$ROOTFS" rectify make
 
 echo "-- [5/6] minitrue musl estático (para dentro do rootfs) --"
 if rustup target list --installed 2>/dev/null | grep -q '^x86_64-unknown-linux-musl$'; then

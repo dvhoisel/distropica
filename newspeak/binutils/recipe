@@ -1,0 +1,19 @@
+NAME=binutils
+VERSION=2.45
+KIND=source
+ABOUT="as, ld, ar, nm, objdump — o assembler e o linker que o gcc invoca em runtime. GNU só publica fonte; primeiro grande elo do Estágio 2"
+LICENSE=GPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/binutils/binutils-$VERSION.tar.xz"
+SHA256=c50c0e7f9cb188980e2cc97e4537626b1672441815587f1eab69d2a1bfbef5d2
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    mkdir -p build && cd build
+    # MAKEINFO=true: sem texinfo no mundo musl inicial, pula a geração de docs.
+    # --disable-werror: clang (zig cc) emite warnings que o -Werror do binutils barra.
+    # --disable-gprofng: o profiler assume glibc (dlvsym/GLIBC_2.17), quebra no musl.
+    ../configure --prefix=/usr --disable-nls --disable-werror --disable-gprofng \
+        --enable-default-hash-style=gnu --disable-dependency-tracking
+    make -j"$JOBS" MAKEINFO=true
+    make install MAKEINFO=true DESTDIR="$STAGE"
+}

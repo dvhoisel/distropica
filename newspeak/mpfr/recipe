@@ -1,0 +1,17 @@
+NAME=mpfr
+VERSION=4.2.2
+KIND=source
+DEPS=gmp
+BUILD_DEPS=binutils
+ABOUT="ponto flutuante de precisão múltipla; dependência do gcc. --with-gmp aponta o gmp em /usr porque o zig cc não busca lá por conta própria"
+LICENSE=LGPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/mpfr/mpfr-$VERSION.tar.xz"
+SHA256=b67ba0383ef7e8a8563734e2e889ef5ec3c3b898a01d00fa0a6869ad81c6ce01
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    ./configure --prefix=/usr --disable-nls --disable-dependency-tracking \
+        --with-gmp="$ROOT/usr"
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+}

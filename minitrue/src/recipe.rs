@@ -17,11 +17,13 @@ pub struct Recipe {
     pub srcs: Vec<String>,
     pub sha256: Vec<String>,
     pub deps: Vec<String>,
+    pub build_deps: Vec<String>,
     pub links: Vec<(String, String)>,
     pub sig: Vec<String>,
     pub sigsums: Option<String>,
     pub sigkey: Option<String>,
     pub requires_glibc: bool,
+    pub provisional: bool,
     pub path: PathBuf,
     pub has_install: bool,
 }
@@ -33,11 +35,13 @@ printf 'KIND=%s\n' "${KIND:-}"
 printf 'SRC=%s\n' "${SRC:-}"
 printf 'SHA256=%s\n' "${SHA256:-}"
 printf 'DEPS=%s\n' "${DEPS:-}"
+printf 'BUILD_DEPS=%s\n' "${BUILD_DEPS:-}"
 printf 'LINKS=%s\n' "${LINKS:-}"
 printf 'SIG=%s\n' "${SIG:-}"
 printf 'SIGSUMS=%s\n' "${SIGSUMS:-}"
 printf 'SIGKEY=%s\n' "${SIGKEY:-}"
 printf 'REQUIRES_GLIBC=%s\n' "${REQUIRES_GLIBC:-}"
+printf 'PROVISIONAL=%s\n' "${PROVISIONAL:-}"
 type install_pkg >/dev/null 2>&1 && printf 'HAS_INSTALL=1\n' || :
 "#;
 
@@ -132,11 +136,13 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         srcs,
         sha256,
         deps: list("DEPS"),
+        build_deps: list("BUILD_DEPS"),
         links,
         sig,
         sigsums,
         sigkey,
         requires_glibc: field("REQUIRES_GLIBC") == "1",
+        provisional: field("PROVISIONAL") == "1",
         path,
         has_install: get.contains_key("HAS_INSTALL"),
     };

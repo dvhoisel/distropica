@@ -1,0 +1,14 @@
+NAME=m4
+VERSION=1.4.21
+KIND=source
+ABOUT="processador de macros GNU; o gmp não configura sem ele (gera o assembly das mpn)"
+LICENSE=GPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/m4/m4-$VERSION.tar.xz"
+SHA256=f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    ./configure --prefix=/usr --disable-nls --disable-dependency-tracking
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+}

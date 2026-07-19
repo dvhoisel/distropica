@@ -1,0 +1,16 @@
+NAME=linux-headers
+VERSION=6.12.96
+KIND=source
+ABOUT="cabeçalhos da API do kernel (uapi) que a glibc consome; make headers não compila nada, só sanitiza e copia"
+LICENSE="GPL-2.0 WITH Linux-syscall-note"
+SRC="https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$VERSION.tar.xz"
+SHA256=7d2e1b5d5ab36b3a01856e71782dad2a54e634fb2b37c0a42998def3bbf957c1
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    make mrproper
+    make headers HOSTCC=cc
+    find usr/include -type f ! -name '*.h' -delete
+    mkdir -p "$STAGE/usr/include"
+    cp -a usr/include/. "$STAGE/usr/include/"
+}

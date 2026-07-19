@@ -37,7 +37,9 @@ fn collect(
     }
     let r = recipe::load(ctx, name)?;
     stack.push(name.to_string());
-    for d in &r.deps {
+    // DEPS (runtime) e BUILD_DEPS (só compilação) precisam existir antes deste
+    // pacote compilar; só as DEPS entram no meta como dependências de runtime.
+    for d in r.deps.iter().chain(r.build_deps.iter()) {
         collect(ctx, d, seen, stack, out)?;
     }
     stack.pop();
@@ -157,12 +159,16 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
             Ok(md) if md.file_type().is_symlink() => {
                 let cur = fs::read_link(&linkpath)?;
                 if cur != Path::new(&target) {
-                    let owner = claims
-                        .iter()
-                        .find(|(n, _, set)| *n != r.name && set.contains(&virt))
-                        .map(|(n, v, _)| format!("{n} {v}"))
-                        .unwrap_or_else(|| "algo fora dos registros".into());
-                    return fail(4, format!("doublethink detectado: {virt} já pertence a {owner}"));
+                    if let Some(prov) = adopt_provisional_path(ctx, &virt, &r.name) {
+                        eprintln!("  {virt}: assume o controle de {prov} (provisório)");
+                    } else {
+                        let owner = claims
+                            .iter()
+                            .find(|(n, _, set)| *n != r.name && set.contains(&virt))
+                            .map(|(n, v, _)| format!("{n} {v}"))
+                            .unwrap_or_else(|| "algo fora dos registros".into());
+                        return fail(4, format!("doublethink detectado: {virt} já pertence a {owner}"));
+                    }
                 }
             }
             Ok(_) => return fail(4, format!("doublethink detectado: {virt} existe e não é link gerido")),
@@ -306,14 +312,16 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     walk(&stage, &stage, &mut entries)?;
 
     // Colisão (doublethink): confere alvos contra os manifestos dos outros.
+    // Pacote provisório (busybox) não gera doublethink — cede o caminho na cópia.
     let claims = all_manifests(ctx);
     for (_, rel, ft) in &entries {
         if ft.is_dir() {
             continue;
         }
         let virt = virt_path(rel);
-        if let Some((n, v, _)) =
-            claims.iter().find(|(n, _, set)| *n != r.name && set.contains(&virt))
+        if let Some((n, v, _)) = claims
+            .iter()
+            .find(|(n, _, set)| *n != r.name && set.contains(&virt) && !is_provisional(ctx, n))
         {
             let _ = fs::remove_dir_all(&work);
             return fail(4, format!("doublethink detectado: {virt} já pertence a {n} {v}"));
@@ -345,6 +353,10 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
             if ft.is_dir() {
                 fs::create_dir_all(&dst)?;
             } else {
+                let virt = virt_path(rel);
+                if let Some(prov) = adopt_provisional_path(ctx, &virt, &r.name) {
+                    eprintln!("  {virt}: assume o controle de {prov} (provisório)");
+                }
                 mkparent(&dst)?;
                 let _ = fs::remove_file(&dst);
                 if ft.is_symlink() {
@@ -352,7 +364,7 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
                 } else {
                     fs::copy(src, &dst)?;
                 }
-                manifest.push(virt_path(rel));
+                manifest.push(virt);
             }
         }
     }
@@ -584,14 +596,15 @@ fn write_record(rec_dir: &Path, r: &Recipe, world: &str, manifest: &mut Vec<Stri
     manifest.sort();
     manifest.dedup();
     let meta = format!(
-        "NAME={}\nVERSION={}\nKIND={}\nWORLD={}\nSHA256={}\nDEPS={}\nINSTALLED_AT={}\n",
+        "NAME={}\nVERSION={}\nKIND={}\nWORLD={}\nSHA256={}\nDEPS={}\nINSTALLED_AT={}\n{}",
         r.name,
         r.version,
         if r.kind == Kind::Binary { "binary" } else { "source" },
         world,
         r.sha256.join(" "),
         r.deps.join(" "),
-        iso_now()
+        iso_now(),
+        if r.provisional { "PROVISIONAL=1\n" } else { "" }
     );
     fs::write(rec_dir.join("meta"), meta)?;
     fs::write(rec_dir.join("manifest"), manifest.join("\n") + "\n")?;
@@ -599,6 +612,32 @@ fn write_record(rec_dir: &Path, r: &Recipe, world: &str, manifest: &mut Vec<Stri
     fs::copy(&r.path, rec_dir.join(format!("recipe@{}", r.version)))?;
     fs::write(rec_dir.join(format!("manifest@{}", r.version)), manifest.join("\n") + "\n")?;
     Ok(())
+}
+
+fn is_provisional(ctx: &Ctx, name: &str) -> bool {
+    read_meta(&ctx.records_dir().join(name))
+        .and_then(|m| m.get("PROVISIONAL").cloned())
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
+
+/// Cede um caminho reivindicado por um pacote PROVISIONAL (busybox): remove-o
+/// do manifesto do cedente e devolve o nome dele. Assim as ferramentas reais
+/// (binutils, coreutils…) tomam o lugar dos applets provisórios sem doublethink.
+fn adopt_provisional_path(ctx: &Ctx, virt: &str, myself: &str) -> Option<String> {
+    for e in fs::read_dir(ctx.records_dir()).ok()?.flatten() {
+        let owner = e.file_name().to_string_lossy().into_owned();
+        if owner == myself || !is_provisional(ctx, &owner) {
+            continue;
+        }
+        let mut m = read_manifest(&e.path());
+        if let Some(pos) = m.iter().position(|l| l == virt) {
+            m.remove(pos);
+            let _ = fs::write(e.path().join("manifest"), m.join("\n") + "\n");
+            return Some(owner);
+        }
+    }
+    None
 }
 
 fn read_meta(rec_dir: &Path) -> Option<HashMap<String, String>> {

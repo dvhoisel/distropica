@@ -1,7 +1,8 @@
 NAME=busybox
 VERSION=1.35.0
 KIND=binary
-ABOUT="canivete do estágio 0; binário oficial de busybox.net (2022) — recompilar da fonte no E1"
+PROVISIONAL=1
+ABOUT="canivete do estágio 0; binário oficial de busybox.net (2022). PROVISIONAL: seus applets cedem lugar às ferramentas reais (binutils, coreutils…) conforme o sistema materializa, sem doublethink"
 LICENSE=GPL-2.0-only
 SRC="https://www.busybox.net/downloads/binaries/$VERSION-x86_64-linux-musl/busybox"
 SHA256=6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348
