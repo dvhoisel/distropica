@@ -1,6 +1,6 @@
 # SPEC-0004 — newspeak, o formato das receitas
 
-**Status:** rascunho v0.3 · 2026-07-18
+**Status:** rascunho v0.4 · 2026-07-19
 **Depende de:** SPEC-0001 (elegibilidade), SPEC-0003 (contrato de execução).
 
 Newspeak é o vocabulário mínimo: uma receita diz **de onde vem, como se
@@ -67,7 +67,7 @@ O minitrue executa a função da receita via `sh -e`, com:
 | `PREFIX` | mundo A: staging de `/opt/<nome>/<versão>` |
 | `STAGE` | mundo B: DESTDIR de staging |
 | `JOBS` | paralelismo |
-| `CC`, `CXX`, `AR`, `RANLIB` | toolchain corrente (`zig cc` etc. antes do Estágio 2; gcc depois) |
+| `CC`, `CXX`, `AR`, `RANLIB` | toolchain corrente. Pré-E2: `zig cc -target x86_64-linux-musl` etc. — o `-target` explícito é obrigatório (spike 2026-07-19: sem ele o zig mira o host, glibc). Pós-E2: gcc |
 | `ROOT` | raiz alvo (para casos raros e legítimos de leitura) |
 
 Proibições (contrato; sandbox é dívida registrada em SPEC-0003 §8):
@@ -76,6 +76,12 @@ Proibições (contrato; sandbox é dívida registrada em SPEC-0003 §8):
 2. NÃO escrever fora de `WORK`, `PREFIX`, `STAGE`.
 3. NÃO executar maintainer scripts de pacotes embalados (`.deb`/`.rpm`).
 4. NÃO usar `sudo`, `su`, nem tocar em serviços.
+
+Convenções pré-E2, verificadas no spike (SPEC-0005 §8): o ambiente de
+build oferece `/bin/ld` como shim para `zig ld.lld` (macros de configure
+exigem um `ld` no PATH), e receitas autotools DEVERIAM passar
+`--disable-nls --disable-dependency-tracking` (sem gettext no mundo musl
+inicial; rastreio de dependências pressupõe um make que ainda não existe).
 
 Nota sobre `/etc`: a receita instala defaults em `$STAGE/etc` normalmente;
 é o minitrue que desvia esse conteúdo para `/usr/share/factory/etc/` e
@@ -133,7 +139,7 @@ SIGKEY_FP=@PINAR@
 
 build() {
     tar -xzf "$DL" --strip-components=1
-    ./configure --prefix=/usr CC="$CC"
+    ./configure --prefix=/usr --disable-nls --disable-dependency-tracking
     ./build.sh
     ./make -j"$JOBS"
     ./make install DESTDIR="$STAGE"

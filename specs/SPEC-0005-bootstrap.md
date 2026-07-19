@@ -1,6 +1,6 @@
 # SPEC-0005 — Bootstrap em estágios
 
-**Status:** rascunho v0.1 · 2026-07-18
+**Status:** rascunho v0.2 · 2026-07-19
 **Depende de:** todas as anteriores.
 
 ## 1. A tese do bootstrap
@@ -28,8 +28,10 @@ recusa instalação com erro 5 (SPEC-0003 §3.2).
 **Entregável:** rootfs FHS mínimo, habitável via chroot sem privilégio.
 
 Requisitos do host: `sh`, `tar`, `sha256sum`, `curl` ou `wget`, ~300 MB
-livres, e cargo/rustup para construir o minitrue (ou, futuramente, o
-binário estático publicado nos releases do projeto — SPEC-0003 §10).
+livres, cargo/rustup para construir o minitrue (ou, futuramente, o
+binário estático publicado nos releases do projeto — SPEC-0003 §10) e
+**bubblewrap (`bwrap`) para a entrada rootless** — na falta dele, `sudo
+chroot` clássico.
 
 Insumos (todos elegíveis por SPEC-0001 §2; hashes pinados nas receitas):
 
@@ -48,9 +50,13 @@ Passos (executados por `bootstrap/stage0.sh`, futuro):
 2. `minitrue --root <rootfs> rectify busybox zig` — o próprio minitrue
    popula o rootfs (dogfooding desde o primeiro minuto). A receita do
    busybox gera os links de applets (`busybox --list`).
-3. Entrada sem root: `unshare -r -m -p -f` + mount de `/proc` + binds
-   mínimos de `/dev` + `chroot` (script `enter.sh`; exige userns não
-   privilegiado habilitado no kernel do host).
+3. Entrada sem root via **bwrap** (script `enter.sh`):
+   `bwrap --bind <rootfs> / --proc /proc --dev /dev --unshare-pid …`.
+   O plano original (`unshare -rmpf` + chroot) está **morto em hosts
+   modernos**: com `apparmor_restrict_unprivileged_userns=1` (padrão
+   Ubuntu/Debian recentes) o `unshare -r` recebe EPERM, enquanto o bwrap
+   tem perfil AppArmor de fábrica (verificado no spike, ver Registro).
+   Fallback documentado: `sudo chroot`.
 
 **Critérios de aceite:**
 - `busybox sh` interativo dentro do chroot;
@@ -58,9 +64,14 @@ Passos (executados por `bootstrap/stage0.sh`, futuro):
 - `minitrue rectify ripgrep` **dentro** do chroot baixa, verifica e instala
   (rede funciona via userns; TLS via raízes embutidas no minitrue).
 
+Estes três critérios, ratificados em 2026-07-19, são o **Marco 0.1** do
+projeto.
+
 ## 3. Estágio 1 — autossuficiência do mundo-fonte
 
-**Entregável:** chroot capaz de `./configure && make` com `CC="zig cc"`.
+**Entregável:** chroot capaz de `./configure && make` com
+`CC="zig cc -target x86_64-linux-musl"` (o `-target` explícito é
+obrigatório: sem ele o zig mira o host — glibc dinâmica).
 
 - `make` da fonte — o primeiro build do mundo B, usando o truque histórico
   `./build.sh` do próprio tarball do GNU make (compilar make sem make).
@@ -76,8 +87,10 @@ instala via receita mundo B de ponta a ponta (staging → manifesto →
 `memoryhole` limpo).
 
 **Riscos:** scripts `configure` que assumem gcc real; incompatibilidades
-pontuais do clang embutido. Mitigação: `CC="zig cc"` é clang — casos
-rebeldes ganham patch em `files/` com justificativa.
+pontuais do clang embutido. Mitigação: `zig cc` é clang — casos rebeldes
+ganham patch em `files/` com justificativa. O caminho feliz foi provado no
+spike com o próprio make (ver Registro): shim `/bin/ld → zig ld.lld` +
+`--disable-nls --disable-dependency-tracking` bastaram.
 
 ## 4. Estágio 2 — a Grande Compilação (glibc)
 
@@ -153,7 +166,35 @@ futura própria.
 | E4a | userland vendor console | baixo |
 | E4b | GUI + Firefox | volume brutal de fonte (mesa/GTK) |
 
-## 8. Questões em aberto
+## 8. Registro do spike E0/E1 (2026-07-19)
+
+Provas executadas em host real (kernel 7.0, AppArmor com userns restrito),
+rootfs de rascunho montado à mão — cada linha sustenta um claim desta spec:
+
+- **busybox 1.35.0 oficial**: roda; 402 applets; sha256
+  `6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348`
+  (pinar na receita).
+- **Entrada rootless**: `unshare -r` bloqueado pelo AppArmor do host (sem
+  perfil para o unshare); `bwrap` 0.11 funcionou com perfil de fábrica —
+  §2 atualizado. DNS e rede ok lá dentro.
+- **busybox wget**: NÃO completa handshake TLS moderno com ziglang.org
+  (falha até com `--no-check-certificate`) — o minitrue é o único
+  buscador viável do E0, agora por necessidade e não só por desenho.
+- **zig cc**: hello musl-estático compilado e executado num rootfs sem
+  `/lib` algum. `-target x86_64-linux-musl` explícito é obrigatório.
+- **GNU make 4.4.1** (`./configure && ./build.sh` sob busybox ash):
+  ok com o shim de `ld` e as flags acima; o make resultante executa
+  Makefiles e **recompila a si mesmo** dentro do rootfs.
+- **Rust musl estático** (ensaio do minitrue): `ureq`/rustls buscou HTTPS
+  **sem `/etc/ssl` no sistema** (raízes Mozilla embutidas confirmadas);
+  `minisign-verify` validou o tarball real do Zig contra a chave pinada;
+  binário `static-pie` de 2,4 MB (alvo < 5 MB da SPEC-0003 respeitado).
+  Crates com C (ring) exigem wrapper de `CC` traduzindo o triple LLVM
+  (`x86_64-unknown-linux-musl`) para o do zig (`x86_64-linux-musl`).
+- **Fluxo P6**: o sha256 pinado do Zig conferiu no download; a cadeia
+  pino → fetch → recusa/aceite foi exercitada de ponta a ponta.
+
+## 9. Questões em aberto
 
 - Publicar o rootfs E0 pronto como tarball de release (bootstrap sem host
   com Rust)?

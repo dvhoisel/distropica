@@ -1,6 +1,6 @@
 # SPEC-0003 — minitrue, a ferramenta
 
-**Status:** rascunho v0.4 · 2026-07-18
+**Status:** rascunho v0.5 · 2026-07-19
 **Depende de:** SPEC-0001 (política), SPEC-0002 (layout), SPEC-0004 (receitas).
 
 ## 1. Identidade
@@ -124,7 +124,9 @@ symlink — o flip do `Current` do GoboLinux, aqui confinado ao mundo A:
   como inativo, **mantendo** `/opt/<nome>` intacto. O pacote vira
   não-pessoa: existe fisicamente, mas nenhum registro visível aponta para
   ele. `rectify` reativa (sem rede, se a versão retida é a da receita);
-  `archives` lista não-pessoas com a marca `unperson`.
+  com a árvore já avançada, a reativação segue a receita corrente
+  (baixando se preciso) e avisa a divergência. `archives` lista
+  não-pessoas com a marca `unperson`.
 - **Varredura de órfãos** — `verify` também confere a direção inversa dos
   manifestos: links em `/usr` apontando para dentro de `/opt` sem dono em
   manifesto algum (sobras de mexida manual) são listados como *wrongthink*,
@@ -201,9 +203,13 @@ Sucesso de `rectify` termina em `doubleplusgood.`; `verify` limpo:
 ## 10. Implementação v0 (Rust)
 
 - Crates: `ureq` (HTTP, rustls), `sha2`, `hex`, `anyhow`. Verificação de
-  assinaturas embutida no binário: Ed25519 para minisign/signify e OpenPGP
-  destacado via crate puro-Rust (candidata: rPGP) — **sem gpg em runtime**.
-  Nada de async.
+  assinaturas embutida no binário: `minisign-verify` para minisign/signify
+  e OpenPGP destacado via crate puro-Rust (candidata: rPGP) — **sem gpg em
+  runtime**. Nada de async. Ensaio verificado no spike (SPEC-0005 §8):
+  ureq com raízes embutidas buscou HTTPS num rootfs sem `/etc/ssl`, e
+  `minisign-verify` validou o tarball real do Zig; binário `static-pie` de
+  2,4 MB. Build do minitrue para musl com crates que embutem C (ring)
+  exige `CC` wrapper traduzindo o triple LLVM para o do zig.
 - Raízes CA **embutidas** (webpki-roots): o fetch funciona num rootfs sem
   `/etc/ssl`. (As CAs também são um artefato upstream — Mozilla — pinado
   em build da ferramenta; a piada é séria.)
@@ -225,5 +231,3 @@ Sucesso de `rectify` termina em `doubleplusgood.`; `verify` limpo:
   com a infra de assinaturas do v0.2, o tarball da árvore DEVERIA vir
   assinado (minisign) com a chave do projeto.
 - Downloads paralelos e retomada (range requests): v0.2.
-- `unperson` com árvore newspeak já atualizada: `rectify` reativa na versão
-  nova (com rede) ou na retida? Tendência: na da receita corrente, avisando.

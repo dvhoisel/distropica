@@ -1,6 +1,6 @@
 # SPEC-0007 — Censo de binários upstream
 
-**Status:** rascunho v0.3 · 2026-07-18
+**Status:** rascunho v0.4 · 2026-07-19
 **Método:** coluna "verificado" = checagem direta na data indicada (URL do
 canal oficial consultada); "notório" = sabidamente publicado, a re-verificar
 no momento de escrever a receita. Elegibilidade conforme SPEC-0001 §2.
@@ -50,7 +50,7 @@ custo GUI (mesa/GTK) é isolado no Estágio 4b.
 | bash | só fonte | adiável: `busybox ash` cobre o começo |
 | gnu coreutils | só fonte | ou uutils (§4) |
 | curl | **sem binário oficial Linux** (verificado 2026-07-18: página oficial só lista pacotes de distros) | dispensável: quem busca é o minitrue |
-| wget / wget2 | **só fonte** (verificado 2026-07-18: ftp.gnu.org tem apenas tar.gz/lz/bz2 + .sig) | dispensável como o curl: quem busca é o minitrue; o applet `wget` do busybox já existe desde o E0 |
+| wget / wget2 | **só fonte** (verificado 2026-07-18: ftp.gnu.org tem apenas tar.gz/lz/bz2 + .sig) | dispensável como o curl: quem busca é o minitrue — **obrigatoriamente**: o applet `wget` do busybox 1.35 nem completa handshake TLS moderno (spike 2026-07-19, SPEC-0005 §8) |
 | git | só fonte (https exige libcurl+tls ⇒ build pesado) | adiável: newspeak atualiza por tarball (SPEC-0003 §11) |
 | python | **só fonte** (python.org não publica binário Linux) | pré-requisito do build da glibc; a ironia registrada |
 | perl, openssh, tmux, vim, htop | só fonte | conforme demanda |

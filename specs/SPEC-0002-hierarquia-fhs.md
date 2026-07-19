@@ -1,6 +1,6 @@
 # SPEC-0002 — Hierarquia de arquivos (FHS 3.0)
 
-**Status:** rascunho v0.3 · 2026-07-18
+**Status:** rascunho v0.4 · 2026-07-19
 **Referência:** Filesystem Hierarchy Standard 3.0 (2015).
 
 ## 1. Princípio: dois mundos, um padrão
@@ -37,6 +37,9 @@ symlink-farm exótico na raiz.
 - Retenção: o `rectify` guarda a versão anterior (corrente + 1) para
   `rollback` de custo zero; não-pessoas (`unperson`) permanecem na árvore
   sem links. Ajuste via `KEEP_VERSIONS` (SPEC-0003 §5).
+- Manuais de vendor (`share/man` dentro de `/opt/<nome>`): fora do farm no
+  v0 — só `bin/` é linkado; exposição via `MANPATH` ou links fica para
+  revisão futura.
 - Reservas do FHS que o minitrue NÃO DEVE tocar: `/opt/bin`, `/opt/doc`,
   `/opt/include`, `/opt/info`, `/opt/lib`, `/opt/man` (pertencem ao
   administrador local).
@@ -109,9 +112,6 @@ greppável por construção.
 
 ## 8. Questões em aberto
 
-- `man`/`info` de pacotes vendor: linkar `share/man` de `/opt/<nome>` em
-  `/usr/share/man` (poluição?) ou expor via `MANPATH` gerado? Tendência:
-  links geridos por manifesto, como os de `bin`.
 - Bibliotecas de vendor (`/opt/<nome>/lib`): nunca linkadas em `/usr/lib`
   (risco de *doublethink* com o mundo B); binário vendor que precisa delas
   usa rpath próprio ou wrapper. Confirmar caso a caso.
