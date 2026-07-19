@@ -171,6 +171,15 @@ gawk 5.4.1, gcc 15.3.0, glibc 2.42 — todos com SHA256 real pinado.
   cada script awk do gcc/glibc — cura a doença na origem. Lição de
   método: fixar versões de ferramenta de bootstrap com cuidado, e
   desconfiar de releases muito novos (o 5.4.1 é de 2026).
+- **Confirmação (build limpo com gawk 5.3.2):** o `options.cc` sai sem
+  `#error` e o `all-gcc` avança **~7 mil linhas além** do antigo ponto de
+  parada — o **compilador propriamente dito (cc1) compila por inteiro**
+  sob zig cc (frontend + otimizadores + analisador, 57 mil linhas). O
+  novo (e distinto) muro é auxiliar: `libgcov-driver-tool.o`
+  (`gcov-tool`) compila como C mas inclui headers C++ do gcc (`unknown
+  type name 'class'`) — não é musl. Próximo passo do gcc: desabilitar/
+  isolar o `gcov-tool` na passada 1 (não faz parte do compilador mínimo).
+  A questão musl→glibc segue sendo o nó final, depois deste.
 
 ## 5. Estágio 3 — boot de verdade
 
