@@ -153,6 +153,17 @@ gawk 5.4.1, gcc 15.3.0, glibc 2.42 — todos com SHA256 real pinado.
   que difere do "instala em /usr" do minitrue. A transição musl→glibc é
   o nó real. Falta ainda `python` (prereq da glibc). Recipes `gcc`/
   `glibc` commitadas como esqueleto marcado, não como build fechado.
+- **Sinal do gcc (teste `make all-gcc`, 2026-07-19):** o `zig cc`
+  compilou a **maior parte do GCC 15.3.0** — libcpp, libiberty, o
+  frontend C e quase todos os passes de otimização, ~62 mil linhas de
+  log, centenas de `.cc`, **sem erro** — e parou num ponto estreito: o
+  `options.o` (código gerado da máquina de opções) com
+  `#error … Wimplicit-function-declaration does not have a Var() flag`.
+  Conclusão: "gcc sob clang é possível, com atrito de flags" (§4) está
+  confirmado, e o atrito NÃO está na compilação do compilador (que
+  passou), mas na geração das opções — provável ajuste em
+  `--enable`/`.opt` ou patch em `files/`. É o próximo obstáculo concreto
+  a atacar antes mesmo da questão musl→glibc.
 
 ## 5. Estágio 3 — boot de verdade
 
