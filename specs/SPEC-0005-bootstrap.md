@@ -224,6 +224,23 @@ gawk 5.4.1, gcc 15.3.0, glibc 2.42 — todos com SHA256 real pinado.
   Falta fechar: `make install` da glibc no rootfs, os symlinks de ld.so, e
   a passada 2 do gcc — mas a barreira central do projeto (produzir glibc a
   partir de um mundo musl com toolchain semente zig) **caiu**.
+- **GLIBC INSTALADA E RODANDO NO ROOTFS (2026-07-19) — o sistema tem a ABI
+  glibc.** `make install DESTDIR=` da glibc (não depende do
+  `links-dso-program`), mesclado no rootfs respeitando o usr-merge
+  (`/sbin`→`usr/bin`, loader em `/usr/lib` visível via `/lib64`), e
+  `ldconfig` montou o cache (38 libs). Prova definitiva: um programa
+  **dinâmico** compilado contra a glibc — interpretador
+  `/lib64/ld-linux-x86-64.so.2`, `NEEDED libc.so.6` — **executou** e
+  `gnu_get_libc_version()` retornou `2.42`. O rootfs deixou de ser
+  musl-estático puro: binários dinâmicos glibc agora rodam. É o momento
+  que o Estágio 2 perseguia desde o início (vendor dinâmico vira viável).
+- **Passada 2 do gcc — nota de método:** a passada 2 pura (gcc estável)
+  exige um gcc-passada-1 **com C++** para compilar o código C++ do GCC; o
+  nosso foi `--enable-languages=c` (bastava para a glibc, que é C). Como o
+  único compilador C++ à mão é o `zig c++`, a passada 2 aqui é um gcc
+  nativo c,c++ hospedado na glibc, construído por zig c++ (dá gcc/g++ +
+  libstdc++ sobre a glibc). Estabilidade plena do gcc só com um bootstrap
+  self-hosted (gcc compilando a si mesmo) — trabalho seguinte.
 
 ## 5. Estágio 3 — boot de verdade
 
