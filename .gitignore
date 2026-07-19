@@ -1,0 +1,4 @@
+# artefatos futuros (ferramenta, bootstrap)
+/target/
+/rootfs/
+*.log
