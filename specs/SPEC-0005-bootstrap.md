@@ -23,6 +23,40 @@ Logo, a ordem do mundo é forçada pela premissa:
 Consequência assumida e documentada: entre E0 e E2, `REQUIRES_GLIBC=1`
 recusa instalação com erro 5 (SPEC-0003 §3.2).
 
+### 1.1 Decisão: o seed é upstream pinado, NÃO o gcc do host
+
+Poder-se-ia — e seria **muito mais fácil** — usar o gcc da distro
+hospedeira (o gcc do Kubuntu, digamos) para erguer a toolchain, como o LFS
+faz. Não há impossibilidade técnica: gcc compilando gcc é o caso normal, e
+um gcc glibc do host construiria o gcc da Distrópica sem o atrito
+musl×glibc que o `zig cc` impôs (os ICEs flaky, os 58 decls mis-detectados,
+o `rlim_t`, as mathlibs vazando a glibc — SPEC-0005 §4 — **são todos preço
+da escolha do seed**).
+
+A Distrópica **rejeita deliberadamente** essa muleta. O seed é o binário
+**oficial e pinado por hash** do Zig (SPEC-0004), nunca o gcc que o builder
+por acaso tem. Razões, em ordem de peso:
+
+1. **Entradas pinadas ⇒ reprodutibilidade entre builders.** O gcc do host
+   é "o que o `apt` instalou": versão, patches Debian/Ubuntu, flags e glibc
+   variam de máquina para máquina — entrada **não pinada**. O zig é
+   definido e verificável. É isso que faz o artefato depender só de insumos
+   pinados e, portanto, o binário de canal ser verificável por reprodução
+   (SPEC-0009/0010). Com o gcc do host como seed, os artefatos variariam
+   por builder e o modelo de confiança dos canais ruiria.
+2. **Independência de distro (P1).** "Só construível sobre o Ubuntu" é
+   dependência permanente do Ubuntu. Bootstrapar de um seed mínimo e oficial
+   estabelece a autossuficiência: a Distrópica se reconstrói de fontes
+   upstream + ferramentas próprias, sem terceira distro.
+3. **Base confiável mínima (trusting-trust).** Partir de um seed pequeno e
+   auditável reduz o que se herda cego de um compilador alheio.
+
+Alternativa rejeitada e por quê: usar o gcc do host como **muleta de
+bootstrap única** (estilo LFS) daria um bootstrap sem dor e ainda terminaria
+self-hosted — mas abre mão da reprodutibilidade-entre-builders do primeiro
+estágio. A dor do seed puro é aceita como o preço da pureza (e, convém
+notar, é temática). Decisão do mantenedor, 2026-07-19: **continua como está.**
+
 ## 2. Estágio 0 — do host ao chroot (musl-estático)
 
 **Entregável:** rootfs FHS mínimo, habitável via chroot sem privilégio.
