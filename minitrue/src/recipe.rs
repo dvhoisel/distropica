@@ -41,6 +41,10 @@ pub struct Recipe {
     pub epoch: Option<String>,
     pub toolchain: Toolchain,
     pub retries: u32,
+    /// Pacotes PROVISIONAL cujos caminhos esta receita tem licença de tomar
+    /// (SPEC-0003 §7): a supersessão vira declarativa — colisão com um
+    /// provisional NÃO listado aqui é *doublethink*, não cessão.
+    pub supersedes: Vec<String>,
     pub path: PathBuf,
     pub has_install: bool,
 }
@@ -88,6 +92,7 @@ printf 'SIGSUMS=%s\n' "${SIGSUMS:-}"
 printf 'SIGKEY=%s\n' "${SIGKEY:-}"
 printf 'REQUIRES_GLIBC=%s\n' "${REQUIRES_GLIBC:-}"
 printf 'PROVISIONAL=%s\n' "${PROVISIONAL:-}"
+printf 'SUPERSEDES=%s\n' "${SUPERSEDES:-}"
 printf 'EPOCH=%s\n' "${EPOCH:-}"
 printf 'TOOLCHAIN=%s\n' "${TOOLCHAIN:-}"
 printf 'RETRIES=%s\n' "${RETRIES:-}"
@@ -237,6 +242,7 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         epoch: Some(field("EPOCH")).filter(|s| !s.is_empty()),
         toolchain,
         retries,
+        supersedes: list("SUPERSEDES"),
         path,
         has_install: get.contains_key("HAS_INSTALL"),
     };

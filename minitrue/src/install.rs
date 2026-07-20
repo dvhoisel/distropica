@@ -220,7 +220,7 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
             Ok(md) if md.file_type().is_symlink() => {
                 let cur = fs::read_link(&linkpath)?;
                 if cur != Path::new(&target) {
-                    if let Some(prov) = adopt_provisional_path(ctx, &virt, &r.name) {
+                    if let Some(prov) = adopt_provisional_path(ctx, &virt, &r.name, &r.supersedes) {
                         eprintln!("  {virt}: assume o controle de {prov} (provisório)");
                     } else {
                         let owner = claims
@@ -596,10 +596,13 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
             continue;
         }
         let virt = virt_path(rel);
-        if let Some((n, v, _)) = claims
-            .iter()
-            .find(|(n, _, set)| *n != r.name && set.contains(&virt) && !is_provisional(ctx, n))
-        {
+        // Colisão é doublethink, EXCETO quando o dono é um provisional que esta
+        // receita declarou superseder (SPEC-0003 §7) — aí a cópia cede.
+        if let Some((n, v, _)) = claims.iter().find(|(n, _, set)| {
+            *n != r.name
+                && set.contains(&virt)
+                && !(is_provisional(ctx, n) && r.supersedes.iter().any(|s| s == n))
+        }) {
             let _ = fs::remove_dir_all(&work);
             return fail(
                 4,
@@ -634,7 +637,7 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
                 fs::create_dir_all(&dst)?;
             } else {
                 let virt = virt_path(rel);
-                if let Some(prov) = adopt_provisional_path(ctx, &virt, &r.name) {
+                if let Some(prov) = adopt_provisional_path(ctx, &virt, &r.name, &r.supersedes) {
                     eprintln!("  {virt}: assume o controle de {prov} (provisório)");
                 }
                 mkparent(&dst)?;
@@ -990,10 +993,21 @@ fn is_provisional(ctx: &Ctx, name: &str) -> bool {
 /// Cede um caminho reivindicado por um pacote PROVISIONAL (busybox): remove-o
 /// do manifesto do cedente e devolve o nome dele. Assim as ferramentas reais
 /// (binutils, coreutils…) tomam o lugar dos applets provisórios sem doublethink.
-fn adopt_provisional_path(ctx: &Ctx, virt: &str, myself: &str) -> Option<String> {
+fn adopt_provisional_path(
+    ctx: &Ctx,
+    virt: &str,
+    myself: &str,
+    supersedes: &[String],
+) -> Option<String> {
     for e in fs::read_dir(ctx.records_dir()).ok()?.flatten() {
         let owner = e.file_name().to_string_lossy().into_owned();
-        if owner == myself || !is_provisional(ctx, &owner) {
+        // Só cede de provisional que ESTA receita declarou superseder
+        // (SPEC-0003 §7). Provisional não-declarado não é cedido — vira
+        // doublethink no check de colisão.
+        if owner == myself
+            || !is_provisional(ctx, &owner)
+            || !supersedes.iter().any(|s| *s == owner)
+        {
             continue;
         }
         let mut m = read_manifest(&e.path());
@@ -1524,8 +1538,15 @@ mod tests {
         assert!(is_provisional(&ctx, "gmp"), "gmp deveria ser provisional");
         assert!(!is_provisional(&ctx, "outro"), "outro NÃO é provisional");
 
-        // o rebuild-glibc reivindica um caminho da semente → ela cede
-        let owner = adopt_provisional_path(&ctx, "/usr/lib/libgmp.so.10", "mathlibs-glibc");
+        // quem NÃO declara superseder gmp NÃO cede (viraria doublethink)
+        assert_eq!(
+            adopt_provisional_path(&ctx, "/usr/lib/libgmp.so.10", "estranho", &[]),
+            None,
+            "sem SUPERSEDES, não cede"
+        );
+        // o rebuild-glibc que DECLARA superseder gmp cede
+        let sup = vec!["gmp".to_string()];
+        let owner = adopt_provisional_path(&ctx, "/usr/lib/libgmp.so.10", "mathlibs-glibc", &sup);
         assert_eq!(owner.as_deref(), Some("gmp"));
         let m = read_manifest(&recs.join("gmp"));
         assert!(
@@ -1539,7 +1560,7 @@ mod tests {
 
         // caminho de pacote NÃO-provisional não é cedido (viraria doublethink)
         assert_eq!(
-            adopt_provisional_path(&ctx, "/usr/lib/liboutro.so", "x"),
+            adopt_provisional_path(&ctx, "/usr/lib/liboutro.so", "x", &["outro".to_string()]),
             None
         );
         let _ = fs::remove_dir_all(&root);

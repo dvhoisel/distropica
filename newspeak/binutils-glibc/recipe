@@ -3,6 +3,7 @@ VERSION=2.45
 KIND=source
 TOOLCHAIN=cross
 RETRIES=20
+SUPERSEDES="binutils binutils-cross"
 DEPS="glibc"
 BUILD_DEPS="gcc binutils-cross"
 ABOUT="binutils 2.45 reconstruído como GLIBC (dinâmico), não musl-estático. Passo do E2 descoberto na passada 2 (SPEC-0005 §4): o ld/ar da semente são estáticos musl e NÃO fazem dlopen do liblto_plugin.so ('dynamic loading not supported'), travando o link das target-libs do pass-2 — nem --disable-lto resolve, pois o ar é configurado com --plugin. Reconstruído glibc (interpreter /lib64/ld-linux-x86-64.so.2), o ld/ar passam a carregar plugins. SUPERSEDE o binutils-semente nos mesmos /usr/bin (as/ld/ar/nm) — colisão = dívida de 'fingerprint de build' (§4). --enable-plugins liga o suporte a plugin; -std=gnu17 p/ o código pré-C23."

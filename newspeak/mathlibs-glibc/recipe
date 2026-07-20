@@ -3,6 +3,7 @@ VERSION=6.3.0
 KIND=source
 TOOLCHAIN=cross
 RETRIES=20
+SUPERSEDES="gmp mpfr mpc"
 DEPS="glibc"
 BUILD_DEPS="gcc binutils-cross"
 ABOUT="gmp 6.3.0 + mpfr 4.2.2 + mpc 1.3.1 reconstruídos como GLIBC (não musl). Passo do E2 descoberto na passada 2 (SPEC-0005 §4): os mathlibs-semente são build musl do zig (NEEDED libc.so); um cc1 glibc (pass-2) não os carrega ('invalid ELF header' ao resolver o linker-script /usr/lib/libc.so). Reconstruídos pelo gcc da passada 1 (cross) com a glibc presente, passam a ter NEEDED libc.so.6. SUPERSEDE os mathlibs-semente nos mesmos caminhos /usr/lib — a colisão com gmp/mpfr/mpc (seed) é a dívida de 'fingerprint de build' (rebuild-in-place com mesma versão, toolchain diferente), ver §4. -std=gnu17: o código é pré-C23, e o gcc 15 rejeita () = zero args."

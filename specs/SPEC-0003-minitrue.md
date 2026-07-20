@@ -249,6 +249,18 @@ doublethink detectado: /usr/bin/rg já pertence a ripgrep 15.2.0
 Sem `--force`. A resolução é humana: ajustar a receita (renomear link,
 retirar arquivo) e commitar na árvore newspeak.
 
+**Exceção declarativa — `SUPERSEDES`.** Uma colisão com um pacote
+`PROVISIONAL` só **não** é doublethink quando a receita que instala **declara**
+esse pacote em `SUPERSEDES` (SPEC-0004 §2). Aí a cópia **cede** o caminho: o
+provisional o perde do seu manifesto, o sucessor o assume. Colisão com um
+provisional **não declarado** volta a ser doublethink — fim do "qualquer
+pacote toma o caminho de qualquer provisional". É o que torna a cadeia de
+substituição do E2 (seed → cross → glibc/nativo, SPEC-0005 §4) explícita e
+auditável, e não um efeito colateral do flag `PROVISIONAL`.
+
+*(Dívida registrada: remover o sucessor ainda não restaura o payload do
+cedente — o rollback da supersessão é território do journal de mundo B, §6.)*
+
 ## 8. Execução de receitas e confinamento
 
 - Receitas rodam via `sh -e`, com ambiente mínimo controlado (§ SPEC-0004

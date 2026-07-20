@@ -14,7 +14,7 @@ parecer externo). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | Runner hermético (bwrap, --unshare-net, --clearenv) | ✅ | ✅ | **rootfs montado gravável** (não read-only) |
 | `retry` de ICE | ✅ | — | usado no E2 |
 | `fingerprint` de build | ✅ | ✅ | **não-transitivo** (build-dep muda não propaga) |
-| Supersessão provisional (`PROVISIONAL`) | ✅ | ✅ | sem `SUPERSEDES=` explícito; qualquer um toma de qualquer provisional |
+| Supersessão provisional (`PROVISIONAL` + `SUPERSEDES=`) | ✅ | ✅ | declarativa: só cede de provisional declarado; falta **restaurar payload** ao remover o sucessor (journal) |
 | `pack` determinístico (v1) | ✅ | ✅ | a parte mais madura; falta xattr/ACL/cap/sparse |
 | Manifesto v1 (hash por arquivo) | ✅ | ✅ | só hash+caminho; **falta tipo/modo/alvo de symlink** e `RECORD_FORMAT=` |
 | `verify` (presença + integridade por arquivo) | ✅ | 🟡 | não varre regulares órfãos em /usr nem fecha o grafo de deps |
@@ -27,7 +27,7 @@ parecer externo). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | Registro atômico (temp+rename, meta = commit) | ✅ | ✅ | meta-less = não-instalado ⇒ reinstala |
 | `RECORD_FORMAT=` | ✅ | — | versiona o esquema (hoje 1) |
 | Journal + rollback do mundo B (STAGE→/) | ⬜ | — | cópia sobre / ainda não transacional |
-| `SUPERSEDES=` explícito | ⬜ | — | hoje qualquer um toma de qualquer provisional |
+| `SUPERSEDES=` explícito | ✅ | ✅ | declarado nas 5 receitas do E2; colisão não-declarada = doublethink |
 | Verificação OpenPGP | ⬜ | — | minisign só; stub p/ .asc |
 
 ## Bootstrap (SPEC-0005)
