@@ -521,12 +521,18 @@ com SHA256 real pinado.
   A **lição**: todo scaffolding superseder por um build glibc/nativo é
   `PROVISIONAL` (a cadeia de cessão seed→cross→glibc é o que faz o bootstrap
   caber no modelo de pacotes), e o cross gcc precisa de `-rpath-link` para os
-  deps transitivos das mathlibs. Com os quatro consertos, o `gcc-pass2` passa a
-  `configure` e o `make` progride (verificado). **Falta só** o `gcc-pass2`
-  rodar sem interrupção até o fim pelo `rectify` — o build (~30 min) e o cotejo
-  com as provas de reprodutibilidade (SPEC-0010 §6); a correção das receitas
-  está validada (a passada 2 já foi construída à mão, §acima). Scripts da
-  investigação em `rootfs/tmp/*.sh`.
+  deps transitivos das mathlibs.
+
+  **E2 FECHADO COMO FLUXO (2026-07-20).** Com os quatro consertos,
+  `rectify gcc-pass2` rodou os **16 pacotes** até o fim pela ferramenta
+  (`gcc-pass2 … compilado e retificado`, `FINGERPRINT` gravado, gcc-pass2
+  cedendo do gcc-semente provisional). O gcc **nativo produzido pelo rectify**
+  (não por scripts) compila e roda **C** (`self-host ok`) e **C++/STL**
+  (`libstdc++.so.6, libc.so.6` — dinâmico glibc), sem shims. O Estágio 2 deixou
+  de ser "feito à mão" e passou a ser **reproduzível de ponta a ponta pela
+  própria ferramenta**, do seed musl/zig ao gcc nativo glibc. Falta só o cotejo
+  formal do artefato com as provas de reprodutibilidade (SPEC-0010 §6). Scripts
+  da investigação em `rootfs/tmp/*.sh`.
 
 ## 5. Estágio 3 — boot de verdade
 
@@ -562,7 +568,7 @@ futura própria.
 |---------|-----------|-----------------|
 | E0 | chroot musl-estático habitável | baixo |
 | E1 | `./configure && make` funciona | atrito zig-cc×autotools |
-| E2 ✅ | ABI glibc + gcc nativo (pass-2) — **vencido** 2026-07-20 | GCC hospedado por clang; matriz glibc↔GCC; toolchain-semente musl→glibc |
+| E2 ✅ | ABI glibc + gcc nativo (pass-2) — **vencido e reproduzível pelo `rectify`** 2026-07-20 | GCC hospedado por clang; matriz glibc↔GCC; toolchain-semente musl→glibc |
 | E3 | boot QEMU até login | config de kernel |
 | E4a | userland vendor console | baixo |
 | E4b | GUI + Firefox | volume brutal de fonte (mesa/GTK) |
