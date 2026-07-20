@@ -294,6 +294,41 @@ gawk 5.4.1, gcc 15.3.0, glibc 2.42 — todos com SHA256 real pinado.
   próxima fronteira é essa correção pontual GCC×musl — **não** a
   reestruturação de sysroot que a teoria anterior sugeria. Fica registrado
   para não repetir o caminho errado.
+- **CACHE VAR ACHADO + muro das ferramentas de build QUEBRADO (2026-07-19).**
+  O `ac_cv_have_decl_sbrk` não pegava porque o GCC usa macro **própria**
+  (`gcc_AC_CHECK_DECL`, em `gcc/acinclude.m4:27`) que cacheia em
+  **`gcc_cv_have_decl_<fn>`** — não no `ac_cv_` padrão. Além disso, a
+  configure do subdir `gcc/` roda **durante o `make`**, então o cache var
+  tem de estar **exportado no ambiente do make**. Com
+  `gcc_cv_have_decl_sbrk=yes gcc_cv_have_decl_strsignal=yes` exportados +
+  um patch no `gcc/configure` neutralizando o fallback `#define rlim_t long`
+  (esse check é `AC_TRY_COMPILE` inline, sem cache var), o `auto-host.h`
+  passou a ter `HAVE_DECL_SBRK/STRSIGNAL 1`, o `rlim_t` sumiu, e as
+  ferramentas `build/` (gengenrtl, genhooks) **compilaram** — o build
+  avançou ~5,5 mil linhas, para dentro do GCC de verdade (c-lang.o). Muro
+  antigo derrubado.
+- **A cauda que resta (por que o c,c++ ainda não fecha).** Dois fatores
+  independentes:
+  1. **Cascata de decls:** são **58** `HAVE_DECL_*=0` mis-detectados (a
+     configure roda os checks em C++ e não vê as declarações GNU da musl).
+     A maioria é inofensiva (fallback = protótipo da musl), mas
+     `sbrk`/`strsignal`/`vasprintf`/… conflitam. Forçar **todos** a `yes`
+     em massa gera erro NOVO (`functions that differ only in their return
+     type`) em outros (`getwd` etc.) — precisa ser **cirúrgico**, só nos
+     que de fato colidem. Cache vars nos dois prefixos:
+     `gcc_cv_have_decl_*` (gcc/) e `ac_cv_have_decl_*` (libiberty).
+  2. **libc++ × glibc em /usr/include:** aqui a glibc instalada MORDE de
+     verdade — não pelo sysroot do compilador, mas porque
+     `--with-gmp=/usr` injeta `-I/usr/include`, e agora essa pasta tem o
+     `stdio.h` da glibc, que vem **antes** do `<stdio.h>` do libc++ do zig
+     → `<cstdio>` do libc++ quebra ("header search paths not configured").
+     Conserto: instalar/apontar as libs matemáticas num include **isolado**
+     da glibc (`--with-gmp=<dir só das mathlibs>`), ou `-isystem`.
+  Conclusão prática: o caminho limpo é a **configuração musl sistemática**
+  (patches/`t-musl` à la Alpine/musl-cross-make) + separar os headers das
+  mathlibs da glibc — não overrides ad-hoc, que revelam camada após camada.
+  O cache var (a pergunta) está respondido: **`gcc_cv_have_decl_<fn>`**,
+  exportado no ambiente do make.
 
 ## 5. Estágio 3 — boot de verdade
 
