@@ -1,8 +1,10 @@
 use crate::recipe::{self, Kind, Recipe, Toolchain};
 use crate::{fail, fetch, iso_now, Ctx};
 use anyhow::Result;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::Read;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -147,8 +149,11 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         r.links.clone()
     };
 
-    let old_links: HashSet<String> =
-        read_manifest(&rec_dir).into_iter().filter(|l| l.starts_with("/usr/")).collect();
+    let old_links: HashSet<String> = read_manifest(&rec_dir)
+        .iter()
+        .map(|l| manifest_path(l).to_string())
+        .filter(|l| l.starts_with("/usr/"))
+        .collect();
     let claims = all_manifests(ctx);
     fs::create_dir_all(ctx.usr_bin())?;
     let mut manifest: Vec<String> =
@@ -208,7 +213,7 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         }
     }
 
-    write_record(&rec_dir, r, "A", &mut manifest)?;
+    write_record(ctx, &rec_dir, r, "A", &mut manifest)?;
     if explicit {
         world_add(ctx, &r.name)?;
     }
@@ -549,10 +554,11 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     }
 
     // Upgrade: recolhe caminhos do manifesto antigo que sumiram do novo.
-    let new_set: HashSet<&String> = manifest.iter().collect();
+    let new_set: HashSet<&str> = manifest.iter().map(String::as_str).collect();
     for old in read_manifest(&rec_dir) {
-        if !new_set.contains(&old) {
-            let p = ctx.root.join(old.trim_start_matches('/'));
+        let path = manifest_path(&old);
+        if !new_set.contains(path) {
+            let p = ctx.root.join(path.trim_start_matches('/'));
             let _ = fs::remove_file(&p);
             if let Some(par) = p.parent() {
                 prune_empty(&ctx.root, par);
@@ -561,7 +567,7 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     }
     let _ = fs::remove_dir_all(&work);
 
-    write_record(&rec_dir, r, "B", &mut manifest)?;
+    write_record(ctx, &rec_dir, r, "B", &mut manifest)?;
     if explicit {
         world_add(ctx, &r.name)?;
     }
@@ -667,8 +673,9 @@ pub fn memoryhole(ctx: &Ctx, names: &[String]) -> Result<()> {
         let world = read_meta(&rec_dir).and_then(|m| m.get("WORLD").cloned()).unwrap_or_else(|| "A".into());
         if world == "A" {
             for line in read_manifest(&rec_dir) {
-                if line.starts_with("/usr/") {
-                    let p = ctx.root.join(line.trim_start_matches('/'));
+                let path = manifest_path(&line);
+                if path.starts_with("/usr/") {
+                    let p = ctx.root.join(path.trim_start_matches('/'));
                     if let Ok(t) = fs::read_link(&p) {
                         if t.to_string_lossy().contains(&format!("/opt/{name}/")) {
                             let _ = fs::remove_file(&p);
@@ -678,10 +685,21 @@ pub fn memoryhole(ctx: &Ctx, names: &[String]) -> Result<()> {
             }
             let _ = fs::remove_dir_all(ctx.opt(name));
         } else {
-            let mut paths = read_manifest(&rec_dir);
-            paths.sort();
-            for line in paths.iter().rev() {
-                let p = ctx.root.join(line.trim_start_matches('/'));
+            let mut lines = read_manifest(&rec_dir);
+            lines.sort_by(|a, b| manifest_path(a).cmp(manifest_path(b)));
+            for line in lines.iter().rev() {
+                let path = manifest_path(line);
+                let p = ctx.root.join(path.trim_start_matches('/'));
+                // Veredito intacto×modificado (SPEC-0003 §4): arquivo cujo
+                // conteúdo diverge do hash registrado foi mexido pelo usuário —
+                // preserva por padrão, com aviso.
+                if let Some(recorded) = manifest_hash(line) {
+                    let cur = file_hash(&p);
+                    if cur != "-" && cur != recorded {
+                        println!("  {path}: modificado desde a instalação — preservado");
+                        continue;
+                    }
+                }
                 let _ = fs::remove_file(&p);
                 if let Some(par) = p.parent() {
                     prune_empty(&ctx.root, par);
@@ -727,15 +745,28 @@ pub fn archives(ctx: &Ctx) -> Result<()> {
 
 pub fn verify(ctx: &Ctx) -> Result<()> {
     let mut problems = 0usize;
-    let claims = all_manifests(ctx);
     let mut claimed: HashSet<String> = HashSet::new();
-    for (name, _, set) in &claims {
-        for line in set {
-            claimed.insert(line.clone());
-            let p = ctx.root.join(line.trim_start_matches('/'));
-            if fs::symlink_metadata(&p).is_err() {
-                println!("wrongthink: {line} (de {name}) sumiu do filesystem");
-                problems += 1;
+    if let Ok(entries) = fs::read_dir(ctx.records_dir()) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            for line in read_manifest(&e.path()) {
+                let path = manifest_path(&line);
+                claimed.insert(path.to_string());
+                let p = ctx.root.join(path.trim_start_matches('/'));
+                if fs::symlink_metadata(&p).is_err() {
+                    println!("wrongthink: {path} (de {name}) sumiu do filesystem");
+                    problems += 1;
+                    continue;
+                }
+                // Integridade por arquivo (manifesto v1): conteúdo vs. hash
+                // registrado. Legado v0 (sem hash) só confere presença.
+                if let Some(recorded) = manifest_hash(&line) {
+                    let cur = file_hash(&p);
+                    if cur != "-" && cur != recorded {
+                        println!("wrongthink: {path} (de {name}) foi modificado — hash difere do registro");
+                        problems += 1;
+                    }
+                }
             }
         }
     }
@@ -770,16 +801,20 @@ pub fn newspeak_show(ctx: &Ctx, name: &str) -> Result<()> {
 
 // ---------- registros e world ----------
 
-fn write_record(rec_dir: &Path, r: &Recipe, world: &str, manifest: &mut Vec<String>) -> Result<()> {
+fn write_record(ctx: &Ctx, rec_dir: &Path, r: &Recipe, world: &str, manifest: &mut Vec<String>) -> Result<()> {
     fs::create_dir_all(rec_dir)?;
     manifest.sort();
     manifest.dedup();
+    // ORIGIN: quando os canais (SPEC-0009) chegarem, a instalação de canal grava
+    // `canal:<nome>` (+ TRUST, CHANNEL_SHA256); por ora deriva do mundo.
+    let origin = if world == "A" { "vendor" } else { "fonte" };
     let meta = format!(
-        "NAME={}\nVERSION={}\nKIND={}\nWORLD={}\nSHA256={}\nDEPS={}\nFINGERPRINT={}\nINSTALLED_AT={}\n{}",
+        "NAME={}\nVERSION={}\nKIND={}\nWORLD={}\nORIGIN={}\nSHA256={}\nDEPS={}\nFINGERPRINT={}\nINSTALLED_AT={}\n{}",
         r.name,
         r.version,
         if r.kind == Kind::Binary { "binary" } else { "source" },
         world,
+        origin,
         r.sha256.join(" "),
         r.deps.join(" "),
         r.fingerprint()?,
@@ -787,10 +822,18 @@ fn write_record(rec_dir: &Path, r: &Recipe, world: &str, manifest: &mut Vec<Stri
         if r.provisional { "PROVISIONAL=1\n" } else { "" }
     );
     fs::write(rec_dir.join("meta"), meta)?;
-    fs::write(rec_dir.join("manifest"), manifest.join("\n") + "\n")?;
+    // Manifesto v1: cada linha vira `<sha256>␠␠<caminho>` (hash do arquivo real;
+    // `-` p/ symlink/diretório). É o que dá integridade por arquivo ao `verify`
+    // e o veredito intacto×modificado ao `memoryhole` (SPEC-0003 §4/§6).
+    let decorated: Vec<String> = manifest
+        .iter()
+        .map(|p| format!("{}  {p}", file_hash(&ctx.root.join(p.trim_start_matches('/')))))
+        .collect();
+    let body = decorated.join("\n") + "\n";
+    fs::write(rec_dir.join("manifest"), &body)?;
     fs::copy(&r.path, rec_dir.join("recipe"))?;
     fs::copy(&r.path, rec_dir.join(format!("recipe@{}", r.version)))?;
-    fs::write(rec_dir.join(format!("manifest@{}", r.version)), manifest.join("\n") + "\n")?;
+    fs::write(rec_dir.join(format!("manifest@{}", r.version)), &body)?;
     Ok(())
 }
 
@@ -811,7 +854,7 @@ fn adopt_provisional_path(ctx: &Ctx, virt: &str, myself: &str) -> Option<String>
             continue;
         }
         let mut m = read_manifest(&e.path());
-        if let Some(pos) = m.iter().position(|l| l == virt) {
+        if let Some(pos) = m.iter().position(|l| manifest_path(l) == virt) {
             m.remove(pos);
             let _ = fs::write(e.path().join("manifest"), m.join("\n") + "\n");
             return Some(owner);
@@ -835,6 +878,39 @@ fn read_manifest(rec_dir: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// O caminho de uma linha de manifesto. Registro **v1**: `<sha256>␠␠<caminho>`;
+/// legado v0 (linha sem os dois espaços): a própria linha. Retrocompatível.
+fn manifest_path(line: &str) -> &str {
+    line.split_once("  ").map(|(_, p)| p).unwrap_or(line)
+}
+
+/// O hash gravado de uma linha de manifesto v1, se houver (`-` e ausência ⇒ None).
+fn manifest_hash(line: &str) -> Option<&str> {
+    line.split_once("  ")
+        .map(|(h, _)| h)
+        .filter(|h| *h != "-" && h.len() == 64)
+}
+
+/// sha256 (hex) de um arquivo regular, em streaming; `-` para symlink, diretório
+/// ou ausente. É o hash por arquivo do manifesto v1 (SPEC-0003 §6).
+fn file_hash(path: &Path) -> String {
+    let Ok(md) = fs::symlink_metadata(path) else { return "-".into() };
+    if !md.file_type().is_file() {
+        return "-".into();
+    }
+    let Ok(mut f) = fs::File::open(path) else { return "-".into() };
+    let mut h = Sha256::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        match f.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => h.update(&buf[..n]),
+            Err(_) => return "-".into(),
+        }
+    }
+    hex::encode(h.finalize())
+}
+
 fn all_manifests(ctx: &Ctx) -> Vec<(String, String, HashSet<String>)> {
     let mut v = Vec::new();
     if let Ok(entries) = fs::read_dir(ctx.records_dir()) {
@@ -843,7 +919,8 @@ fn all_manifests(ctx: &Ctx) -> Vec<(String, String, HashSet<String>)> {
             let ver = read_meta(&e.path())
                 .and_then(|m| m.get("VERSION").cloned())
                 .unwrap_or_else(|| "?".into());
-            let set: HashSet<String> = read_manifest(&e.path()).into_iter().collect();
+            let set: HashSet<String> =
+                read_manifest(&e.path()).iter().map(|l| manifest_path(l).to_string()).collect();
             v.push((name, ver, set));
         }
     }
@@ -958,16 +1035,41 @@ fn world_label(meta: &HashMap<String, String>) -> &'static str {
     }
 }
 
-/// De onde veio o artefato. Quando os canais (SPEC-0009) forem implementados,
-/// o campo `ORIGIN` refina isto; por ora deriva de `WORLD`.
+/// De onde veio o artefato (campo `ORIGIN`; canais em SPEC-0009 gravam
+/// `canal:<nome>`). Sem `ORIGIN` (registro legado), deriva de `WORLD`.
 fn origin_label(meta: &HashMap<String, String>) -> String {
-    if let Some(o) = meta.get("ORIGIN") {
-        return o.clone();
+    match meta.get("ORIGIN").map(String::as_str) {
+        Some("vendor") => "binário de vendor (upstream)".into(),
+        Some("fonte") => "compilado localmente da fonte".into(),
+        Some(o) if o.starts_with("canal:") => format!("canal binário «{}» (SPEC-0009)", &o[6..]),
+        Some(o) => o.to_string(),
+        None => match meta.get("WORLD").map(String::as_str) {
+            Some("A") => "binário de vendor (upstream)".into(),
+            Some("B") => "compilado localmente da fonte".into(),
+            _ => "desconhecida".into(),
+        },
     }
-    match meta.get("WORLD").map(String::as_str) {
-        Some("A") => "binário de vendor (upstream)".into(),
-        Some("B") => "compilado localmente da fonte".into(),
-        _ => "desconhecida".into(),
+}
+
+/// Extrai o `REPROCORR` (hash reprodutível pinado) de uma cópia de receita no
+/// registro — a base da corroboração (SPEC-0009 §6, SPEC-0010). None se ausente.
+fn reprocorr_of(rec_dir: &Path) -> Option<String> {
+    let recipe = rec_dir.join("recipe");
+    if !recipe.is_file() {
+        return None;
+    }
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(". \"$1\"; printf '%s' \"${REPROCORR:-}\"")
+        .arg("sh")
+        .arg(&recipe)
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
     }
 }
 
@@ -983,11 +1085,36 @@ pub fn explain(ctx: &Ctx, target: &str) -> Result<()> {
             println!("  pacote:      {name} {}", field("VERSION"));
             println!("  mundo:       {}", world_label(&meta));
             println!("  origem:      {}", origin_label(&meta));
+            // Confiança e corroboração (SPEC-0009 §6/§8): TRUST e CHANNEL_SHA256
+            // são gravados pela instalação de canal (ainda por vir); o REPROCORR
+            // vem da receita e é a base da corroboração por reprodução.
+            if let Some(trust) = meta.get("TRUST") {
+                println!("  confiança:   {trust}");
+            }
+            match reprocorr_of(&rec) {
+                Some(rc) => println!(
+                    "  reprocorr:   {} — corroborável por reprodução (SPEC-0010 §5)",
+                    &rc[..rc.len().min(16)]
+                ),
+                None => println!("  reprocorr:   (a receita não pina hash reprodutível ainda)"),
+            }
+            if let Some(corr) = meta.get("CORROBORADORES") {
+                println!("  corroborado: {corr}");
+            }
             if field("PROVISIONAL") == "1" {
                 println!("  provisório:  sim — cede o caminho a um sucessor (SPEC-0003 §3)");
             }
             if let Some(fp) = meta.get("FINGERPRINT") {
                 println!("  fingerprint: {}", &fp[..fp.len().min(16)]);
+            }
+            // Hash do próprio arquivo no manifesto v1 (integridade por arquivo).
+            if let Some(line) = read_manifest(&rec).iter().find(|l| {
+                let p = manifest_path(l);
+                p == virt || virt.strip_prefix("/etc/").map(|s| p == format!("/usr/share/factory/etc/{s}")).unwrap_or(false)
+            }) {
+                if let Some(h) = manifest_hash(line) {
+                    println!("  hash-arq:    {}", &h[..16]);
+                }
             }
             println!("  instalado:   {}", field("INSTALLED_AT"));
             println!("  receita:     {}", rec.join("recipe").display());
@@ -1068,6 +1195,35 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static CNT: AtomicU32 = AtomicU32::new(0);
+
+    /// Manifesto v1: parsing de `<sha256>␠␠<caminho>`, retrocompat com v0
+    /// (linha sem hash), e file_hash streaming.
+    #[test]
+    fn manifesto_v1_parsing_e_hash() {
+        let h = "b".repeat(64);
+        let v1 = format!("{h}  /usr/bin/x");
+        assert_eq!(manifest_path(&v1), "/usr/bin/x");
+        assert_eq!(manifest_hash(&v1), Some(h.as_str()));
+        // symlink/dir → "-"
+        assert_eq!(manifest_path("-  /opt/foo/current"), "/opt/foo/current");
+        assert_eq!(manifest_hash("-  /opt/foo/current"), None);
+        // legado v0: a própria linha é o caminho, sem hash
+        assert_eq!(manifest_path("/usr/lib/libc.so.6"), "/usr/lib/libc.so.6");
+        assert_eq!(manifest_hash("/usr/lib/libc.so.6"), None);
+
+        // file_hash: arquivo regular hasheia; symlink/ausente → "-"
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("mt-fh-{}-{n}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a"), b"conteudo\n").unwrap();
+        symlink("a", dir.join("l")).unwrap();
+        let ha = file_hash(&dir.join("a"));
+        assert_eq!(ha.len(), 64);
+        assert_eq!(file_hash(&dir.join("a")), ha, "determinístico");
+        assert_eq!(file_hash(&dir.join("l")), "-", "symlink → -");
+        assert_eq!(file_hash(&dir.join("ausente")), "-");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     /// explain/why: owner_of acha o dono (incl. desvio de /etc→fábrica) e
     /// prefere o não-provisório; dependents_of acha a dependência reversa;

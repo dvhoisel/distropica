@@ -159,8 +159,12 @@ são removidas no upgrade. `memoryhole` remove tudo. Ajustável via
 
 Três arquivos-texto:
 
-- `meta` — `VERSION=`, `KIND=`, `WORLD=A|B`, `SHA256=` (por artefato),
-  `FINGERPRINT=`, `INSTALLED_AT=` (ISO-8601), `RECIPE_COMMIT=` (se conhecido).
+- `meta` — `VERSION=`, `KIND=`, `WORLD=A|B`, `ORIGIN=`, `SHA256=` (por
+  artefato), `FINGERPRINT=`, `INSTALLED_AT=` (ISO-8601), `RECIPE_COMMIT=` (se
+  conhecido). O **`ORIGIN`** é de onde veio o artefato — `vendor` (mundo A),
+  `fonte` (mundo B compilado localmente) ou `canal:<nome>` quando os canais
+  (SPEC-0009 §8) o instalam, caso em que `TRUST=` e `CHANNEL_SHA256=` também
+  entram.
   O **`FINGERPRINT`** é a identidade de build (SPEC-0011 §4): sha256 do
   arquivo `recipe` inteiro + do `files/` (via o `pack` determinístico). A
   idempotência do `rectify` compara **versão E fingerprint** — uma receita
@@ -194,9 +198,13 @@ respondem, sem estado extra:
 
 - **`explain <caminho>`** — de quem é um arquivo e toda a sua proveniência:
   o pacote e a versão que o reivindicam (varrendo os manifestos), o mundo
-  (A/B), a origem (vendor/fonte/canal), se é **provisório**, o `FINGERPRINT`,
-  quando foi instalado, a receita de origem e o seu `ABOUT`, o alvo se for
-  link, e a nota de fábrica se for um default de `/etc`. Um caminho sem dono é
+  (A/B), a **origem** (`ORIGIN`: vendor/fonte/canal), a **confiança** (`TRUST`,
+  quando de canal), o **`reprocorr`** da receita (se pina hash reprodutível —
+  a base da corroboração, SPEC-0010 §5) e os **corroboradores** (quando o canal
+  os registra), se é **provisório**, o `FINGERPRINT`, o **hash do próprio
+  arquivo** (manifesto v1), quando foi instalado, a receita e o seu `ABOUT`, o
+  alvo se for link, e a nota de fábrica se for um default de `/etc`. Um caminho
+  sem dono é
   apontado como *wrongthink* (existe sem registro). Aceita caminho absoluto ou
   nome de comando (resolvido em `/usr/bin`); um `/etc/X` resolve pelo seu
   default de fábrica (`/usr/share/factory/etc/X`). Onde um provisório e o seu
@@ -277,12 +285,13 @@ Sucesso de `rectify` termina em `doubleplusgood.`; `verify` limpo:
 
 ## 11. Questões em aberto
 
-- ~~hash por arquivo instalado fica para v0.2~~ — **decidido: entra já**
-  (registro v1, §6): o manifesto guarda `<sha256>␠␠<caminho>`. É o que torna
-  enforçável a promessa do `memoryhole` de preservar arquivo modificado (§4)
-  e dá dentes ao `verify` (integridade por arquivo, não só presença). O
-  `install_source` do minitrue hoje grava só o caminho — **implementação
-  pendente** (hashear cada arquivo copiado ao montar o manifesto).
+- ~~hash por arquivo instalado fica para v0.2~~ — **implementado** (registro
+  **v1**, §6): o `write_record` decora cada linha do manifesto como
+  `<sha256>␠␠<caminho>` (hash em streaming do arquivo real; `-` p/ symlink e
+  diretório). O `verify` confere a integridade por arquivo (conteúdo × hash
+  registrado, não só presença) e o `memoryhole` do mundo B **preserva o
+  arquivo modificado** (hash diverge ⇒ fica, com aviso). Leitura
+  retrocompatível: uma linha sem os dois espaços é o próprio caminho (v0).
 - A própria árvore newspeak como pacote gerido (`minitrue rectify newspeak`
   puxando tarball do repositório oficial da Distrópica): elegante e
   resolve atualização sem git instalado; especificar o pacote especial —
