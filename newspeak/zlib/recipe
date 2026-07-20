@@ -1,0 +1,18 @@
+NAME=zlib
+VERSION=1.3.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="gcc-pass2 binutils-glibc"
+ABOUT="compressão DEFLATE; dependência do elfutils (e de meio mundo). Última estável (1.3.1, 2024)."
+LICENSE="Zlib"
+SRC="https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz"
+SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    # zlib tem configure próprio (não autotools).
+    ./configure --prefix=/usr
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+}

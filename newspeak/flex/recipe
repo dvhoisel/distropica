@@ -1,0 +1,17 @@
+NAME=flex
+VERSION=2.6.4
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="gcc-pass2 binutils-glibc m4"
+ABOUT="gerador de scanners léxicos (lex). O kconfig e o dtc do kernel o exigem — 'make defconfig' falha sem ele. 2.6.4 é a última estável (2017; o projeto não lança desde então, então edge = 2.6.4)."
+LICENSE="BSD-3-Clause"
+SRC="https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz"
+SHA256=e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    ./configure --prefix=/usr --disable-dependency-tracking
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+}

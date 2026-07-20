@@ -1,0 +1,27 @@
+NAME=elfutils
+VERSION=0.192
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc zlib"
+BUILD_DEPS="gcc-pass2 binutils-glibc m4 flex bison zlib"
+ABOUT="libelf + gelf.h — o objtool do kernel os exige ('fatal error: gelf.h: No such file or directory'). --program-prefix=eu- evita colidir com o binutils (readelf/nm/strip/ar); --disable-debuginfod evita a dependência de libcurl."
+LICENSE="GPL-3.0-or-later AND LGPL-3.0-or-later"
+SRC="https://sourceware.org/elfutils/ftp/0.192/elfutils-0.192.tar.bz2"
+SHA256=616099beae24aba11f9b63d86ca6cc8d566d968b802391334c91df54eab416b4
+
+build() {
+    # busybox tar pode não autodetectar bz2 — descomprime explícito.
+    bzcat "$DL" | tar -x --strip-components=1
+    # -rpath-link,/usr/lib: o ld do gcc nativo não resolve o dep TRANSITIVO
+    # (os tools do elfutils linkam libelf.so/libdw.so, que precisam de libz.so)
+    # sem isto. Mesmo padrão do mathlibs-glibc (libmpc→libm). SPEC-0005.
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # -Wno-error: o gcc 15 emite warnings que o -Werror do elfutils barra.
+    # --disable-demangler: não precisamos do demangler C++ (só libelf/gelf.h
+    # p/ o objtool), e o teste de __cxa_demangle na libstdc++ falha.
+    ./configure --prefix=/usr --program-prefix=eu- \
+        --disable-debuginfod --disable-libdebuginfod --disable-werror \
+        --disable-demangler --disable-dependency-tracking
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+}
