@@ -76,6 +76,15 @@ Caminhos > 100 chars (o gcc tem vários) viram entradas GNU LongName, que o
 `pack` também emite deterministicamente. `rectify --emit` (SPEC-0009 §4)
 usará `pack` + compressão (zstd, a integrar) para o artefato do canal.
 
+O formato é **versionado** (`v1`), gravado num cabeçalho PAX global no início
+do tar (`DISTROPICA.pack=1`) — muda quando a normalização mudar, e um leitor
+pode recusar versão que não entenda. O `pack` transmite arquivo→tar→hasher
+(sem carregar arquivo nem tar inteiro em RAM), preserva nomes não-UTF-8 e
+hardlinks, e **recusa** arquivos especiais (FIFO/dispositivo/socket).
+Limitação conhecida do v1: **não** captura xattrs, ACLs, capabilities nem
+sparse — como dois builds da mesma receita dão a mesma árvore, isso não
+quebra o determinismo, mas quebra a fidelidade e está registrado.
+
 **O que o `reprocorr` cobre — o tar, não o `.tar.zst`.** O `reprocorr`
 (SPEC-0009 §3/§6) é o sha256 do **tar normalizado** (a saída de `pack`),
 nunca do `.tar.zst`: o zstd não é garantidamente byte-reprodutível entre
@@ -113,8 +122,8 @@ determinístico, na receita do binutils.
 
 **Hash de artefato — o laço fechado (2026-07-20).** Os dois `DESTDIR`
 independentes do m4 (byte-a-byte idênticos como árvore) empacotam, via
-`minitrue pack`, para o **mesmo sha256**
-(`5205a1591a7cedda43ca12cb2c4bb3a678bbb5bad1a68f3d16f0c7bebbbd0e6c`). É a
+`minitrue pack` (formato v1), para o **mesmo sha256**
+(`3502e68fc3eb5fecc2cc39e5e45164640bc5a02c13216ad51867e74c212e3e8f`). É a
 cadeia inteira demonstrada: **build reprodutível → empacotamento
 determinístico → hash de artefato idêntico**. Esse sha256 é exatamente o
 `reprocorr` que o mantenedor pina no índice do canal (SPEC-0009 §6) e que o
@@ -131,7 +140,7 @@ plugin — 185 arquivos, 564 MB). E os dois `DESTDIR` empacotam, via `minitrue
 pack`, para um **hash de artefato idêntico**:
 
 ```
-9396e46bfd96e4ad20d5df43b5f78aa03a407ed387515648c89a725da27a531e   (gcc-d1 == gcc-d2)
+e340111069e0f1cd29e0659d7cda6d0b28222534938299f80f52af342e5b02f1   (gcc-d1 == gcc-d2, formato v1)
 ```
 
 É a confirmação, em escala, da tese do codegen determinístico: o gcc da
@@ -146,7 +155,7 @@ passada-1) deram install idêntico arquivo a arquivo, e os dois `DESTDIR`
 empacotam para um hash de artefato idêntico:
 
 ```
-eac0e2635033bd1dc281bce787093068e1adda3129c47c1cbb6a13d259579705   (glibc-d1 == glibc-d2)
+9a1648d2a4eebc8a345b67b886af414e3d8492b457cb3459d228218f711ac05a   (glibc-d1 == glibc-d2, formato v1)
 ```
 
 Importa porque a glibc tem `configure`s que rodam durante o `make` e podiam

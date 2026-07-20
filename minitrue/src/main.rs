@@ -155,11 +155,15 @@ fn run() -> anyhow::Result<()> {
             if !dir.is_dir() {
                 return fail(1, format!("pack: {} não é um diretório", dir.display()));
             }
-            let (bytes, sha) = pack::pack_deterministic(&dir, pack::epoch_from_env())?;
-            if let Some(out) = names.get(1) {
-                std::fs::write(out, &bytes)
-                    .map_err(|e| Fail { code: 1, msg: format!("pack: não gravou {out}: {e}") })?;
-            }
+            let epoch = pack::epoch_from_env();
+            let sha = match names.get(1) {
+                Some(out) => {
+                    let f = std::fs::File::create(out)
+                        .map_err(|e| Fail { code: 1, msg: format!("pack: não gravou {out}: {e}") })?;
+                    pack::pack_deterministic(&dir, epoch, std::io::BufWriter::new(f))?
+                }
+                None => pack::pack_deterministic(&dir, epoch, std::io::sink())?,
+            };
             println!("{sha}  {}", dir.display());
             Ok(())
         }
