@@ -468,9 +468,31 @@ com SHA256 real pinado.
   instalados em `/usr/lib`. LTO fica desligado por opção (`--disable-lto`), o
   que é coerente com o pass-1. **O objetivo central do projeto — produzir uma
   glibc E um gcc nativo a partir de um mundo musl com semente zig — está
-  cumprido.** Falta transcrever tudo em receitas (`gcc-pass2`, `mathlibs`- e
-  `binutils`-glibc) e no fluxo do `rectify`; a investigação foi via bwrap
-  direto, e os scripts estão em `rootfs/tmp/*.sh`.
+  cumprido.**
+- **Transcrição em receitas (2026-07-20).** A investigação (feita via bwrap
+  direto) virou receitas versionadas em `newspeak/`, cada uma codificando os
+  consertos provados: `libstdcxx`, `mathlibs-glibc` (gmp+mpfr+mpc glibc,
+  `-std=gnu17`), `binutils-glibc` (`--enable-plugins`), `gcc-pass2` (triple
+  nativo, shims `-isystem` do pass-1, `--disable-lto`, `SELFTEST_TARGETS=`,
+  reconciliação lib64→lib). A **ordem do E2** fica no grafo de DEPS:
+  `rectify gcc-pass2` puxa `glibc → mathlibs-glibc → libstdcxx →
+  binutils-glibc → gcc-pass2` (com `gcc` pass-1 e `binutils-cross` como
+  BUILD_DEPS). Validadas: sintaxe (`sh -n`) e carga (campos + DEPS).
+
+  **O gap que a transcrição expôs — supersessão / fingerprint de build.** Os
+  rebuilds-glibc instalam nos **mesmos caminhos** dos seus equivalentes
+  semente (mathlibs-glibc × gmp/mpfr/mpc; binutils-glibc × binutils;
+  gcc-pass2 × gcc). No `rectify`, isso dispara *doublethink* (SPEC-0003 §7),
+  porque o modelo hoje trata "mesmo caminho, dono diferente" como colisão. É
+  a mesma dívida do **fingerprint de build** (idempotência só olha `VERSION`,
+  não a identidade toolchain×receita): o E2 é uma **sequência de
+  substituições** — reconstruir o mesmo software com um toolchain melhor,
+  in-place. Fechar a execução ponta-a-ponta pelo `rectify` exige resolver
+  isso — via fingerprint (rebuild-in-place quando a identidade de build muda)
+  ou tratando os builds-semente como provisionais que cedem (SPEC-0003 §3) —
+  e é o **próximo passo** do E2 como fluxo. As receitas estão prontas; o
+  executor precisa desta peça para rodá-las sem colidir. Os scripts da
+  investigação seguem em `rootfs/tmp/*.sh` como referência.
 
 ## 5. Estágio 3 — boot de verdade
 

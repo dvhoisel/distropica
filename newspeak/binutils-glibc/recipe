@@ -1,0 +1,32 @@
+NAME=binutils-glibc
+VERSION=2.45
+KIND=source
+TOOLCHAIN=cross
+RETRIES=20
+DEPS="glibc"
+BUILD_DEPS="gcc binutils-cross"
+ABOUT="binutils 2.45 reconstruído como GLIBC (dinâmico), não musl-estático. Passo do E2 descoberto na passada 2 (SPEC-0005 §4): o ld/ar da semente são estáticos musl e NÃO fazem dlopen do liblto_plugin.so ('dynamic loading not supported'), travando o link das target-libs do pass-2 — nem --disable-lto resolve, pois o ar é configurado com --plugin. Reconstruído glibc (interpreter /lib64/ld-linux-x86-64.so.2), o ld/ar passam a carregar plugins. SUPERSEDE o binutils-semente nos mesmos /usr/bin (as/ld/ar/nm) — colisão = dívida de 'fingerprint de build' (§4). --enable-plugins liga o suporte a plugin; -std=gnu17 p/ o código pré-C23."
+LICENSE=GPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/binutils/binutils-2.45.tar.xz"
+SHA256=c50c0e7f9cb188980e2cc97e4537626b1672441815587f1eab69d2a1bfbef5d2
+
+build() {
+    mkdir -p "$WORK/.tc"
+    cat > "$WORK/.tc/x86_64-distropica-linux-gnu-gcc" <<'SHIM'
+#!/bin/sh
+exec /usr/bin/x86_64-distropica-linux-gnu-gcc -isystem /usr/include -B/usr/lib -L/usr/lib -std=gnu17 "$@"
+SHIM
+    chmod +x "$WORK/.tc"/*
+    export PATH="$WORK/.tc:$PATH"
+    export CC=x86_64-distropica-linux-gnu-gcc AR=ar RANLIB=ranlib
+
+    tar -xJf "$DL" --strip-components=1
+    mkdir -p build && cd build
+    # Mesmas flags do binutils-semente, agora glibc + --enable-plugins (o que
+    # habilita o dlopen do liblto_plugin.so). MAKEINFO=true: sem texinfo.
+    ../configure --prefix=/usr --disable-nls --disable-werror --disable-gprofng \
+        --enable-default-hash-style=gnu --enable-deterministic-archives \
+        --enable-plugins --disable-dependency-tracking
+    retry make -j"$JOBS" MAKEINFO=true
+    make install MAKEINFO=true DESTDIR="$STAGE"
+}
