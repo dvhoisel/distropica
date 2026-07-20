@@ -872,12 +872,244 @@ fn world_remove(ctx: &Ctx, name: &str) -> Result<()> {
     Ok(())
 }
 
+// ---------- explain / why: a proveniência como comando (SPEC-0003 §6) ----------
+
+/// Resolve o alvo do `explain` para um caminho virtual absoluto: caminho
+/// absoluto → como está; nome simples (sem `/`) → comando em `/usr/bin`;
+/// relativo com `/` → absolutizado.
+fn resolve_virt(target: &str) -> String {
+    if target.starts_with('/') {
+        target.to_string()
+    } else if !target.contains('/') {
+        format!("/usr/bin/{target}")
+    } else {
+        format!("/{target}")
+    }
+}
+
+/// Dado um caminho virtual, o nome do pacote cujo manifesto o reivindica.
+/// Cobre o desvio de `/etc` para a fábrica (`/usr/share/factory/etc/…`).
+/// O manifesto guarda caminhos (ou `<sha256>␠␠<caminho>` no v1); casa o sufixo.
+fn owner_of(ctx: &Ctx, virt: &str) -> Option<String> {
+    let mut wanted = vec![virt.to_string()];
+    if let Some(sub) = virt.strip_prefix("/etc/") {
+        wanted.push(format!("/usr/share/factory/etc/{sub}"));
+    }
+    let claims = |line: &str| -> bool {
+        let path = line.rsplit("  ").next().unwrap_or(line);
+        wanted.iter().any(|w| w == path || w == line)
+    };
+    let mut owners: Vec<String> = Vec::new();
+    for e in fs::read_dir(ctx.records_dir()).ok()?.flatten() {
+        if read_manifest(&e.path()).iter().any(|l| claims(l)) {
+            owners.push(e.file_name().to_string_lossy().into_owned());
+        }
+    }
+    // Um provisório e um sucessor podem "reivindicar" o mesmo caminho no
+    // manifesto se a cessão ainda não foi limpa; o dono real é o não-provisório.
+    owners.sort();
+    owners
+        .iter()
+        .find(|n| !is_provisional(ctx, n))
+        .or_else(|| owners.first())
+        .cloned()
+}
+
+/// Pacotes instalados que listam `name` em `DEPS` (dependência reversa). Lê o
+/// `DEPS=` do `meta` do registro (gravado por `write_record`).
+fn dependents_of(ctx: &Ctx, name: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(entries) = fs::read_dir(ctx.records_dir()) {
+        for e in entries.flatten() {
+            let other = e.file_name().to_string_lossy().into_owned();
+            if other == name {
+                continue;
+            }
+            let deps = read_meta(&e.path())
+                .and_then(|m| m.get("DEPS").cloned())
+                .unwrap_or_default();
+            if deps.split_whitespace().any(|d| d == name) {
+                out.push(other);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// O conjunto `world` (intenção explícita do administrador), um pacote por
+/// linha; `#` comenta. Ausente ⇒ vazio.
+fn read_world(ctx: &Ctx) -> HashSet<String> {
+    fs::read_to_string(ctx.world_path())
+        .map(|t| {
+            t.lines()
+                .map(|l| l.split('#').next().unwrap_or("").trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn world_label(meta: &HashMap<String, String>) -> &'static str {
+    match meta.get("WORLD").map(String::as_str) {
+        Some("A") => "A — binário do mantenedor (em /opt, links em /usr)",
+        Some("B") => "B — compilado da fonte (árvore em /usr)",
+        _ => "?",
+    }
+}
+
+/// De onde veio o artefato. Quando os canais (SPEC-0009) forem implementados,
+/// o campo `ORIGIN` refina isto; por ora deriva de `WORLD`.
+fn origin_label(meta: &HashMap<String, String>) -> String {
+    if let Some(o) = meta.get("ORIGIN") {
+        return o.clone();
+    }
+    match meta.get("WORLD").map(String::as_str) {
+        Some("A") => "binário de vendor (upstream)".into(),
+        Some("B") => "compilado localmente da fonte".into(),
+        _ => "desconhecida".into(),
+    }
+}
+
+/// `explain <caminho>` — quem é o dono de um arquivo e toda a sua proveniência.
+pub fn explain(ctx: &Ctx, target: &str) -> Result<()> {
+    let virt = resolve_virt(target);
+    match owner_of(ctx, &virt) {
+        Some(name) => {
+            let rec = ctx.records_dir().join(&name);
+            let meta = read_meta(&rec).unwrap_or_default();
+            let field = |k: &str| meta.get(k).map(String::as_str).unwrap_or("?");
+            println!("{virt}");
+            println!("  pacote:      {name} {}", field("VERSION"));
+            println!("  mundo:       {}", world_label(&meta));
+            println!("  origem:      {}", origin_label(&meta));
+            if field("PROVISIONAL") == "1" {
+                println!("  provisório:  sim — cede o caminho a um sucessor (SPEC-0003 §3)");
+            }
+            if let Some(fp) = meta.get("FINGERPRINT") {
+                println!("  fingerprint: {}", &fp[..fp.len().min(16)]);
+            }
+            println!("  instalado:   {}", field("INSTALLED_AT"));
+            println!("  receita:     {}", rec.join("recipe").display());
+            if let Some(about) = about_of(&rec) {
+                println!("  é:           {about}");
+            }
+            if virt.starts_with("/etc/") {
+                println!("  nota:        default de /etc (a fábrica é a fonte; a sua cópia pode divergir — SPEC-0002 §6)");
+            }
+            let real = ctx.root.join(virt.trim_start_matches('/'));
+            if let Ok(t) = fs::read_link(&real) {
+                println!("  link →       {}", t.display());
+            }
+            Ok(())
+        }
+        None => {
+            let real = ctx.root.join(virt.trim_start_matches('/'));
+            if real.symlink_metadata().is_ok() {
+                println!("{virt}: existe, mas nenhum registro o reivindica — wrongthink (veja `verify`)");
+            } else {
+                println!("{virt}: nenhum registro o reivindica, e não há nada aí.");
+            }
+            Ok(())
+        }
+    }
+}
+
+/// `why <pacote>` — por que este pacote está no sistema.
+pub fn why(ctx: &Ctx, name: &str) -> Result<()> {
+    let rec = ctx.records_dir().join(name);
+    let meta = match read_meta(&rec) {
+        Some(m) => m,
+        None => return fail(2, format!("{name}: não está registrado (não instalado)")),
+    };
+    println!("{name} {}", meta.get("VERSION").map(String::as_str).unwrap_or("?"));
+    let explicit = read_world(ctx).contains(name);
+    let dependents = dependents_of(ctx, name);
+    if explicit {
+        println!("  desejado:    explicitamente (consta no world — SPEC-0003 §2)");
+    }
+    if !dependents.is_empty() {
+        println!("  requerido por: {}", dependents.join(", "));
+    }
+    if !explicit && dependents.is_empty() {
+        println!("  órfão:       nem explícito nem dependência de outro (candidato a `memoryhole --orfaos`)");
+    }
+    println!("  origem:      {}", origin_label(&meta));
+    if meta.get("PROVISIONAL").map(String::as_str) == Some("1") {
+        println!("  provisório:  sim — scaffolding que cede a um sucessor (SPEC-0003 §3)");
+    }
+    Ok(())
+}
+
+/// Extrai o `ABOUT` de uma cópia de receita no registro (uma linha).
+fn about_of(rec_dir: &Path) -> Option<String> {
+    let recipe = rec_dir.join("recipe");
+    if !recipe.is_file() {
+        return None;
+    }
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(". \"$1\"; printf '%s' \"${ABOUT:-}\"")
+        .arg("sh")
+        .arg(&recipe)
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static CNT: AtomicU32 = AtomicU32::new(0);
+
+    /// explain/why: owner_of acha o dono (incl. desvio de /etc→fábrica) e
+    /// prefere o não-provisório; dependents_of acha a dependência reversa;
+    /// read_world lê a intenção explícita.
+    #[test]
+    fn explain_why_proveniencia() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-expl-{}-{n}", std::process::id()));
+        let recs = root.join("var/lib/minitrue/records");
+        // glibc (mundo B) dona de /usr/lib/libc.so.6, dep de ninguém explícito
+        fs::create_dir_all(recs.join("glibc")).unwrap();
+        fs::write(recs.join("glibc/meta"), "NAME=glibc\nVERSION=2.42\nWORLD=B\nDEPS=\n").unwrap();
+        fs::write(recs.join("glibc/manifest"), "/usr/lib/libc.so.6\n").unwrap();
+        // gcc (mundo B) depende de glibc; dona do default /etc (via fábrica)
+        fs::create_dir_all(recs.join("gcc")).unwrap();
+        fs::write(recs.join("gcc/meta"), "NAME=gcc\nVERSION=15.3.0\nWORLD=B\nDEPS=glibc\n").unwrap();
+        fs::write(recs.join("gcc/manifest"), "/usr/bin/gcc\n/usr/share/factory/etc/gcc.conf\n").unwrap();
+        // busybox provisional também "reivindica" /usr/bin/gcc (cessão não limpa)
+        fs::create_dir_all(recs.join("busybox")).unwrap();
+        fs::write(recs.join("busybox/meta"), "NAME=busybox\nVERSION=1.35\nWORLD=A\nPROVISIONAL=1\n").unwrap();
+        fs::write(recs.join("busybox/manifest"), "/usr/bin/gcc\n").unwrap();
+        // world: glibc é explícito
+        fs::create_dir_all(root.join("etc/minitrue")).unwrap();
+        fs::write(root.join("etc/minitrue/world"), "glibc\n# comentário\n").unwrap();
+
+        let ctx = Ctx { root: root.clone(), offline: false, tofu: false, jobs: 1 };
+        // dono direto
+        assert_eq!(owner_of(&ctx, "/usr/lib/libc.so.6").as_deref(), Some("glibc"));
+        // /etc/gcc.conf resolve pela fábrica
+        assert_eq!(owner_of(&ctx, "/etc/gcc.conf").as_deref(), Some("gcc"));
+        // caminho reivindicado por gcc E pela busybox provisional → vence o não-provisório
+        assert_eq!(owner_of(&ctx, "/usr/bin/gcc").as_deref(), Some("gcc"));
+        // caminho sem dono
+        assert_eq!(owner_of(&ctx, "/usr/bin/inexistente"), None);
+        // dependência reversa
+        assert_eq!(dependents_of(&ctx, "glibc"), vec!["gcc".to_string()]);
+        assert!(dependents_of(&ctx, "gcc").is_empty());
+        // world
+        assert!(read_world(&ctx).contains("glibc"));
+        assert!(!read_world(&ctx).contains("gcc"));
+        let _ = fs::remove_dir_all(&root);
+    }
 
     /// Supersessão provisional (SPEC-0005 §4): um pacote-semente PROVISIONAL
     /// (gmp/binutils/gcc musl) cede seus caminhos ao rebuild-glibc que os

@@ -76,6 +76,8 @@ uso: minitrue [--root DIR] [--offline] [--tofu] [--jobs N] <comando> [args]
   archives              lista os registros
   verify                confere registros e varre /usr por links órfãos
   newspeak  <pacote>    imprime a receita efetiva e sua origem
+  explain   <caminho>   de quem é o arquivo e toda a sua proveniência
+  why       <pacote>    por que este pacote está no sistema
   pack <dir> [saída]    tara <dir> determinístico; imprime o sha256 (SPEC-0010)
 
 chegam no Marco 0.2: rectify --sync, rollback, unperson, lint, mundo B
@@ -146,6 +148,14 @@ fn run() -> anyhow::Result<()> {
         Some("newspeak") => match names.first() {
             Some(n) => install::newspeak_show(&ctx, n),
             None => fail(1, "newspeak: diga o pacote"),
+        },
+        Some("explain") => match names.first() {
+            Some(t) => install::explain(&ctx, t),
+            None => fail(1, "explain: diga o caminho ou o comando"),
+        },
+        Some("why") => match names.first() {
+            Some(n) => install::why(&ctx, n),
+            None => fail(1, "why: diga o pacote"),
         },
         Some("pack") => {
             let dir = match names.first() {

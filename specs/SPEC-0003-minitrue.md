@@ -30,6 +30,8 @@ minitrue archives  [padrão]       lista registros; marca não-pessoas e órfão
 minitrue verify    [<pacote>…]    confere registros contra o filesystem e
                                   varre /usr por links órfãos (§5)
 minitrue newspeak  <pacote>       imprime a receita efetiva e sua origem
+minitrue explain   <caminho>      de quem é o arquivo e toda a sua proveniência (§6)
+minitrue why       <pacote>       por que este pacote está no sistema (§6)
 minitrue lint      [<árvore>]     valida a árvore newspeak (SPEC-0004 §6)
 minitrue channel   <sub>          add|remove|list|refresh de canais (SPEC-0009 §7)
 minitrue pack      <dir> [saída]  tar normalizado determinístico + sha256 (SPEC-0010 §4)
@@ -183,6 +185,32 @@ o estado (`UNPERSON=1` quando desativado). É o que permite `rollback` e
 Mundo B: os hashes dos defaults de `/etc` materializados também ficam no
 registro — é a base do veredito intacto × modificado-pelo-admin que o
 `verify` emite (§3, passo 6).
+
+### 6.1 Explicabilidade — `explain` e `why`
+
+Se o registro **é** a verdade (o filesystem como banco, SPEC-0001), então a
+verdade tem de ser **perguntável**. Dois comandos leem os registros e
+respondem, sem estado extra:
+
+- **`explain <caminho>`** — de quem é um arquivo e toda a sua proveniência:
+  o pacote e a versão que o reivindicam (varrendo os manifestos), o mundo
+  (A/B), a origem (vendor/fonte/canal), se é **provisório**, o `FINGERPRINT`,
+  quando foi instalado, a receita de origem e o seu `ABOUT`, o alvo se for
+  link, e a nota de fábrica se for um default de `/etc`. Um caminho sem dono é
+  apontado como *wrongthink* (existe sem registro). Aceita caminho absoluto ou
+  nome de comando (resolvido em `/usr/bin`); um `/etc/X` resolve pelo seu
+  default de fábrica (`/usr/share/factory/etc/X`). Onde um provisório e o seu
+  sucessor ainda coexistem no manifesto, vence o **não-provisório**.
+- **`why <pacote>`** — por que ele está no sistema: se é **desejado
+  explicitamente** (consta no `world`, §2), quais pacotes o **requerem**
+  (dependência reversa, lendo `DEPS` dos registros), e se é **órfão** (nem
+  explícito nem dependência — candidato a `memoryhole --orfaos`); mais a
+  origem e o estado provisório.
+
+É a característica distintiva: não "tenho um gerenciador pequeno", e sim
+"todo arquivo do sistema explica a si mesmo". Habilitada pelo registro —
+especialmente pelo `FINGERPRINT` (SPEC-0011 §4) e, quando chegar, pelo hash
+por arquivo do manifesto v1.
 
 ## 7. Colisões (*doublethink*)
 
