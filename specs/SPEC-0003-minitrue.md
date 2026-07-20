@@ -253,5 +253,7 @@ Sucesso de `rectify` termina em `doubleplusgood.`; `verify` limpo:
   puxando tarball do repositório oficial da Distrópica): elegante e
   resolve atualização sem git instalado; especificar o pacote especial —
   com a infra de assinaturas do v0.2, o tarball da árvore DEVERIA vir
-  assinado (minisign) com a chave do projeto.
+  assinado (minisign) com a chave do projeto. **É o motor do modelo rolling
+  edge (SPEC-0011 §3.1) — a peça que faz a árvore, logo o sistema, avançar
+  para o estável-mais-novo (P7).**
 - Downloads paralelos e retomada (range requests): v0.2.

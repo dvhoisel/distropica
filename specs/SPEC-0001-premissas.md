@@ -154,6 +154,35 @@ sistema alheio a partir de hash não-pinado — o pino nasce na máquina do
 autor e chega aos outros já congelado no commit. TOFU é como um pino passa a
 existir, não uma licença para viver sem ele.
 
+### P7 — Edge: sempre o estável mais recente
+
+A Distrópica é **edge**: para cada componente, a árvore newspeak pina a
+**versão estável mais recente** do upstream — a começar pelo **kernel**, que
+acompanha o *stable* mais novo do kernel.org, não um LTS antigo.
+
+**Edge é o estável mais recente, não *bleeding edge*.** Nada de release
+candidates, betas, nightlies ou snapshots de git — é a fronteira do que já é
+estável, não do que ainda não é. (Distingue-se do "edge" do Alpine, que
+nomeia o ramo *instável*; o edge da Distrópica é o oposto — o estável na sua
+borda mais nova.)
+
+Edge é **política de versão** (qual versão a árvore pina); o **rolling**
+(SPEC-0011) é o **mecanismo** (como a árvore se move e o sistema converge). Os
+dois casam: a árvore é continuamente reapontada para o estável-mais-novo, e
+`rectify --sync` retifica o sistema a ela. Seguir o binário do mantenedor
+(P2) passa a significar seguir o **último estável** dele — a segurança vem do
+rollback e da reprodução (SPEC-0011, SPEC-0010), não de ficar para trás.
+
+**Ressalva pragmática (P0).** Edge é o **default**, não um absoluto: quando o
+estável-mais-novo regride, a receita PODE pinar uma versão anterior sã, com o
+motivo registrado. Precedente do próprio bootstrap: **gawk 5.3.2**, porque o
+5.4.1 tinha uma regressão que quebrava o gcc (SPEC-0005). Edge nunca embarca o
+comprovadamente quebrado — o fim (um sistema que funciona) vence a letra (a
+versão mais nova).
+
+Tema: o **presente eterno**. Não se cultua a versão "antiga, estável e
+testada" — isso seria preservar o passado. Retifica-se para o agora.
+
 ## 2. O que conta como "binário do mantenedor original"
 
 Um artefato é **elegível** quando TODAS as condições valem:
