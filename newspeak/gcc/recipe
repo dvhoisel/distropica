@@ -3,41 +3,60 @@ VERSION=15.3.0
 KIND=source
 DEPS="binutils gmp mpfr mpc"
 BUILD_DEPS="linux-headers gawk"
-ABOUT="FRONTEIRA. O compilador C/C++ da passada 1 (cross, --without-headers). gawk 5.3.2 é BUILD_DEP (o 5.4.1 gera options.cc malformado); gcov-tool isolado de LANGUAGES; cc1 estático (LDFLAGS=-static). A versão c-only DESTA config compilou sob zig cc e a glibc 2.42 saiu dela. RESSALVA (2026-07-19): reconfigurar para c,c++ é a config correta p/ a passada 2, mas o rebuild falha quando a GLIBC JÁ ESTÁ INSTALADA — a configure do GCC passa a mis-detectar rlim_t/sbrk/strsignal e gera auto-host.h que colide com os headers musl do zig cc (build/gengenrtl.o). Causa estrutural: falta isolar o build da toolchain num sysroot separado (à la /tools do LFS), senão a glibc do sistema contamina a configure. Ver SPEC-0005 §4."
+ABOUT="O compilador C/C++ da passada 1 (cross x86_64-distropica-linux-gnu, --without-headers). Constrói cc1 + cc1plus + libgcc mínima com zig cc; a glibc 2.42 é compilada por ele, e o cc1plus habilita a passada 2. gawk 5.3.2 (o 5.4.1 gera options.cc malformado); gcov-tool fora de LANGUAGES; cc1/xgcc estáticos (LDFLAGS=-static); --disable-lto (o ld estático não faz dlopen do plugin). Consertos GCC×musl verificados 2026-07-19: (a) patch no gcc/configure neutralizando o fallback '#define rlim_t long'; (b) cache vars gcc_cv_have_decl_*/ac_cv_have_decl_*=yes p/ os decls que a musl declara mas a configure mis-detecta (senão system.h/libiberty.h criam fallbacks que colidem — sbrk(int)×intptr_t, vasprintf noexcept, strstr); (c) mathlibs isoladas da glibc (com a glibc instalada, --with-gmp=/usr injetaria -I/usr/include e o stdio.h da glibc quebraria o <cstdio> do libc++). libstdc++ NÃO entra aqui (--without-headers); vem após a glibc."
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/gcc/gcc-$VERSION/gcc-$VERSION.tar.xz"
 SHA256=fa59c1beef8995f27c4d71c1df227587189315d3e6faff1bb4306e61b0c530eb
 
 build() {
     tar -xJf "$DL" --strip-components=1
-    # Isola o gcov-tool da passada 1 (retira-o de LANGUAGES): seu
-    # libgcov-driver-tool.o compila um .c com o compilador C++, e o zig c++
-    # (clang) compila .c como C — quebra nos headers C++ do gcc (system.h:
-    # 'class'). g++ forçaria C++; não vale patchar isso na passada 1, onde o
-    # gcov-tool nem é necessário. gcov e gcov-dump continuam.
+
+    # gcov-tool fora de LANGUAGES: seu libgcov-driver-tool.o compila um .c com
+    # o compilador C++, e o zig c++ (clang) compila .c como C — quebra nos
+    # headers C++ do gcc. Não é parte do compilador mínimo.
     sed -i 's/ gcov-tool\$(exeext)//' gcc/Makefile.in
-    # As três libs matemáticas são achadas em /usr via --with-* (zig cc não
-    # busca /usr por conta própria). --disable-bootstrap: um estágio só, com o
-    # zig cc como compilador semente. --without-headers/--with-newlib: constrói
-    # o compilador + libgcc estático sem depender de um libc-alvo que ainda não
-    # existe. --disable-lto: sem o LTO plugin (liblto_plugin.so), que o ld
-    # estático não consegue carregar (dlopen) — e a passada 1 não usa LTO.
-    # Passo seguinte da cadeia: glibc compilada com este gcc, e então
-    # uma passada 2 (linguagens c,c++, sem --without-headers) hospedada na glibc.
+
+    # rlim_t: o check é AC_TRY_COMPILE inline (sem cache var); quando falha (por
+    # causa dos outros fallbacks conflitantes em system.h) define '#define rlim_t
+    # long', que colide com o typedef da musl. Neutraliza o fallback.
+    sed -i 's/#define rlim_t long/#define GCC_RLIM_T_UNUSED_ long/' gcc/configure
+
+    # Decls que a musl DECLARA mas a configure do GCC (rodando em C++) não
+    # enxerga — daí HAVE_DECL_*=0 e fallbacks em system.h/libiberty.h que
+    # colidem. Força a verdade nos dois prefixos: gcc_cv_ (gcc/, macro própria
+    # gcc_AC_CHECK_DECL) e ac_cv_ (libiberty). Exportado p/ o make, pois a
+    # configure do subdir gcc/ roda durante o make. Exclui os glibc-only
+    # (mallinfo, mallinfo2, ldgetname).
+    for d in abort asprintf atof atol atoll basename calloc clearerr_unlocked \
+        clock errno feof_unlocked ferror_unlocked fflush_unlocked ffs \
+        fgetc_unlocked fgets_unlocked fileno_unlocked fmemopen fprintf_unlocked \
+        fputc_unlocked fputs_unlocked fread_unlocked free fwrite_unlocked \
+        getchar_unlocked getcwd getc_unlocked getenv getopt getpagesize \
+        getrlimit getrusage getwd madvise malloc mkstemps putchar_unlocked \
+        putc_unlocked realloc setenv setrlimit sigaltstack snprintf sbrk \
+        stpcpy strnlen strstr strsignal strtol strtoll strtoul strtoull \
+        strverscmp times unsetenv vasprintf vsnprintf; do
+        export "gcc_cv_have_decl_$d=yes" "ac_cv_have_decl_$d=yes"
+    done
+
+    # Isola gmp/mpfr/mpc num prefixo separado da glibc: com a glibc instalada,
+    # --with-gmp="$ROOT/usr" traria -I/usr/include e o stdio.h da glibc vem
+    # antes do <stdio.h> do libc++ do zig, quebrando o <cstdio>.
+    ml="$WORK/mathlibs"
+    mkdir -p "$ml/include" "$ml/lib"
+    for h in gmp gmpxx mpfr mpf2mpfr mpc; do
+        cp -a "$ROOT/usr/include/$h.h" "$ml/include/" 2>/dev/null || true
+    done
+    cp -a "$ROOT"/usr/lib/libgmp.* "$ROOT"/usr/lib/libmpfr.* "$ROOT"/usr/lib/libmpc.* "$ml/lib/" 2>/dev/null || true
+
     mkdir -p build && cd build
     ../configure --prefix=/usr \
         --target=x86_64-distropica-linux-gnu \
         --disable-bootstrap --disable-multilib --disable-nls \
         --disable-shared --disable-threads --disable-lto \
         --without-headers --with-newlib --enable-languages=c,c++ \
-        --with-gmp="$ROOT/usr" --with-mpfr="$ROOT/usr" --with-mpc="$ROOT/usr" \
+        --with-gmp="$ml" --with-mpfr="$ml" --with-mpc="$ml" \
         --disable-dependency-tracking
-    # LDFLAGS=-static: o cc1/xgcc linkam estáticos, para rodarem no rootfs
-    # (que não tem loader musl instalado; o resto do sistema é estático).
-    # SELFTEST_TARGETS=: desliga o self-test do all-gcc (a passada 1 não o
-    # roda, à la LFS) — ele tentaria executar o cc1 durante o build.
-    # c,c++: build o compilador (cc1 + cc1plus) e a libgcc mínima. libstdc++
-    # NÃO entra aqui (--without-headers); vem depois, com a glibc instalada.
     make -j"$JOBS" all-gcc all-target-libgcc LDFLAGS=-static SELFTEST_TARGETS=
     make install-gcc install-target-libgcc DESTDIR="$STAGE" SELFTEST_TARGETS=
 }

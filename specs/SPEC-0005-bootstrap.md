@@ -329,6 +329,21 @@ gawk 5.4.1, gcc 15.3.0, glibc 2.42 — todos com SHA256 real pinado.
   mathlibs da glibc — não overrides ad-hoc, que revelam camada após camada.
   O cache var (a pergunta) está respondido: **`gcc_cv_have_decl_<fn>`**,
   exportado no ambiente do make.
+- **RESOLVIDO — a passada 1 com C++ COMPILA (2026-07-19).** Correção
+  cirúrgica dos decls + isolamento das mathlibs fecharam o build. As quatro
+  peças, todas na receita `gcc`: (1) patch no `gcc/configure` neutralizando
+  `#define rlim_t long`; (2) cache vars `gcc_cv_have_decl_*`/`ac_cv_have_decl_*=yes`
+  para os ~55 decls que a musl declara (exceto glibc-only mallinfo/mallinfo2/
+  ldgetname) — a `getwd`/`strstr` NÃO davam return-type-conflict de verdade,
+  era cascata do `<cstdio>` quebrado; (3) mathlibs copiadas p/ um prefixo
+  isolado (`$WORK/mathlibs`) e `--with-gmp=` apontando lá, tirando o
+  `-I/usr/include` da glibc do caminho do libc++; (4) gcov-tool fora de
+  LANGUAGES. Resultado: o build completou 66 mil linhas e produziu **`cc1`
+  (242 MB), `cc1plus` (256 MB), `xgcc`, `xg++`**. Instalado; o
+  `x86_64-distropica-linux-gnu-g++` **compila C++ → assembly** (cc1plus
+  funciona). O `libstdc++` ainda não (é `--without-headers`; vem com a
+  glibc). Com o cc1plus pronto, a **passada 2 destrava**: agora há um gcc
+  real (não zig cc) capaz de compilar o código C++ do GCC contra a glibc.
 
 ## 5. Estágio 3 — boot de verdade
 
