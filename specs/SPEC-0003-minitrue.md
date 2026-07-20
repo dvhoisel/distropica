@@ -159,9 +159,11 @@ são removidas no upgrade. `memoryhole` remove tudo. Ajustável via
 
 Três arquivos-texto:
 
-- `meta` — `VERSION=`, `KIND=`, `WORLD=A|B`, `ORIGIN=`, `SHA256=` (por
-  artefato), `FINGERPRINT=`, `INSTALLED_AT=` (ISO-8601), `RECIPE_COMMIT=` (se
-  conhecido). O **`ORIGIN`** é de onde veio o artefato — `vendor` (mundo A),
+- `meta` — `RECORD_FORMAT=`, `VERSION=`, `KIND=`, `WORLD=A|B`, `ORIGIN=`,
+  `SHA256=` (por artefato), `FINGERPRINT=`, `INSTALLED_AT=` (ISO-8601),
+  `RECIPE_COMMIT=` (se conhecido). O **`RECORD_FORMAT`** versiona o esquema do
+  registro (hoje `1`), para migração e leitura consciente. O **`ORIGIN`** é de
+  onde veio o artefato — `vendor` (mundo A),
   `fonte` (mundo B compilado localmente) ou `canal:<nome>` quando os canais
   (SPEC-0009 §8) o instalam, caso em que `TRUST=` e `CHANNEL_SHA256=` também
   entram.
@@ -189,6 +191,21 @@ o estado (`UNPERSON=1` quando desativado). É o que permite `rollback` e
 Mundo B: os hashes dos defaults de `/etc` materializados também ficam no
 registro — é a base do veredito intacto × modificado-pelo-admin que o
 `verify` emite (§3, passo 6).
+
+**Escrita atômica e recuperação.** Cada arquivo do registro (e o `world`) é
+gravado por **temporário + `rename`** — atômico no mesmo filesystem, então
+nenhum leitor vê um arquivo meio-escrito. O `meta` é gravado **por último**: é
+a **marca de commit** do registro. Um crash entre o `manifest` e o `meta`
+deixa um registro **sem `meta`**, que a leitura trata como *não-instalado*
+(`all_manifests` o ignora, e o `rectify` reinstala) — em vez de tê-lo por bom
+meio-escrito. **Dívida restante:** a cópia mundo-B de `STAGE` para `/` ainda
+não é transacional (um crash no meio deixa arquivos soltos sem registro); um
+journal com rollback é trabalho próprio.
+
+**Exclusão mútua.** Comandos que mutam (`rectify`, `memoryhole`) tomam uma
+**trava exclusiva por rootfs** (`flock` em `var/lib/minitrue/lock`), advisory
+e auto-liberada na saída do processo — dois `minitrue` não corrompem o mesmo
+sistema ao mesmo tempo; o segundo recusa com erro claro.
 
 ### 6.1 Explicabilidade — `explain` e `why`
 

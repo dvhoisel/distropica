@@ -23,7 +23,11 @@ parecer externo). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | `--sync` (convergir ao world) | ⬜ | — | stub; SPEC-0011 |
 | `rollback` / `unperson` / `lint` | ⬜ | — | stub |
 | Canais binários (`channel`, `--emit`) | ⬜ | — | SPEC-0009; protocolo de confiança a fixar |
-| Registro **transacional** (lock, journal, rename) | ⬜ | — | **maior bloqueador** (parecer §3) |
+| Lock global por rootfs (flock) | ✅ | ✅ | rectify/memoryhole; auto-libera na saída |
+| Registro atômico (temp+rename, meta = commit) | ✅ | ✅ | meta-less = não-instalado ⇒ reinstala |
+| `RECORD_FORMAT=` | ✅ | — | versiona o esquema (hoje 1) |
+| Journal + rollback do mundo B (STAGE→/) | ⬜ | — | cópia sobre / ainda não transacional |
+| `SUPERSEDES=` explícito | ⬜ | — | hoje qualquer um toma de qualquer provisional |
 | Verificação OpenPGP | ⬜ | — | minisign só; stub p/ .asc |
 
 ## Bootstrap (SPEC-0005)
@@ -52,8 +56,10 @@ parecer externo). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 - **E2 não é "a frio":** o rootfs de prova tem resíduo da investigação manual
   (libstdcxx intermediária em lib64, libgmpxx-seed libc++, órfãos musl). O grafo
   ganhou a aresta `gcc → binutils-cross` que faltava; falta o E2-clean.
-- **Não-transacional:** instalação copia sobre `/` e só depois grava o registro;
-  falha parcial deixa estado sujo. Sem lock global, journal ou rename atômico.
+- **Parcialmente transacional:** o **registro** já é atômico (temp+rename, meta
+  = marca de commit) e há **lock global** (flock). Falta: a cópia mundo-B de
+  `STAGE` para `/` ainda não é transacional (crash no meio deixa arquivos soltos
+  sem registro) — precisa de journal + rollback.
 - **Sandbox não isola escrita:** o rootfs é montado gravável; uma receita pode
   escrever fora de `STAGE`. Ideal: rootfs read-only + binds graváveis p/ WORK/STAGE.
 - **Confiança de canal vs P6:** sem `REPROCORR`, o hash viria do índice assinado

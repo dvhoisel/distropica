@@ -6,6 +6,7 @@ description = "O Ministério da Verdade: busca, verifica, registra, apaga."
 
 [dependencies]
 anyhow = "1"
+fs2 = "0.4"
 hex = "0.4"
 minisign-verify = "0.2"
 sha2 = "0.10"

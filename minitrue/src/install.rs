@@ -1,6 +1,7 @@
 use crate::recipe::{self, Kind, Recipe, Toolchain};
 use crate::{fail, fetch, iso_now, Ctx};
 use anyhow::Result;
+use fs2::FileExt;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -9,9 +10,44 @@ use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Versão do esquema de registro (gravada em `RECORD_FORMAT=`). Muda quando o
+/// formato de `meta`/`manifest` muda — permite migração e leitura consciente.
+const RECORD_FORMAT: &str = "1";
+
+/// Escreve `bytes` em `path` **atomicamente**: grava num temporário irmão e
+/// `rename` por cima (atômico no mesmo filesystem). Um leitor nunca vê um
+/// arquivo meio-escrito, e um crash não deixa `path` corrompido (SPEC-0003 §6).
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("x");
+    let tmp = path.with_file_name(format!("{name}.tmp-{}", std::process::id()));
+    fs::write(&tmp, bytes)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// Trava exclusiva **por rootfs** — impede dois `minitrue` mutando o mesmo
+/// sistema ao mesmo tempo. É advisory (`flock`) e **auto-liberada quando o
+/// processo sai**, então um crash não deixa o lock preso. O `File` devolvido é
+/// o guarda: segure-o pela operação inteira; soltá-lo libera a trava.
+fn acquire_lock(ctx: &Ctx) -> Result<fs::File> {
+    let dir = ctx.root.join("var/lib/minitrue");
+    fs::create_dir_all(&dir)?;
+    let f = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(dir.join("lock"))?;
+    f.try_lock_exclusive().map_err(|_| crate::Fail {
+        code: 1,
+        msg: "outro minitrue já opera este sistema (lock em var/lib/minitrue/lock)".into(),
+    })?;
+    Ok(f)
+}
+
 // ---------- rectify ----------
 
 pub fn rectify(ctx: &Ctx, names: &[String]) -> Result<()> {
+    let _lock = acquire_lock(ctx)?; // segurado até o fim da operação
     let explicit: HashSet<&str> = names.iter().map(String::as_str).collect();
     let mut order: Vec<Recipe> = Vec::new();
     let mut seen = HashSet::new();
@@ -721,6 +757,7 @@ fn room101(ctx: &Ctx, r: &Recipe, stdout: &[u8], stderr: &[u8]) -> Result<()> {
 // ---------- memoryhole ----------
 
 pub fn memoryhole(ctx: &Ctx, names: &[String]) -> Result<()> {
+    let _lock = acquire_lock(ctx)?; // segurado até o fim da operação
     let removing: HashSet<&str> = names.iter().map(String::as_str).collect();
     for name in names {
         let rec_dir = ctx.records_dir().join(name);
@@ -899,7 +936,7 @@ fn write_record(
     // `canal:<nome>` (+ TRUST, CHANNEL_SHA256); por ora deriva do mundo.
     let origin = if world == "A" { "vendor" } else { "fonte" };
     let meta = format!(
-        "NAME={}\nVERSION={}\nKIND={}\nWORLD={}\nORIGIN={}\nSHA256={}\nDEPS={}\nFINGERPRINT={}\nINSTALLED_AT={}\n{}",
+        "RECORD_FORMAT={RECORD_FORMAT}\nNAME={}\nVERSION={}\nKIND={}\nWORLD={}\nORIGIN={}\nSHA256={}\nDEPS={}\nFINGERPRINT={}\nINSTALLED_AT={}\n{}",
         r.name,
         r.version,
         if r.kind == Kind::Binary { "binary" } else { "source" },
@@ -911,7 +948,6 @@ fn write_record(
         iso_now(),
         if r.provisional { "PROVISIONAL=1\n" } else { "" }
     );
-    fs::write(rec_dir.join("meta"), meta)?;
     // Manifesto v1: cada linha vira `<sha256>␠␠<caminho>` (hash do arquivo real;
     // `-` p/ symlink/diretório). É o que dá integridade por arquivo ao `verify`
     // e o veredito intacto×modificado ao `memoryhole` (SPEC-0003 §4/§6).
@@ -925,10 +961,22 @@ fn write_record(
         })
         .collect();
     let body = decorated.join("\n") + "\n";
-    fs::write(rec_dir.join("manifest"), &body)?;
-    fs::copy(&r.path, rec_dir.join("recipe"))?;
-    fs::copy(&r.path, rec_dir.join(format!("recipe@{}", r.version)))?;
-    fs::write(rec_dir.join(format!("manifest@{}", r.version)), &body)?;
+    // Tudo por temporário + rename (atômico). O `meta` é gravado **por último**:
+    // é a marca de commit do registro — um crash entre o manifest e o meta deixa
+    // um registro sem meta, que `read_meta` trata como não-instalado (⇒ reinstala
+    // no próximo rectify), em vez de um registro meio-escrito tido por bom.
+    write_atomic(&rec_dir.join("manifest"), body.as_bytes())?;
+    write_atomic(
+        &rec_dir.join(format!("manifest@{}", r.version)),
+        body.as_bytes(),
+    )?;
+    let recipe_bytes = fs::read(&r.path)?;
+    write_atomic(&rec_dir.join("recipe"), &recipe_bytes)?;
+    write_atomic(
+        &rec_dir.join(format!("recipe@{}", r.version)),
+        &recipe_bytes,
+    )?;
+    write_atomic(&rec_dir.join("meta"), meta.as_bytes())?;
     Ok(())
 }
 
@@ -951,7 +999,7 @@ fn adopt_provisional_path(ctx: &Ctx, virt: &str, myself: &str) -> Option<String>
         let mut m = read_manifest(&e.path());
         if let Some(pos) = m.iter().position(|l| manifest_path(l) == virt) {
             m.remove(pos);
-            let _ = fs::write(e.path().join("manifest"), m.join("\n") + "\n");
+            let _ = write_atomic(&e.path().join("manifest"), (m.join("\n") + "\n").as_bytes());
             return Some(owner);
         }
     }
@@ -1017,10 +1065,14 @@ fn all_manifests(ctx: &Ctx) -> Vec<(String, String, HashSet<String>)> {
     let mut v = Vec::new();
     if let Ok(entries) = fs::read_dir(ctx.records_dir()) {
         for e in entries.flatten() {
+            // Registro sem `meta` = instalação não-commitada (crash entre o
+            // manifest e o meta): ignora, para não reivindicar caminhos que
+            // pertencem a um pacote meio-instalado (SPEC-0003 §6).
+            let Some(meta) = read_meta(&e.path()) else {
+                continue;
+            };
             let name = e.file_name().to_string_lossy().into_owned();
-            let ver = read_meta(&e.path())
-                .and_then(|m| m.get("VERSION").cloned())
-                .unwrap_or_else(|| "?".into());
+            let ver = meta.get("VERSION").cloned().unwrap_or_else(|| "?".into());
             let set: HashSet<String> = read_manifest(&e.path())
                 .iter()
                 .map(|l| manifest_path(l).to_string())
@@ -1039,7 +1091,7 @@ fn world_add(ctx: &Ctx, name: &str) -> Result<()> {
         .unwrap_or_default();
     if !lines.iter().any(|l| l.trim() == name) {
         lines.push(name.to_string());
-        fs::write(&p, lines.join("\n") + "\n")?;
+        write_atomic(&p, (lines.join("\n") + "\n").as_bytes())?;
     }
     Ok(())
 }
@@ -1048,7 +1100,7 @@ fn world_remove(ctx: &Ctx, name: &str) -> Result<()> {
     let p = ctx.world_path();
     if let Ok(txt) = fs::read_to_string(&p) {
         let lines: Vec<&str> = txt.lines().filter(|l| l.trim() != name).collect();
-        fs::write(&p, lines.join("\n") + "\n")?;
+        write_atomic(&p, (lines.join("\n") + "\n").as_bytes())?;
     }
     Ok(())
 }
@@ -1308,6 +1360,40 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static CNT: AtomicU32 = AtomicU32::new(0);
+
+    /// Núcleo transacional: write_atomic grava certo e não deixa `.tmp`; o
+    /// lock por rootfs é exclusivo (segundo pedido falha enquanto o 1º vive).
+    #[test]
+    fn atomico_e_lock() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-tx-{}-{n}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let p = root.join("meta");
+        write_atomic(&p, b"conteudo\n").unwrap();
+        assert_eq!(fs::read_to_string(&p).unwrap(), "conteudo\n");
+        write_atomic(&p, b"novo\n").unwrap(); // sobrescreve
+        assert_eq!(fs::read_to_string(&p).unwrap(), "novo\n");
+        // nenhum temporário sobrou
+        let leftovers: Vec<_> = fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "sobrou temporário");
+
+        // lock: o primeiro guarda segura; o segundo falha
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let g1 = acquire_lock(&ctx).expect("1º lock");
+        assert!(acquire_lock(&ctx).is_err(), "2º lock deveria falhar");
+        drop(g1);
+        assert!(acquire_lock(&ctx).is_ok(), "após soltar, relockeia");
+        let _ = fs::remove_dir_all(&root);
+    }
 
     /// Manifesto v1: parsing de `<sha256>␠␠<caminho>`, retrocompat com v0
     /// (linha sem hash), e file_hash streaming.
