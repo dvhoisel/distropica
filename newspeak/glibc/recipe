@@ -1,7 +1,9 @@
 NAME=glibc
 VERSION=2.42
 KIND=source
-BUILD_DEPS="gcc linux-headers binutils bison gawk python"
+TOOLCHAIN=cross
+RETRIES=50
+BUILD_DEPS="gcc binutils-cross linux-headers binutils bison gawk python"
 ABOUT="A ABI glibc — o divisor de águas do Estágio 2. COMPILA com o gcc da passada 1 (verificado 2026-07-19): libc.so.6 (2.42), ld-linux-x86-64.so.2, libm/libpthread/libdl saem como ELFs válidos. python é BUILD_DEP (a glibc exige Python no build). Ressalvas: o gcc-passada-1 (feito por zig cc/clang) é flaky — ICE segfault aleatório na math; um loop de make atravessa. O único não-compilável é links-dso-program.cc (helper de teste C++; pass-1 é só C). Falta fechar: make install no rootfs, symlinks do ld.so, e a passada 2 do gcc (que traz C++ e um gcc estável)."
 LICENSE="LGPL-2.1-or-later AND GPL-2.0-or-later"
 SRC="https://ftp.gnu.org/gnu/glibc/glibc-$VERSION.tar.xz"
@@ -20,6 +22,8 @@ build() {
         CC="x86_64-distropica-linux-gnu-gcc -fno-use-linker-plugin" BUILD_CC=cc \
         --enable-kernel=5.4 --with-headers="$ROOT/usr/include" \
         --disable-nscd libc_cv_slibdir=/usr/lib
-    make -j"$JOBS"
+    # retry: o gcc-passada-1 é flaky (ICE aleatório na math); cada tentativa
+    # do make incremental resume de onde parou até fechar (SPEC-0005/0010).
+    retry make -j"$JOBS"
     make install DESTDIR="$STAGE"
 }

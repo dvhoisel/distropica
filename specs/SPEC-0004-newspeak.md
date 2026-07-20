@@ -53,6 +53,8 @@ Opcionais:
 | `EPOCH` | `SOURCE_DATE_EPOCH` da receita (unix ts); sobrepõe o default do projeto p/ builds reprodutíveis (§3, SPEC-0010) |
 | `REPROCORR` | mundo B: sha256 do **tar normalizado** reprodutível (saída de `minitrue pack`); raiz de confiança única da corroboração de canal (SPEC-0009 §6, SPEC-0010 §4) |
 | `PROVISIONAL` | `1` ⇒ pacote-semente que cede o caminho a um homônimo real sem *doublethink* (ex.: busybox → coreutils/binutils; SPEC-0003 §3) |
+| `TOOLCHAIN` | perfil de toolchain do build (SPEC-0005): `seed` (zig cc -target musl; **default**), `cross` (`x86_64-distropica-linux-gnu-*`: gcc passada 1 + binutils-cross), `native` (gcc nativo, pós-E2) |
+| `RETRIES` | nº de reexecuções que a função `retry` do build tolera (§3), para o ICE flaky do gcc-passada-1 (SPEC-0005/0010). Default `0` |
 
 Funções:
 
@@ -73,7 +75,8 @@ O minitrue executa a função da receita via `sh -e`, com:
 | `PREFIX` | mundo A: staging de `/opt/<nome>/<versão>` |
 | `STAGE` | mundo B: DESTDIR de staging |
 | `JOBS` | paralelismo |
-| `CC`, `CXX`, `AR`, `RANLIB` | toolchain corrente. Pré-E2: `zig cc -target x86_64-linux-musl` etc. — o `-target` explícito é obrigatório (spike 2026-07-19: sem ele o zig mira o host, glibc). Pós-E2: gcc |
+| `CC`, `CXX`, `AR`, `RANLIB`, `NM`, `LD` | toolchain do perfil `TOOLCHAIN` (§2, SPEC-0005): `seed` ⇒ shims `zig cc -target x86_64-linux-musl` (o `-target` é obrigatório — sem ele o zig mira o host, glibc); `cross` ⇒ `x86_64-distropica-linux-gnu-*` (com os shims seed ainda no PATH, p/ `BUILD_CC`); `native` ⇒ `gcc`/`g++` |
+| `retry <cmd>` | função shell injetada: reexecuta `<cmd>` até `RETRIES` vezes (§2). Envolve o comando sujeito ao ICE flaky do gcc-passada-1 (ex.: `retry make -j"$JOBS"`); o `make` incremental resume a cada tentativa (SPEC-0005/0010) |
 | `ROOT` | raiz alvo (para casos raros e legítimos de leitura) |
 | `SOURCE_DATE_EPOCH` | timestamp fixo p/ builds reprodutíveis (SPEC-0010); do campo `EPOCH` da receita ou o default do projeto |
 | `LC_ALL`/`LANG`/`TZ` | `C`/`C`/`UTC` — impostos p/ determinismo (SPEC-0010) |

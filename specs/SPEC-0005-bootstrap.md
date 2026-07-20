@@ -146,6 +146,42 @@ no papel de toolchain hospedeira):
 7. `ldconfig`, `/etc/ld.so.conf`, e `/lib64/ld-linux-x86-64.so.2`
    resolvendo (usr-merge, SPEC-0002 §4).
 
+**A cadeia codificada — toolchain por estágio (2026-07-20).** Até aqui o E2
+era *demonstrado à mão* (scripts ad-hoc). Agora o executor a codifica: cada
+receita declara `TOOLCHAIN` (SPEC-0004 §2) e o `minitrue` injeta o compilador
+certo por estágio, em vez de tudo cair no zig/musl:
+
+- **`seed`** (default) — `zig cc -target x86_64-linux-musl`. A semente que
+  constrói a base E0/E1 e o **gcc passada 1** (que é seed: feito pelo zig).
+- **`cross`** — `x86_64-distropica-linux-gnu-{gcc,g++,ar,ranlib,nm,ld}`, do
+  gcc passada 1 + do **`binutils-cross`** (receita nova: binutils `--target=`
+  que dá as ferramentas prefixadas por nome, exigidas pelo build cross). A
+  **glibc** é `cross`; os shims seed seguem no PATH para o `BUILD_CC` dela.
+- **`native`** — `gcc`/`g++` nativo, hospedado na glibc. A **passada 2** e
+  tudo pós-E2.
+
+O ICE flaky do gcc-passada-1 vira contrato: a receita declara `RETRIES` e
+envolve o comando em `retry` (SPEC-0004 §3); o `make` incremental resume a
+cada tentativa até fechar. A `glibc` e o `gcc` já declaram `RETRIES=50`.
+
+**O runner hermético (2026-07-20).** O executor roda os builds mundo-B de um
+rootfs (`--root` != `/`) **dentro** dele, via `bwrap`: o rootfs montado em
+`/`, `--clearenv` (só as variáveis do contrato — fim do vazamento do ambiente
+do host) e `--unshare-net` (nenhum insumo pela rede; o fetch é no host —
+SPEC-0004 §3.2). É necessário para o perfil `native` (o gcc da passada 2 é
+**dinâmico** e usa o loader/libs glibc do rootfs em `/lib64`,`/usr/lib`
+absolutos, que só são os do rootfs sob chroot); o `cross` (estático, e o gcc é
+relocável) rodaria fora também, mas o runner o roda igual, hermético. Smoke
+verificado: sob `bwrap`, o `x86_64-distropica-linux-gnu-gcc` compila
+in-chroot achando o `cc1`, e a rede fica isolada. No próprio sistema
+(`--root /`) o build roda direto (o alvo já é `/`; sandbox de rede lá é dívida
+de SPEC-0003 §8).
+
+**Falta para o E2 fechar:** a **execução ponta-a-ponta** — `rectify` levando
+gcc→glibc→passada 2→libstdc++ até bater com os hashes reprodutíveis já
+provados (SPEC-0010 §6) — e as receitas da **passada 2 + libstdc++**, que
+ainda não existem.
+
 A partir daqui `CC` do contrato de receitas (SPEC-0004 §3) passa a ser o
 gcc nativo; `zig cc` permanece disponível como pacote comum.
 

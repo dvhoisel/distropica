@@ -196,10 +196,12 @@ retirar arquivo) e commitar na árvore newspeak.
   define as variáveis do contrato: `DL`, `WORK`, `PREFIX`/`STAGE`, `JOBS`,
   `CC`…).
 - Regra normativa: receita NÃO DEVE acessar rede (todo insumo entra por
-  `SRC`) nem escrever fora de `WORK`/`PREFIX`/`STAGE`. No v0 isso é
-  contrato, não sandbox; a partir do v0.2 o build DEVERIA rodar sob
-  `unshare -n` (sem rede) e usuário dedicado. Registrado como dívida
-  explícita.
+  `SRC`) nem escrever fora de `WORK`/`PREFIX`/`STAGE`. Para builds de um
+  rootfs (`--root` != `/`), isso já é **sandbox**, não só contrato: o
+  executor os roda dentro do rootfs via `bwrap` com `--clearenv` (ambiente
+  hermético) e `--unshare-net` (sem rede) — SPEC-0005. **Dívida restante:** o
+  build no próprio sistema (`--root /`) ainda roda direto (sem netns nem
+  usuário dedicado), e o mundo A (`install_pkg`) ainda não é sandboxado.
 - Maintainer scripts de `.deb`/`.rpm`: nunca executados (SPEC-0001 §2).
 
 ## 9. Saídas e códigos de erro

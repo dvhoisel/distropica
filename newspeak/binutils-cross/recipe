@@ -1,0 +1,23 @@
+NAME=binutils-cross
+VERSION=2.45
+KIND=source
+TOOLCHAIN=seed
+ABOUT="binutils targetando x86_64-distropica-linux-gnu: as/ld/ar/ranlib/nm/objcopy com o prefixo do alvo, que o gcc da passada 1 invoca ao gerar libgcc e que o build cross da glibc usa (o executor põe AR=x86_64-distropica-linux-gnu-ar etc. no perfil cross, SPEC-0005). Mesmo tarball do binutils nativo; muda só --target=. Mesma arquitetura, então os objetos são idênticos aos do binutils nativo — o prefixo é o que o toolchain cross exige por nome."
+LICENSE=GPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/binutils/binutils-$VERSION.tar.xz"
+SHA256=c50c0e7f9cb188980e2cc97e4537626b1672441815587f1eab69d2a1bfbef5d2
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    mkdir -p build && cd build
+    # --target= produz as ferramentas prefixadas (x86_64-distropica-linux-gnu-*)
+    # sob /usr/bin, sem colidir com o binutils nativo (nomes distintos, sem
+    # doublethink). MAKEINFO=true: sem texinfo no mundo musl inicial.
+    # --enable-deterministic-archives: o ar cross zera metadados dos membros
+    # (SPEC-0010), senão os .a da glibc não reproduzem.
+    ../configure --prefix=/usr --target=x86_64-distropica-linux-gnu \
+        --disable-nls --disable-werror --disable-gprofng \
+        --enable-deterministic-archives --disable-dependency-tracking
+    make -j"$JOBS" MAKEINFO=true
+    make install MAKEINFO=true DESTDIR="$STAGE"
+}

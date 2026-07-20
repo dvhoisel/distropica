@@ -9,6 +9,20 @@ pub enum Kind {
     Source,
 }
 
+/// Toolchain de build por estágio (SPEC-0005). O executor injeta `CC`/`AR`/…
+/// conforme o perfil; é o que permite a cadeia pass-1 → glibc → pass-2 existir
+/// como fluxo, em vez de tudo cair no zig/musl.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Toolchain {
+    /// `zig cc -target x86_64-linux-musl` — a semente. Default (pré-E2).
+    #[default]
+    Seed,
+    /// `x86_64-distropica-linux-gnu-*` — gcc passada 1 + binutils-cross.
+    Cross,
+    /// `gcc`/`g++` nativo, hospedado na glibc nova (pós-E2).
+    Native,
+}
+
 #[derive(Debug, Clone)]
 pub struct Recipe {
     pub name: String,
@@ -25,6 +39,8 @@ pub struct Recipe {
     pub requires_glibc: bool,
     pub provisional: bool,
     pub epoch: Option<String>,
+    pub toolchain: Toolchain,
+    pub retries: u32,
     pub path: PathBuf,
     pub has_install: bool,
 }
@@ -44,6 +60,8 @@ printf 'SIGKEY=%s\n' "${SIGKEY:-}"
 printf 'REQUIRES_GLIBC=%s\n' "${REQUIRES_GLIBC:-}"
 printf 'PROVISIONAL=%s\n' "${PROVISIONAL:-}"
 printf 'EPOCH=%s\n' "${EPOCH:-}"
+printf 'TOOLCHAIN=%s\n' "${TOOLCHAIN:-}"
+printf 'RETRIES=%s\n' "${RETRIES:-}"
 type install_pkg >/dev/null 2>&1 && printf 'HAS_INSTALL=1\n' || :
 "#;
 
@@ -130,6 +148,18 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
     }
     let sigsums = Some(field("SIGSUMS")).filter(|s| !s.is_empty());
     let sigkey = Some(field("SIGKEY")).filter(|s| !s.is_empty());
+    let toolchain = match field("TOOLCHAIN").as_str() {
+        "" | "seed" => Toolchain::Seed,
+        "cross" => Toolchain::Cross,
+        "native" => Toolchain::Native,
+        other => return fail(2, format!("{name}: TOOLCHAIN '{other}' inválido (seed|cross|native)")),
+    };
+    let retries: u32 = match field("RETRIES").as_str() {
+        "" => 0,
+        s => s
+            .parse()
+            .map_err(|_| crate::Fail { code: 2, msg: format!("{name}: RETRIES '{s}' não é número") })?,
+    };
 
     let r = Recipe {
         name: rname,
@@ -146,6 +176,8 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         requires_glibc: field("REQUIRES_GLIBC") == "1",
         provisional: field("PROVISIONAL") == "1",
         epoch: Some(field("EPOCH")).filter(|s| !s.is_empty()),
+        toolchain,
+        retries,
         path,
         has_install: get.contains_key("HAS_INSTALL"),
     };
@@ -153,4 +185,58 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         return fail(2, format!("{name}: KIND=binary exige install_pkg()"));
     }
     Ok(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static CNT: AtomicU32 = AtomicU32::new(0);
+
+    /// Grava um recipe num tree temporário e o carrega via `load`.
+    fn load_body(extra: &str) -> Result<Recipe> {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-recipe-{}-{n}", std::process::id()));
+        let dir = root.join("var/lib/minitrue/newspeak/foo");
+        std::fs::create_dir_all(&dir).unwrap();
+        let hash = "a".repeat(64);
+        let body = format!(
+            "NAME=foo\nVERSION=1.0\nKIND=source\nSRC=https://e/foo.tar.xz\nSHA256={hash}\n{extra}\nbuild(){{ :; }}\n"
+        );
+        std::fs::write(dir.join("recipe"), body).unwrap();
+        let ctx = Ctx { root: root.clone(), offline: false, tofu: false, jobs: 1 };
+        let r = load(&ctx, "foo");
+        let _ = std::fs::remove_dir_all(&root);
+        r
+    }
+
+    #[test]
+    fn toolchain_default_e_seed_sem_retries() {
+        let r = load_body("").unwrap();
+        assert_eq!(r.toolchain, Toolchain::Seed);
+        assert_eq!(r.retries, 0);
+    }
+
+    #[test]
+    fn toolchain_cross_com_retries() {
+        let r = load_body("TOOLCHAIN=cross\nRETRIES=50").unwrap();
+        assert_eq!(r.toolchain, Toolchain::Cross);
+        assert_eq!(r.retries, 50);
+    }
+
+    #[test]
+    fn toolchain_native() {
+        assert_eq!(load_body("TOOLCHAIN=native").unwrap().toolchain, Toolchain::Native);
+    }
+
+    #[test]
+    fn toolchain_invalido_recusado() {
+        assert!(load_body("TOOLCHAIN=quantum").is_err());
+    }
+
+    #[test]
+    fn retries_nao_numero_recusado() {
+        assert!(load_body("RETRIES=muitas").is_err());
+    }
 }

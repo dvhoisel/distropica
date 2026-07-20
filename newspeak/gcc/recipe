@@ -1,6 +1,7 @@
 NAME=gcc
 VERSION=15.3.0
 KIND=source
+RETRIES=50
 DEPS="binutils gmp mpfr mpc"
 BUILD_DEPS="linux-headers gawk"
 ABOUT="O compilador C/C++ da passada 1 (cross x86_64-distropica-linux-gnu, --without-headers). Constrói cc1 + cc1plus + libgcc mínima com zig cc; a glibc 2.42 é compilada por ele, e o cc1plus habilita a passada 2. gawk 5.3.2 (o 5.4.1 gera options.cc malformado); gcov-tool fora de LANGUAGES; cc1/xgcc estáticos (LDFLAGS=-static); --disable-lto (o ld estático não faz dlopen do plugin). Consertos GCC×musl verificados 2026-07-19: (a) patch no gcc/configure neutralizando o fallback '#define rlim_t long'; (b) cache vars gcc_cv_have_decl_*/ac_cv_have_decl_*=yes p/ os decls que a musl declara mas a configure mis-detecta (senão system.h/libiberty.h criam fallbacks que colidem — sbrk(int)×intptr_t, vasprintf noexcept, strstr); (c) mathlibs isoladas da glibc (com a glibc instalada, --with-gmp=/usr injetaria -I/usr/include e o stdio.h da glibc quebraria o <cstdio> do libc++). libstdc++ NÃO entra aqui (--without-headers); vem após a glibc."
@@ -57,6 +58,9 @@ build() {
         --without-headers --with-newlib --enable-languages=c,c++ \
         --with-gmp="$ml" --with-mpfr="$ml" --with-mpc="$ml" \
         --disable-dependency-tracking
-    make -j"$JOBS" all-gcc all-target-libgcc LDFLAGS=-static SELFTEST_TARGETS=
+    # retry: o zig cc/clang que constrói o gcc é flaky (ICE segfault aleatório
+    # na math, _FloatNx); cada tentativa do make incremental resume até fechar.
+    # A flakiness é só crash — o .o produzido é determinístico (SPEC-0010 §6).
+    retry make -j"$JOBS" all-gcc all-target-libgcc LDFLAGS=-static SELFTEST_TARGETS=
     make install-gcc install-target-libgcc DESTDIR="$STAGE" SELFTEST_TARGETS=
 }

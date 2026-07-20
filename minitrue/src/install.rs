@@ -1,4 +1,4 @@
-use crate::recipe::{self, Kind, Recipe};
+use crate::recipe::{self, Kind, Recipe, Toolchain};
 use crate::{fail, fetch, iso_now, Ctx};
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
@@ -219,17 +219,35 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
 /// Monta um diretório de shims cc/ld/ar/ranlib que fazem `zig` se passar pela
 /// toolchain de C corrente (SPEC-0005: pré-E2 é zig+musl). É o que o contrato
 /// da receita chama de $CC — a receita não sabe se por baixo é zig ou gcc.
-fn setup_toolchain(ctx: &Ctx, work: &Path) -> Result<PathBuf> {
-    let zig = ctx.root.join("opt/zig/current/zig");
-    if !zig.exists() {
-        return fail(5, "mundo B pré-E2 exige a toolchain zig — `minitrue rectify zig` antes");
+/// Ferramentas e prefixos de PATH que o build recebe, conforme o perfil de
+/// toolchain da receita (SPEC-0005). É o que faz a cadeia pass-1 → glibc →
+/// pass-2 existir como fluxo, em vez de tudo cair no zig/musl.
+struct BuildEnv {
+    cc: String,
+    cxx: String,
+    ar: String,
+    ranlib: String,
+    ld: String,
+    nm: String,
+    path_prefix: Vec<PathBuf>,
+}
+
+/// Alvo do gcc/binutils cross que produz glibc (SPEC-0005).
+const CROSS_TRIPLE: &str = "x86_64-distropica-linux-gnu";
+
+/// Cria os shims da semente (zig cc/c++/ld/ar…) num diretório e o devolve.
+/// `-ffile-prefix-map=$WORK=.` torna a reprodutibilidade independente do
+/// caminho de build (SPEC-0010): reescreve o comp_dir/__FILE__ para relativo.
+fn seed_shims(ctx: &Ctx, work: &Path) -> Result<PathBuf> {
+    let zig_host = ctx.root.join("opt/zig/current/zig");
+    if !zig_host.exists() {
+        return fail(5, "toolchain seed exige o zig — `minitrue rectify zig` antes");
     }
-    let zig_abs = zig.canonicalize()?;
-    let z = zig_abs.display();
-    // -ffile-prefix-map=$WORK=. torna a reprodutibilidade independente do
-    // caminho de build (SPEC-0010): reescreve o comp_dir/__FILE__ para relativo.
-    let w = work.display();
-    let map = format!("-ffile-prefix-map={w}=.");
+    // Os shims rodam DENTRO do chroot (bwrap): o caminho do zig e o
+    // prefix-map são os de dentro do rootfs, não os do host.
+    let zc = in_chroot(&ctx.root, &zig_host);
+    let z = zc.display();
+    let map = format!("-ffile-prefix-map={}=.", in_chroot(&ctx.root, work).display());
     let tc = work.join(".tc");
     fs::create_dir_all(&tc)?;
     let shims = [
@@ -237,7 +255,7 @@ fn setup_toolchain(ctx: &Ctx, work: &Path) -> Result<PathBuf> {
         ("gcc", format!("#!/bin/sh\nexec \"{z}\" cc -target x86_64-linux-musl {map} \"$@\"\n")),
         ("c++", format!("#!/bin/sh\nexec \"{z}\" c++ -target x86_64-linux-musl {map} \"$@\"\n")),
         ("g++", format!("#!/bin/sh\nexec \"{z}\" c++ -target x86_64-linux-musl {map} \"$@\"\n")),
-        // configure só sonda a existência de `ld` no PATH; o link real é interno ao zig cc.
+        // configure só sonda a existência de `ld` no PATH; o link é interno ao zig cc.
         ("ld", format!("#!/bin/sh\nexec \"{z}\" ld.lld \"$@\"\n")),
         ("ar", format!("#!/bin/sh\nexec \"{z}\" ar \"$@\"\n")),
         ("ranlib", format!("#!/bin/sh\nexec \"{z}\" ranlib \"$@\"\n")),
@@ -248,6 +266,171 @@ fn setup_toolchain(ctx: &Ctx, work: &Path) -> Result<PathBuf> {
         fs::set_permissions(&p, fs::Permissions::from_mode(0o755))?;
     }
     Ok(tc)
+}
+
+fn setup_toolchain(ctx: &Ctx, work: &Path, r: &Recipe) -> Result<BuildEnv> {
+    match r.toolchain {
+        Toolchain::Seed => {
+            let tc = seed_shims(ctx, work)?;
+            Ok(BuildEnv {
+                cc: "cc".into(),
+                cxx: "c++".into(),
+                ar: "ar".into(),
+                ranlib: "ranlib".into(),
+                ld: "ld".into(),
+                nm: "nm".into(),
+                path_prefix: vec![tc],
+            })
+        }
+        Toolchain::Cross => {
+            // gcc da passada 1 (real, não zig), em /usr/bin. Exige os build-deps
+            // `gcc` e `binutils-cross` (que trazem as/ld/ar/nm do alvo). Os shims
+            // da semente também ficam no PATH: um build cross usa o cross-gcc p/ o
+            // alvo (CC) e a semente p/ ferramentas do build-host (ex.: BUILD_CC=cc
+            // da glibc).
+            let cc = ctx.root.join("usr/bin").join(format!("{CROSS_TRIPLE}-gcc"));
+            if !cc.exists() {
+                return fail(
+                    5,
+                    format!("toolchain cross exige {CROSS_TRIPLE}-gcc (passada 1) — build-deps gcc + binutils-cross"),
+                );
+            }
+            let tc = seed_shims(ctx, work)?;
+            Ok(BuildEnv {
+                cc: format!("{CROSS_TRIPLE}-gcc"),
+                cxx: format!("{CROSS_TRIPLE}-g++"),
+                ar: format!("{CROSS_TRIPLE}-ar"),
+                ranlib: format!("{CROSS_TRIPLE}-ranlib"),
+                ld: format!("{CROSS_TRIPLE}-ld"),
+                nm: format!("{CROSS_TRIPLE}-nm"),
+                path_prefix: vec![tc, ctx.root.join("usr/bin"), ctx.root.join("bin")],
+            })
+        }
+        Toolchain::Native => {
+            // gcc nativo hospedado na glibc (passada 2). Pós-E2.
+            let gcc = ctx.root.join("usr/bin/gcc");
+            if !gcc.exists() {
+                return fail(5, "toolchain native exige o gcc da passada 2 (pós-E2)");
+            }
+            Ok(BuildEnv {
+                cc: "gcc".into(),
+                cxx: "g++".into(),
+                ar: "ar".into(),
+                ranlib: "ranlib".into(),
+                ld: "ld".into(),
+                nm: "nm".into(),
+                path_prefix: vec![ctx.root.join("usr/bin"), ctx.root.join("bin")],
+            })
+        }
+    }
+}
+
+/// Traduz um caminho do host (sob `root`) para o equivalente dentro do chroot
+/// (`root` montado em `/`). Fora de `root`, devolve como está.
+fn in_chroot(root: &Path, p: &Path) -> PathBuf {
+    match p.strip_prefix(root) {
+        Ok(rel) => Path::new("/").join(rel),
+        Err(_) => p.to_path_buf(),
+    }
+}
+
+/// Preâmbulo do build: `umask`, a função `retry` (SPEC-0005 — reexecuta um
+/// comando até `RETRIES` vezes, remédio do ICE flaky do gcc-passada-1, que é
+/// só crash: o `.o` é determinístico, SPEC-0010 §6), então `. $RECIPE; build`.
+const BUILD_PREAMBLE: &str = "umask 022\n\
+    retry(){ i=0; until \"$@\"; do i=$((i+1)); \
+    [ \"$i\" -gt \"${RETRIES:-0}\" ] && return 1; \
+    echo \"minitrue: retry $i (ICE?): $*\" >&2; done; }\n\
+    . \"$RECIPE\"\nbuild";
+
+/// Monta o comando de build. Num rootfs (`--root` != `/`) roda dentro dele via
+/// `bwrap`, o que (a) é necessário para o perfil `native` — o gcc da passada 2
+/// é **dinâmico** e usa o loader/libs glibc do rootfs (`/lib64`, `/usr/lib`
+/// absolutos), que só são os do rootfs sob chroot — e (b) torna **todo** build
+/// hermético: `--clearenv` (só as variáveis do contrato) e `--unshare-net`
+/// (nenhum insumo pela rede — SPEC-0004 §3.2; o fetch já ocorreu no host). O
+/// gcc é relocável, então o perfil `cross` (estático) rodaria fora do chroot
+/// também, mas o runner o roda igual, hermético. No próprio sistema
+/// (`--root /`) roda direto — o alvo já é `/`.
+fn build_command(
+    ctx: &Ctx,
+    be: &BuildEnv,
+    retries: u32,
+    work: &Path,
+    epoch: &str,
+    artifacts: &[(PathBuf, String)],
+) -> Command {
+    let root = ctx.root.clone();
+    let src_dir = work.join("src");
+    let stage = work.join("stage");
+    let c = |p: &Path| in_chroot(&root, p).display().to_string();
+
+    // PATH hermético: prefixos do perfil (em forma de chroot) + /usr/bin:/bin.
+    let mut path = String::new();
+    for p in &be.path_prefix {
+        path.push_str(&c(p));
+        path.push(':');
+    }
+    path.push_str("/usr/bin:/bin");
+
+    let mut envs: Vec<(String, String)> = vec![
+        ("RECIPE".into(), c(&work.join("recipe"))),
+        ("STAGE".into(), c(&stage)),
+        ("WORK".into(), c(work)),
+        ("ROOT".into(), "/".into()),
+        ("JOBS".into(), ctx.jobs.to_string()),
+        ("PATH".into(), path),
+        ("CC".into(), be.cc.clone()),
+        ("CXX".into(), be.cxx.clone()),
+        ("LD".into(), be.ld.clone()),
+        ("AR".into(), be.ar.clone()),
+        ("RANLIB".into(), be.ranlib.clone()),
+        ("NM".into(), be.nm.clone()),
+        ("RETRIES".into(), retries.to_string()),
+        ("HOME".into(), c(work)),
+        ("ZIG_GLOBAL_CACHE_DIR".into(), c(&ctx.cache_dir().join("zig"))),
+        ("SOURCE_DATE_EPOCH".into(), epoch.to_string()),
+        ("LC_ALL".into(), "C".into()),
+        ("LANG".into(), "C".into()),
+        ("LANGUAGE".into(), String::new()),
+        ("TZ".into(), "UTC".into()),
+    ];
+    for (i, (p, _)) in artifacts.iter().enumerate() {
+        let cp = c(p);
+        if i == 0 {
+            envs.push(("DL".into(), cp.clone()));
+        }
+        envs.push((format!("DL_{}", i + 1), cp));
+    }
+
+    if root == Path::new("/") {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-ec").arg(BUILD_PREAMBLE).current_dir(&src_dir);
+        for (k, v) in &envs {
+            cmd.env(k, v);
+        }
+        cmd
+    } else {
+        let mut cmd = Command::new("bwrap");
+        cmd.arg("--bind")
+            .arg(&root)
+            .arg("/")
+            .arg("--proc")
+            .arg("/proc")
+            .arg("--dev")
+            .arg("/dev")
+            .arg("--unshare-pid")
+            .arg("--unshare-net")
+            .arg("--die-with-parent")
+            .arg("--clearenv")
+            .arg("--chdir")
+            .arg(in_chroot(&root, &src_dir));
+        for (k, v) in &envs {
+            cmd.arg("--setenv").arg(k).arg(v);
+        }
+        cmd.arg("/bin/sh").arg("-ec").arg(BUILD_PREAMBLE);
+        cmd
+    }
 }
 
 fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
@@ -268,46 +451,23 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     let stage = work.join("stage");
     fs::create_dir_all(&src_dir)?;
     fs::create_dir_all(&stage)?;
-    let tc = setup_toolchain(ctx, &work)?;
-    let zcache = ctx.cache_dir().join("zig");
-    fs::create_dir_all(&zcache)?;
-
-    let path = format!("{}:{}", tc.display(), std::env::var("PATH").unwrap_or_default());
-    // Ambiente determinístico (SPEC-0010): mesmo insumo → mesmo artefato, para
-    // que o binário do canal seja verificável por reprodução (SPEC-0009 §6).
-    // EPOCH default fixo (2024-01-01) sobreponível pela receita; LC/TZ fixos;
-    // umask fixo. O caminho de build é canônico dentro do chroot.
+    let be = setup_toolchain(ctx, &work, r)?;
+    fs::create_dir_all(ctx.cache_dir().join("zig"))?;
+    // A receita é copiada para dentro do work (montado no chroot), então fica
+    // acessível lá como /tmp/minitrue-build-<nome>/recipe.
+    fs::copy(&r.path, work.join("recipe"))?;
+    // EPOCH default fixo (2024-01-01) sobreponível pela receita (SPEC-0010).
     let epoch = r.epoch.clone().unwrap_or_else(|| "1704067200".into());
-    let mut cmd = Command::new("sh");
-    cmd.arg("-ec")
-        .arg("umask 022\n. \"$RECIPE\"\nbuild")
-        .current_dir(&src_dir)
-        .env("RECIPE", &r.path)
-        .env("STAGE", &stage)
-        .env("WORK", &work)
-        .env("ROOT", &ctx.root)
-        .env("JOBS", ctx.jobs.to_string())
-        .env("PATH", &path)
-        .env("CC", "cc")
-        .env("CXX", "c++")
-        .env("LD", "ld")
-        .env("AR", "ar")
-        .env("RANLIB", "ranlib")
-        .env("HOME", &work)
-        .env("ZIG_GLOBAL_CACHE_DIR", &zcache)
-        .env("SOURCE_DATE_EPOCH", &epoch)
-        .env("LC_ALL", "C")
-        .env("LANG", "C")
-        .env("LANGUAGE", "")
-        .env("TZ", "UTC");
-    for (i, (p, _)) in artifacts.iter().enumerate() {
-        let abs = p.canonicalize()?;
-        if i == 0 {
-            cmd.env("DL", &abs);
-        }
-        cmd.env(format!("DL_{}", i + 1), &abs);
-    }
-    let out = cmd.output().map_err(|e| crate::Fail { code: 1, msg: format!("sh indisponível: {e}") })?;
+
+    let mut cmd = build_command(ctx, &be, r.retries, &work, &epoch, &artifacts);
+    let out = cmd.output().map_err(|e| {
+        let hint = if ctx.root != Path::new("/") {
+            " — build em rootfs usa bwrap; instale-o no host"
+        } else {
+            ""
+        };
+        crate::Fail { code: 1, msg: format!("não consegui rodar o build: {e}{hint}") }
+    })?;
     if !out.status.success() {
         room101(ctx, r, &out.stdout, &out.stderr)?;
         let _ = fs::remove_dir_all(&work);
@@ -704,4 +864,81 @@ fn world_remove(ctx: &Ctx, name: &str) -> Result<()> {
         fs::write(&p, lines.join("\n") + "\n")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn be() -> BuildEnv {
+        BuildEnv {
+            cc: "x-gcc".into(),
+            cxx: "x-g++".into(),
+            ar: "x-ar".into(),
+            ranlib: "x-ranlib".into(),
+            ld: "x-ld".into(),
+            nm: "x-nm".into(),
+            path_prefix: vec![PathBuf::from("/root/tmp/b/.tc")],
+        }
+    }
+    fn ctx(root: &str) -> Ctx {
+        Ctx { root: PathBuf::from(root), offline: false, tofu: false, jobs: 4 }
+    }
+    fn args_of(cmd: &Command) -> Vec<String> {
+        cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+    fn has_pair(a: &[String], k: &str, v: &str) -> bool {
+        a.windows(2).any(|w| w[0] == k && w[1] == v)
+    }
+
+    #[test]
+    fn rootfs_usa_bwrap_hermetico() {
+        let ctx = ctx("/root");
+        let work = PathBuf::from("/root/tmp/b");
+        let cmd = build_command(
+            &ctx,
+            &be(),
+            50,
+            &work,
+            "1704067200",
+            &[(PathBuf::from("/root/var/cache/minitrue/deadbeef"), "deadbeef".into())],
+        );
+        assert_eq!(cmd.get_program().to_string_lossy(), "bwrap");
+        let a = args_of(&cmd);
+        // rootfs montado em /
+        let bind = a.iter().position(|x| x == "--bind").unwrap();
+        assert_eq!(a[bind + 1], "/root");
+        assert_eq!(a[bind + 2], "/");
+        // hermético
+        assert!(a.contains(&"--unshare-net".to_string()));
+        assert!(a.contains(&"--clearenv".to_string()));
+        // variáveis em forma de CHROOT, não caminho do host
+        assert!(has_pair(&a, "STAGE", "/tmp/b/stage"));
+        assert!(has_pair(&a, "RECIPE", "/tmp/b/recipe"));
+        assert!(has_pair(&a, "ROOT", "/"));
+        assert!(has_pair(&a, "CC", "x-gcc"));
+        assert!(has_pair(&a, "AR", "x-ar"));
+        assert!(has_pair(&a, "DL", "/var/cache/minitrue/deadbeef"));
+        // PATH: prefixo em chroot + /usr/bin:/bin, sem PATH do host
+        assert!(has_pair(&a, "PATH", "/tmp/b/.tc:/usr/bin:/bin"), "PATH errado: {a:?}");
+        assert!(!a.iter().any(|x| x.contains("/root/tmp")), "vazou caminho do host: {a:?}");
+        // termina em /bin/sh -ec <preâmbulo>
+        assert_eq!(a[a.len() - 3], "/bin/sh");
+        assert_eq!(a[a.len() - 2], "-ec");
+        assert_eq!(a[a.len() - 1], BUILD_PREAMBLE);
+    }
+
+    #[test]
+    fn root_slash_roda_direto() {
+        let ctx = ctx("/");
+        let work = PathBuf::from("/tmp/b");
+        let cmd = build_command(&ctx, &be(), 0, &work, "1704067200", &[]);
+        assert_eq!(cmd.get_program().to_string_lossy(), "sh");
+        let cc = cmd
+            .get_envs()
+            .find(|(k, _)| *k == "CC")
+            .and_then(|(_, v)| v)
+            .map(|v| v.to_string_lossy().into_owned());
+        assert_eq!(cc.as_deref(), Some("x-gcc"));
+    }
 }
