@@ -13,7 +13,7 @@ parecer externo). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | Perfis de toolchain (seed/cross/native) | ✅ | ✅ | parsing + seleção testados |
 | Runner hermético (bwrap, --unshare-net, --clearenv) | ✅ | ✅ | **rootfs montado gravável** (não read-only) |
 | `retry` de ICE | ✅ | — | usado no E2 |
-| `fingerprint` de build | ✅ | ✅ | **não-transitivo** (build-dep muda não propaga) |
+| `fingerprint` de build | ✅ | ✅ | **transitivo** (build-dep muda propaga aos dependentes) |
 | Supersessão provisional (`PROVISIONAL` + `SUPERSEDES=`) | ✅ | ✅ | declarativa: só cede de provisional declarado; falta **restaurar payload** ao remover o sucessor (journal) |
 | `pack` determinístico (v1) | ✅ | ✅ | a parte mais madura; falta xattr/ACL/cap/sparse |
 | Manifesto v1 (hash por arquivo) | ✅ | ✅ | só hash+caminho; **falta tipo/modo/alvo de symlink** e `RECORD_FORMAT=` |

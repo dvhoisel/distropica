@@ -90,10 +90,13 @@ fingerprint**: receita corrigida com a mesma versão ⇒ fingerprint diferente �
 re-builda. Consertado o "GCC 15.3.0 mudou várias vezes sem bump" que o modelo
 só-`VERSION` ignorava.
 
-**Limite do v1:** o fingerprint **não é transitivo** — se um build-dep muda
-(ex.: `binutils`), o fingerprint do dependente (ex.: `gcc`) não muda sozinho.
-Um roll que só altera um build-dep pode não propagar o rebuild. Fingerprint
-transitivo (encadear o dos build-deps) fica para depois.
+**Transitivo (2026-07-20).** O fingerprint de build é o `own_fingerprint` da
+receita (arquivo + `files/`) **combinado com os fingerprints das suas
+`DEPS`+`BUILD_DEPS`**, recursivamente (memoizado, robusto a ciclo). Então uma
+mudança no `binutils` propaga para o `gcc`, e um roll que altera só um build-dep
+**re-builda os dependentes**. Consertado o limite não-transitivo. (Mudar o
+algoritmo invalida os fingerprints antigos ⇒ um `rectify` seguinte re-builda a
+árvore uma vez — comportamento correto de uma troca de esquema.)
 
 É a **mesma peça** que o Estágio 2 pediu para rodar pelo `rectify` (SPEC-0005
 §4) — uma dívida, dois usos. O `--sync` (§3.2), quando implementado, usa este
@@ -158,7 +161,7 @@ projeto é o stable novo.
 | Boot A/B do kernel (rollback do mais arriscado) | especificado (SPEC-0008 §4) |
 | `rectify newspeak` (árvore-como-pacote) | **não implementado** (§3.1) |
 | `rectify --sync` | speced, *stubbed* (SPEC-0003) |
-| Fingerprint de build | **implementado (v1)** (§4) — não-transitivo ainda |
+| Fingerprint de build | **implementado, transitivo** (§4) |
 | Rollback de mundo B | **lacuna** (§5.1) |
 | Canal republicando no roll | speced (SPEC-0009), não implementado |
 

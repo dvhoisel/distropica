@@ -50,20 +50,16 @@ pub struct Recipe {
 }
 
 impl Recipe {
-    /// Fingerprint de build (SPEC-0011 §4): identidade que resume a receita
-    /// inteira — o arquivo `recipe` (que já carrega VERSION, SRC, SHA256,
-    /// TOOLCHAIN, DEPS, BUILD_DEPS e o corpo de `build()`) e o diretório
-    /// `files/` (patches, chaves). Muda quando qualquer um deles muda, **mesmo
-    /// sem bump de VERSION** — é o que faz o `rectify` rebuildar uma receita
-    /// corrigida (o bug do "GCC 15.3.0 mudou várias vezes na mesma versão") e o
-    /// que o `--sync` do rolling usa para detectar o que retificar.
-    ///
-    /// Limite do v1: NÃO cobre a identidade dos build-deps (se o binutils muda,
-    /// o fingerprint do gcc não muda). Fingerprint transitivo fica para depois.
-    pub fn fingerprint(&self) -> Result<String> {
+    /// Fingerprint **próprio** (só desta receita): o arquivo `recipe` — que já
+    /// carrega VERSION, SRC, SHA256, TOOLCHAIN, DEPS, BUILD_DEPS e o corpo de
+    /// `build()` — mais o diretório `files/` (patches, chaves). Muda quando
+    /// qualquer um deles muda, **mesmo sem bump de VERSION**. É o átomo do
+    /// fingerprint de build transitivo ([`build_fingerprint`], SPEC-0011 §4),
+    /// que é o que a idempotência do `rectify` e o `--sync` de fato usam.
+    pub fn own_fingerprint(&self) -> Result<String> {
         use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
-        h.update(b"minitrue-fp-v1\0recipe\0");
+        h.update(b"minitrue-fp-v2\0recipe\0");
         h.update(std::fs::read(&self.path)?);
         if let Some(files) = self.path.parent().map(|p| p.join("files")) {
             if files.is_dir() {
@@ -252,6 +248,53 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
     Ok(r)
 }
 
+/// Fingerprint de build **transitivo** (SPEC-0011 §4): o `own_fingerprint` da
+/// receita **combinado com os fingerprints das suas `DEPS`+`BUILD_DEPS`**,
+/// recursivamente. Assim, se o `binutils` muda, o fingerprint do `gcc` também
+/// muda — e o `rectify`/`--sync` re-builda o dependente, não só o pacote
+/// alterado. Consertando o limite não-transitivo do v1.
+///
+/// Memoiza (diamantes) e é robusto a ciclo (a árvore num commit é acíclica —
+/// `collect` detecta; aqui um ciclo apenas encerra a recursão sem travar).
+pub fn build_fingerprint(ctx: &Ctx, name: &str) -> Result<String> {
+    let mut cache = std::collections::HashMap::new();
+    build_fp_rec(ctx, name, &mut cache, &mut Vec::new())
+}
+
+fn build_fp_rec(
+    ctx: &Ctx,
+    name: &str,
+    cache: &mut std::collections::HashMap<String, String>,
+    stack: &mut Vec<String>,
+) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    if let Some(fp) = cache.get(name) {
+        return Ok(fp.clone());
+    }
+    if stack.iter().any(|s| s == name) {
+        return Ok(String::new()); // ciclo: encerra sem recorrer
+    }
+    let r = load(ctx, name)?;
+    let mut h = Sha256::new();
+    h.update(b"minitrue-bfp-v1\0self\0");
+    h.update(r.own_fingerprint()?.as_bytes());
+    stack.push(name.to_string());
+    // Ordem canônica dos deps para o hash ser estável.
+    let mut deps: Vec<&String> = r.deps.iter().chain(r.build_deps.iter()).collect();
+    deps.sort();
+    deps.dedup();
+    for d in deps {
+        h.update(b"\0dep\0");
+        h.update(d.as_bytes());
+        h.update(b"=");
+        h.update(build_fp_rec(ctx, d, cache, stack)?.as_bytes());
+    }
+    stack.pop();
+    let fp = hex::encode(h.finalize());
+    cache.insert(name.to_string(), fp.clone());
+    Ok(fp)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,7 +349,7 @@ mod tests {
             tofu: false,
             jobs: 1,
         };
-        let f = load(&ctx, "foo").unwrap().fingerprint().unwrap();
+        let f = load(&ctx, "foo").unwrap().own_fingerprint().unwrap();
         let _ = std::fs::remove_dir_all(&root);
         f
     }
@@ -330,6 +373,41 @@ mod tests {
             fp_of("", &[("fix.patch", "outro conteúdo\n")]),
             "conteúdo de files/ conta"
         );
+    }
+
+    #[test]
+    fn build_fingerprint_transitivo() {
+        // Árvore A → B: A depende de B. Mudar B muda o fingerprint de A.
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-bfp-{}-{n}", std::process::id()));
+        let tree = root.join("var/lib/minitrue/newspeak");
+        let hash = "a".repeat(64);
+        let write = |name: &str, extra: &str| {
+            let d = tree.join(name);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(
+                d.join("recipe"),
+                format!("NAME={name}\nVERSION=1\nKIND=source\nSRC=https://e/{name}.tar.xz\nSHA256={hash}\n{extra}\nbuild(){{ :; }}\n"),
+            )
+            .unwrap();
+        };
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+
+        write("b", "");
+        write("a", "DEPS=b");
+        let fp_a1 = build_fingerprint(&ctx, "a").unwrap();
+        // determinístico
+        assert_eq!(fp_a1, build_fingerprint(&ctx, "a").unwrap());
+        // muda B (mesma versão) → o fingerprint de A muda também (transitivo)
+        write("b", "# toque em b");
+        let fp_a2 = build_fingerprint(&ctx, "a").unwrap();
+        assert_ne!(fp_a1, fp_a2, "mudar um dep deve mudar o fp do dependente");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

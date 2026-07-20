@@ -109,7 +109,7 @@ fn install_one(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
 fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     let rec_dir = ctx.records_dir().join(&r.name);
     let opt = ctx.opt(&r.name);
-    let fp = r.fingerprint()?;
+    let fp = recipe::build_fingerprint(ctx, &r.name)?;
     if let Some(meta) = read_meta(&rec_dir) {
         if meta.get("VERSION") == Some(&r.version)
             && meta.get("FINGERPRINT") == Some(&fp)
@@ -527,7 +527,7 @@ fn build_command(
 
 fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     let rec_dir = ctx.records_dir().join(&r.name);
-    let fp = r.fingerprint()?;
+    let fp = recipe::build_fingerprint(ctx, &r.name)?;
     if let Some(meta) = read_meta(&rec_dir) {
         // Idempotência por FINGERPRINT, não só VERSION (SPEC-0011 §4): uma
         // receita corrigida com a MESMA versão muda o fingerprint e re-builda.
@@ -947,7 +947,7 @@ fn write_record(
         origin,
         r.sha256.join(" "),
         r.deps.join(" "),
-        r.fingerprint()?,
+        recipe::build_fingerprint(ctx, &r.name)?,
         iso_now(),
         if r.provisional { "PROVISIONAL=1\n" } else { "" }
     );

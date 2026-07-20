@@ -168,11 +168,12 @@ Três arquivos-texto:
   (SPEC-0009 §8) o instalam, caso em que `TRUST=` e `CHANNEL_SHA256=` também
   entram.
   O **`FINGERPRINT`** é a identidade de build (SPEC-0011 §4): sha256 do
-  arquivo `recipe` inteiro + do `files/` (via o `pack` determinístico). A
+  arquivo `recipe` inteiro + do `files/` (via o `pack` determinístico),
+  **combinado transitivamente com o fingerprint das `DEPS`+`BUILD_DEPS`**. A
   idempotência do `rectify` compara **versão E fingerprint** — uma receita
   corrigida com a mesma versão muda o fingerprint e re-builda (conserta o
-  "GCC 15.3.0 mudou várias vezes sem bump"). Limite do v1: não é transitivo
-  (mudança num build-dep não muda o fingerprint do dependente).
+  "GCC 15.3.0 mudou várias vezes sem bump"), e uma mudança num build-dep
+  propaga para os dependentes (transitivo).
 - `manifest` — uma entrada por linha, ordenada, no formato `sha256sum`:
   **`<sha256>␠␠<caminho absoluto>`** (registro **v1**) — o hash do conteúdo
   instalado. Symlinks e diretórios levam `-` no lugar do hash (o alvo do
