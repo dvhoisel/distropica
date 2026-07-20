@@ -51,16 +51,30 @@ por readdir), DEVE corrigi-lo — e o campo `EPOCH` está disponível.
 ## 4. Empacotamento determinístico do artefato
 
 O `STAGE` idêntico só vira **hash** idêntico se o empacotamento também for
-determinístico. `minitrue rectify --emit` (SPEC-0009 §4) DEVE tarar o
-`STAGE` com ordem e metadados normalizados:
+determinístico. **Decidido (2026-07-20): o próprio minitrue emite um tar
+normalizado em Rust** — `minitrue pack <dir>` (crate `tar`, sem depender do
+GNU tar na base). O minitrue é o empacotador canônico da corroboração (§5):
+quem confere a reprodutibilidade tara com o mesmo código, então o formato só
+precisa ser **determinístico**, não idêntico byte-a-byte ao do GNU tar.
+
+Equivale a este `tar`, e normaliza o mesmo que ele normalizaria:
 
 ```
 tar --format=gnu --sort=name --mtime=@$SOURCE_DATE_EPOCH \
-    --owner=0 --group=0 --numeric-owner -C "$STAGE" -cf - . | zstd -19
+    --owner=0 --group=0 --numeric-owner -C "$STAGE" -cf - .
 ```
 
-(No v0, o busybox tar não tem `--sort`; o `--emit` usa o GNU tar da base,
-ou o próprio minitrue emite um tar normalizado em Rust — a decidir.)
+O que o `pack` normaliza (tudo que é volátil):
+
+- **ordem** por nome armazenado, byte-a-byte (diretórios com `/` ao final,
+  então o pai sempre precede o conteúdo) — independe da ordem de `readdir`;
+- **mtime** = `SOURCE_DATE_EPOCH` em toda entrada (não o mtime do disco);
+- **uid/gid** = 0, **uname/gname** vazios (não o dono que buildou);
+- **modo** mascarado em `07777`; nada de atime/ctime/device.
+
+Caminhos > 100 chars (o gcc tem vários) viram entradas GNU LongName, que o
+`pack` também emite deterministicamente. `rectify --emit` (SPEC-0009 §4)
+usará `pack` + compressão (zstd, a integrar) para o artefato do canal.
 
 ## 5. Verificação — o modo `corroborado`
 
@@ -86,6 +100,35 @@ independentes do mesmo pacote deram **`STAGE` byte-a-byte idêntico**:
 O ambiente está embutido no `install_source` do minitrue; o `ar`
 determinístico, na receita do binutils.
 
+**Hash de artefato — o laço fechado (2026-07-20).** Os dois `DESTDIR`
+independentes do m4 (byte-a-byte idênticos como árvore) empacotam, via
+`minitrue pack`, para o **mesmo sha256**
+(`5205a1591a7cedda43ca12cb2c4bb3a678bbb5bad1a68f3d16f0c7bebbbd0e6c`). É a
+cadeia inteira demonstrada: **build reprodutível → empacotamento
+determinístico → hash de artefato idêntico**. Esse sha256 é exatamente o
+`reprocorr` que o mantenedor pina no índice do canal (SPEC-0009 §6) e que o
+`TRUST=corroborado` exige bater (§5). O empacotador foi validado à parte
+numa árvore com caminho > 100 chars (GNU LongName), symlink e modos
+distintos: dois `pack` do mesmo diretório dão bytes idênticos, e o GNU tar
+lista o resultado sem erro (formato válido).
+
+**gcc reproduz — a toolchain inteira (2026-07-20).** Dois builds
+independentes do gcc da passada 1 (`c,c++`), cada um instalado num `DESTDIR`
+próprio, deram **todos os arquivos com o mesmo sha256** (comparação arquivo
+a arquivo do install: `cc1`, `cc1plus`, `g++`, `libgcc`, todos os headers de
+plugin — 185 arquivos, 564 MB). E os dois `DESTDIR` empacotam, via `minitrue
+pack`, para um **hash de artefato idêntico**:
+
+```
+9396e46bfd96e4ad20d5df43b5f78aa03a407ed387515648c89a725da27a531e   (gcc-d1 == gcc-d2)
+```
+
+É a confirmação, em escala, da tese do codegen determinístico: o gcc da
+passada 1 é *flaky* (ICE aleatório), mas a instabilidade é **só crash** — o
+`.o` que sai é sempre o mesmo, e por isso o pacote de saída, com todos os
+seus geradores (`gen*`, `insn-*.c` etc.), reproduz. Um compilador não
+confiável para *rodar* produziu um artefato confiável para *verificar*.
+
 **Codegen determinístico (o achado que destrava gcc/glibc).** O gcc da
 passada 1 é *flaky* (ICE segfault aleatório, corrupção de memória do
 binário feito por clang). A pergunta perigosa era: a instabilidade afeta
@@ -107,13 +150,18 @@ independente do caminho — não só do caminho canônico do chroot.
 
 ## 7. Questões em aberto
 
-- **gcc/glibc reprodutíveis:** os pacotes maiores ainda não foram testados
-  para reprodutibilidade; gcc tem geradores e a glibc tem
-  `configure`-embutidos que podem exigir ajuste. Testar é o próximo passo.
+- **gcc reprodutível — resolvido (2026-07-20):** apesar dos geradores, dois
+  builds independentes deram install idêntico e hash de artefato idêntico
+  (§6). **glibc:** o mesmo teste (dois builds + comparação) está rodando (2º
+  build em andamento); a glibc tem `configure`-embutidos que rodam durante o
+  `make` e podem cravar algo volátil — veredito pendente.
 - ~~Builds fora do chroot (caminho não canônico)~~ — **resolvido**: os
   shims passam `-ffile-prefix-map=$WORK=.`, e o `zig cc` já não crava o
   path por padrão (§6). A reprodutibilidade não depende mais do caminho.
-- **Empacotamento em Rust vs GNU tar** para o `--emit` (§4): decidir.
+- ~~**Empacotamento em Rust vs GNU tar** para o `--emit` (§4)~~ —
+  **resolvido**: Rust (`minitrue pack`), tar normalizado, sem depender do
+  GNU tar na base (§4, §6). Falta só encadear a compressão (zstd) e o
+  `rectify --emit` que grava o artefato no layout do canal.
 - **Reprodutibilidade do próprio `minitrue`** (o binário Rust estático):
   desejável (o buscador que verifica tudo deveria ser verificável); Cargo +
   `SOURCE_DATE_EPOCH` chega perto — medir.

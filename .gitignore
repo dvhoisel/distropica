@@ -1,4 +1,5 @@
 # artefatos futuros (ferramenta, bootstrap)
 /target/
+/minitrue/target/
 /rootfs/
 *.log

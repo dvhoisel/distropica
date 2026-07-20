@@ -1,5 +1,6 @@
 mod fetch;
 mod install;
+mod pack;
 mod recipe;
 
 use std::path::PathBuf;
@@ -75,6 +76,7 @@ uso: minitrue [--root DIR] [--offline] [--tofu] [--jobs N] <comando> [args]
   archives              lista os registros
   verify                confere registros e varre /usr por links órfãos
   newspeak  <pacote>    imprime a receita efetiva e sua origem
+  pack <dir> [saída]    tara <dir> determinístico; imprime o sha256 (SPEC-0010)
 
 chegam no Marco 0.2: rectify --sync, rollback, unperson, lint, mundo B
 (fonte), SIGSUMS e OpenPGP.";
@@ -145,6 +147,22 @@ fn run() -> anyhow::Result<()> {
             Some(n) => install::newspeak_show(&ctx, n),
             None => fail(1, "newspeak: diga o pacote"),
         },
+        Some("pack") => {
+            let dir = match names.first() {
+                Some(d) => PathBuf::from(d),
+                None => return fail(1, "pack: diga o diretório"),
+            };
+            if !dir.is_dir() {
+                return fail(1, format!("pack: {} não é um diretório", dir.display()));
+            }
+            let (bytes, sha) = pack::pack_deterministic(&dir, pack::epoch_from_env())?;
+            if let Some(out) = names.get(1) {
+                std::fs::write(out, &bytes)
+                    .map_err(|e| Fail { code: 1, msg: format!("pack: não gravou {out}: {e}") })?;
+            }
+            println!("{sha}  {}", dir.display());
+            Ok(())
+        }
         Some(c @ ("rollback" | "unperson" | "lint")) => {
             fail(1, format!("{c} chega no Marco 0.2 (SPEC-0003)"))
         }
