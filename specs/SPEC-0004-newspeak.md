@@ -69,6 +69,13 @@ O minitrue executa a função da receita via `sh -e`, com:
 | `JOBS` | paralelismo |
 | `CC`, `CXX`, `AR`, `RANLIB` | toolchain corrente. Pré-E2: `zig cc -target x86_64-linux-musl` etc. — o `-target` explícito é obrigatório (spike 2026-07-19: sem ele o zig mira o host, glibc). Pós-E2: gcc |
 | `ROOT` | raiz alvo (para casos raros e legítimos de leitura) |
+| `SOURCE_DATE_EPOCH` | timestamp fixo p/ builds reprodutíveis (SPEC-0010); do campo `EPOCH` da receita ou o default do projeto |
+| `LC_ALL`/`LANG`/`TZ` | `C`/`C`/`UTC` — impostos p/ determinismo (SPEC-0010) |
+
+O ambiente é **determinístico** (SPEC-0010): além do acima, `umask 022` e
+caminho de build canônico. A receita herda tudo; só precisa evitar
+não-determinismo próprio (gravar a data corrente etc.). Campo opcional
+`EPOCH=<unix ts>` sobrepõe o default.
 
 Proibições (contrato; sandbox é dívida registrada em SPEC-0003 §8):
 

@@ -44,6 +44,7 @@ Quando algo é removido, ele nunca existiu.
 | [SPEC-0007](specs/SPEC-0007-censo-binarios.md) | Censo de binários upstream (quem publica o quê) |
 | [SPEC-0008](specs/SPEC-0008-instalador.md) | `minipax` — o instalador (mídia viva, EFI stub sem bootloader) |
 | [SPEC-0009](specs/SPEC-0009-canais-binarios.md) | Canais binários (oficial e samizdat) — o usuário não compila a base |
+| [SPEC-0010](specs/SPEC-0010-reprodutibilidade.md) | Builds reprodutíveis — a raiz de confiança dos canais |
 
 ## Estado
 

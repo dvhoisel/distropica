@@ -131,7 +131,10 @@ acabamento, nunca substituto de informação.
 
 - Múltiplas arquiteturas: alvo inicial é **x86_64**; receitas DEVERIAM ser
   estruturadas para acomodar aarch64 depois, sem compromisso de prazo.
-- Reprodutibilidade bit-a-bit: aspiração, não requisito.
+- Reprodutibilidade bit-a-bit: começou como aspiração, mas virou
+  **mecanismo de segurança** dos canais binários (SPEC-0010): é o que faz
+  o binário de canal ser verificável por reprodução (SPEC-0009 §6). Já vale
+  para os pacotes menores da base (m4, gmp verificados); gcc/glibc a testar.
 - Multilib/i686: fora.
 - Sandbox forte de builds: desejado, mas não bloqueia o v0 (SPEC-0003 §8).
 - Secure boot, instalador gráfico, suporte a hardware exótico: fora.

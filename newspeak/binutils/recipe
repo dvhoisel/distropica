@@ -12,8 +12,11 @@ build() {
     # MAKEINFO=true: sem texinfo no mundo musl inicial, pula a geração de docs.
     # --disable-werror: clang (zig cc) emite warnings que o -Werror do binutils barra.
     # --disable-gprofng: o profiler assume glibc (dlvsym/GLIBC_2.17), quebra no musl.
+    # --enable-deterministic-archives: o ar zera os timestamps/uid/gid dos
+    # membros, senão os .a embutem os mtimes dos .o e o build não reproduz.
     ../configure --prefix=/usr --disable-nls --disable-werror --disable-gprofng \
-        --enable-default-hash-style=gnu --disable-dependency-tracking
+        --enable-default-hash-style=gnu --enable-deterministic-archives \
+        --disable-dependency-tracking
     make -j"$JOBS" MAKEINFO=true
     make install MAKEINFO=true DESTDIR="$STAGE"
 }

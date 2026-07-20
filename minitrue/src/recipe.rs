@@ -24,6 +24,7 @@ pub struct Recipe {
     pub sigkey: Option<String>,
     pub requires_glibc: bool,
     pub provisional: bool,
+    pub epoch: Option<String>,
     pub path: PathBuf,
     pub has_install: bool,
 }
@@ -42,6 +43,7 @@ printf 'SIGSUMS=%s\n' "${SIGSUMS:-}"
 printf 'SIGKEY=%s\n' "${SIGKEY:-}"
 printf 'REQUIRES_GLIBC=%s\n' "${REQUIRES_GLIBC:-}"
 printf 'PROVISIONAL=%s\n' "${PROVISIONAL:-}"
+printf 'EPOCH=%s\n' "${EPOCH:-}"
 type install_pkg >/dev/null 2>&1 && printf 'HAS_INSTALL=1\n' || :
 "#;
 
@@ -143,6 +145,7 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         sigkey,
         requires_glibc: field("REQUIRES_GLIBC") == "1",
         provisional: field("PROVISIONAL") == "1",
+        epoch: Some(field("EPOCH")).filter(|s| !s.is_empty()),
         path,
         has_install: get.contains_key("HAS_INSTALL"),
     };

@@ -269,9 +269,14 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     fs::create_dir_all(&zcache)?;
 
     let path = format!("{}:{}", tc.display(), std::env::var("PATH").unwrap_or_default());
+    // Ambiente determinístico (SPEC-0010): mesmo insumo → mesmo artefato, para
+    // que o binário do canal seja verificável por reprodução (SPEC-0009 §6).
+    // EPOCH default fixo (2024-01-01) sobreponível pela receita; LC/TZ fixos;
+    // umask fixo. O caminho de build é canônico dentro do chroot.
+    let epoch = r.epoch.clone().unwrap_or_else(|| "1704067200".into());
     let mut cmd = Command::new("sh");
     cmd.arg("-ec")
-        .arg(". \"$RECIPE\"\nbuild")
+        .arg("umask 022\n. \"$RECIPE\"\nbuild")
         .current_dir(&src_dir)
         .env("RECIPE", &r.path)
         .env("STAGE", &stage)
@@ -285,7 +290,12 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         .env("AR", "ar")
         .env("RANLIB", "ranlib")
         .env("HOME", &work)
-        .env("ZIG_GLOBAL_CACHE_DIR", &zcache);
+        .env("ZIG_GLOBAL_CACHE_DIR", &zcache)
+        .env("SOURCE_DATE_EPOCH", &epoch)
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .env("LANGUAGE", "")
+        .env("TZ", "UTC");
     for (i, (p, _)) in artifacts.iter().enumerate() {
         let abs = p.canonicalize()?;
         if i == 0 {
