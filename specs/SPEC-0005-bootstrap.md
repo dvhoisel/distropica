@@ -270,10 +270,30 @@ gawk 5.4.1, gcc 15.3.0, glibc 2.42 — todos com SHA256 real pinado.
   Ou seja, **instalar a glibc contaminou o ambiente de build do
   gcc-por-zig-cc**. É a separação de sysroot que o LFS mantém (ferramentas
   temporárias isoladas do sistema final) e que o nosso modelo de rootfs
-  único não faz. Correção real (próxima fronteira): construir a toolchain
-  num sysroot/prefixo isolado (à la `/tools` do LFS) para que a `configure`
-  do gcc não enxergue a glibc do sistema — reestruturação do bootstrap, não
-  um ajuste pontual. O diagnóstico está fechado; a implementação, não.
+  único não faz. [Teoria depois CORRIGIDA — ver abaixo.]
+- **CORREÇÃO do diagnóstico (2026-07-19) — NÃO é sysroot nem glibc.** Ao
+  investigar para isolar a toolchain num sysroot, o mecanismo real apareceu
+  e desmentiu a teoria acima. Fatos verificados: o
+  `x86_64-distropica-linux-gnu-gcc` tem `-print-sysroot` **vazio** e a lista
+  de includes **não contém `/usr/include`** — o compilador **não enxerga a
+  glibc do sistema**. Logo, isolar um sysroot **não resolveria nada**. O
+  muro real é um conflito **musl × `system.h` do GCC**: o `system.h`
+  declara `extern void *sbrk(int)` (e um análogo p/ `strsignal`) como
+  fallback quando a `configure` reporta `HAVE_DECL_SBRK=0`, mas a musl
+  declara `sbrk(intptr_t)` (`unistd.h:164`) — `int` vs `intptr_t` colide
+  nas ferramentas `build/` (gengenrtl, genhooks). A `configure` mis-detecta
+  `HAVE_DECL_SBRK/STRSIGNAL=0` (o teste roda sem o feature-macro que a musl
+  exige p/ declará-los), e o `auto-host.h` é **regenerado pelo
+  `config.status` durante o `make`** — então corrigir o arquivo à mão não
+  gruda (só os `libiberty/config.h` de subdir mantiveram o patch; o
+  `auto-host.h` voltou a 0). O conserto tem de ser no nível da `configure`:
+  o cache var certo (`ac_cv_have_decl_sbrk=yes` tentado não pegou no subdir
+  `gcc/` — nome/propagação a investigar) ou um patch em `system.h`/config.
+  É atrito **conhecido** de "GCC sobre musl" (Alpine e musl-cross-make
+  compilam GCC com/para musl usando config de triplet musl próprio). A
+  próxima fronteira é essa correção pontual GCC×musl — **não** a
+  reestruturação de sysroot que a teoria anterior sugeria. Fica registrado
+  para não repetir o caminho errado.
 
 ## 5. Estágio 3 — boot de verdade
 
