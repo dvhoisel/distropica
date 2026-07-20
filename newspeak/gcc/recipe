@@ -1,6 +1,9 @@
 NAME=gcc
 VERSION=15.3.0
 KIND=source
+# Passada 1 (cross, feito por zig cc/musl): scaffolding do E2. Cede o
+# cross-gcc e cc1/cc1plus ao gcc nativo da passada 2 (gcc-pass2) — SPEC-0005 §4.
+PROVISIONAL=1
 RETRIES=50
 DEPS="binutils gmp mpfr mpc"
 BUILD_DEPS="linux-headers gawk"

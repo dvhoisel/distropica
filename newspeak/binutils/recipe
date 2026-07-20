@@ -1,6 +1,9 @@
 NAME=binutils
 VERSION=2.45
 KIND=source
+# Semente musl-estático: cede /usr/bin/{as,ld,ar,nm,…} ao rebuild glibc
+# (binutils-glibc), que faz dlopen do plugin LTO — SPEC-0003 §3, SPEC-0005 §4.
+PROVISIONAL=1
 ABOUT="as, ld, ar, nm, objdump — o assembler e o linker que o gcc invoca em runtime. GNU só publica fonte; primeiro grande elo do Estágio 2"
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/binutils/binutils-$VERSION.tar.xz"

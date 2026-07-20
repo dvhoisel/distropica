@@ -487,17 +487,22 @@ com SHA256 real pinado.
   o E2 é uma **sequência de substituições** — reconstruir o mesmo software com
   um toolchain melhor, in-place.
 
-  **Meio caminho andado — o fingerprint de build (v1, 2026-07-20).** A parte
-  da idempotência está feita (SPEC-0011 §4): o registro guarda `FINGERPRINT` e
-  o `rectify` re-builda quando a receita muda sem bump de versão. Mas isso
-  resolve o rebuild-in-place da **mesma** receita; **não** resolve o
-  *doublethink* entre receitas de **nomes distintos** (mathlibs-glibc × gmp)
-  instalando os mesmos caminhos. Para o E2 rodar ponta-a-ponta pelo `rectify`
-  falta a outra metade: tratar os builds-semente (gmp/mpfr/mpc/binutils/gcc)
-  como **provisionais que cedem** aos rebuilds-glibc (SPEC-0003 §3) — o mesmo
-  mecanismo do busybox → coreutils. É o **próximo passo** do E2 como fluxo. As
-  receitas estão prontas; os scripts da investigação seguem em
-  `rootfs/tmp/*.sh` como referência.
+  **As duas metades do executor — fechadas (2026-07-20).**
+  1. *Fingerprint de build* (SPEC-0011 §4): o registro guarda `FINGERPRINT` e o
+     `rectify` re-builda quando a receita muda sem bump de versão. Resolve o
+     rebuild-in-place da **mesma** receita.
+  2. *Supersessão provisional* (SPEC-0003 §3): os builds-semente
+     (gmp/mpfr/mpc/binutils/gcc) foram marcados `PROVISIONAL=1` — cedem seus
+     caminhos aos rebuilds-glibc (mathlibs-glibc/binutils-glibc/gcc-pass2) sem
+     *doublethink*, como o busybox cede a coreutils. Resolve a colisão entre
+     receitas de **nomes distintos** que se substituem.
+
+  Com as duas, o executor tem tudo para rodar a cadeia do E2 pelo `rectify`
+  sem colidir. **Falta exercer:** a execução ponta-a-ponta de fato
+  (`rectify gcc-pass2`, um build de horas, com gcc/glibc registrados como
+  pacotes) e conferir que o artefato bate com as provas de reprodutibilidade
+  (SPEC-0010 §6). Os scripts da investigação seguem em `rootfs/tmp/*.sh` como
+  referência.
 
 ## 5. Estágio 3 — boot de verdade
 

@@ -1,6 +1,8 @@
 NAME=mpfr
 VERSION=4.2.2
 KIND=source
+# Semente musl: cede /usr/lib/libmpfr* ao rebuild glibc (mathlibs-glibc).
+PROVISIONAL=1
 DEPS=gmp
 BUILD_DEPS=binutils
 ABOUT="ponto flutuante de precisão múltipla; dependência do gcc. --with-gmp aponta o gmp em /usr porque o zig cc não busca lá por conta própria"

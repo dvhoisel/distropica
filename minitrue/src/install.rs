@@ -875,6 +875,42 @@ fn world_remove(ctx: &Ctx, name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static CNT: AtomicU32 = AtomicU32::new(0);
+
+    /// Supersessão provisional (SPEC-0005 §4): um pacote-semente PROVISIONAL
+    /// (gmp/binutils/gcc musl) cede seus caminhos ao rebuild-glibc que os
+    /// reivindica — sem doublethink — como busybox cede a coreutils.
+    #[test]
+    fn provisional_cede_ao_rebuild() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-prov-{}-{n}", std::process::id()));
+        let recs = root.join("var/lib/minitrue/records");
+        // semente provisional (gmp) com dois caminhos
+        fs::create_dir_all(recs.join("gmp")).unwrap();
+        fs::write(recs.join("gmp/meta"), "NAME=gmp\nVERSION=6.3.0\nPROVISIONAL=1\n").unwrap();
+        fs::write(recs.join("gmp/manifest"), "/usr/lib/libgmp.so.10\n/usr/lib/libgmp.so\n").unwrap();
+        // pacote real (não-provisional) para contraste
+        fs::create_dir_all(recs.join("outro")).unwrap();
+        fs::write(recs.join("outro/meta"), "NAME=outro\nVERSION=1\n").unwrap();
+        fs::write(recs.join("outro/manifest"), "/usr/lib/liboutro.so\n").unwrap();
+
+        let ctx = Ctx { root: root.clone(), offline: false, tofu: false, jobs: 1 };
+        assert!(is_provisional(&ctx, "gmp"), "gmp deveria ser provisional");
+        assert!(!is_provisional(&ctx, "outro"), "outro NÃO é provisional");
+
+        // o rebuild-glibc reivindica um caminho da semente → ela cede
+        let owner = adopt_provisional_path(&ctx, "/usr/lib/libgmp.so.10", "mathlibs-glibc");
+        assert_eq!(owner.as_deref(), Some("gmp"));
+        let m = read_manifest(&recs.join("gmp"));
+        assert!(!m.contains(&"/usr/lib/libgmp.so.10".to_string()), "caminho cedido some do manifesto");
+        assert!(m.contains(&"/usr/lib/libgmp.so".to_string()), "os outros caminhos ficam");
+
+        // caminho de pacote NÃO-provisional não é cedido (viraria doublethink)
+        assert_eq!(adopt_provisional_path(&ctx, "/usr/lib/liboutro.so", "x"), None);
+        let _ = fs::remove_dir_all(&root);
+    }
 
     fn be() -> BuildEnv {
         BuildEnv {

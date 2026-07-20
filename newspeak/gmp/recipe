@@ -1,6 +1,9 @@
 NAME=gmp
 VERSION=6.3.0
 KIND=source
+# Semente musl (zig): scaffolding do Estágio 2. Cede /usr/lib/libgmp* ao
+# rebuild glibc (mathlibs-glibc) sem doublethink — SPEC-0003 §3, SPEC-0005 §4.
+PROVISIONAL=1
 BUILD_DEPS="m4 binutils"
 ABOUT="aritmética de inteiros/racionais de precisão arbitrária; dependência de build do gcc (usada in-tree pelo gcc, mas verificável como pacote isolado). Precisa de m4 (asm) e do nm do binutils (configure)"
 LICENSE="LGPL-3.0-or-later OR GPL-2.0-or-later"
