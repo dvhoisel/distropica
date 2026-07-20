@@ -35,6 +35,14 @@ Para cada pacote, se existir **binário elegível** (§2), a receita DEVE usá-l
 Compilar algo que o mantenedor já distribui pronto é considerado desperdício
 e desvio de premissa.
 
+Aplicada recursivamente, P2 resolve o mundo B: o que não tem binário
+upstream a Distrópica compila **uma vez** e publica como binário do
+próprio projeto (o **canal binário**, SPEC-0009). A partir daí existe um
+binário elegível, e P2 manda preferi-lo à fonte — então o usuário final
+não recompila a base. Compilar de fonte na máquina do usuário vira o
+último recurso, só para o que nem o upstream nem nenhum canal confiável
+publica.
+
 ### P3 — Fonte apenas na falta
 
 O que não tem binário elegível é compilado da fonte oficial do projeto.

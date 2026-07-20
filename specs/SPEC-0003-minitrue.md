@@ -84,7 +84,11 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
      `PREFIX=/opt/<nome>/<versão>.tmp`; sucesso ⇒ rename atômico para
      `/opt/<nome>/<versão>`, flip do symlink `current`, criação dos links
      de comando (`LINKS`) em `/usr/bin`.
-   - **Mundo B** (`KIND=source`): executa `build()` com `STAGE=` (DESTDIR)
+   - **Mundo B** (`KIND=source`): antes de compilar, consulta os canais
+     binários (SPEC-0009) por um binário pré-buildado da versão da receita;
+     havendo um aceitável, instala-o como mundo A (baixa/verifica/extrai) e
+     o `build()` não roda. Só na falta é que executa `build()` com
+     `STAGE=` (DESTDIR)
      em diretório temporário; sucesso ⇒ checagem de colisão (§7) ⇒ cópia
      para `/`; se já havia versão anterior, caminhos órfãos do manifesto
      antigo são removidos após a cópia (upgrade = instalar novo + varrer

@@ -50,6 +50,9 @@ DEVERIA ser publicada com assinatura minisign da chave do projeto.
    `minitrue --root /mnt rectify base`, onde `base` é a meta-receita do
    conjunto mínimo (busybox, minitrue, runit, kernel, doas, tzdata…;
    composição exata definida na árvore newspeak, não no instalador).
+   Os pacotes do mundo B da `base` (glibc, gcc…) resolvem-se por **binário
+   de canal** (SPEC-0009), não por compilação — é o que garante que o
+   usuário **não compila a base** ao instalar.
    Esqueleto FHS e usr-merge conforme SPEC-0002. Grava o
    `/etc/minitrue/world` inicial (conjunto `base` + escolhas do usuário);
    `minipax --world <arquivo>` reinstala uma máquina inteira a partir de

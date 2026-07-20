@@ -43,6 +43,7 @@ Quando algo é removido, ele nunca existiu.
 | [SPEC-0006](specs/SPEC-0006-init.md) | Init e serviços sem systemd (busybox init → runit) |
 | [SPEC-0007](specs/SPEC-0007-censo-binarios.md) | Censo de binários upstream (quem publica o quê) |
 | [SPEC-0008](specs/SPEC-0008-instalador.md) | `minipax` — o instalador (mídia viva, EFI stub sem bootloader) |
+| [SPEC-0009](specs/SPEC-0009-canais-binarios.md) | Canais binários (oficial e samizdat) — o usuário não compila a base |
 
 ## Estado
 
@@ -60,5 +61,6 @@ rascunho e são o material a revisar. Alvo inicial: x86_64.
 | `newspeak` | A árvore de receitas — vocabulário mínimo, sem ambiguidade |
 | `room101` | `/var/log/room101/` — para onde vão os logs de builds que quebraram |
 | `unperson` | Pacote desativado sem remoção: segue em `/opt`, mas some de todos os registros visíveis |
+| `samizdat` | Canal binário não oficial porém confiável (SPEC-0009) — o livro clandestino, circulado fora do canal oficial |
 | *crimestop* | Recusa automática de artefato com hash divergente |
 | *doublethink* | Colisão: dois pacotes reivindicando o mesmo arquivo |
