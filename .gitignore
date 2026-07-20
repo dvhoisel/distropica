@@ -2,4 +2,5 @@
 /target/
 /minitrue/target/
 /rootfs/
+/rootfs-clean/
 *.log
