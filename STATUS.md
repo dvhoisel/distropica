@@ -36,7 +36,7 @@ parecer externo). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 |---|---|---|
 | E0 — chroot musl-estático | ✅ | |
 | E1 — `./configure && make` | ✅ | |
-| E2 — glibc + gcc nativo | 🟡 | **executado** pelo `rectify` num rootfs trabalhado; **E2-clean a frio** (rootfs novo, grafo corrigido, ×2 ambientes) é o próximo marco |
+| E2 — glibc + gcc nativo | ✅ | **E2-clean: reproduzido a frio** (rootfs novo, seed limpo, 16 pacotes, gcc nativo compila C/C++, libs finais em /usr/lib). Falta só repetir num 2º ambiente independente |
 | E3 — boot QEMU até login | ⬜ | kernel EFI-stub/UKI desenhado (SPEC-0008) |
 | E4 — userland vendor / GUI | ⬜ | |
 
@@ -53,9 +53,10 @@ parecer externo). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
 ## Limitações conhecidas (do parecer externo)
 
-- **E2 não é "a frio":** o rootfs de prova tem resíduo da investigação manual
-  (libstdcxx intermediária em lib64, libgmpxx-seed libc++, órfãos musl). O grafo
-  ganhou a aresta `gcc → binutils-cross` que faltava; falta o E2-clean.
+- **E2-clean feito (uma vez):** reproduzido a frio de um rootfs novo (seed
+  limpo, grafo corrigido). Achou e consertou 2 bugs que o rootfs sujo mascarava
+  (SUPERSEDES seed→busybox; libstdc++ lib64×lib usr-merge). Falta repetir num
+  **2º ambiente independente** para "reproduzível ×2".
 - **Parcialmente transacional:** o **registro** já é atômico (temp+rename, meta
   = marca de commit) e há **lock global** (flock). Falta: a cópia mundo-B de
   `STAGE` para `/` ainda não é transacional (crash no meio deixa arquivos soltos

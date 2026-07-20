@@ -530,20 +530,29 @@ com SHA256 real pinado.
   (não por scripts) compila e roda **C** (`self-host ok`) e **C++/STL**
   (`libstdc++.so.6, libc.so.6` — dinâmico glibc), sem shims.
 
-  **A formulação honesta (correção 2026-07-20):** *o E2 foi **executado** pelo
-  `rectify`* — não *provado a frio*. A prova rodou num **rootfs experimental
-  já trabalhado**, com resíduo da investigação manual; isso pode ter mascarado
-  arestas — de fato o grafo tinha o `gcc` pass-1 antes do `binutils-cross`
-  porque a receita não declarava a dependência (corrigido: `binutils-cross`
-  entrou em `BUILD_DEPS` do `gcc`). Restam impurezas no rootfs de prova:
-  `libstdcxx` intermediária em `/usr/lib64` × a final em `/usr/lib`; a
-  `libgmpxx`-seed (ABI libc++) não substituída; arquivos musl órfãos da
-  investigação. **O próximo marco é o E2-clean**: rootfs **novo**, grafo
-  corrigido, sem resíduo provisório, provando que a `gcc`/`libstdc++`/`binutils`
-  **finais** são as selecionadas — repetido em **dois** ambientes limpos, com
-  logs e hashes preservados. Só então cabe dizer "reproduzível a frio". O
-  cotejo com a reprodutibilidade (SPEC-0010 §6) faz parte do E2-clean. Scripts
-  da investigação em `rootfs/tmp/*.sh`.
+  **E2-CLEAN — reproduzível a frio (2026-07-20).** A primeira prova rodou num
+  rootfs trabalhado; agora foi refeita **do zero**. Um rootfs **novo**
+  (`rootfs-clean`), semeado só com o E0/E1 (busybox, zig, make — verificado:
+  registros = exatamente esses três, zero resíduo do E2) e o cache de fontes,
+  rodou `rectify gcc-pass2 --offline` e construiu os **16 pacotes** de ponta a
+  ponta, com o grafo corrigido. Resultado: o `gcc`/`g++` **nativos** compilam e
+  rodam **C** (`self-host ok`) e **C++/STL**, e a **`libstdc++` final está em
+  `/usr/lib`** (não a intermediária em lib64) — as libs finais são as
+  selecionadas.
+
+  Rodar a frio **expôs dois bugs que o rootfs trabalhado mascarava**, ambos
+  corrigidos: (1) `doublethink: /usr/bin/ar já pertence a busybox` — a
+  supersessão declarativa (`SUPERSEDES`, SPEC-0003 §7) não cobria seed→busybox;
+  `binutils`/`gawk` passaram a declarar `SUPERSEDES="busybox"`; (2) o híbrido
+  `libstdc++` em `/usr/lib64` × o shim `-L/usr/lib` (o gcc x86_64 instala em
+  lib64, o sistema é /usr/lib) — `libstdcxx` reconcilia lib64→lib e o `stage0`
+  faz `/usr/lib64 → lib` (usr-merge). Também a aresta `gcc → binutils-cross`
+  (que faltava) foi confirmada na ordem: binutils-cross **antes** de gcc.
+
+  **Falta para "reproduzível ×2":** repetir num **segundo** ambiente limpo
+  independente (a reprodutibilidade *de artefato* — byte-a-byte — já está
+  provada para gcc e glibc em SPEC-0010 §6; o cotejo do artefato do E2-clean
+  completo é o passo restante). Scripts da investigação em `rootfs/tmp/*.sh`.
 
 ## 5. Estágio 3 — boot de verdade
 
@@ -579,7 +588,7 @@ futura própria.
 |---------|-----------|-----------------|
 | E0 | chroot musl-estático habitável | baixo |
 | E1 | `./configure && make` funciona | atrito zig-cc×autotools |
-| E2 ~ | ABI glibc + gcc nativo (pass-2) — **executado pelo `rectify`** (rootfs trabalhado); **E2-clean a frio** é o próximo marco | GCC hospedado por clang; matriz glibc↔GCC; toolchain-semente musl→glibc |
+| E2 ✅ | ABI glibc + gcc nativo (pass-2) — **E2-clean: reproduzido a frio** de um rootfs novo (16 pacotes, libs finais selecionadas) 2026-07-20 | GCC hospedado por clang; matriz glibc↔GCC; toolchain-semente musl→glibc |
 | E3 | boot QEMU até login | config de kernel |
 | E4a | userland vendor console | baixo |
 | E4b | GUI + Firefox | volume brutal de fonte (mesa/GTK) |
