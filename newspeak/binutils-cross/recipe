@@ -2,6 +2,12 @@ NAME=binutils-cross
 VERSION=2.45
 KIND=source
 TOOLCHAIN=seed
+# Scaffolding do E2: além das ferramentas PREFIXADAS (x86_64-distropica-…-*,
+# que ninguém reivindica, então permanecem), instala arquivos COMPARTILHADOS
+# não-prefixados (bfd-plugins, headers, info) que o binutils-glibc — o binutils
+# nativo final — também instala. PROVISIONAL faz ceder esses compartilhados ao
+# binutils-glibc sem doublethink (achado ao rodar o E2 pelo rectify). SPEC-0005 §4.
+PROVISIONAL=1
 ABOUT="binutils targetando x86_64-distropica-linux-gnu: as/ld/ar/ranlib/nm/objcopy com o prefixo do alvo, que o gcc da passada 1 invoca ao gerar libgcc e que o build cross da glibc usa (o executor põe AR=x86_64-distropica-linux-gnu-ar etc. no perfil cross, SPEC-0005). Mesmo tarball do binutils nativo; muda só --target=. Mesma arquitetura, então os objetos são idênticos aos do binutils nativo — o prefixo é o que o toolchain cross exige por nome."
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/binutils/binutils-$VERSION.tar.xz"

@@ -26,10 +26,14 @@ SHIM
     # p/ os testes de configure que rodam binários linkados ao gmp staged.
     export LD_LIBRARY_PATH="$STAGE/usr/lib"
 
-    # gmp
+    # gmp — SEM --enable-cxx: o gcc usa a API C do gmp (libgmp), não o wrapper
+    # C++ (libgmpxx). Habilitar C++ exigiria um g++ funcional (logo a
+    # libstdc++), que neste ponto da cadeia ainda não existe — mathlibs-glibc
+    # builda antes de libstdcxx. Achado ao rodar o E2 ponta-a-ponta pelo
+    # rectify (o build manual mascarava, pois a libstdc++ fora instalada à mão).
     mkdir -p "$WORK/gmp"; cd "$WORK/gmp"
     tar -xJf "$DL" --strip-components=1
-    ./configure --prefix=/usr --enable-cxx --disable-dependency-tracking
+    ./configure --prefix=/usr --disable-dependency-tracking
     retry make -j"$JOBS"
     make install DESTDIR="$STAGE"
 

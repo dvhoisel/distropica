@@ -15,14 +15,19 @@ build() {
     # da libstdc++ ANTES de /usr/include (por causa do #include_next de
     # <cstdlib>), na ordem -isystem. Cobre as invocações de host E de build
     # (CC_FOR_BUILD) transparentemente — o que flags-por-fase não fariam.
+    # -Wl,-rpath-link,/usr/lib: o ld do pass-1 gcc não conhece /usr, e ao
+    # linkar um programa CONTRA os mathlibs (libmpc → libm.so.6, sqrt) precisa
+    # resolver o dep transitivo — o -L cobre só o -l direto. Sem isso, o teste
+    # de gmp/mpfr/mpc da configure do gcc falha ("requires GMP 4.2+"). Achado
+    # ao rodar o E2 pelo rectify (o build manual não batia neste teste).
     mkdir -p "$WORK/.tc"
     cat > "$WORK/.tc/x86_64-distropica-linux-gnu-gcc" <<'SHIM'
 #!/bin/sh
-exec /usr/bin/x86_64-distropica-linux-gnu-gcc -isystem /usr/include -B/usr/lib -L/usr/lib "$@"
+exec /usr/bin/x86_64-distropica-linux-gnu-gcc -isystem /usr/include -B/usr/lib -L/usr/lib -Wl,-rpath-link,/usr/lib "$@"
 SHIM
     cat > "$WORK/.tc/x86_64-distropica-linux-gnu-g++" <<SHIM
 #!/bin/sh
-exec /usr/bin/x86_64-distropica-linux-gnu-g++ -isystem /usr/include/c++/$VERSION -isystem /usr/include/c++/$VERSION/x86_64-distropica-linux-gnu -isystem /usr/include -B/usr/lib -L/usr/lib "\$@"
+exec /usr/bin/x86_64-distropica-linux-gnu-g++ -isystem /usr/include/c++/$VERSION -isystem /usr/include/c++/$VERSION/x86_64-distropica-linux-gnu -isystem /usr/include -B/usr/lib -L/usr/lib -Wl,-rpath-link,/usr/lib "\$@"
 SHIM
     chmod +x "$WORK/.tc"/*
     export PATH="$WORK/.tc:$PATH"

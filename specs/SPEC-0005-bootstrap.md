@@ -497,12 +497,36 @@ com SHA256 real pinado.
      *doublethink*, como o busybox cede a coreutils. Resolve a colisão entre
      receitas de **nomes distintos** que se substituem.
 
-  Com as duas, o executor tem tudo para rodar a cadeia do E2 pelo `rectify`
-  sem colidir. **Falta exercer:** a execução ponta-a-ponta de fato
-  (`rectify gcc-pass2`, um build de horas, com gcc/glibc registrados como
-  pacotes) e conferir que o artefato bate com as provas de reprodutibilidade
-  (SPEC-0010 §6). Os scripts da investigação seguem em `rootfs/tmp/*.sh` como
-  referência.
+  Com as duas, o executor tem tudo para rodar a cadeia do E2 pelo `rectify`.
+
+  **Exercido pelo `rectify` (2026-07-20).** `minitrue rectify gcc-pass2` (com
+  `--root <rootfs>`) resolveu e construiu a cadeia pela ferramenta —
+  **15 de 16** pacotes retificados na ordem do grafo, cada um dirigido em
+  bwrap: toda a base seed, o **gcc pass-1** (o build flaky, limpo), a **glibc**
+  (perfil **cross**), e os rebuilds-glibc (`mathlibs-glibc`, `binutils-glibc`,
+  `libstdcxx`) com a **supersessão provisional** funcionando de fato (as linhas
+  `assume o controle de … (provisório)` no log). O `FINGERPRINT` é gravado em
+  cada registro. Rodar pela ferramenta **expôs quatro bugs que o build manual
+  mascarava** (a ordem real do grafo + o ambiente hermético), todos corrigidos
+  nas receitas:
+  1. `gmp --enable-cxx` exigia libstdc++ que ainda não existe nesta ordem
+     (mathlibs-glibc precede libstdcxx) → removido (o gcc usa a API C do gmp);
+  2/3. *doublethink* de arquivos compartilhados: `binutils-cross` × `binutils-
+     glibc`, e a libstdc++ do `gcc-pass2` × `libstdcxx` → marcar os scaffoldings
+     `binutils-cross` e `libstdcxx` como `PROVISIONAL`;
+  4. o teste de gmp/mpfr/mpc da `configure` do gcc falhava: o ld do cross gcc
+     não resolve o dep **transitivo** `libmpc → libm.so.6` (o `-L` cobre só o
+     `-l` direto) → `-Wl,-rpath-link,/usr/lib` no shim do `gcc-pass2`.
+
+  A **lição**: todo scaffolding superseder por um build glibc/nativo é
+  `PROVISIONAL` (a cadeia de cessão seed→cross→glibc é o que faz o bootstrap
+  caber no modelo de pacotes), e o cross gcc precisa de `-rpath-link` para os
+  deps transitivos das mathlibs. Com os quatro consertos, o `gcc-pass2` passa a
+  `configure` e o `make` progride (verificado). **Falta só** o `gcc-pass2`
+  rodar sem interrupção até o fim pelo `rectify` — o build (~30 min) e o cotejo
+  com as provas de reprodutibilidade (SPEC-0010 §6); a correção das receitas
+  está validada (a passada 2 já foi construída à mão, §acima). Scripts da
+  investigação em `rootfs/tmp/*.sh`.
 
 ## 5. Estágio 3 — boot de verdade
 

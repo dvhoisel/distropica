@@ -3,6 +3,10 @@ VERSION=15.3.0
 KIND=source
 TOOLCHAIN=cross
 RETRIES=50
+# Scaffolding: existe só para o pass-1 g++ conseguir LINKAR C++ e construir o
+# gcc-pass2. A libstdc++ FINAL é a que o próprio gcc-pass2 constrói (target-lib).
+# PROVISIONAL faz esta libstdc++ ceder à do gcc-pass2 sem doublethink. SPEC-0005 §4.
+PROVISIONAL=1
 DEPS="glibc"
 BUILD_DEPS="gcc binutils-cross"
 ABOUT="A libstdc++ (runtime C++), do subdir libstdc++-v3 do fonte do gcc, buildada pelo gcc da passada 1 AGORA que a glibc existe (headers presentes). É o elo que faltava entre a passada 1 (--without-headers: tem cc1plus mas nenhuma libstdc++) e a passada 2: sem uma libstdc++, o pass-1 g++ compila C++ mas não LINKA, então não conseguiria buildar o gcc, que é C++. Ordem LFS 5.7 (glibc → libstdc++ → gcc final)."
