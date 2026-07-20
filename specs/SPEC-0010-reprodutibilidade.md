@@ -86,14 +86,33 @@ independentes do mesmo pacote deram **`STAGE` byte-a-byte idêntico**:
 O ambiente está embutido no `install_source` do minitrue; o `ar`
 determinístico, na receita do binutils.
 
+**Codegen determinístico (o achado que destrava gcc/glibc).** O gcc da
+passada 1 é *flaky* (ICE segfault aleatório, corrupção de memória do
+binário feito por clang). A pergunta perigosa era: a instabilidade afeta
+só *crashes* ou também o *código gerado*? Teste (2026-07-19): o **mesmo
+`.c` compilado 4× pelo gcc-passada-1 deu 1 hash único** (`.o` idênticos);
+o zig cc idem em 3×. Conclusão: **a flakiness é só crash, não corrompe a
+saída** — quando compila, produz idêntico. Logo o loop de retry (SPEC-0005)
+não afeta o resultado: retenta-se até não estourar, e o `.o` produzido é o
+mesmo de um build limpo. Isso é a base para gcc/glibc reproduzirem apesar
+do compilador flaky.
+
+**Caminho de build embutido — pouco, e coberto.** Teste: dois builds do
+mesmo `.c` com `-g` em caminhos absolutos **diferentes** deram `.o`
+idênticos **sem** `-ffile-prefix-map` — o `zig cc` (clang) não crava o
+path absoluto no debug info por padrão. Mesmo assim, os shims do minitrue
+passam `-ffile-prefix-map=$WORK=.` como defesa-em-profundidade (cobre
+`__FILE__` e `comp_dir` onde ocorram), tornando a reprodutibilidade
+independente do caminho — não só do caminho canônico do chroot.
+
 ## 7. Questões em aberto
 
 - **gcc/glibc reprodutíveis:** os pacotes maiores ainda não foram testados
   para reprodutibilidade; gcc tem geradores e a glibc tem
   `configure`-embutidos que podem exigir ajuste. Testar é o próximo passo.
-- **Builds fora do chroot** (caminho não canônico): precisariam de
-  `-ffile-prefix-map=$WORK=.` nos shims do toolchain; hoje a garantia é só
-  para builds no chroot. Formalizar se/quando build no host importar.
+- ~~Builds fora do chroot (caminho não canônico)~~ — **resolvido**: os
+  shims passam `-ffile-prefix-map=$WORK=.`, e o `zig cc` já não crava o
+  path por padrão (§6). A reprodutibilidade não depende mais do caminho.
 - **Empacotamento em Rust vs GNU tar** para o `--emit` (§4): decidir.
 - **Reprodutibilidade do próprio `minitrue`** (o binário Rust estático):
   desejável (o buscador que verifica tudo deveria ser verificável); Cargo +

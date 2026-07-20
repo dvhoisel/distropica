@@ -226,13 +226,17 @@ fn setup_toolchain(ctx: &Ctx, work: &Path) -> Result<PathBuf> {
     }
     let zig_abs = zig.canonicalize()?;
     let z = zig_abs.display();
+    // -ffile-prefix-map=$WORK=. torna a reprodutibilidade independente do
+    // caminho de build (SPEC-0010): reescreve o comp_dir/__FILE__ para relativo.
+    let w = work.display();
+    let map = format!("-ffile-prefix-map={w}=.");
     let tc = work.join(".tc");
     fs::create_dir_all(&tc)?;
     let shims = [
-        ("cc", format!("#!/bin/sh\nexec \"{z}\" cc -target x86_64-linux-musl \"$@\"\n")),
-        ("gcc", format!("#!/bin/sh\nexec \"{z}\" cc -target x86_64-linux-musl \"$@\"\n")),
-        ("c++", format!("#!/bin/sh\nexec \"{z}\" c++ -target x86_64-linux-musl \"$@\"\n")),
-        ("g++", format!("#!/bin/sh\nexec \"{z}\" c++ -target x86_64-linux-musl \"$@\"\n")),
+        ("cc", format!("#!/bin/sh\nexec \"{z}\" cc -target x86_64-linux-musl {map} \"$@\"\n")),
+        ("gcc", format!("#!/bin/sh\nexec \"{z}\" cc -target x86_64-linux-musl {map} \"$@\"\n")),
+        ("c++", format!("#!/bin/sh\nexec \"{z}\" c++ -target x86_64-linux-musl {map} \"$@\"\n")),
+        ("g++", format!("#!/bin/sh\nexec \"{z}\" c++ -target x86_64-linux-musl {map} \"$@\"\n")),
         // configure só sonda a existência de `ld` no PATH; o link real é interno ao zig cc.
         ("ld", format!("#!/bin/sh\nexec \"{z}\" ld.lld \"$@\"\n")),
         ("ar", format!("#!/bin/sh\nexec \"{z}\" ar \"$@\"\n")),
