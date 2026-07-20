@@ -32,7 +32,10 @@ fn collect(
     out: &mut Vec<Recipe>,
 ) -> Result<()> {
     if stack.iter().any(|s| s == name) {
-        return fail(2, format!("ciclo de dependências: {} -> {name}", stack.join(" -> ")));
+        return fail(
+            2,
+            format!("ciclo de dependências: {} -> {name}", stack.join(" -> ")),
+        );
     }
     if !seen.insert(name.to_string()) {
         return Ok(());
@@ -53,7 +56,10 @@ fn install_one(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     if r.requires_glibc && !ctx.root.join("usr/lib/ld-linux-x86-64.so.2").exists() {
         return fail(
             5,
-            format!("{}: exige a ABI glibc, que só existe após o Estágio 2 (SPEC-0005 §4)", r.name),
+            format!(
+                "{}: exige a ABI glibc, que só existe após o Estágio 2 (SPEC-0005 §4)",
+                r.name
+            ),
         );
     }
     match r.kind {
@@ -86,7 +92,10 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     let staging = opt.join(format!(".{}.tmp", r.version));
     let _ = fs::remove_dir_all(&staging);
     fs::create_dir_all(&staging)?;
-    let work = ctx.root.join("tmp").join(format!("minitrue-work-{}", r.name));
+    let work = ctx
+        .root
+        .join("tmp")
+        .join(format!("minitrue-work-{}", r.name));
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work)?;
 
@@ -106,7 +115,10 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         }
         cmd.env(format!("DL_{}", i + 1), &abs);
     }
-    let out = cmd.output().map_err(|e| crate::Fail { code: 1, msg: format!("sh indisponível: {e}") })?;
+    let out = cmd.output().map_err(|e| crate::Fail {
+        code: 1,
+        msg: format!("sh indisponível: {e}"),
+    })?;
     if !out.status.success() {
         room101(ctx, r, &out.stdout, &out.stderr)?;
         let _ = fs::remove_dir_all(&staging);
@@ -116,14 +128,18 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
             format!(
                 "{}: install_pkg falhou — o interrogatório completo está em {}",
                 r.name,
-                ctx.room101().join(format!("{}-{}.log", r.name, r.version)).display()
+                ctx.room101()
+                    .join(format!("{}-{}.log", r.name, r.version))
+                    .display()
             ),
         );
     }
     let _ = fs::remove_dir_all(&work);
 
     let verdir = opt.join(&r.version);
-    let previous = read_meta(&rec_dir).and_then(|m| m.get("VERSION").cloned()).filter(|v| *v != r.version);
+    let previous = read_meta(&rec_dir)
+        .and_then(|m| m.get("VERSION").cloned())
+        .filter(|v| *v != r.version);
     if verdir.exists() {
         fs::remove_dir_all(&verdir)?;
     }
@@ -156,8 +172,10 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         .collect();
     let claims = all_manifests(ctx);
     fs::create_dir_all(ctx.usr_bin())?;
-    let mut manifest: Vec<String> =
-        vec![format!("/opt/{}/{}", r.name, r.version), format!("/opt/{}/current", r.name)];
+    let mut manifest: Vec<String> = vec![
+        format!("/opt/{}/{}", r.name, r.version),
+        format!("/opt/{}/current", r.name),
+    ];
     for (cmdname, rel) in &pairs {
         let linkpath = ctx.usr_bin().join(cmdname);
         let target = format!("../../opt/{}/current/{}", r.name, rel);
@@ -174,11 +192,19 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
                             .find(|(n, _, set)| *n != r.name && set.contains(&virt))
                             .map(|(n, v, _)| format!("{n} {v}"))
                             .unwrap_or_else(|| "algo fora dos registros".into());
-                        return fail(4, format!("doublethink detectado: {virt} já pertence a {owner}"));
+                        return fail(
+                            4,
+                            format!("doublethink detectado: {virt} já pertence a {owner}"),
+                        );
                     }
                 }
             }
-            Ok(_) => return fail(4, format!("doublethink detectado: {virt} existe e não é link gerido")),
+            Ok(_) => {
+                return fail(
+                    4,
+                    format!("doublethink detectado: {virt} existe e não é link gerido"),
+                )
+            }
             Err(_) => {}
         }
         let _ = fs::remove_file(&linkpath);
@@ -197,8 +223,10 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         }
     }
 
-    let keep: HashSet<String> =
-        [Some(r.version.clone()), previous.clone()].into_iter().flatten().collect();
+    let keep: HashSet<String> = [Some(r.version.clone()), previous.clone()]
+        .into_iter()
+        .flatten()
+        .collect();
     if let Ok(entries) = fs::read_dir(&opt) {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
@@ -248,20 +276,38 @@ const CROSS_TRIPLE: &str = "x86_64-distropica-linux-gnu";
 fn seed_shims(ctx: &Ctx, work: &Path) -> Result<PathBuf> {
     let zig_host = ctx.root.join("opt/zig/current/zig");
     if !zig_host.exists() {
-        return fail(5, "toolchain seed exige o zig — `minitrue rectify zig` antes");
+        return fail(
+            5,
+            "toolchain seed exige o zig — `minitrue rectify zig` antes",
+        );
     }
     // Os shims rodam DENTRO do chroot (bwrap): o caminho do zig e o
     // prefix-map são os de dentro do rootfs, não os do host.
     let zc = in_chroot(&ctx.root, &zig_host);
     let z = zc.display();
-    let map = format!("-ffile-prefix-map={}=.", in_chroot(&ctx.root, work).display());
+    let map = format!(
+        "-ffile-prefix-map={}=.",
+        in_chroot(&ctx.root, work).display()
+    );
     let tc = work.join(".tc");
     fs::create_dir_all(&tc)?;
     let shims = [
-        ("cc", format!("#!/bin/sh\nexec \"{z}\" cc -target x86_64-linux-musl {map} \"$@\"\n")),
-        ("gcc", format!("#!/bin/sh\nexec \"{z}\" cc -target x86_64-linux-musl {map} \"$@\"\n")),
-        ("c++", format!("#!/bin/sh\nexec \"{z}\" c++ -target x86_64-linux-musl {map} \"$@\"\n")),
-        ("g++", format!("#!/bin/sh\nexec \"{z}\" c++ -target x86_64-linux-musl {map} \"$@\"\n")),
+        (
+            "cc",
+            format!("#!/bin/sh\nexec \"{z}\" cc -target x86_64-linux-musl {map} \"$@\"\n"),
+        ),
+        (
+            "gcc",
+            format!("#!/bin/sh\nexec \"{z}\" cc -target x86_64-linux-musl {map} \"$@\"\n"),
+        ),
+        (
+            "c++",
+            format!("#!/bin/sh\nexec \"{z}\" c++ -target x86_64-linux-musl {map} \"$@\"\n"),
+        ),
+        (
+            "g++",
+            format!("#!/bin/sh\nexec \"{z}\" c++ -target x86_64-linux-musl {map} \"$@\"\n"),
+        ),
         // configure só sonda a existência de `ld` no PATH; o link é interno ao zig cc.
         ("ld", format!("#!/bin/sh\nexec \"{z}\" ld.lld \"$@\"\n")),
         ("ar", format!("#!/bin/sh\nexec \"{z}\" ar \"$@\"\n")),
@@ -395,7 +441,10 @@ fn build_command(
         ("NM".into(), be.nm.clone()),
         ("RETRIES".into(), retries.to_string()),
         ("HOME".into(), c(work)),
-        ("ZIG_GLOBAL_CACHE_DIR".into(), c(&ctx.cache_dir().join("zig"))),
+        (
+            "ZIG_GLOBAL_CACHE_DIR".into(),
+            c(&ctx.cache_dir().join("zig")),
+        ),
         ("SOURCE_DATE_EPOCH".into(), epoch.to_string()),
         ("LC_ALL".into(), "C".into()),
         ("LANG".into(), "C".into()),
@@ -455,7 +504,10 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     println!("retificando os registros (fonte): {} {}", r.name, r.version);
     let artifacts = fetch::ensure_artifacts(ctx, r)?;
 
-    let work = ctx.root.join("tmp").join(format!("minitrue-build-{}", r.name));
+    let work = ctx
+        .root
+        .join("tmp")
+        .join(format!("minitrue-build-{}", r.name));
     let _ = fs::remove_dir_all(&work);
     let src_dir = work.join("src");
     let stage = work.join("stage");
@@ -476,7 +528,10 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         } else {
             ""
         };
-        crate::Fail { code: 1, msg: format!("não consegui rodar o build: {e}{hint}") }
+        crate::Fail {
+            code: 1,
+            msg: format!("não consegui rodar o build: {e}{hint}"),
+        }
     })?;
     if !out.status.success() {
         room101(ctx, r, &out.stdout, &out.stderr)?;
@@ -486,7 +541,9 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
             format!(
                 "{}: build() falhou — o interrogatório completo está em {}",
                 r.name,
-                ctx.room101().join(format!("{}-{}.log", r.name, r.version)).display()
+                ctx.room101()
+                    .join(format!("{}-{}.log", r.name, r.version))
+                    .display()
             ),
         );
     }
@@ -508,7 +565,10 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
             .find(|(n, _, set)| *n != r.name && set.contains(&virt) && !is_provisional(ctx, n))
         {
             let _ = fs::remove_dir_all(&work);
-            return fail(4, format!("doublethink detectado: {virt} já pertence a {n} {v}"));
+            return fail(
+                4,
+                format!("doublethink detectado: {virt} já pertence a {n} {v}"),
+            );
         }
     }
 
@@ -571,7 +631,10 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     if explicit {
         world_add(ctx, &r.name)?;
     }
-    println!("{} {} — compilado e retificado. doubleplusgood.", r.name, r.version);
+    println!(
+        "{} {} — compilado e retificado. doubleplusgood.",
+        r.name, r.version
+    );
     Ok(())
 }
 
@@ -605,7 +668,11 @@ fn walk(base: &Path, dir: &Path, out: &mut Vec<(PathBuf, String, fs::FileType)>)
     entries.sort_by_key(|e| e.file_name());
     for e in entries {
         let path = e.path();
-        let rel = path.strip_prefix(base).unwrap().to_string_lossy().into_owned();
+        let rel = path
+            .strip_prefix(base)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         let ft = fs::symlink_metadata(&path)?.file_type();
         out.push((path.clone(), rel, ft));
         if ft.is_dir() {
@@ -629,7 +696,9 @@ fn mkparent(p: &Path) -> Result<()> {
 fn prune_empty(root: &Path, start: &Path) {
     let mut p = start.to_path_buf();
     while p.starts_with(root) && p != *root {
-        let empty = fs::read_dir(&p).map(|mut d| d.next().is_none()).unwrap_or(false);
+        let empty = fs::read_dir(&p)
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false);
         if !empty || fs::remove_dir(&p).is_err() {
             break;
         }
@@ -656,7 +725,10 @@ pub fn memoryhole(ctx: &Ctx, names: &[String]) -> Result<()> {
     for name in names {
         let rec_dir = ctx.records_dir().join(name);
         if !rec_dir.is_dir() {
-            return fail(2, format!("{name}: não há registro — talvez nunca tenha existido"));
+            return fail(
+                2,
+                format!("{name}: não há registro — talvez nunca tenha existido"),
+            );
         }
         for (other, _, _) in all_manifests(ctx) {
             if removing.contains(other.as_str()) {
@@ -666,11 +738,16 @@ pub fn memoryhole(ctx: &Ctx, names: &[String]) -> Result<()> {
                 .and_then(|m| m.get("DEPS").cloned())
                 .unwrap_or_default();
             if deps.split_whitespace().any(|d| d == name) {
-                return fail(1, format!("{name} ainda sustenta {other} — memoryhole recusado"));
+                return fail(
+                    1,
+                    format!("{name} ainda sustenta {other} — memoryhole recusado"),
+                );
             }
         }
 
-        let world = read_meta(&rec_dir).and_then(|m| m.get("WORLD").cloned()).unwrap_or_else(|| "A".into());
+        let world = read_meta(&rec_dir)
+            .and_then(|m| m.get("WORLD").cloned())
+            .unwrap_or_else(|| "A".into());
         if world == "A" {
             for line in read_manifest(&rec_dir) {
                 let path = manifest_path(&line);
@@ -692,10 +769,11 @@ pub fn memoryhole(ctx: &Ctx, names: &[String]) -> Result<()> {
                 let p = ctx.root.join(path.trim_start_matches('/'));
                 // Veredito intacto×modificado (SPEC-0003 §4): arquivo cujo
                 // conteúdo diverge do hash registrado foi mexido pelo usuário —
-                // preserva por padrão, com aviso.
+                // preserva por padrão, com aviso. `-` (virou symlink/dir ou
+                // ficou ilegível) também é divergência: um regular registrado
+                // não deveria ter mudado de tipo.
                 if let Some(recorded) = manifest_hash(line) {
-                    let cur = file_hash(&p);
-                    if cur != "-" && cur != recorded {
+                    if file_hash(&p) != recorded {
                         println!("  {path}: modificado desde a instalação — preservado");
                         continue;
                     }
@@ -759,11 +837,11 @@ pub fn verify(ctx: &Ctx) -> Result<()> {
                     continue;
                 }
                 // Integridade por arquivo (manifesto v1): conteúdo vs. hash
-                // registrado. Legado v0 (sem hash) só confere presença.
+                // registrado. `-` (regular virou symlink/dir ou ficou ilegível)
+                // também é divergência. Legado v0 (sem hash) só confere presença.
                 if let Some(recorded) = manifest_hash(&line) {
-                    let cur = file_hash(&p);
-                    if cur != "-" && cur != recorded {
-                        println!("wrongthink: {path} (de {name}) foi modificado — hash difere do registro");
+                    if file_hash(&p) != recorded {
+                        println!("wrongthink: {path} (de {name}) foi modificado — hash/tipo difere do registro");
                         problems += 1;
                     }
                 }
@@ -779,7 +857,10 @@ pub fn verify(ctx: &Ctx) -> Result<()> {
             }
             let virt = format!("/usr/bin/{}", e.file_name().to_string_lossy());
             if !claimed.contains(&virt) {
-                println!("wrongthink: {virt} é órfão (aponta {} sem dono em manifesto)", t.display());
+                println!(
+                    "wrongthink: {virt} é órfão (aponta {} sem dono em manifesto)",
+                    t.display()
+                );
                 problems += 1;
             }
         }
@@ -788,7 +869,10 @@ pub fn verify(ctx: &Ctx) -> Result<()> {
         println!("thinkpol: nenhum wrongthink.");
         Ok(())
     } else {
-        fail(1, format!("{problems} problema(s) — nada foi apagado sem ordem"))
+        fail(
+            1,
+            format!("{problems} problema(s) — nada foi apagado sem ordem"),
+        )
     }
 }
 
@@ -801,7 +885,13 @@ pub fn newspeak_show(ctx: &Ctx, name: &str) -> Result<()> {
 
 // ---------- registros e world ----------
 
-fn write_record(ctx: &Ctx, rec_dir: &Path, r: &Recipe, world: &str, manifest: &mut Vec<String>) -> Result<()> {
+fn write_record(
+    ctx: &Ctx,
+    rec_dir: &Path,
+    r: &Recipe,
+    world: &str,
+    manifest: &mut Vec<String>,
+) -> Result<()> {
     fs::create_dir_all(rec_dir)?;
     manifest.sort();
     manifest.dedup();
@@ -827,7 +917,12 @@ fn write_record(ctx: &Ctx, rec_dir: &Path, r: &Recipe, world: &str, manifest: &m
     // e o veredito intacto×modificado ao `memoryhole` (SPEC-0003 §4/§6).
     let decorated: Vec<String> = manifest
         .iter()
-        .map(|p| format!("{}  {p}", file_hash(&ctx.root.join(p.trim_start_matches('/')))))
+        .map(|p| {
+            format!(
+                "{}  {p}",
+                file_hash(&ctx.root.join(p.trim_start_matches('/')))
+            )
+        })
         .collect();
     let body = decorated.join("\n") + "\n";
     fs::write(rec_dir.join("manifest"), &body)?;
@@ -867,7 +962,10 @@ fn read_meta(rec_dir: &Path) -> Option<HashMap<String, String>> {
     let txt = fs::read_to_string(rec_dir.join("meta")).ok()?;
     Some(
         txt.lines()
-            .filter_map(|l| l.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+            .filter_map(|l| {
+                l.split_once('=')
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+            })
             .collect(),
     )
 }
@@ -894,11 +992,15 @@ fn manifest_hash(line: &str) -> Option<&str> {
 /// sha256 (hex) de um arquivo regular, em streaming; `-` para symlink, diretório
 /// ou ausente. É o hash por arquivo do manifesto v1 (SPEC-0003 §6).
 fn file_hash(path: &Path) -> String {
-    let Ok(md) = fs::symlink_metadata(path) else { return "-".into() };
+    let Ok(md) = fs::symlink_metadata(path) else {
+        return "-".into();
+    };
     if !md.file_type().is_file() {
         return "-".into();
     }
-    let Ok(mut f) = fs::File::open(path) else { return "-".into() };
+    let Ok(mut f) = fs::File::open(path) else {
+        return "-".into();
+    };
     let mut h = Sha256::new();
     let mut buf = [0u8; 65536];
     loop {
@@ -919,8 +1021,10 @@ fn all_manifests(ctx: &Ctx) -> Vec<(String, String, HashSet<String>)> {
             let ver = read_meta(&e.path())
                 .and_then(|m| m.get("VERSION").cloned())
                 .unwrap_or_else(|| "?".into());
-            let set: HashSet<String> =
-                read_manifest(&e.path()).iter().map(|l| manifest_path(l).to_string()).collect();
+            let set: HashSet<String> = read_manifest(&e.path())
+                .iter()
+                .map(|l| manifest_path(l).to_string())
+                .collect();
             v.push((name, ver, set));
         }
     }
@@ -1110,7 +1214,11 @@ pub fn explain(ctx: &Ctx, target: &str) -> Result<()> {
             // Hash do próprio arquivo no manifesto v1 (integridade por arquivo).
             if let Some(line) = read_manifest(&rec).iter().find(|l| {
                 let p = manifest_path(l);
-                p == virt || virt.strip_prefix("/etc/").map(|s| p == format!("/usr/share/factory/etc/{s}")).unwrap_or(false)
+                p == virt
+                    || virt
+                        .strip_prefix("/etc/")
+                        .map(|s| p == format!("/usr/share/factory/etc/{s}"))
+                        .unwrap_or(false)
             }) {
                 if let Some(h) = manifest_hash(line) {
                     println!("  hash-arq:    {}", &h[..16]);
@@ -1133,7 +1241,9 @@ pub fn explain(ctx: &Ctx, target: &str) -> Result<()> {
         None => {
             let real = ctx.root.join(virt.trim_start_matches('/'));
             if real.symlink_metadata().is_ok() {
-                println!("{virt}: existe, mas nenhum registro o reivindica — wrongthink (veja `verify`)");
+                println!(
+                    "{virt}: existe, mas nenhum registro o reivindica — wrongthink (veja `verify`)"
+                );
             } else {
                 println!("{virt}: nenhum registro o reivindica, e não há nada aí.");
             }
@@ -1149,7 +1259,10 @@ pub fn why(ctx: &Ctx, name: &str) -> Result<()> {
         Some(m) => m,
         None => return fail(2, format!("{name}: não está registrado (não instalado)")),
     };
-    println!("{name} {}", meta.get("VERSION").map(String::as_str).unwrap_or("?"));
+    println!(
+        "{name} {}",
+        meta.get("VERSION").map(String::as_str).unwrap_or("?")
+    );
     let explicit = read_world(ctx).contains(name);
     let dependents = dependents_of(ctx, name);
     if explicit {
@@ -1235,23 +1348,47 @@ mod tests {
         let recs = root.join("var/lib/minitrue/records");
         // glibc (mundo B) dona de /usr/lib/libc.so.6, dep de ninguém explícito
         fs::create_dir_all(recs.join("glibc")).unwrap();
-        fs::write(recs.join("glibc/meta"), "NAME=glibc\nVERSION=2.42\nWORLD=B\nDEPS=\n").unwrap();
+        fs::write(
+            recs.join("glibc/meta"),
+            "NAME=glibc\nVERSION=2.42\nWORLD=B\nDEPS=\n",
+        )
+        .unwrap();
         fs::write(recs.join("glibc/manifest"), "/usr/lib/libc.so.6\n").unwrap();
         // gcc (mundo B) depende de glibc; dona do default /etc (via fábrica)
         fs::create_dir_all(recs.join("gcc")).unwrap();
-        fs::write(recs.join("gcc/meta"), "NAME=gcc\nVERSION=15.3.0\nWORLD=B\nDEPS=glibc\n").unwrap();
-        fs::write(recs.join("gcc/manifest"), "/usr/bin/gcc\n/usr/share/factory/etc/gcc.conf\n").unwrap();
+        fs::write(
+            recs.join("gcc/meta"),
+            "NAME=gcc\nVERSION=15.3.0\nWORLD=B\nDEPS=glibc\n",
+        )
+        .unwrap();
+        fs::write(
+            recs.join("gcc/manifest"),
+            "/usr/bin/gcc\n/usr/share/factory/etc/gcc.conf\n",
+        )
+        .unwrap();
         // busybox provisional também "reivindica" /usr/bin/gcc (cessão não limpa)
         fs::create_dir_all(recs.join("busybox")).unwrap();
-        fs::write(recs.join("busybox/meta"), "NAME=busybox\nVERSION=1.35\nWORLD=A\nPROVISIONAL=1\n").unwrap();
+        fs::write(
+            recs.join("busybox/meta"),
+            "NAME=busybox\nVERSION=1.35\nWORLD=A\nPROVISIONAL=1\n",
+        )
+        .unwrap();
         fs::write(recs.join("busybox/manifest"), "/usr/bin/gcc\n").unwrap();
         // world: glibc é explícito
         fs::create_dir_all(root.join("etc/minitrue")).unwrap();
         fs::write(root.join("etc/minitrue/world"), "glibc\n# comentário\n").unwrap();
 
-        let ctx = Ctx { root: root.clone(), offline: false, tofu: false, jobs: 1 };
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
         // dono direto
-        assert_eq!(owner_of(&ctx, "/usr/lib/libc.so.6").as_deref(), Some("glibc"));
+        assert_eq!(
+            owner_of(&ctx, "/usr/lib/libc.so.6").as_deref(),
+            Some("glibc")
+        );
         // /etc/gcc.conf resolve pela fábrica
         assert_eq!(owner_of(&ctx, "/etc/gcc.conf").as_deref(), Some("gcc"));
         // caminho reivindicado por gcc E pela busybox provisional → vence o não-provisório
@@ -1277,14 +1414,27 @@ mod tests {
         let recs = root.join("var/lib/minitrue/records");
         // semente provisional (gmp) com dois caminhos
         fs::create_dir_all(recs.join("gmp")).unwrap();
-        fs::write(recs.join("gmp/meta"), "NAME=gmp\nVERSION=6.3.0\nPROVISIONAL=1\n").unwrap();
-        fs::write(recs.join("gmp/manifest"), "/usr/lib/libgmp.so.10\n/usr/lib/libgmp.so\n").unwrap();
+        fs::write(
+            recs.join("gmp/meta"),
+            "NAME=gmp\nVERSION=6.3.0\nPROVISIONAL=1\n",
+        )
+        .unwrap();
+        fs::write(
+            recs.join("gmp/manifest"),
+            "/usr/lib/libgmp.so.10\n/usr/lib/libgmp.so\n",
+        )
+        .unwrap();
         // pacote real (não-provisional) para contraste
         fs::create_dir_all(recs.join("outro")).unwrap();
         fs::write(recs.join("outro/meta"), "NAME=outro\nVERSION=1\n").unwrap();
         fs::write(recs.join("outro/manifest"), "/usr/lib/liboutro.so\n").unwrap();
 
-        let ctx = Ctx { root: root.clone(), offline: false, tofu: false, jobs: 1 };
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
         assert!(is_provisional(&ctx, "gmp"), "gmp deveria ser provisional");
         assert!(!is_provisional(&ctx, "outro"), "outro NÃO é provisional");
 
@@ -1292,11 +1442,20 @@ mod tests {
         let owner = adopt_provisional_path(&ctx, "/usr/lib/libgmp.so.10", "mathlibs-glibc");
         assert_eq!(owner.as_deref(), Some("gmp"));
         let m = read_manifest(&recs.join("gmp"));
-        assert!(!m.contains(&"/usr/lib/libgmp.so.10".to_string()), "caminho cedido some do manifesto");
-        assert!(m.contains(&"/usr/lib/libgmp.so".to_string()), "os outros caminhos ficam");
+        assert!(
+            !m.contains(&"/usr/lib/libgmp.so.10".to_string()),
+            "caminho cedido some do manifesto"
+        );
+        assert!(
+            m.contains(&"/usr/lib/libgmp.so".to_string()),
+            "os outros caminhos ficam"
+        );
 
         // caminho de pacote NÃO-provisional não é cedido (viraria doublethink)
-        assert_eq!(adopt_provisional_path(&ctx, "/usr/lib/liboutro.so", "x"), None);
+        assert_eq!(
+            adopt_provisional_path(&ctx, "/usr/lib/liboutro.so", "x"),
+            None
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1312,10 +1471,17 @@ mod tests {
         }
     }
     fn ctx(root: &str) -> Ctx {
-        Ctx { root: PathBuf::from(root), offline: false, tofu: false, jobs: 4 }
+        Ctx {
+            root: PathBuf::from(root),
+            offline: false,
+            tofu: false,
+            jobs: 4,
+        }
     }
     fn args_of(cmd: &Command) -> Vec<String> {
-        cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+        cmd.get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
     }
     fn has_pair(a: &[String], k: &str, v: &str) -> bool {
         a.windows(2).any(|w| w[0] == k && w[1] == v)
@@ -1331,7 +1497,10 @@ mod tests {
             50,
             &work,
             "1704067200",
-            &[(PathBuf::from("/root/var/cache/minitrue/deadbeef"), "deadbeef".into())],
+            &[(
+                PathBuf::from("/root/var/cache/minitrue/deadbeef"),
+                "deadbeef".into(),
+            )],
         );
         assert_eq!(cmd.get_program().to_string_lossy(), "bwrap");
         let a = args_of(&cmd);
@@ -1350,8 +1519,14 @@ mod tests {
         assert!(has_pair(&a, "AR", "x-ar"));
         assert!(has_pair(&a, "DL", "/var/cache/minitrue/deadbeef"));
         // PATH: prefixo em chroot + /usr/bin:/bin, sem PATH do host
-        assert!(has_pair(&a, "PATH", "/tmp/b/.tc:/usr/bin:/bin"), "PATH errado: {a:?}");
-        assert!(!a.iter().any(|x| x.contains("/root/tmp")), "vazou caminho do host: {a:?}");
+        assert!(
+            has_pair(&a, "PATH", "/tmp/b/.tc:/usr/bin:/bin"),
+            "PATH errado: {a:?}"
+        );
+        assert!(
+            !a.iter().any(|x| x.contains("/root/tmp")),
+            "vazou caminho do host: {a:?}"
+        );
         // termina em /bin/sh -ec <preâmbulo>
         assert_eq!(a[a.len() - 3], "/bin/sh");
         assert_eq!(a[a.len() - 2], "-ec");

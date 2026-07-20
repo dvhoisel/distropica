@@ -101,7 +101,10 @@ pub fn find(ctx: &Ctx, name: &str) -> Result<PathBuf> {
             return Ok(p);
         }
     }
-    fail(2, format!("não há receita para '{name}' em nenhuma árvore newspeak"))
+    fail(
+        2,
+        format!("não há receita para '{name}' em nenhuma árvore newspeak"),
+    )
 }
 
 pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
@@ -112,7 +115,10 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         .arg("sh")
         .arg(&path)
         .output()
-        .map_err(|e| crate::Fail { code: 2, msg: format!("não consegui avaliar a receita: {e}") })?;
+        .map_err(|e| crate::Fail {
+            code: 2,
+            msg: format!("não consegui avaliar a receita: {e}"),
+        })?;
     if !out.status.success() {
         return fail(
             2,
@@ -131,9 +137,8 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         }
     }
     let field = |k: &str| get.get(k).cloned().unwrap_or_default();
-    let list = |k: &str| -> Vec<String> {
-        field(k).split_whitespace().map(str::to_string).collect()
-    };
+    let list =
+        |k: &str| -> Vec<String> { field(k).split_whitespace().map(str::to_string).collect() };
 
     let rname = field("NAME");
     if rname != name {
@@ -146,7 +151,12 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
     let kind = match field("KIND").as_str() {
         "binary" => Kind::Binary,
         "source" => Kind::Source,
-        other => return fail(2, format!("{name}: KIND '{other}' inválido (binary|source)")),
+        other => {
+            return fail(
+                2,
+                format!("{name}: KIND '{other}' inválido (binary|source)"),
+            )
+        }
     };
     let srcs = list("SRC");
     if srcs.is_empty() {
@@ -156,11 +166,20 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
     if !sha256.is_empty() && sha256.len() != srcs.len() {
         return fail(2, format!("{name}: SHA256 e SRC com contagens diferentes"));
     }
-    if sha256.iter().any(|h| h.len() != 64 || !h.chars().all(|c| c.is_ascii_hexdigit())) {
-        return fail(2, format!("{name}: SHA256 mal-formado (64 hex por artefato)"));
+    if sha256
+        .iter()
+        .any(|h| h.len() != 64 || !h.chars().all(|c| c.is_ascii_hexdigit()))
+    {
+        return fail(
+            2,
+            format!("{name}: SHA256 mal-formado (64 hex por artefato)"),
+        );
     }
     if sha256.is_empty() && !ctx.tofu {
-        return fail(2, format!("{name}: receita sem SHA256 (só com --tofu, e com aviso)"));
+        return fail(
+            2,
+            format!("{name}: receita sem SHA256 (só com --tofu, e com aviso)"),
+        );
     }
     let sig = list("SIG");
     if !sig.is_empty() && sig.len() != srcs.len() {
@@ -172,7 +191,12 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
             Some((cmd, rel)) if !cmd.is_empty() && !rel.is_empty() && !rel.starts_with('/') => {
                 links.push((cmd.to_string(), rel.to_string()))
             }
-            _ => return fail(2, format!("{name}: LINKS '{item}' inválido (nome=caminho/relativo)")),
+            _ => {
+                return fail(
+                    2,
+                    format!("{name}: LINKS '{item}' inválido (nome=caminho/relativo)"),
+                )
+            }
         }
     }
     let sigsums = Some(field("SIGSUMS")).filter(|s| !s.is_empty());
@@ -181,13 +205,19 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         "" | "seed" => Toolchain::Seed,
         "cross" => Toolchain::Cross,
         "native" => Toolchain::Native,
-        other => return fail(2, format!("{name}: TOOLCHAIN '{other}' inválido (seed|cross|native)")),
+        other => {
+            return fail(
+                2,
+                format!("{name}: TOOLCHAIN '{other}' inválido (seed|cross|native)"),
+            )
+        }
     };
     let retries: u32 = match field("RETRIES").as_str() {
         "" => 0,
-        s => s
-            .parse()
-            .map_err(|_| crate::Fail { code: 2, msg: format!("{name}: RETRIES '{s}' não é número") })?,
+        s => s.parse().map_err(|_| crate::Fail {
+            code: 2,
+            msg: format!("{name}: RETRIES '{s}' não é número"),
+        })?,
     };
 
     let r = Recipe {
@@ -234,7 +264,12 @@ mod tests {
             "NAME=foo\nVERSION=1.0\nKIND=source\nSRC=https://e/foo.tar.xz\nSHA256={hash}\n{extra}\nbuild(){{ :; }}\n"
         );
         std::fs::write(dir.join("recipe"), body).unwrap();
-        let ctx = Ctx { root: root.clone(), offline: false, tofu: false, jobs: 1 };
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
         let r = load(&ctx, "foo");
         let _ = std::fs::remove_dir_all(&root);
         r
@@ -259,7 +294,12 @@ mod tests {
                 std::fs::write(dir.join("files").join(name), content).unwrap();
             }
         }
-        let ctx = Ctx { root: root.clone(), offline: false, tofu: false, jobs: 1 };
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
         let f = load(&ctx, "foo").unwrap().fingerprint().unwrap();
         let _ = std::fs::remove_dir_all(&root);
         f
@@ -279,7 +319,11 @@ mod tests {
         let com_patch = fp_of("", &[("fix.patch", "--- a\n+++ b\n")]);
         assert_ne!(base, com_patch, "files/ muda o fp");
         assert_eq!(com_patch, fp_of("", &[("fix.patch", "--- a\n+++ b\n")]));
-        assert_ne!(com_patch, fp_of("", &[("fix.patch", "outro conteúdo\n")]), "conteúdo de files/ conta");
+        assert_ne!(
+            com_patch,
+            fp_of("", &[("fix.patch", "outro conteúdo\n")]),
+            "conteúdo de files/ conta"
+        );
     }
 
     #[test]
@@ -298,7 +342,10 @@ mod tests {
 
     #[test]
     fn toolchain_native() {
-        assert_eq!(load_body("TOOLCHAIN=native").unwrap().toolchain, Toolchain::Native);
+        assert_eq!(
+            load_body("TOOLCHAIN=native").unwrap().toolchain,
+            Toolchain::Native
+        );
     }
 
     #[test]

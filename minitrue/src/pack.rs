@@ -82,7 +82,10 @@ pub fn pack_deterministic<W: Write>(dir: &Path, epoch: u64, out: W) -> Result<St
     // diretório é prefixo do de seus filhos, o pai sempre precede o conteúdo.
     entries.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let hw = HashingWriter { inner: out, hasher: Sha256::new() };
+    let hw = HashingWriter {
+        inner: out,
+        hasher: Sha256::new(),
+    };
     let mut b = Builder::new(hw);
     b.follow_symlinks(false);
 
@@ -157,9 +160,18 @@ fn collect(base: &Path, dir: &Path, out: &mut Vec<Entry>) -> Result<()> {
         let de = de?;
         let abs = de.path();
         let md = fs::symlink_metadata(&abs)?;
-        let name = abs.strip_prefix(base).unwrap().as_os_str().as_bytes().to_vec();
+        let name = abs
+            .strip_prefix(base)
+            .unwrap()
+            .as_os_str()
+            .as_bytes()
+            .to_vec();
         let is_dir = md.file_type().is_dir();
-        out.push(Entry { abs: abs.clone(), name, md });
+        out.push(Entry {
+            abs: abs.clone(),
+            name,
+            md,
+        });
         if is_dir {
             collect(base, &abs, out)?;
         }
@@ -225,8 +237,7 @@ mod tests {
     impl Tmp {
         fn new() -> Self {
             let n = CNT.fetch_add(1, Ordering::Relaxed);
-            let p = std::env::temp_dir()
-                .join(format!("mt-pack-{}-{n}", std::process::id()));
+            let p = std::env::temp_dir().join(format!("mt-pack-{}-{n}", std::process::id()));
             let _ = fs::remove_dir_all(&p);
             fs::create_dir_all(&p).unwrap();
             Tmp(p)
@@ -254,8 +265,7 @@ mod tests {
     fn make_tree(root: &Path) {
         fs::create_dir_all(root.join("usr/bin")).unwrap();
         fs::write(root.join("usr/bin/tool"), b"#!/bin/sh\necho oi\n").unwrap();
-        fs::set_permissions(root.join("usr/bin/tool"), fs::Permissions::from_mode(0o755))
-            .unwrap();
+        fs::set_permissions(root.join("usr/bin/tool"), fs::Permissions::from_mode(0o755)).unwrap();
         symlink("tool", root.join("usr/bin/tool-link")).unwrap();
         fs::create_dir_all(root.join("usr/share")).unwrap();
         fs::write(root.join("usr/share/data.txt"), b"plain\n").unwrap();
@@ -329,7 +339,10 @@ mod tests {
         assert_eq!(first.header().entry_type().as_byte(), b'g');
         let mut s = String::new();
         first.read_to_string(&mut s).unwrap();
-        assert!(s.contains(&format!("DISTROPICA.pack={PACK_FORMAT}")), "sem versão: {s:?}");
+        assert!(
+            s.contains(&format!("DISTROPICA.pack={PACK_FORMAT}")),
+            "sem versão: {s:?}"
+        );
     }
 
     #[test]
@@ -346,7 +359,10 @@ mod tests {
         let tool = es.iter().find(|(_, n, _)| n == b"usr/bin/tool").unwrap();
         assert_eq!(tool.0, b'0');
         assert_eq!(tool.2, 0o755);
-        let link = es.iter().find(|(_, n, _)| n == b"usr/bin/tool-link").unwrap();
+        let link = es
+            .iter()
+            .find(|(_, n, _)| n == b"usr/bin/tool-link")
+            .unwrap();
         assert_eq!(link.0, b'2', "symlink deveria ser typeflag 2");
         names.dedup();
     }
@@ -360,10 +376,21 @@ mod tests {
         fs::create_dir_all(&deep).unwrap();
         let long = deep.join("um-header-de-nome-bem-comprido.h");
         fs::write(&long, b"x\n").unwrap();
-        let rel = long.strip_prefix(t.path()).unwrap().as_os_str().as_bytes().to_vec();
-        assert!(rel.len() > 100, "caminho de teste precisa passar de 100 bytes");
+        let rel = long
+            .strip_prefix(t.path())
+            .unwrap()
+            .as_os_str()
+            .as_bytes()
+            .to_vec();
+        assert!(
+            rel.len() > 100,
+            "caminho de teste precisa passar de 100 bytes"
+        );
         let es = read_entries(&bytes(t.path()));
-        assert!(es.iter().any(|(_, n, _)| *n == rel), "LongName não round-trippou");
+        assert!(
+            es.iter().any(|(_, n, _)| *n == rel),
+            "LongName não round-trippou"
+        );
     }
 
     #[test]
@@ -373,7 +400,9 @@ mod tests {
         fs::write(t.path().join(name), b"x").unwrap();
         // não deve entrar em pânico nem alterar o nome
         let es = read_entries(&bytes(t.path()));
-        assert!(es.iter().any(|(_, n, _)| n.as_slice() == b"esquisito-\xff-nome"));
+        assert!(es
+            .iter()
+            .any(|(_, n, _)| n.as_slice() == b"esquisito-\xff-nome"));
     }
 
     #[test]
@@ -395,6 +424,9 @@ mod tests {
         // socket é um arquivo especial fácil de criar sem libc extra
         let _l = std::os::unix::net::UnixListener::bind(t.path().join("sock")).unwrap();
         let err = pack_deterministic(t.path(), EPOCH, io::sink()).unwrap_err();
-        assert!(err.to_string().contains("especial"), "erro inesperado: {err}");
+        assert!(
+            err.to_string().contains("especial"),
+            "erro inesperado: {err}"
+        );
     }
 }

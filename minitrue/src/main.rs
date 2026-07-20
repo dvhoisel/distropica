@@ -40,7 +40,11 @@ impl Ctx {
                 .filter(|s| !s.is_empty())
                 .map(|s| {
                     let p = PathBuf::from(s);
-                    if p.is_absolute() { p } else { self.root.join(p) }
+                    if p.is_absolute() {
+                        p
+                    } else {
+                        self.root.join(p)
+                    }
                 })
                 .collect(),
             _ => vec![self.root.join("var/lib/minitrue/newspeak")],
@@ -63,7 +67,11 @@ impl std::fmt::Display for Fail {
 impl std::error::Error for Fail {}
 
 pub fn fail<T>(code: i32, msg: impl Into<String>) -> anyhow::Result<T> {
-    Err(Fail { code, msg: msg.into() }.into())
+    Err(Fail {
+        code,
+        msg: msg.into(),
+    }
+    .into())
 }
 
 const USO: &str = "\
@@ -100,13 +108,20 @@ fn run() -> anyhow::Result<()> {
     let mut offline = false;
     let mut tofu = false;
     let mut sync = false;
-    let mut jobs = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let mut jobs = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
     let mut cmd: Option<String> = None;
     let mut names: Vec<String> = Vec::new();
 
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--root" => root = args.next().ok_or_else(|| Fail { code: 1, msg: "--root exige diretório".into() })?,
+            "--root" => {
+                root = args.next().ok_or_else(|| Fail {
+                    code: 1,
+                    msg: "--root exige diretório".into(),
+                })?
+            }
             "--offline" => offline = true,
             "--tofu" => tofu = true,
             "--sync" => sync = true,
@@ -114,7 +129,10 @@ fn run() -> anyhow::Result<()> {
                 jobs = args
                     .next()
                     .and_then(|v| v.parse().ok())
-                    .ok_or_else(|| Fail { code: 1, msg: "--jobs exige número".into() })?
+                    .ok_or_else(|| Fail {
+                        code: 1,
+                        msg: "--jobs exige número".into(),
+                    })?
             }
             "-h" | "--help" => {
                 println!("{USO}");
@@ -125,7 +143,12 @@ fn run() -> anyhow::Result<()> {
         }
     }
 
-    let ctx = Ctx { root: PathBuf::from(root), offline, tofu, jobs };
+    let ctx = Ctx {
+        root: PathBuf::from(root),
+        offline,
+        tofu,
+        jobs,
+    };
 
     match cmd.as_deref() {
         Some("rectify") => {
@@ -168,8 +191,10 @@ fn run() -> anyhow::Result<()> {
             let epoch = pack::epoch_from_env();
             let sha = match names.get(1) {
                 Some(out) => {
-                    let f = std::fs::File::create(out)
-                        .map_err(|e| Fail { code: 1, msg: format!("pack: não gravou {out}: {e}") })?;
+                    let f = std::fs::File::create(out).map_err(|e| Fail {
+                        code: 1,
+                        msg: format!("pack: não gravou {out}: {e}"),
+                    })?;
                     pack::pack_deterministic(&dir, epoch, std::io::BufWriter::new(f))?
                 }
                 None => pack::pack_deterministic(&dir, epoch, std::io::sink())?,

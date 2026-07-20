@@ -6,7 +6,11 @@ KIND=source
 PROVISIONAL=1
 RETRIES=50
 DEPS="binutils gmp mpfr mpc"
-BUILD_DEPS="linux-headers gawk"
+# binutils-cross: o gcc é --target=x86_64-distropica-linux-gnu e invoca as/ld
+# PREFIXADOS ao gerar a libgcc do alvo. A aresta faltava, e a prova pelo
+# rectify rodou num rootfs já com as ferramentas cross (resíduo da investigação
+# manual) — declarar torna o grafo honesto para o E2-clean a frio (SPEC-0005).
+BUILD_DEPS="linux-headers gawk binutils-cross"
 ABOUT="O compilador C/C++ da passada 1 (cross x86_64-distropica-linux-gnu, --without-headers). Constrói cc1 + cc1plus + libgcc mínima com zig cc; a glibc 2.42 é compilada por ele, e o cc1plus habilita a passada 2. gawk 5.3.2 (o 5.4.1 gera options.cc malformado); gcov-tool fora de LANGUAGES; cc1/xgcc estáticos (LDFLAGS=-static); --disable-lto (o ld estático não faz dlopen do plugin). Consertos GCC×musl verificados 2026-07-19: (a) patch no gcc/configure neutralizando o fallback '#define rlim_t long'; (b) cache vars gcc_cv_have_decl_*/ac_cv_have_decl_*=yes p/ os decls que a musl declara mas a configure mis-detecta (senão system.h/libiberty.h criam fallbacks que colidem — sbrk(int)×intptr_t, vasprintf noexcept, strstr); (c) mathlibs isoladas da glibc (com a glibc instalada, --with-gmp=/usr injetaria -I/usr/include e o stdio.h da glibc quebraria o <cstdio> do libc++). libstdc++ NÃO entra aqui (--without-headers); vem após a glibc."
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/gcc/gcc-$VERSION/gcc-$VERSION.tar.xz"

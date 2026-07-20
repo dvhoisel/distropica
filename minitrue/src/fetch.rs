@@ -67,35 +67,50 @@ fn verify_signatures(ctx: &Ctx, r: &Recipe, artifacts: &[(PathBuf, String)]) -> 
     }
     let Some(key) = &r.sigkey else { return Ok(()) };
     if key.contains(".asc") || key.contains("BEGIN") {
-        return fail(1, format!("{}: verificação OpenPGP chega no Marco 0.2", r.name));
+        return fail(
+            1,
+            format!("{}: verificação OpenPGP chega no Marco 0.2", r.name),
+        );
     }
     if r.sig.is_empty() {
         return fail(2, format!("{}: SIGKEY sem SIG", r.name));
     }
-    let pk = minisign_verify::PublicKey::from_base64(key)
-        .map_err(|e| crate::Fail { code: 2, msg: format!("{}: SIGKEY inválida ({e})", r.name) })?;
+    let pk = minisign_verify::PublicKey::from_base64(key).map_err(|e| crate::Fail {
+        code: 2,
+        msg: format!("{}: SIGKEY inválida ({e})", r.name),
+    })?;
 
     for (i, sig_url) in r.sig.iter().enumerate() {
         let (artifact, hash) = &artifacts[i];
         let sig_path = ctx.cache_dir().join(format!("{hash}.minisig"));
         if !sig_path.is_file() {
             if ctx.offline {
-                return fail(6, format!("--offline e assinatura ausente do cache: {sig_url}"));
+                return fail(
+                    6,
+                    format!("--offline e assinatura ausente do cache: {sig_url}"),
+                );
             }
-            let tmp = ctx.cache_dir().join(format!(".sig-{}-{i}", std::process::id()));
+            let tmp = ctx
+                .cache_dir()
+                .join(format!(".sig-{}-{i}", std::process::id()));
             download(sig_url, &tmp)?;
             fs::rename(&tmp, &sig_path)?;
         }
         let data = fs::read(artifact)?;
         let sig_txt = fs::read_to_string(&sig_path)?;
-        let sig = minisign_verify::Signature::decode(&sig_txt)
-            .map_err(|e| crate::Fail { code: 7, msg: format!("assinatura mal-formada: {e}") })?;
+        let sig = minisign_verify::Signature::decode(&sig_txt).map_err(|e| crate::Fail {
+            code: 7,
+            msg: format!("assinatura mal-formada: {e}"),
+        })?;
         match pk.verify(&data, &sig, false) {
             Ok(()) => eprintln!("  assinatura minisign confere — veio de quem sempre veio"),
             Err(e) => {
                 return fail(
                     7,
-                    format!("crimestop (assinatura): {} não é de quem diz ser ({e})", short(sig_url)),
+                    format!(
+                        "crimestop (assinatura): {} não é de quem diz ser ({e})",
+                        short(sig_url)
+                    ),
                 )
             }
         }
@@ -114,9 +129,10 @@ fn download(url: &str, dst: &PathBuf) -> Result<String> {
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 65536];
     loop {
-        let n = reader
-            .read(&mut buf)
-            .map_err(|e| crate::Fail { code: 6, msg: format!("rede caiu no meio de {url}: {e}") })?;
+        let n = reader.read(&mut buf).map_err(|e| crate::Fail {
+            code: 6,
+            msg: format!("rede caiu no meio de {url}: {e}"),
+        })?;
         if n == 0 {
             break;
         }
@@ -141,5 +157,8 @@ pub fn sha256_file(p: &PathBuf) -> Result<String> {
 }
 
 fn short(url: &str) -> &str {
-    url.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or(url)
+    url.rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(url)
 }
