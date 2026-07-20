@@ -5,6 +5,41 @@
 
 ## 1. Premissas fundadoras
 
+### P0 — Pragmatismo acima de ideologia
+
+A Distrópica é **pragmática acima de ideológica**. As premissas abaixo
+(P1–P6) NÃO são dogmas: cada uma existe por um **fim prático** —
+simplicidade inspecionável, controle do usuário, não reinventar o que o
+upstream já entrega. Quando a *letra* de uma regra colidir com o *fim* que
+a justifica, o fim vence, e a regra é emendada — estas specs são rascunhos
+versionados, não escritura. Não se recusa uma solução por ela ser "impura";
+recusa-se por ela ser pior para o usuário. Toda premissa DEVERIA poder
+responder "que problema concreto do usuário isto resolve?"; a que não
+responder é candidata a corte.
+
+Exemplos já no corpo destas specs, de pragmatismo sobre purismo:
+
+- vendorizar um `.deb`/`.rpm` do mantenedor como **envelope passivo**
+  (extrair o conteúdo, jamais rodar os scripts) em vez de exigir tarball —
+  aproveita o binário upstream sem adotar o formato (§2, SPEC-0007);
+- semear o mundo-fonte com o `zig cc` — um toolchain **gordo** (Clang+LLD+
+  fontes de libc), o oposto do minimalismo —, porque é um binário upstream
+  único e reprodutível que destrava todo o resto (SPEC-0005);
+- uma versão ativa por pacote em vez de um solver de versões: menos poder,
+  mas explicável com `cat` (P1).
+
+**A ressalva — "a ideologia que vale é a dela mesma".** Há exatamente uma
+coisa que a Distrópica NÃO troca por conveniência: a própria identidade — a
+coerência do sistema, o mandato de inspecionabilidade ("explicável em uma
+página", P4) e o caráter Newspeak que a nomeia. Tudo o mais é meio, e meios
+se escolhem pelo que funciona; esse núcleo é o fim. É o único dogma, e é o
+dela: **não há purismo herdado que a governe, só a sua própria coerência.**
+
+O eco distópico é proposital. No romance, o Partido não serve a doutrina
+nenhuma além da perpetuação de si mesmo — "o objetivo do poder é o poder".
+A Distrópica inverte a piada a favor do usuário: nenhuma ortodoxia externa
+a comanda, e ainda assim a forma é a mesma — **a única lealdade é à casa.**
+
 ### P1 — Nenhum gerenciador de pacotes existente
 
 A Distrópica NÃO DEVE adotar, embutir ou depender de apt, dnf, pacman, apk,
