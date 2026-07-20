@@ -420,6 +420,42 @@ com SHA256 real pinado.
   funciona). O `libstdc++` ainda não (é `--without-headers`; vem com a
   glibc). Com o cc1plus pronto, a **passada 2 destrava**: agora há um gcc
   real (não zig cc) capaz de compilar o código C++ do GCC contra a glibc.
+- **libstdc++ construída (2026-07-20).** Do subdir `libstdc++-v3` do fonte do
+  gcc, pelo pass-1 (perfil cross), agora com a glibc. É o elo entre pass-1
+  (`--without-headers`: tem cc1plus, nenhuma libstdc++) e pass-2 — sem ela o
+  g++ compila C++ mas não linka. Muro: o pass-1 gcc não conhece `/usr`
+  (headers nem startfiles). Conserto: `-isystem /usr/include -B/usr/lib
+  -L/usr/lib`. Produziu `libstdc++.so.6.0.34`. (receita `libstdcxx`.)
+- **PASSADA 2 — o compilador construído, e o achado profundo do E2
+  (2026-07-20).** O gcc nativo c,c++ (build=host=target=distropica, hospedado
+  na glibc, feito pelo pass-1) foi levado até **cc1+cc1plus construídos e
+  funcionais** (1586 objetos, `all-gcc` fechado, selftest passou). Oito muros,
+  cada um diagnosticado:
+  1. `C++14 required` → build nativo puro (build=host=target), não cross;
+  2. `build-libiberty` sem `<stdlib.h>` → **shims** do cross gcc/g++ que
+     injetam os paths `/usr` (não flag-por-fase, um poço sem fundo);
+  3. `obstack.h` da glibc sombreava o da libiberty → **`-isystem`** (buscado
+     após os `-I` do pacote), não `-I`;
+  4. selftest falhava porque o **cc1 não carregava** — não era o selftest;
+  5. `cc1: /usr/lib/libc.so: invalid ELF header` → os **mathlibs eram musl**
+     (`NEEDED libc.so`); um cc1 glibc não os carrega;
+  6. gmp configure: `g()` = 0 args (**C23** mudou `()`) → `-std=gnu17`;
+  7/8. `ld: liblto_plugin.so: dynamic loading not supported` — o `ld`/`ar` da
+     **semente são estáticos musl** e não fazem `dlopen`; nem `--disable-lto`
+     resolve, pois o `ar` é configurado com `--plugin`.
+
+  **A lição do E2 (que o LFS não vê, pois lá nada é musl):** *todo o
+  toolchain-semente construído musl/estático pelo zig precisa ser
+  reconstruído como glibc antes da passada 2* — os **mathlibs** (senão o cc1
+  glibc não os carrega) e os **binutils** (senão o ld/ar estático não faz
+  dlopen do plugin). Ordem revisada do E2: pass-1 → glibc → **mathlibs-glibc**
+  → libstdc++ → **binutils-glibc** → pass-2. Os mathlibs-glibc já foram
+  reconstruídos (gmp/mpfr/mpc, `NEEDED libc.so.6`, com `-std=gnu17`); os
+  binutils-glibc são o próximo passo, e então a passada 2 fecha as target-libs
+  (libgcc + libstdc++ do alvo). **Estado:** o *compilador* da passada 2 existe;
+  falta o toolchain-semente terminar de virar glibc e as target-libs. Tudo
+  isto foi via bwrap direto (experimentos); vira as receitas `gcc-pass2`,
+  `mathlibs`-glibc e `binutils-glibc` quando fechar.
 
 ## 5. Estágio 3 — boot de verdade
 
