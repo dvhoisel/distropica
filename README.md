@@ -43,6 +43,10 @@ ideológica** — cada premissa existe por um fim prático, não por dogma, e a
    mais nova do upstream (a começar pelo kernel); *edge* é o estável na sua
    borda, não *bleeding edge*. Rolling: não há versão-do-sistema nem release
    congelado.
+8. **Opinativa — uma escolha canônica por função.** Onde há vários softwares
+   para o mesmo fim, a Distrópica escolhe: o conjunto default é curado e
+   singular — Newspeak aplicado ao sistema, uma resposta por necessidade. Não
+   trancada: alternativas vivem na árvore, só não são o default.
 
 ## Especificações
 

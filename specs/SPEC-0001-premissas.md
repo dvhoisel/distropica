@@ -183,6 +183,38 @@ versão mais nova).
 Tema: o **presente eterno**. Não se cultua a versão "antiga, estável e
 testada" — isso seria preservar o passado. Retifica-se para o agora.
 
+### P8 — Opinativa: uma escolha canônica por função
+
+Para muitas funções há mais de um software (editor, shell, coreutils, servidor
+de DNS…). A Distrópica **escolhe**: o conjunto default é **curado e singular**
+— uma ferramenta canônica por função, não um cardápio de equivalentes com um
+sistema de "alternativas" a configurar.
+
+É **Newspeak aplicado ao sistema**: assim como a árvore newspeak dá um nome sem
+ambiguidade a cada pacote (SPEC-0004), a instalação default dá uma resposta sem
+ambiguidade a cada necessidade. Menos escolha imposta ao usuário, menos
+superfície de teste, menos fadiga de decisão — a simplicidade que P4 promete,
+estendida do mecanismo ao conteúdo. O precedente já está no projeto: **runit**
+como init (não systemd, não OpenRC, não s6 — P4/SPEC-0006) é uma escolha
+opinativa, não um default entre iguais; P8 generaliza a postura para o conjunto
+base.
+
+**Opinativa não é trancada (P0, controle do usuário).** A curadoria decide o
+que vem **por default** (a meta-receita `base`, SPEC-0008 §3), não o que é
+**permitido**. Alternativas que valham a pena vivem na árvore e o usuário as
+instala com um `rectify`; elas só não são a resposta default. A liberdade que
+importa — trocar a ferramenta — fica; a que se remove — ter de escolher tudo
+antes de começar — é atrito, não liberdade.
+
+Critério da escolha: coerência com as premissas (binário upstream elegível, P2;
+explicável e inspecionável, P4; sem arrastar dependências que firam P1) e, entre
+os que passam, o de menor peso e maior clareza. A escolha e o porquê ficam na
+árvore (o `ABOUT` da receita), auditáveis.
+
+Tema: o Partido decide qual é a palavra certa — aqui, a favor do usuário. A
+escolha é feita uma vez, com transparência, para que ninguém precise refazê-la
+a cada instalação.
+
 ## 2. O que conta como "binário do mantenedor original"
 
 Um artefato é **elegível** quando TODAS as condições valem:

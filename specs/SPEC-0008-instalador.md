@@ -49,7 +49,9 @@ DEVERIA ser publicada com assinatura minisign da chave do projeto.
 2. **`minipax-base`** — monta o alvo em `/mnt` e roda
    `minitrue --root /mnt rectify base`, onde `base` é a meta-receita do
    conjunto mínimo (busybox, minitrue, runit, kernel, doas, tzdata…;
-   composição exata definida na árvore newspeak, não no instalador).
+   composição exata definida na árvore newspeak, não no instalador). É onde a
+   curadoria **opinativa** (SPEC-0001 P8) ganha forma: uma ferramenta canônica
+   por função. Alternativas existem na árvore, mas a `base` escolhe o default.
    Os pacotes do mundo B da `base` (glibc, gcc…) resolvem-se por **binário
    de canal** (SPEC-0009), não por compilação — é o que garante que o
    usuário **não compila a base** ao instalar.
