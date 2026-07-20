@@ -25,6 +25,10 @@ chmod 1777 "$ROOTFS/tmp"
 [ -e "$ROOTFS/sbin" ]  || ln -s usr/bin "$ROOTFS/sbin"
 [ -e "$ROOTFS/lib" ]   || ln -s usr/lib "$ROOTFS/lib"
 [ -e "$ROOTFS/lib64" ] || ln -s usr/lib "$ROOTFS/lib64"
+# usr-merge também DENTRO de /usr: o sistema é /usr/lib (glibc libc_cv_slibdir),
+# então /usr/lib64 → lib, senão pacotes que instalam em lib64 (gcc/libstdc++)
+# ficam num diretório real separado e o -L/usr/lib não os acha (E2-clean).
+[ -e "$ROOTFS/usr/lib64" ] || ln -s lib "$ROOTFS/usr/lib64"
 
 cat > "$ROOTFS/etc/passwd" <<'EOF'
 root:x:0:0:root:/root:/bin/sh

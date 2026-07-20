@@ -38,4 +38,15 @@ build() {
     # make incremental resume a cada tentativa (SPEC-0005/0010).
     retry make -j"$JOBS"
     make install DESTDIR="$STAGE"
+
+    # Reconcilia lib64→lib: o gcc x86_64 instala a libstdc++ em /usr/lib64, mas
+    # o sistema é /usr/lib (a glibc forçou libc_cv_slibdir=/usr/lib). Sem isto a
+    # libstdc++ fica em lib64 e o shim g++ do gcc-pass2 (-L/usr/lib) não a acha
+    # ("C++ compiler cannot create executables"). Achado no E2-clean — o rootfs
+    # sujo tinha a libstdc++ copiada à mão em /usr/lib, o que mascarava.
+    if [ -d "$STAGE/usr/lib64" ]; then
+        mkdir -p "$STAGE/usr/lib"
+        cp -a "$STAGE/usr/lib64/." "$STAGE/usr/lib/"
+        rm -rf "$STAGE/usr/lib64"
+    fi
 }
