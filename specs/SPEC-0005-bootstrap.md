@@ -484,15 +484,20 @@ com SHA256 real pinado.
   semente (mathlibs-glibc × gmp/mpfr/mpc; binutils-glibc × binutils;
   gcc-pass2 × gcc). No `rectify`, isso dispara *doublethink* (SPEC-0003 §7),
   porque o modelo hoje trata "mesmo caminho, dono diferente" como colisão. É
-  a mesma dívida do **fingerprint de build** (idempotência só olha `VERSION`,
-  não a identidade toolchain×receita): o E2 é uma **sequência de
-  substituições** — reconstruir o mesmo software com um toolchain melhor,
-  in-place. Fechar a execução ponta-a-ponta pelo `rectify` exige resolver
-  isso — via fingerprint (rebuild-in-place quando a identidade de build muda)
-  ou tratando os builds-semente como provisionais que cedem (SPEC-0003 §3) —
-  e é o **próximo passo** do E2 como fluxo. As receitas estão prontas; o
-  executor precisa desta peça para rodá-las sem colidir. Os scripts da
-  investigação seguem em `rootfs/tmp/*.sh` como referência.
+  o E2 é uma **sequência de substituições** — reconstruir o mesmo software com
+  um toolchain melhor, in-place.
+
+  **Meio caminho andado — o fingerprint de build (v1, 2026-07-20).** A parte
+  da idempotência está feita (SPEC-0011 §4): o registro guarda `FINGERPRINT` e
+  o `rectify` re-builda quando a receita muda sem bump de versão. Mas isso
+  resolve o rebuild-in-place da **mesma** receita; **não** resolve o
+  *doublethink* entre receitas de **nomes distintos** (mathlibs-glibc × gmp)
+  instalando os mesmos caminhos. Para o E2 rodar ponta-a-ponta pelo `rectify`
+  falta a outra metade: tratar os builds-semente (gmp/mpfr/mpc/binutils/gcc)
+  como **provisionais que cedem** aos rebuilds-glibc (SPEC-0003 §3) — o mesmo
+  mecanismo do busybox → coreutils. É o **próximo passo** do E2 como fluxo. As
+  receitas estão prontas; os scripts da investigação seguem em
+  `rootfs/tmp/*.sh` como referência.
 
 ## 5. Estágio 3 — boot de verdade
 

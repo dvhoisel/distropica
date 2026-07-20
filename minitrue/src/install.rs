@@ -65,8 +65,10 @@ fn install_one(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
 fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     let rec_dir = ctx.records_dir().join(&r.name);
     let opt = ctx.opt(&r.name);
+    let fp = r.fingerprint()?;
     if let Some(meta) = read_meta(&rec_dir) {
         if meta.get("VERSION") == Some(&r.version)
+            && meta.get("FINGERPRINT") == Some(&fp)
             && fs::read_link(opt.join("current")).ok() == Some(PathBuf::from(&r.version))
             && opt.join(&r.version).is_dir()
         {
@@ -435,8 +437,11 @@ fn build_command(
 
 fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     let rec_dir = ctx.records_dir().join(&r.name);
+    let fp = r.fingerprint()?;
     if let Some(meta) = read_meta(&rec_dir) {
-        if meta.get("VERSION") == Some(&r.version) {
+        // Idempotência por FINGERPRINT, não só VERSION (SPEC-0011 §4): uma
+        // receita corrigida com a MESMA versão muda o fingerprint e re-builda.
+        if meta.get("VERSION") == Some(&r.version) && meta.get("FINGERPRINT") == Some(&fp) {
             println!("os registros já estão corretos: {} {}", r.name, r.version);
             return Ok(());
         }
@@ -770,13 +775,14 @@ fn write_record(rec_dir: &Path, r: &Recipe, world: &str, manifest: &mut Vec<Stri
     manifest.sort();
     manifest.dedup();
     let meta = format!(
-        "NAME={}\nVERSION={}\nKIND={}\nWORLD={}\nSHA256={}\nDEPS={}\nINSTALLED_AT={}\n{}",
+        "NAME={}\nVERSION={}\nKIND={}\nWORLD={}\nSHA256={}\nDEPS={}\nFINGERPRINT={}\nINSTALLED_AT={}\n{}",
         r.name,
         r.version,
         if r.kind == Kind::Binary { "binary" } else { "source" },
         world,
         r.sha256.join(" "),
         r.deps.join(" "),
+        r.fingerprint()?,
         iso_now(),
         if r.provisional { "PROVISIONAL=1\n" } else { "" }
     );

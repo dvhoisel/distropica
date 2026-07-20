@@ -158,7 +158,13 @@ são removidas no upgrade. `memoryhole` remove tudo. Ajustável via
 Três arquivos-texto:
 
 - `meta` — `VERSION=`, `KIND=`, `WORLD=A|B`, `SHA256=` (por artefato),
-  `INSTALLED_AT=` (ISO-8601), `RECIPE_COMMIT=` (se conhecido).
+  `FINGERPRINT=`, `INSTALLED_AT=` (ISO-8601), `RECIPE_COMMIT=` (se conhecido).
+  O **`FINGERPRINT`** é a identidade de build (SPEC-0011 §4): sha256 do
+  arquivo `recipe` inteiro + do `files/` (via o `pack` determinístico). A
+  idempotência do `rectify` compara **versão E fingerprint** — uma receita
+  corrigida com a mesma versão muda o fingerprint e re-builda (conserta o
+  "GCC 15.3.0 mudou várias vezes sem bump"). Limite do v1: não é transitivo
+  (mudança num build-dep não muda o fingerprint do dependente).
 - `manifest` — uma entrada por linha, ordenada, no formato `sha256sum`:
   **`<sha256>␠␠<caminho absoluto>`** (registro **v1**) — o hash do conteúdo
   instalado. Symlinks e diretórios levam `-` no lugar do hash (o alvo do

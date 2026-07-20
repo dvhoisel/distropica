@@ -78,12 +78,26 @@ Rolar exige saber o que mudou entre a árvore antiga e a nova. Hoje o registro
 compara `VERSION` (SPEC-0003 §6): versão diferente ⇒ retifica. Cobre o caso
 comum do edge (quase todo roll é um bump de versão).
 
-O que **falta**: a receita que muda **sem** bumpar versão (novo conserto, novo
-toolchain, nova dependência) não dispara rebuild. É o **fingerprint de
-build** — uma identidade que resume receita + `files/` + toolchain/estágio +
-build-deps. O `--sync` DEVE retificar quando o fingerprint muda, não só a
-versão. É a **mesma peça** que o Estágio 2 exige para rodar a cadeia de
-substituições pelo `rectify` (SPEC-0005 §4): uma dívida, dois usos.
+O que faltava: a receita que muda **sem** bumpar versão (novo conserto, novo
+toolchain, nova dependência) não disparava rebuild. É o **fingerprint de
+build** — uma identidade que resume a receita.
+
+**Implementado (v1, 2026-07-20).** O registro guarda `FINGERPRINT=` (sha256 do
+arquivo `recipe` inteiro — que carrega VERSION, SRC, TOOLCHAIN, DEPS,
+BUILD_DEPS e o corpo de `build()` — mais o `files/`, via o `pack`
+determinístico da SPEC-0010). A idempotência do `rectify` compara **versão E
+fingerprint**: receita corrigida com a mesma versão ⇒ fingerprint diferente ⇒
+re-builda. Consertado o "GCC 15.3.0 mudou várias vezes sem bump" que o modelo
+só-`VERSION` ignorava.
+
+**Limite do v1:** o fingerprint **não é transitivo** — se um build-dep muda
+(ex.: `binutils`), o fingerprint do dependente (ex.: `gcc`) não muda sozinho.
+Um roll que só altera um build-dep pode não propagar o rebuild. Fingerprint
+transitivo (encadear o dos build-deps) fica para depois.
+
+É a **mesma peça** que o Estágio 2 pediu para rodar pelo `rectify` (SPEC-0005
+§4) — uma dívida, dois usos. O `--sync` (§3.2), quando implementado, usa este
+fingerprint para decidir o que retificar.
 
 ## 5. A segurança do rolling (newer = menos testado)
 
@@ -144,13 +158,14 @@ projeto é o stable novo.
 | Boot A/B do kernel (rollback do mais arriscado) | especificado (SPEC-0008 §4) |
 | `rectify newspeak` (árvore-como-pacote) | **não implementado** (§3.1) |
 | `rectify --sync` | speced, *stubbed* (SPEC-0003) |
-| Fingerprint de build | **lacuna** (§4) — compartilhada com o E2 |
+| Fingerprint de build | **implementado (v1)** (§4) — não-transitivo ainda |
 | Rollback de mundo B | **lacuna** (§5.1) |
 | Canal republicando no roll | speced (SPEC-0009), não implementado |
 
-Duas lacunas são exclusivamente-rolling — **árvore-como-pacote** (o motor) e
-**rollback de mundo B** (a rede). As outras duas (**fingerprint**, **canal**)
-já são exigidas por E2/reprodutibilidade: dívidas de duplo uso.
+Com o fingerprint feito, restam três peças: **árvore-como-pacote** (o motor)
+e **rollback de mundo B** (a rede) — exclusivamente-rolling — e o **canal**
+republicando (compartilhada com reprodutibilidade). O fingerprint v1 →
+transitivo é refinamento, não bloqueio.
 
 ## 8. Questões em aberto
 

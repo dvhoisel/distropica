@@ -45,6 +45,35 @@ pub struct Recipe {
     pub has_install: bool,
 }
 
+impl Recipe {
+    /// Fingerprint de build (SPEC-0011 §4): identidade que resume a receita
+    /// inteira — o arquivo `recipe` (que já carrega VERSION, SRC, SHA256,
+    /// TOOLCHAIN, DEPS, BUILD_DEPS e o corpo de `build()`) e o diretório
+    /// `files/` (patches, chaves). Muda quando qualquer um deles muda, **mesmo
+    /// sem bump de VERSION** — é o que faz o `rectify` rebuildar uma receita
+    /// corrigida (o bug do "GCC 15.3.0 mudou várias vezes na mesma versão") e o
+    /// que o `--sync` do rolling usa para detectar o que retificar.
+    ///
+    /// Limite do v1: NÃO cobre a identidade dos build-deps (se o binutils muda,
+    /// o fingerprint do gcc não muda). Fingerprint transitivo fica para depois.
+    pub fn fingerprint(&self) -> Result<String> {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(b"minitrue-fp-v1\0recipe\0");
+        h.update(std::fs::read(&self.path)?);
+        if let Some(files) = self.path.parent().map(|p| p.join("files")) {
+            if files.is_dir() {
+                // Reusa o empacotador determinístico (SPEC-0010): o hash do tar
+                // normalizado de files/ é estável entre máquinas.
+                let fh = crate::pack::pack_deterministic(&files, 0, std::io::sink())?;
+                h.update(b"\0files\0");
+                h.update(fh.as_bytes());
+            }
+        }
+        Ok(hex::encode(h.finalize()))
+    }
+}
+
 const DUMP: &str = r#". "$1"
 printf 'NAME=%s\n' "${NAME:-}"
 printf 'VERSION=%s\n' "${VERSION:-}"
@@ -209,6 +238,48 @@ mod tests {
         let r = load(&ctx, "foo");
         let _ = std::fs::remove_dir_all(&root);
         r
+    }
+
+    /// Carrega uma receita (opcionalmente com arquivos em `files/`), computa o
+    /// fingerprint ANTES de limpar (o fingerprint lê o arquivo do disco).
+    fn fp_of(extra: &str, files: &[(&str, &str)]) -> String {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-fp-{}-{n}", std::process::id()));
+        let dir = root.join("var/lib/minitrue/newspeak/foo");
+        std::fs::create_dir_all(&dir).unwrap();
+        let hash = "a".repeat(64);
+        std::fs::write(
+            dir.join("recipe"),
+            format!("NAME=foo\nVERSION=1.0\nKIND=source\nSRC=https://e/f.tar.xz\nSHA256={hash}\n{extra}\nbuild(){{ :; }}\n"),
+        )
+        .unwrap();
+        if !files.is_empty() {
+            std::fs::create_dir_all(dir.join("files")).unwrap();
+            for (name, content) in files {
+                std::fs::write(dir.join("files").join(name), content).unwrap();
+            }
+        }
+        let ctx = Ctx { root: root.clone(), offline: false, tofu: false, jobs: 1 };
+        let f = load(&ctx, "foo").unwrap().fingerprint().unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        f
+    }
+
+    #[test]
+    fn fingerprint_estavel_e_sensivel() {
+        let base = fp_of("", &[]);
+        // determinístico: mesma receita → mesmo fingerprint
+        assert_eq!(base, fp_of("", &[]));
+        // MESMA versão (1.0), receita diferente → fingerprint diferente.
+        // É o bug do review consertado: mudar a receita sem bump de VERSION
+        // agora dispara rebuild.
+        assert_ne!(base, fp_of("TOOLCHAIN=cross", &[]), "toolchain muda o fp");
+        assert_ne!(base, fp_of("DEPS=glibc", &[]), "deps mudam o fp");
+        // files/ entra no fingerprint (patches, chaves)
+        let com_patch = fp_of("", &[("fix.patch", "--- a\n+++ b\n")]);
+        assert_ne!(base, com_patch, "files/ muda o fp");
+        assert_eq!(com_patch, fp_of("", &[("fix.patch", "--- a\n+++ b\n")]));
+        assert_ne!(com_patch, fp_of("", &[("fix.patch", "outro conteúdo\n")]), "conteúdo de files/ conta");
     }
 
     #[test]
