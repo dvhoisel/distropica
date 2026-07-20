@@ -528,10 +528,21 @@ com SHA256 real pinado.
   (`gcc-pass2 … compilado e retificado`, `FINGERPRINT` gravado, gcc-pass2
   cedendo do gcc-semente provisional). O gcc **nativo produzido pelo rectify**
   (não por scripts) compila e roda **C** (`self-host ok`) e **C++/STL**
-  (`libstdc++.so.6, libc.so.6` — dinâmico glibc), sem shims. O Estágio 2 deixou
-  de ser "feito à mão" e passou a ser **reproduzível de ponta a ponta pela
-  própria ferramenta**, do seed musl/zig ao gcc nativo glibc. Falta só o cotejo
-  formal do artefato com as provas de reprodutibilidade (SPEC-0010 §6). Scripts
+  (`libstdc++.so.6, libc.so.6` — dinâmico glibc), sem shims.
+
+  **A formulação honesta (correção 2026-07-20):** *o E2 foi **executado** pelo
+  `rectify`* — não *provado a frio*. A prova rodou num **rootfs experimental
+  já trabalhado**, com resíduo da investigação manual; isso pode ter mascarado
+  arestas — de fato o grafo tinha o `gcc` pass-1 antes do `binutils-cross`
+  porque a receita não declarava a dependência (corrigido: `binutils-cross`
+  entrou em `BUILD_DEPS` do `gcc`). Restam impurezas no rootfs de prova:
+  `libstdcxx` intermediária em `/usr/lib64` × a final em `/usr/lib`; a
+  `libgmpxx`-seed (ABI libc++) não substituída; arquivos musl órfãos da
+  investigação. **O próximo marco é o E2-clean**: rootfs **novo**, grafo
+  corrigido, sem resíduo provisório, provando que a `gcc`/`libstdc++`/`binutils`
+  **finais** são as selecionadas — repetido em **dois** ambientes limpos, com
+  logs e hashes preservados. Só então cabe dizer "reproduzível a frio". O
+  cotejo com a reprodutibilidade (SPEC-0010 §6) faz parte do E2-clean. Scripts
   da investigação em `rootfs/tmp/*.sh`.
 
 ## 5. Estágio 3 — boot de verdade
@@ -568,7 +579,7 @@ futura própria.
 |---------|-----------|-----------------|
 | E0 | chroot musl-estático habitável | baixo |
 | E1 | `./configure && make` funciona | atrito zig-cc×autotools |
-| E2 ✅ | ABI glibc + gcc nativo (pass-2) — **vencido e reproduzível pelo `rectify`** 2026-07-20 | GCC hospedado por clang; matriz glibc↔GCC; toolchain-semente musl→glibc |
+| E2 ~ | ABI glibc + gcc nativo (pass-2) — **executado pelo `rectify`** (rootfs trabalhado); **E2-clean a frio** é o próximo marco | GCC hospedado por clang; matriz glibc↔GCC; toolchain-semente musl→glibc |
 | E3 | boot QEMU até login | config de kernel |
 | E4a | userland vendor console | baixo |
 | E4b | GUI + Firefox | volume brutal de fonte (mesa/GTK) |

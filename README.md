@@ -66,28 +66,31 @@ ideológica** — cada premissa existe por um fim prático, não por dogma, e a
 
 ## Estado
 
-A barreira técnica que justificava o projeto — compilar o "mundo antigo" a
-partir de nada além de binários upstream — está **vencida**.
+Um **protótipo sério de engenharia de sistemas** — ainda um laboratório, não
+uma distribuição pronta para usuários. A matriz precisa do que está feito,
+testado e futuro vive em **[STATUS.md](STATUS.md)**.
 
-- **Bootstrap (Estágio 2) — vencido.** A partir de um mundo musl semeado
-  apenas pelo binário oficial do Zig (`zig cc`), a Distrópica compila uma
-  **glibc** e um **gcc nativo** (C e C++) — sem toolchain de nenhuma outra
-  distro. O gcc final, hospedado na glibc, compila e roda C e C++/STL
-  (SPEC-0005).
-- **`minitrue` — implementado** (Rust): mundo A (binários vendor em `/opt`) e
-  mundo B (compilação para `/usr`), verificação por hash + assinatura
-  (minisign), registros em texto, empacotamento determinístico (`pack`),
-  toolchain por estágio e um runner de build hermético (bwrap). Com os
-  primeiros testes automatizados.
+A barreira técnica que justificava o projeto — compilar o "mundo antigo" a
+partir de nada além de binários upstream — foi **demonstrada**:
+
+- **Bootstrap (Estágio 2) — executado pelo `rectify`.** A partir de um mundo
+  musl semeado apenas pelo binário oficial do Zig (`zig cc`), o `minitrue
+  rectify gcc-pass2` construiu os 16 pacotes até um **gcc nativo** (C e C++)
+  hospedado na **glibc**, sem toolchain de outra distro. **Ressalva honesta:**
+  a prova rodou num rootfs experimental já trabalhado; o **E2-clean** — a frio,
+  em rootfs novo, com o grafo corrigido — é o próximo marco (SPEC-0005 §4).
+- **`minitrue` — implementado** (Rust): mundo A (`/opt`) e mundo B (`/usr`),
+  hash + assinatura (minisign), registros em texto com **fingerprint de build**
+  e **manifesto v1** (hash por arquivo), empacotamento determinístico (`pack`),
+  toolchain por estágio, runner hermético (bwrap), e **`explain`/`why`** (a
+  proveniência como comando). 20 testes automatizados.
 - **Reprodutibilidade — provada.** Dois builds independentes de m4, gmp, gcc e
-  glibc produzem artefato byte-a-byte idêntico — a raiz de confiança dos
-  canais binários (SPEC-0010).
+  glibc produzem artefato byte-a-byte idêntico (SPEC-0010).
 
 Ainda em design ou não implementados: o instalador (`minipax`), o init
-(runit), os canais binários, e a execução **ponta-a-ponta** do bootstrap pelo
-próprio `minitrue` — hoje as receitas do Estágio 2 existem, mas a cadeia foi
-provada por experimentos diretos; fechá-la pelo `rectify` depende do
-*fingerprint de build* (SPEC-0011 §4).
+(runit), os canais binários, o `--sync` e o rollback de mundo B, um núcleo de
+instalação transacional (lock/journal/rename atômico), e o **E2-clean** (a
+prova a frio). Ver [STATUS.md](STATUS.md).
 
 Alvo inicial: **x86_64**.
 
