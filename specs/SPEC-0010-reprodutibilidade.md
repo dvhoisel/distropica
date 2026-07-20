@@ -76,13 +76,24 @@ Caminhos > 100 chars (o gcc tem vários) viram entradas GNU LongName, que o
 `pack` também emite deterministicamente. `rectify --emit` (SPEC-0009 §4)
 usará `pack` + compressão (zstd, a integrar) para o artefato do canal.
 
+**O que o `reprocorr` cobre — o tar, não o `.tar.zst`.** O `reprocorr`
+(SPEC-0009 §3/§6) é o sha256 do **tar normalizado** (a saída de `pack`),
+nunca do `.tar.zst`: o zstd não é garantidamente byte-reprodutível entre
+versões e níveis, então acoplar a confiança à saída comprimida seria frágil.
+O `.tar.zst` é só **transporte** — o índice do canal pina o sha256 *dele*
+para integridade do download; a corroboração descomprime e confere o tar
+interno contra o `reprocorr`. A **raiz de confiança única** do `reprocorr` é
+a **receita assinada** (SPEC-0009 §6): a cópia no índice é declaração do
+publicador, e se divergir da receita, vale a receita.
+
 ## 5. Verificação — o modo `corroborado`
 
 A reprodutibilidade é *afirmável* mas precisa ser *checável*:
 
-- `minitrue rectify --check-repro <pacote>` — builda localmente, empacota,
-  e compara o hash com o `reprocorr` pinado (na receita ou no índice do
-  canal). Igual ⇒ a reprodutibilidade se sustenta ⇒ o binário daquele canal
+- `minitrue rectify --check-repro <pacote>` — builda localmente, empacota
+  (o tar normalizado do `pack`), e compara **o sha256 desse tar** com o
+  `reprocorr` pinado na **receita** (autoridade; o índice traz só uma
+  cópia). Igual ⇒ a reprodutibilidade se sustenta ⇒ o binário daquele canal
   é confiável sem confiar no publicador.
 - É esse hash reproduzido que o `TRUST=corroborado` (SPEC-0009 §6) exige
   bater; e é ele que o mantenedor pina como `reprocorr` ao publicar.
@@ -129,6 +140,21 @@ passada 1 é *flaky* (ICE aleatório), mas a instabilidade é **só crash** — 
 seus geradores (`gen*`, `insn-*.c` etc.), reproduz. Um compilador não
 confiável para *rodar* produziu um artefato confiável para *verificar*.
 
+**glibc reproduz — o outro grande (2026-07-20).** Mesmo teste, mesmo
+resultado: dois builds independentes da glibc 2.42 (compilada pelo gcc
+passada-1) deram install idêntico arquivo a arquivo, e os dois `DESTDIR`
+empacotam para um hash de artefato idêntico:
+
+```
+eac0e2635033bd1dc281bce787093068e1adda3129c47c1cbb6a13d259579705   (glibc-d1 == glibc-d2)
+```
+
+Importa porque a glibc tem `configure`s que rodam durante o `make` e podiam
+cravar algo volátil (data, host, ordem) — não cravaram, sob o ambiente
+determinístico. Com gcc **e** glibc reprodutíveis, os dois pacotes que
+justificavam todo o Estágio 2 estão prontos para virar binário de canal
+`corroborado` (§5) — a base distribuível sem "confie em quem buildou".
+
 **Codegen determinístico (o achado que destrava gcc/glibc).** O gcc da
 passada 1 é *flaky* (ICE segfault aleatório, corrupção de memória do
 binário feito por clang). A pergunta perigosa era: a instabilidade afeta
@@ -150,11 +176,10 @@ independente do caminho — não só do caminho canônico do chroot.
 
 ## 7. Questões em aberto
 
-- **gcc reprodutível — resolvido (2026-07-20):** apesar dos geradores, dois
-  builds independentes deram install idêntico e hash de artefato idêntico
-  (§6). **glibc:** o mesmo teste (dois builds + comparação) está rodando (2º
-  build em andamento); a glibc tem `configure`-embutidos que rodam durante o
-  `make` e podem cravar algo volátil — veredito pendente.
+- ~~**gcc/glibc reprodutíveis**~~ — **resolvido (2026-07-20):** apesar dos
+  geradores do gcc e dos `configure`s-durante-o-`make` da glibc, os dois
+  reproduzem — install idêntico arquivo a arquivo e hash de artefato
+  idêntico em ambos (§6). Os dois maiores do Estágio 2 estão provados.
 - ~~Builds fora do chroot (caminho não canônico)~~ — **resolvido**: os
   shims passam `-ffile-prefix-map=$WORK=.`, e o `zig cc` já não crava o
   path por padrão (§6). A reprodutibilidade não depende mais do caminho.

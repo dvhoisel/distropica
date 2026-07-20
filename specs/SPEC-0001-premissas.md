@@ -35,6 +35,24 @@ página", P4) e o caráter Newspeak que a nomeia. Tudo o mais é meio, e meios
 se escolhem pelo que funciona; esse núcleo é o fim. É o único dogma, e é o
 dela: **não há purismo herdado que a governe, só a sua própria coerência.**
 
+**O que o pragmatismo NÃO flexibiliza.** P0 governa *meios*, e jamais serve
+de desculpa para afrouxar em silêncio o que é *fim*. Três coisas nunca cedem
+a uma "conveniência", porque são a própria identidade que P0 protege:
+
+- **P6** — nada é usado sem hash pinado; nenhum atalho o dispensa (a única
+  exceção, `--tofu`, *cria* o pino, não o remove — P6);
+- **rastreabilidade** — toda instalação é auditável na sua proveniência
+  (`ORIGIN`/`TRUST`, SPEC-0009 §8); nenhum caminho pode apagar a trilha ou
+  registrar menos do que fez;
+- **consentimento** — decisão de confiança (samizdat `builder`, TOFU,
+  remoção com perda) exige opt-in explícito e gritante, nunca um default
+  silencioso.
+
+Um "pragmatismo" que enfraquece qualquer um destes está negociando a
+identidade, não um meio — e aí P0 se volta contra si mesmo. Se a praticidade
+e um destes colidirem, o fim vence e o atalho é recusado, com a razão dita
+em voz alta.
+
 O eco distópico é proposital. No romance, o Partido não serve a doutrina
 nenhuma além da perpetuação de si mesmo — "o objetivo do poder é o poder".
 A Distrópica inverte a piada a favor do usuário: nenhuma ortodoxia externa
@@ -121,6 +139,20 @@ artefato exato que o autor da receita viu; a assinatura protege o momento
 da **repinagem** (troca de versão), provando que o artefato novo veio de
 quem sempre veio. Chaves NÃO DEVEM ser buscadas em keyservers ou URLs em
 tempo de instalação.
+
+**A única exceção — `--tofu` — e por que não fere P6.** Escrever uma receita
+nova exige obter, uma vez, o hash que ainda não existe. `minitrue --tofu`
+(SPEC-0003 §2) faz isso: baixa, calcula e **imprime a linha `SHA256=…` para
+o autor colar** na receita e commitar. É um *aid de autoria* que **cria** o
+pino — não um bypass que o dispensa. Depois disso, todo uso (o do autor e o
+de qualquer outro) confere contra o hash pinado, como manda P6; a árvore
+versionada continua sendo a fonte de verdade. As três amarras que o mantêm
+dentro de P6: (a) se a receita pina `SIGKEY`, a assinatura é exigida **mesmo
+em TOFU** — nem o primeiro fetch é cego; (b) `--tofu` NÃO DEVE existir em
+builds de release destinados a usuários finais; (c) nada é instalado num
+sistema alheio a partir de hash não-pinado — o pino nasce na máquina do
+autor e chega aos outros já congelado no commit. TOFU é como um pino passa a
+existir, não uma licença para viver sem ele.
 
 ## 2. O que conta como "binário do mantenedor original"
 

@@ -32,9 +32,9 @@ Obrigatórios:
 |-------|-------------|
 | `NAME` | nome do pacote (= nome do diretório) |
 | `VERSION` | versão upstream, literal |
-| `KIND` | `binary` (mundo A) ou `source` (mundo B) |
-| `SRC` | URL(s) do(s) artefato(s), separadas por espaço; HTTPS |
-| `SHA256` | hash(es) na mesma ordem de `SRC` |
+| `KIND` | `binary` (mundo A), `source` (mundo B) ou `meta` (meta-receita: só agrega `DEPS`, sem `SRC`/`build` — ex.: `base`, SPEC-0008 §3) |
+| `SRC` | URL(s) do(s) artefato(s), separadas por espaço; HTTPS (não se aplica a `KIND=meta`) |
+| `SHA256` | hash(es) na mesma ordem de `SRC` (não se aplica a `KIND=meta`) |
 
 Opcionais:
 
@@ -50,11 +50,17 @@ Opcionais:
 | `SIGSUMS` | alternativa a `SIG`: URL única de lista de checksums assinada que cobre os artefatos (§5) |
 | `SIGKEY` | chave pública pinada: uma linha base64 (minisign/signify) ou caminho `files/*.asc` (OpenPGP) |
 | `SIGKEY_FP` | OpenPGP: fingerprint da chave — este é o pino de fato; o `.asc` é só transporte |
+| `EPOCH` | `SOURCE_DATE_EPOCH` da receita (unix ts); sobrepõe o default do projeto p/ builds reprodutíveis (§3, SPEC-0010) |
+| `REPROCORR` | mundo B: sha256 do **tar normalizado** reprodutível (saída de `minitrue pack`); raiz de confiança única da corroboração de canal (SPEC-0009 §6, SPEC-0010 §4) |
+| `PROVISIONAL` | `1` ⇒ pacote-semente que cede o caminho a um homônimo real sem *doublethink* (ex.: busybox → coreutils/binutils; SPEC-0003 §3) |
 
 Funções:
 
 - `KIND=binary` DEVE definir `install_pkg()` — popula `$PREFIX`.
 - `KIND=source` DEVE definir `build()` — compila e instala em `$STAGE`.
+- `KIND=meta` NÃO define função nem `SRC`/`SHA256`: é só um nó de `DEPS`
+  (ex.: `base`) que agrega um conjunto; instalar o meta = instalar as suas
+  `DEPS`. Resolve o "conjunto mínimo" do instalador sem lógica no minipax.
 
 ## 3. Contrato de execução
 

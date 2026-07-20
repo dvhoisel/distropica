@@ -57,10 +57,10 @@ DEVERIA ser publicada com assinatura minisign da chave do projeto.
    `/etc/minitrue/world` inicial (conjunto `base` + escolhas do usuário);
    `minipax --world <arquivo>` reinstala uma máquina inteira a partir de
    um world salvo (SPEC-0003 §2).
-3. **`minipax-boot`** — copia kernel+initramfs para a ESP como
-   `EFI/BOOT/BOOTX64.EFI` (caminho de fallback UEFI) e, quando a NVRAM é
-   gravável, cria a entrada "Distrópica" via `efibootmgr`. **Não há
-   bootloader** (§4).
+3. **`minipax-boot`** — monta o **UKI** (kernel + initramfs num único `.efi`,
+   §4) e o grava na ESP como `EFI/BOOT/BOOTX64.EFI` (caminho de fallback
+   UEFI) e, quando a NVRAM é gravável, cria a entrada "Distrópica" via
+   `efibootmgr`. **Não há bootloader** (§4).
 4. **`minipax-config`** — hostname, senha de root, usuário inicial +
    `doas`, fuso (tzdata), rede (`udhcpc` ou estática → rc simples,
    SPEC-0006 §3), serviços habilitados por symlink (SPEC-0006 §4), `fstab`
@@ -72,12 +72,28 @@ DEVERIA ser publicada com assinatura minisign da chave do projeto.
 - Kernel compilado com `CONFIG_EFI_STUB`: o firmware UEFI executa o kernel
   diretamente. Sem GRUB (fonte GNU pesada, contra P3/P4), sem systemd-boot
   (banido por P4).
-- **Nenhuma linha de comando de kernel é necessária**: o initramfs (o
-  mesmo script de uma tela do E3, SPEC-0005 §5) localiza a raiz por
+- **Imagem unificada (UKI), sem systemd.** Kernel, initramfs e (se houver)
+  cmdline viram **um único `.efi`** — o `BOOTX64.EFI` é autocontido. Monta-se
+  com `objcopy` puro, embutindo seções PE no stub EFI do kernel:
+  `.linux` (o `bzImage`), `.initrd` (o initramfs) e, opcional, `.cmdline`/
+  `.osrel`. É o formato UKI, montado com binutils — **não** com o `ukify` do
+  systemd (P4). Vantagem: nada de "kernel aqui, initrd ali, cmdline no
+  bootloader" — um arquivo, uma coisa para copiar, medir e assinar (Secure
+  Boot fica trivial de acrescentar depois, uma assinatura sobre o `.efi`).
+- **Nenhuma linha de comando de kernel é necessária**: o initramfs embutido
+  (o mesmo script de uma tela do E3, SPEC-0005 §5) localiza a raiz por
   `LABEL=distropica-root` e faz `switch_root`. A instalação fica idêntica
   em qualquer máquina — nada de `root=/dev/sdX` gravado em lugar nenhum.
+- **O kernel é um pacote especial.** `linux` é mundo B (compilado no E2),
+  mas seu "instalar" não termina em copiar arquivos para `/usr`: um passo de
+  pós-instalação monta o UKI (kernel recém-instalado + o initramfs corrente)
+  e o grava na ESP. `memoryhole` também o trata à parte — **nunca** remove o
+  kernel **em execução** (`uname -r`), mesmo sob `--tudo`, e a retenção de
+  kernels não segue o corrente+1 genérico cegamente (o kernel que bootou
+  fica sempre retido). É a única exceção de ciclo-de-vida à SPEC-0003 §4/§5,
+  justificada: apagar o kernel rodando é a única remoção que se auto-destrói.
 - **Kernel anterior sempre bootável** (o A/B do ChromeOS, em versão
-  simplificada): a ESP mantém o kernel corrente em `EFI/BOOT/BOOTX64.EFI`
+  simplificada): a ESP mantém o UKI corrente em `EFI/BOOT/BOOTX64.EFI`
   e o anterior em `EFI/distropica/anterior.efi`, com entrada NVRAM
   "Distrópica (anterior)" quando gravável. O `rectify` do pacote `linux`
   rotaciona os dois — a retenção corrente+1 (SPEC-0003 §5) estendida ao

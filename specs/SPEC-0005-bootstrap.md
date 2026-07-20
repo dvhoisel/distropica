@@ -163,14 +163,19 @@ roda.
 
 **Conjunto de versões fixado (2026-07-19):** linux-headers 6.12.96,
 m4 1.4.21, binutils 2.45, gmp 6.3.0, mpfr 4.2.2, mpc 1.3.1, bison 3.8,
-gawk 5.4.1, gcc 15.3.0, glibc 2.42 — todos com SHA256 real pinado.
+gawk **5.3.2** (não 5.4.1 — regressão de array não-inicializado que quebra o
+`optc-gen.awk` do gcc; ver adiante neste §), gcc 15.3.0, glibc 2.42 — todos
+com SHA256 real pinado.
 
 **Registro da fundação do Estágio 2 (2026-07-19).** Compilados com
 `zig cc` DE DENTRO do chroot e encadeados por DEPS/BUILD_DEPS:
 - **verificados de ponta a ponta:** linux-headers, m4, binutils, gmp,
   mpfr, mpc, bison, gawk. Achados que viraram desenho:
-  - `make` é a ferramenta essencial do E1 — entrou no `stage0` (todo
-    build de fonte a invoca);
+  - `make` é a ferramenta essencial do E1 (todo build de fonte a invoca),
+    mas o E1 ainda não tem make — então uma **semente de make entra no E0**
+    (`stage0`); o GNU make de verdade é (re)compilado da fonte no início do
+    E1 pelo truque `./build.sh` (compila make sem make). Semente provisória
+    no E0 → make real da fonte no E1;
   - o **busybox virou PROVISIONAL** (SPEC-0003): binutils tomou `ar`/
     `strings`, gawk tomou `awk`, sem doublethink — pré-condição para
     instalar qualquer GNU homônimo de applet;
@@ -231,8 +236,9 @@ gawk 5.4.1, gcc 15.3.0, glibc 2.42 — todos com SHA256 real pinado.
   sendo a transição musl→glibc: falta este gcc **produzir glibc** (hoje
   ele mira musl); daí a passada 1 de verdade (`--without-headers` já está)
   seguida da glibc e da passada 2.
-- **A GLIBC 2.42 COMPILA com o gcc da passada 1 (2026-07-19) — o Estágio 2
-  está essencialmente vencido.** A `configure` da glibc declarou o
+- **A GLIBC 2.42 COMPILA com o gcc da passada 1 (2026-07-19) — a barreira
+  central do E2 caiu, mas o E2 ainda não fechou: falta a passada 2.** A
+  `configure` da glibc declarou o
   `x86_64-distropica-linux-gnu-gcc` "sufficient to build libc", e o build
   produziu `libc.so.6` (11,6 MB, SONAME e a string "GNU C Library … 2.42"
   confirmados), o carregador `ld-linux-x86-64.so.2`, e `libm`/`libpthread`/

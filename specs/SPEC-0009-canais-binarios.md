@@ -16,9 +16,11 @@ como baixaria o do Firefox.
 O mundo B (glibc, gcc, coreutils — sem binário upstream) é compilado **uma
 vez, pelo mantenedor**, e publicado como binário. Um **canal** é o meio
 dessa publicação. Do ponto de vista do `minitrue`, um binário de canal é
-consumido pelo mesmo caminho de um binário de vendor (mundo A): baixa,
-verifica, extrai, registra. A compilação local de fonte vira o **último
-recurso** — só para o que nem o upstream nem nenhum canal confiável
+buscado pelo mesmo caminho de *fetch* de um binário de vendor: baixa,
+verifica, extrai, registra — sem rodar `build()`. O *layout* de instalação,
+porém, é o do mundo do pacote: o binário de canal de um pacote `KIND=source`
+instala como **mundo B** (árvore em `/usr`, `WORLD=B`), não em `/opt` — ver
+§4. A compilação local de fonte vira o **último recurso** — só para o que nem o upstream nem nenhum canal confiável
 publica, e que o usuário especificamente pede.
 
 Consequência: o processo doloroso do bootstrap é do mantenedor, único. O
@@ -64,22 +66,33 @@ Ex.: `glibc 2.42 x86_64 pool/glibc-2.42-x86_64.tar.zst <sha256>`.
   a chave pinada do canal — *crimestop* de índice.
 - O índice diz **onde** está o artefato e **qual** o hash esperado. A rede
   entrega bytes; a chave+hash decidem a verdade (P6).
-- `reprocorr` (opcional): hash de build reprodutível que o publicador
-  declara ter obtido — usado na corroboração (§6).
+- O `<sha256>` (obrigatório) cobre o **`.tar.zst` servido** — integridade do
+  download.
+- `reprocorr` (opcional): o hash reprodutível — **sha256 do tar normalizado
+  interno** (a saída de `minitrue pack`, SPEC-0010 §4), **não** do `.tar.zst`
+  (o zstd não é byte-reprodutível entre versões). É a *cópia declarada pelo
+  publicador*; a **autoridade única** é o `reprocorr` pinado na **receita**
+  (§6) — se divergirem, vale o da receita. Usado na corroboração (§6).
 
 ## 4. O artefato binário
 
 Um artefato de canal é o **staging (`STAGE`/DESTDIR) do build de fonte
 empacotado** — exatamente a árvore que a receita mundo B (SPEC-0004)
 instalaria. Instalar = extrair em `/` (respeitando a política de `/etc`,
-SPEC-0002 §6) e registrar o manifesto. É o mesmo mecanismo do mundo A;
-muda só a origem.
+SPEC-0002 §6) e registrar o manifesto — **layout mundo B** (`WORLD=B`,
+árvore em `/usr`, nada em `/opt`), idêntico ao que a receita produziria
+compilando. O que se herda do mundo A é só o **fetch** de um tarball passivo
+(baixa/verifica/extrai, sem `build()`), **não** o layout: um binário de
+canal de pacote `KIND=source` não vira mundo A. Muda só a origem —
+pré-buildado em vez de compilado localmente.
 
 - Nome: `<nome>-<versão>-<arch>.tar.zst`.
 - **Produção (mantenedor):** `minitrue rectify --emit <pacote>` roda o
-  `build()`, empacota o `STAGE`, imprime o sha256 e (se o build for
-  reprodutível) o `reprocorr`. O mantenedor publica o tarball e acrescenta
-  a linha ao índice, reassinando-o.
+  `build()`, empacota o `STAGE` (tar normalizado → `.tar.zst`) e imprime
+  **dois** hashes: o `<sha256>` do `.tar.zst` (integridade, vai no índice) e
+  o `reprocorr` = sha256 do tar normalizado interno (reprodutibilidade, vai
+  na **receita** e, como cópia, no índice). O mantenedor publica o tarball e
+  acrescenta a linha ao índice, reassinando-o.
 - O artefato NÃO carrega scripts de pós-instalação (SPEC-0001 §2): é
   árvore passiva, como qualquer tarball.
 
@@ -105,14 +118,17 @@ nenhum canal tiver — útil em máquina sem toolchain).
 A cadeia de confiança de instalar um binário depende de **haver ou não um
 hash reprodutível pinado na receita** (que é versionada e assinada):
 
-- **Com `reprocorr` na receita (build reprodutível):** o hash do artefato
-  DEVE bater com o hash reprodutível pinado. Aí o canal é **só um espelho
-  (CDN)** — a raiz de confiança é a **receita**, não o publicador. Um canal
-  samizdat é tão seguro quanto o oficial: só consegue te entregar
-  exatamente o artefato reprodutível, ou é recusado. A rede segue sem
-  decidir a verdade (P6 preservado ao pé da letra). **Esta é a forma
-  forte**, e o motivo de a reprodutibilidade (aspiração em SPEC-0001 §4)
-  virar mecanismo de segurança aqui.
+- **Com `reprocorr` na receita (build reprodutível):** após conferir o
+  `<sha256>` do `.tar.zst` contra o índice assinado (integridade do
+  download), o minitrue **descomprime** e confere o sha256 do **tar
+  normalizado interno** contra o `reprocorr` **pinado na receita** — a raiz
+  de confiança única (versionada, assinada), não o índice nem o publicador.
+  Bateu ⇒ o canal é **só um espelho (CDN)**. Um canal samizdat é tão seguro
+  quanto o oficial: só consegue te entregar exatamente o artefato
+  reprodutível canônico, ou é recusado. A rede segue sem decidir a verdade
+  (P6 preservado ao pé da letra). **Esta é a forma forte**, e o motivo de a
+  reprodutibilidade (aspiração em SPEC-0001 §4) virar mecanismo de segurança
+  aqui.
 - **Sem hash reprodutível (build não determinístico):** é preciso confiar
   em **quem** buildou. Política por canal:
   - `oficial`: confia no projeto (chave oficial).

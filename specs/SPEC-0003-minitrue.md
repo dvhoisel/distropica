@@ -20,6 +20,8 @@ build system. Builds e extração são delegados a `sh` e `tar` (busybox).
 ```
 minitrue rectify   <pacote>…      instala/atualiza; acrescenta ao world (§2)
 minitrue rectify   --sync         converge o sistema ao world inteiro (§2)
+minitrue rectify   --emit <pkg>   mantenedor: empacota o STAGE como artefato
+                                  de canal, imprime os hashes (SPEC-0009 §4)
 minitrue rollback  <pacote> [<v>] mundo A: volta o current à versão retida (§5)
 minitrue unperson  <pacote>…      mundo A: some dos registros, fica em /opt (§5)
 minitrue memoryhole <pacote>…     remove do sistema e do world; --orfaos:
@@ -29,6 +31,8 @@ minitrue verify    [<pacote>…]    confere registros contra o filesystem e
                                   varre /usr por links órfãos (§5)
 minitrue newspeak  <pacote>       imprime a receita efetiva e sua origem
 minitrue lint      [<árvore>]     valida a árvore newspeak (SPEC-0004 §6)
+minitrue channel   <sub>          add|remove|list|refresh de canais (SPEC-0009 §7)
+minitrue pack      <dir> [saída]  tar normalizado determinístico + sha256 (SPEC-0010 §4)
 ```
 
 Opções globais:
@@ -38,8 +42,9 @@ Opções globais:
 | `--root <dir>` | opera sobre outro rootfs (Estágio 0 popula o chroot assim); env `MINITRUE_ROOT` |
 | `--jobs N` | paralelismo passado aos builds (`$JOBS`); default: nproc |
 | `--offline` | proíbe rede; só aceita artefato já presente no cache |
+| `--no-binary` / `--only-binary` | `rectify`: força build de fonte / proíbe o fallback de fonte (SPEC-0009 §5) |
 | `NEWSPEAK_PATH` (env ou `conf`) | árvores de receitas separadas por `:`, em ordem de precedência — a primeira ocorrência do pacote vence (herança `KISS_PATH`); default `/var/lib/minitrue/newspeak` |
-| `--tofu` | permite receita sem `SHA256`: baixa, calcula, imprime a linha `SHA256=…` pronta para colar, instala com aviso gritante. Se a receita pina `SIGKEY`, a assinatura continua obrigatória mesmo em TOFU — é o que torna a repinagem de versão segura. NÃO DEVE existir em builds de release da ferramenta destinados a usuários finais |
+| `--tofu` | permite receita sem `SHA256`: baixa, calcula, imprime a linha `SHA256=…` pronta para colar, instala com aviso gritante. Se a receita pina `SIGKEY`, a assinatura continua obrigatória mesmo em TOFU — é o que torna a repinagem de versão segura. NÃO DEVE existir em builds de release da ferramenta destinados a usuários finais. É a única exceção a P6, e reconciliada lá: o TOFU **cria** o pino (aid de autoria), não o dispensa — SPEC-0001 P6 |
 
 ### O arquivo `world` (`/etc/minitrue/world`)
 
@@ -86,8 +91,11 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
      de comando (`LINKS`) em `/usr/bin`.
    - **Mundo B** (`KIND=source`): antes de compilar, consulta os canais
      binários (SPEC-0009) por um binário pré-buildado da versão da receita;
-     havendo um aceitável, instala-o como mundo A (baixa/verifica/extrai) e
-     o `build()` não roda. Só na falta é que executa `build()` com
+     havendo um aceitável, o instala **como mundo B pré-buildado** — mesmo
+     *fetch* de um tarball passivo (baixa/verifica/extrai), mas layout mundo
+     B (árvore em `/usr`, `/etc`→factory, manifesto plano, `WORLD=B`), **não**
+     em `/opt` — e o `build()` não roda (SPEC-0009 §4). Só na falta é que
+     executa `build()` com
      `STAGE=` (DESTDIR)
      em diretório temporário; sucesso ⇒ checagem de colisão (§7) ⇒ cópia
      para `/`; se já havia versão anterior, caminhos órfãos do manifesto
@@ -109,8 +117,10 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
    `/opt/<nome>` (mundo A) ou cada caminho listado (mundo B); diretórios
    que ficarem vazios são removidos.
 2. Preservados por padrão: `/etc/opt/<nome>`, `/var/opt/<nome>` e qualquer
-   arquivo cujo conteúdo diferir do registrado (modificado pelo usuário ⇒
-   fica, com aviso). `--tudo` remove também esses.
+   arquivo cujo sha256 diferir do registrado no manifesto (§6) — modificado
+   pelo usuário ⇒ fica, com aviso. É o hash por arquivo do registro v1 que
+   torna essa promessa **enforçável** (sem ele, não há como saber o que o
+   usuário mexeu). `--tudo` remove também esses.
 3. Registro apagado por último. Saída: `"<nome> nunca existiu."`
 4. Pacote requerido por outro registro (`DEPS` reversa) ⇒ recusa com a
    lista de dependentes; `--force-orfaos` não existe no v0.
@@ -149,8 +159,13 @@ Três arquivos-texto:
 
 - `meta` — `VERSION=`, `KIND=`, `WORLD=A|B`, `SHA256=` (por artefato),
   `INSTALLED_AT=` (ISO-8601), `RECIPE_COMMIT=` (se conhecido).
-- `manifest` — um caminho absoluto por linha, ordenado. Para mundo A:
-  a raiz `/opt/<nome>/<versão>` e cada link criado em `/usr`.
+- `manifest` — uma entrada por linha, ordenada, no formato `sha256sum`:
+  **`<sha256>␠␠<caminho absoluto>`** (registro **v1**) — o hash do conteúdo
+  instalado. Symlinks e diretórios levam `-` no lugar do hash (o alvo do
+  link é conferido à parte). Para mundo A: a raiz `/opt/<nome>/<versão>` e
+  cada link criado em `/usr`. O hash por arquivo é o que sustenta o veredito
+  intacto × modificado do `memoryhole` (§4) e dá ao `verify` integridade por
+  arquivo — não só para `/etc`.
 - `recipe` — cópia fiel da receita usada (torna `memoryhole` e `verify`
   independentes de mudanças posteriores na árvore newspeak).
 
@@ -226,9 +241,12 @@ Sucesso de `rectify` termina em `doubleplusgood.`; `verify` limpo:
 
 ## 11. Questões em aberto
 
-- `verify` v0 confere presença + alvo de links + hash de artefato em cache;
-  hash por arquivo instalado (manifesto com sha256 por linha) fica para
-  v0.2 — custo/benefício a medir.
+- ~~hash por arquivo instalado fica para v0.2~~ — **decidido: entra já**
+  (registro v1, §6): o manifesto guarda `<sha256>␠␠<caminho>`. É o que torna
+  enforçável a promessa do `memoryhole` de preservar arquivo modificado (§4)
+  e dá dentes ao `verify` (integridade por arquivo, não só presença). O
+  `install_source` do minitrue hoje grava só o caminho — **implementação
+  pendente** (hashear cada arquivo copiado ao montar o manifesto).
 - A própria árvore newspeak como pacote gerido (`minitrue rectify newspeak`
   puxando tarball do repositório oficial da Distrópica): elegante e
   resolve atualização sem git instalado; especificar o pacote especial —
