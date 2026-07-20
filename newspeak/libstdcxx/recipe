@@ -1,0 +1,37 @@
+NAME=libstdcxx
+VERSION=15.3.0
+KIND=source
+TOOLCHAIN=cross
+RETRIES=50
+DEPS="glibc"
+BUILD_DEPS="gcc binutils-cross"
+ABOUT="A libstdc++ (runtime C++), do subdir libstdc++-v3 do fonte do gcc, buildada pelo gcc da passada 1 AGORA que a glibc existe (headers presentes). É o elo que faltava entre a passada 1 (--without-headers: tem cc1plus mas nenhuma libstdc++) e a passada 2: sem uma libstdc++, o pass-1 g++ compila C++ mas não LINKA, então não conseguiria buildar o gcc, que é C++. Ordem LFS 5.7 (glibc → libstdc++ → gcc final)."
+LICENSE="GPL-3.0-or-later WITH GCC-exception-3.1"
+SRC="https://ftp.gnu.org/gnu/gcc/gcc-$VERSION/gcc-$VERSION.tar.xz"
+SHA256=fa59c1beef8995f27c4d71c1df227587189315d3e6faff1bb4306e61b0c530eb
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    mkdir -p build && cd build
+    # O gcc da passada 1 é --without-headers: seu path de include é só o dele
+    # (/usr/lib/gcc/.../include), NÃO /usr/include (glibc), e ele não acha os
+    # startfiles em /usr/lib. Aponta os três explicitamente (verificado
+    # 2026-07-20: -I p/ headers glibc, -B p/ crt1.o/crti.o, -L p/ libc). É
+    # por-receita de propósito — não se mexe no build da glibc, que já é
+    # reprodutível. (O conserto estrutural seria rebuildar a passada 1 com
+    # sysroot; fica para depois.)
+    export CFLAGS="-I/usr/include -B/usr/lib -L/usr/lib"
+    export CXXFLAGS="$CFLAGS"
+    export LDFLAGS="-B/usr/lib -L/usr/lib"
+    # Configura só o subdir libstdc++-v3 (não o gcc inteiro), como cross-host:
+    # o CC/CXX é o gcc da passada 1 (perfil cross), que já produz binários glibc.
+    # --disable-libstdcxx-pch: PCH atrasa e não é essencial na base.
+    ../libstdc++-v3/configure --prefix=/usr \
+        --host=x86_64-distropica-linux-gnu --build="$(../config.guess)" \
+        --disable-multilib --disable-nls --disable-libstdcxx-pch \
+        --disable-dependency-tracking
+    # retry: o gcc-passada-1 (feito por clang) é flaky ao COMPILAR (ICE); o
+    # make incremental resume a cada tentativa (SPEC-0005/0010).
+    retry make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+}
