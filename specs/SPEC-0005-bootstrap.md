@@ -452,10 +452,25 @@ com SHA256 real pinado.
   → libstdc++ → **binutils-glibc** → pass-2. Os mathlibs-glibc já foram
   reconstruídos (gmp/mpfr/mpc, `NEEDED libc.so.6`, com `-std=gnu17`); os
   binutils-glibc são o próximo passo, e então a passada 2 fecha as target-libs
-  (libgcc + libstdc++ do alvo). **Estado:** o *compilador* da passada 2 existe;
-  falta o toolchain-semente terminar de virar glibc e as target-libs. Tudo
-  isto foi via bwrap direto (experimentos); vira as receitas `gcc-pass2`,
-  `mathlibs`-glibc e `binutils-glibc` quando fechar.
+  (libgcc + libstdc++ do alvo).
+- **PASSADA 2 FECHADA — O ESTÁGIO 2 ESTÁ VENCIDO (2026-07-20).** Com os
+  binutils-semente reconstruídos como glibc (dinâmicos → `ld`/`ar` fazem
+  `dlopen`), o muro do `libgcc_s.so` caiu, a libgcc e a **libstdc++ do alvo**
+  compilaram, e `make install` produziu `gcc`/`g++` **nativos** (11 MB cada,
+  GCC 15.3.0, dinâmicos glibc). Prova (sem shims, sem flags, só `PATH=/usr/bin`):
+  - `gcc` compila **C** e roda (`self-host ok`);
+  - `g++` compila **C++/STL** (vector/string/unique_ptr) e roda — binário
+    dinâmico `NEEDED libstdc++.so.6, libc.so.6`, interpretador
+    `/lib64/ld-linux-x86-64.so.2`.
+  Detalhes de fechamento: o `liblto_plugin.so` herdado do pass-1 tinha `NEEDED
+  libc.so` (musl) e falhava ao carregar — substituído pelo do pass-2 (glibc);
+  `libgcc_s.so.1` e a `libstdc++.so.6.0.34` do pass-2 (com symbol versioning)
+  instalados em `/usr/lib`. LTO fica desligado por opção (`--disable-lto`), o
+  que é coerente com o pass-1. **O objetivo central do projeto — produzir uma
+  glibc E um gcc nativo a partir de um mundo musl com semente zig — está
+  cumprido.** Falta transcrever tudo em receitas (`gcc-pass2`, `mathlibs`- e
+  `binutils`-glibc) e no fluxo do `rectify`; a investigação foi via bwrap
+  direto, e os scripts estão em `rootfs/tmp/*.sh`.
 
 ## 5. Estágio 3 — boot de verdade
 
@@ -491,7 +506,7 @@ futura própria.
 |---------|-----------|-----------------|
 | E0 | chroot musl-estático habitável | baixo |
 | E1 | `./configure && make` funciona | atrito zig-cc×autotools |
-| E2 | ABI glibc; vendor dinâmico roda | GCC hospedado por clang; matriz glibc↔GCC |
+| E2 ✅ | ABI glibc + gcc nativo (pass-2) — **vencido** 2026-07-20 | GCC hospedado por clang; matriz glibc↔GCC; toolchain-semente musl→glibc |
 | E3 | boot QEMU até login | config de kernel |
 | E4a | userland vendor console | baixo |
 | E4b | GUI + Firefox | volume brutal de fonte (mesa/GTK) |
