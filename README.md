@@ -14,7 +14,16 @@ Não há gerenciador de pacotes herdado — nem apt, nem pacman, nem flatpak. H�
 o `minitrue`, uma ferramenta mínima que busca, verifica, registra e apaga.
 Quando algo é removido, ele nunca existiu.
 
+É uma *rolling release* **edge**: a árvore aponta sempre para a versão estável
+mais recente do upstream, e o sistema é continuamente retificado para o
+presente — nunca um release congelado. O passado é reescrito para bater com o
+agora.
+
 ## Premissas
+
+Acima de todas, uma lente (**P0**): a Distrópica é **pragmática acima de
+ideológica** — cada premissa existe por um fim prático, não por dogma, e a
+única ideologia inegociável é a coerência da própria casa.
 
 1. **Nenhum gerenciador de pacotes existente.** A ferramenta própria
    (`minitrue`) é deliberadamente pequena: sem solver, sem protocolo de
@@ -30,6 +39,10 @@ Quando algo é removido, ele nunca existiu.
    compilado em `/usr`, estado em `/var`.
 6. **A rede nunca decide o que é verdade.** Todo artefato é conferido contra
    o hash pinado na receita. Divergência é *crimestop*.
+7. **Edge — sempre o estável mais recente.** A árvore pina a versão estável
+   mais nova do upstream (a começar pelo kernel); *edge* é o estável na sua
+   borda, não *bleeding edge*. Rolling: não há versão-do-sistema nem release
+   congelado.
 
 ## Especificações
 
@@ -45,11 +58,34 @@ Quando algo é removido, ele nunca existiu.
 | [SPEC-0008](specs/SPEC-0008-instalador.md) | `minipax` — o instalador (mídia viva, EFI stub sem bootloader) |
 | [SPEC-0009](specs/SPEC-0009-canais-binarios.md) | Canais binários (oficial e samizdat) — o usuário não compila a base |
 | [SPEC-0010](specs/SPEC-0010-reprodutibilidade.md) | Builds reprodutíveis — a raiz de confiança dos canais |
+| [SPEC-0011](specs/SPEC-0011-release-rolling.md) | Modelo de release: rolling *edge* — sempre o estável mais recente |
 
 ## Estado
 
-**Fase de especificação.** Ainda não há código — as specs acima estão em
-rascunho e são o material a revisar. Alvo inicial: x86_64.
+A barreira técnica que justificava o projeto — compilar o "mundo antigo" a
+partir de nada além de binários upstream — está **vencida**.
+
+- **Bootstrap (Estágio 2) — vencido.** A partir de um mundo musl semeado
+  apenas pelo binário oficial do Zig (`zig cc`), a Distrópica compila uma
+  **glibc** e um **gcc nativo** (C e C++) — sem toolchain de nenhuma outra
+  distro. O gcc final, hospedado na glibc, compila e roda C e C++/STL
+  (SPEC-0005).
+- **`minitrue` — implementado** (Rust): mundo A (binários vendor em `/opt`) e
+  mundo B (compilação para `/usr`), verificação por hash + assinatura
+  (minisign), registros em texto, empacotamento determinístico (`pack`),
+  toolchain por estágio e um runner de build hermético (bwrap). Com os
+  primeiros testes automatizados.
+- **Reprodutibilidade — provada.** Dois builds independentes de m4, gmp, gcc e
+  glibc produzem artefato byte-a-byte idêntico — a raiz de confiança dos
+  canais binários (SPEC-0010).
+
+Ainda em design ou não implementados: o instalador (`minipax`), o init
+(runit), os canais binários, e a execução **ponta-a-ponta** do bootstrap pelo
+próprio `minitrue` — hoje as receitas do Estágio 2 existem, mas a cadeia foi
+provada por experimentos diretos; fechá-la pelo `rectify` depende do
+*fingerprint de build* (SPEC-0011 §4).
+
+Alvo inicial: **x86_64**.
 
 ## Vocabulário
 
