@@ -160,31 +160,40 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         }
     };
     let srcs = list("SRC");
-    if srcs.is_empty() {
-        return fail(2, format!("{name}: SRC ausente"));
-    }
     let sha256: Vec<String> = list("SHA256").iter().map(|s| s.to_lowercase()).collect();
-    if !sha256.is_empty() && sha256.len() != srcs.len() {
-        return fail(2, format!("{name}: SHA256 e SRC com contagens diferentes"));
-    }
-    if sha256
-        .iter()
-        .any(|h| h.len() != 64 || !h.chars().all(|c| c.is_ascii_hexdigit()))
-    {
-        return fail(
-            2,
-            format!("{name}: SHA256 mal-formado (64 hex por artefato)"),
-        );
-    }
-    if sha256.is_empty() && !ctx.tofu {
-        return fail(
-            2,
-            format!("{name}: receita sem SHA256 (só com --tofu, e com aviso)"),
-        );
-    }
     let sig = list("SIG");
-    if !sig.is_empty() && sig.len() != srcs.len() {
-        return fail(2, format!("{name}: SIG e SRC com contagens diferentes"));
+    if srcs.is_empty() {
+        // Receita de MONTAGEM (sem SRC): o pacote é gerado pelo próprio build()
+        // — config, esqueleto de /etc. Nada a baixar, logo nada a hashear ou
+        // assinar. Um SHA256/SIG aqui é engano (não há artefato).
+        if !sha256.is_empty() || !sig.is_empty() {
+            return fail(
+                2,
+                format!("{name}: SHA256/SIG sem SRC (receita de montagem não baixa nada)"),
+            );
+        }
+    } else {
+        if !sha256.is_empty() && sha256.len() != srcs.len() {
+            return fail(2, format!("{name}: SHA256 e SRC com contagens diferentes"));
+        }
+        if sha256
+            .iter()
+            .any(|h| h.len() != 64 || !h.chars().all(|c| c.is_ascii_hexdigit()))
+        {
+            return fail(
+                2,
+                format!("{name}: SHA256 mal-formado (64 hex por artefato)"),
+            );
+        }
+        if sha256.is_empty() && !ctx.tofu {
+            return fail(
+                2,
+                format!("{name}: receita sem SHA256 (só com --tofu, e com aviso)"),
+            );
+        }
+        if !sig.is_empty() && sig.len() != srcs.len() {
+            return fail(2, format!("{name}: SIG e SRC com contagens diferentes"));
+        }
     }
     let mut links = Vec::new();
     for item in list("LINKS") {
@@ -352,6 +361,44 @@ mod tests {
         let f = load(&ctx, "foo").unwrap().own_fingerprint().unwrap();
         let _ = std::fs::remove_dir_all(&root);
         f
+    }
+
+    /// Receita de MONTAGEM (sem SRC): parseia sem SHA256 (nada a baixar); mas
+    /// SHA256 sem SRC é engano e deve falhar.
+    #[test]
+    fn receita_sem_src_monta() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-nosrc-{}-{n}", std::process::id()));
+        let dir = root.join("var/lib/minitrue/newspeak/base");
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+
+        // sem SRC, sem SHA256 → OK (o build() monta o pacote)
+        std::fs::write(
+            dir.join("recipe"),
+            "NAME=base\nVERSION=0.1\nKIND=source\nTOOLCHAIN=native\nbuild(){ :; }\n",
+        )
+        .unwrap();
+        let r = load(&ctx, "base").expect("receita de montagem (sem SRC) deve parsear");
+        assert!(r.srcs.is_empty() && r.sha256.is_empty());
+
+        // sem SRC, mas COM SHA256 → erro
+        std::fs::write(
+            dir.join("recipe"),
+            format!(
+                "NAME=base\nVERSION=0.1\nKIND=source\nSHA256={}\nbuild(){{ :; }}\n",
+                "a".repeat(64)
+            ),
+        )
+        .unwrap();
+        assert!(load(&ctx, "base").is_err(), "SHA256 sem SRC deve falhar");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
