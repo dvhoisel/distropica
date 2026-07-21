@@ -21,7 +21,7 @@ Amor, SPEC-0012). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | Manifesto v1 (hash por arquivo) | ✅ | ✅ | só hash+caminho; **falta tipo/modo/alvo de symlink** e `RECORD_FORMAT=` |
 | `verify` (presença + integridade por arquivo) | ✅ | 🟡 | não varre regulares órfãos em /usr nem fecha o grafo de deps |
 | `memoryhole` (+ preserva modificado) | ✅ | 🟡 | sem `--tudo`; sem rollback do payload |
-| `explain` / `why` (proveniência) | ✅ | ✅ | ORIGIN/hash-arq; TRUST/corroboradores só quando houver canais |
+| `explain` / `why` (proveniência) | ✅ | ✅ | ORIGIN/hash-arq; **corroboração real** (attest + builders pinados); reprocorr pinado vs build |
 | `--sync` (convergir ao world) | ⬜ | — | stub; SPEC-0011 |
 | `rollback` / `unperson` / `lint` | ⬜ | — | stub |
 | Canais binários (`channel`, `--emit`) | ⬜ | — | SPEC-0009; protocolo de confiança a fixar |
@@ -31,6 +31,8 @@ Amor, SPEC-0012). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | Journal + rollback do mundo B (STAGE→/) | ⬜ | — | cópia sobre / ainda não transacional |
 | `SUPERSEDES=` explícito | ✅ | ✅ | declarado nas 5 receitas do E2; colisão não-declarada = doublethink |
 | Verificação OpenPGP | ⬜ | — | minisign só; stub p/ .asc |
+| `reprocorr` (raiz de confiança) | ✅ | ✅ | build de fonte grava `ARTIFACT_HASH`=`pack(STAGE)`; receita que pina `REPROCORR` exige reprodução (crimestop). SPEC-0009 §8.1 |
+| Attestation + corroboração (`attest`/`corroborate`) | ✅ | ✅ | ed25519; builders pinados em `/etc/minitrue/builders`; ≥2 confiáveis concordam = corroborado, um divergindo = crimestop; fiado no `explain`. **Independência de builder ainda simulada** (1 máquina) |
 
 ## Bootstrap (SPEC-0005)
 
@@ -52,7 +54,7 @@ Amor, SPEC-0012). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | `ar` determinístico | ✅ |
 | m4, gmp, **gcc**, **glibc** byte-idênticos (2 builds) | ✅ |
 | Hash de artefato via `pack` = `reprocorr` | ✅ (m4/gcc/glibc) |
-| Nenhuma receita pina `REPROCORR` ainda | ⬜ |
+| `REPROCORR` pinado + verificado no build | ✅ (`m4` pina; build de fonte grava `ARTIFACT_HASH` e exige reproduzir o pinado — crimestop se divergir) |
 | Cotejo do artefato do E2 produzido pelo `rectify` | ⬜ (parte do E2-clean) |
 
 ## Limitações conhecidas (do parecer externo)
@@ -77,5 +79,5 @@ Amor, SPEC-0012). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
 ## Ferramentas de CI (estado local)
 
-`cargo test` 24/24 · `cargo clippy -D warnings` ok · `cargo fmt --check` ok ·
+`cargo test` 26/26 · `cargo clippy -D warnings` ok · `cargo fmt --check` ok ·
 `sh -n` em receitas/scripts ok · ShellCheck e `cargo-audit` não instalados.

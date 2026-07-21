@@ -186,6 +186,48 @@ O registro de um pacote (SPEC-0003 §6) ganha, no `meta`:
 índice corrente. Assim o sistema é auditável: "quais binários vieram de
 samizdat, e sob que confiança?".
 
+### 8.1 Attestations e corroboração — o Miniluv com lei escrita (implementado)
+
+A federação de §6 (`corroborado`) tem forma concreta. Duas camadas:
+
+**Raiz — `reprocorr` (build reprodutível).** A receita pina `REPROCORR=`
+(sha256 do `pack(STAGE)`, SPEC-0010 §4). No build de fonte, o `minitrue`
+computa o `pack(STAGE)`, grava `ARTIFACT_HASH=` no registro, e — se a receita
+pina — EXIGE que batam: divergir é **crimestop (reprodução)**, não aviso. É a
+autoridade única (§6): a rede vira espelho. (1ª receita a pinar: `m4`.)
+
+**Federação — attestations assinadas.** Uma attestation é texto assinado
+(ed25519): ordem canônica `ATTEST_FORMAT, PACKAGE, VERSION, RECIPE_FINGERPRINT,
+ARTIFACT_HASH, BUILDER, BUILDER_KEY`, seguido de `BUILT_AT` (informativo) e
+`SIG=` (hex, sobre o corpo canônico). Diz: *"o builder K obteve, da receita R
+(fingerprint F), o artefato H."*
+
+Comandos:
+
+```
+minitrue attest keygen <nome> <arquivo-da-chave>   # gera par ed25519 (secreta 0600)
+minitrue attest <pacote> <builder> <arquivo>       # emite a attestation assinada (stdout)
+minitrue corroborate <pacote>                      # veredito de corroboração
+```
+
+Confiança e regra:
+
+- Builders CONFIÁVEIS têm a pubkey PINADA em `/etc/minitrue/builders/<nome>`
+  (o ato explícito de confiança, §7). Attestation de builder não-pinado, ou com
+  assinatura que não bate, é **ignorada** (não é de quem diz ser — *crimestop*).
+- Attestations chegam em `var/lib/minitrue/attestations/<pacote>/`. Agrupadas
+  por `ARTIFACT_HASH` e contando builders confiáveis DISTINTOS:
+  - **≥2 concordam com o hash local** ⇒ **corroborado** (ortodoxo);
+  - **um confiável atesta hash diferente** ⇒ **DIVERGÊNCIA** — desvio (§9),
+    crimestop mesmo que outros concordem (uma testemunha herege basta pro alarme);
+  - **<2** ⇒ não corroborado.
+
+`explain` mostra a linha de corroboração e se o build reproduziu o REPROCORR
+pinado. **Honestidade (SPEC-0001 §4):** independência de builder de verdade pede
+máquinas independentes (o vão "reproduzível ×2"); numa só máquina o mecanismo é
+o mesmo, mas a independência é simulada — a garantia forte vem de builders REAIS
+e separados publicando attestations convergentes.
+
 ## 9. Ameaças (o que um canal malicioso pode e não pode)
 
 - **Não pode** empurrar outra versão (a versão vem da receita).
