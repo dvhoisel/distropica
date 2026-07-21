@@ -277,7 +277,7 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         }
     }
 
-    write_record(ctx, &rec_dir, r, "A", &mut manifest)?;
+    write_record(ctx, &rec_dir, r, "A", &mut manifest, None)?;
     if explicit {
         world_add(ctx, &r.name)?;
     }
@@ -584,6 +584,32 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         );
     }
 
+    // Reprodutibilidade como RAIZ de confiança (SPEC-0009 §6, SPEC-0010 §5): o
+    // reprocorr é o sha256 do STAGE empacotado deterministicamente (`pack`). Se a
+    // receita o pina, o build DEVE reproduzi-lo — divergir é crimestop (build
+    // não-determinístico ou adulterado), não um aviso. Gravado no registro sempre,
+    // é o que uma attestation assina e a corroboração compara (SPEC-0009 §8).
+    let epoch_u64: u64 = epoch.parse().unwrap_or(1_704_067_200);
+    let reprocorr = crate::pack::pack_deterministic(&stage, epoch_u64, std::io::sink())?;
+    if let Some(pinned) = &r.reprocorr {
+        if pinned != &reprocorr {
+            let _ = fs::remove_dir_all(&work);
+            return fail(
+                4,
+                format!(
+                    "crimestop (reprodução): {} produziu reprocorr {} mas a receita pina {}",
+                    r.name,
+                    &reprocorr[..16.min(reprocorr.len())],
+                    &pinned[..16.min(pinned.len())]
+                ),
+            );
+        }
+        println!(
+            "  reprocorr confere: {} — reprodução corroborada",
+            &reprocorr[..16.min(reprocorr.len())]
+        );
+    }
+
     // Coleta o que foi para o staging (pré-ordem: pais antes dos filhos).
     let mut entries = Vec::new();
     walk(&stage, &stage, &mut entries)?;
@@ -666,7 +692,7 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     }
     let _ = fs::remove_dir_all(&work);
 
-    write_record(ctx, &rec_dir, r, "B", &mut manifest)?;
+    write_record(ctx, &rec_dir, r, "B", &mut manifest, Some(&reprocorr))?;
     if explicit {
         world_add(ctx, &r.name)?;
     }
@@ -968,6 +994,7 @@ fn write_record(
     r: &Recipe,
     world: &str,
     manifest: &mut Vec<String>,
+    artifact_hash: Option<&str>,
 ) -> Result<()> {
     fs::create_dir_all(rec_dir)?;
     manifest.sort();
@@ -976,7 +1003,7 @@ fn write_record(
     // `canal:<nome>` (+ TRUST, CHANNEL_SHA256); por ora deriva do mundo.
     let origin = if world == "A" { "vendor" } else { "fonte" };
     let meta = format!(
-        "RECORD_FORMAT={RECORD_FORMAT}\nNAME={}\nVERSION={}\nKIND={}\nWORLD={}\nORIGIN={}\nSHA256={}\nDEPS={}\nFINGERPRINT={}\nINSTALLED_AT={}\n{}",
+        "RECORD_FORMAT={RECORD_FORMAT}\nNAME={}\nVERSION={}\nKIND={}\nWORLD={}\nORIGIN={}\nSHA256={}\nDEPS={}\nFINGERPRINT={}\nINSTALLED_AT={}\n{}{}",
         r.name,
         r.version,
         if r.kind == Kind::Binary { "binary" } else { "source" },
@@ -986,6 +1013,9 @@ fn write_record(
         r.deps.join(" "),
         recipe::build_fingerprint(ctx, &r.name)?,
         iso_now(),
+        artifact_hash
+            .map(|h| format!("ARTIFACT_HASH={h}\n"))
+            .unwrap_or_default(),
         if r.provisional { "PROVISIONAL=1\n" } else { "" }
     );
     // Manifesto v1: cada linha vira `<sha256>␠␠<caminho>` (hash do arquivo real;
@@ -1054,7 +1084,7 @@ fn adopt_provisional_path(
     None
 }
 
-fn read_meta(rec_dir: &Path) -> Option<HashMap<String, String>> {
+pub(crate) fn read_meta(rec_dir: &Path) -> Option<HashMap<String, String>> {
     let txt = fs::read_to_string(rec_dir.join("meta")).ok()?;
     Some(
         txt.lines()
@@ -1295,15 +1325,30 @@ pub fn explain(ctx: &Ctx, target: &str) -> Result<()> {
             if let Some(trust) = meta.get("TRUST") {
                 println!("  confiança:   {trust}");
             }
-            match reprocorr_of(&rec) {
-                Some(rc) => println!(
-                    "  reprocorr:   {} — corroborável por reprodução (SPEC-0010 §5)",
-                    &rc[..rc.len().min(16)]
+            let short = |s: &str| s[..s.len().min(16)].to_string();
+            match (meta.get("ARTIFACT_HASH"), reprocorr_of(&rec)) {
+                (Some(b), Some(p)) if b == &p => println!(
+                    "  reprocorr:   {} — build reproduziu o hash PINADO (SPEC-0009 §6)",
+                    short(b)
                 ),
-                None => println!("  reprocorr:   (a receita não pina hash reprodutível ainda)"),
+                (Some(b), Some(p)) => println!(
+                    "  reprocorr:   DIVERGE — build {} vs pinado {} (crimestop)",
+                    short(b),
+                    short(&p)
+                ),
+                (Some(b), None) => println!(
+                    "  artefato:    {} — hash reprodutível; pinável como REPROCORR na receita",
+                    short(b)
+                ),
+                (None, Some(p)) => {
+                    println!("  reprocorr:   {} (pinado; registro legado)", short(&p))
+                }
+                (None, None) => {
+                    println!("  reprocorr:   (a receita não pina hash reprodutível ainda)")
+                }
             }
-            if let Some(corr) = meta.get("CORROBORADORES") {
-                println!("  corroborado: {corr}");
+            if let Some(line) = crate::attest::corroboration_line(ctx, &name) {
+                println!("  corroboração: {line}");
             }
             if field("PROVISIONAL") == "1" {
                 println!("  provisório:  sim — cede o caminho a um sucessor (SPEC-0003 §3)");

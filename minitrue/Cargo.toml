@@ -6,7 +6,9 @@ description = "O Ministério da Verdade: busca, verifica, registra, apaga."
 
 [dependencies]
 anyhow = "1"
+ed25519-dalek = "2"
 fs2 = "0.4"
+getrandom = "0.2"
 hex = "0.4"
 minisign-verify = "0.2"
 sha2 = "0.10"

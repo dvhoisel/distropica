@@ -1,3 +1,4 @@
+mod attest;
 mod fetch;
 mod install;
 mod pack;
@@ -179,6 +180,27 @@ fn run() -> anyhow::Result<()> {
         Some("why") => match names.first() {
             Some(n) => install::why(&ctx, n),
             None => fail(1, "why: diga o pacote"),
+        },
+        // Attestation e corroboração (SPEC-0009 §6/§8) — o Miniluv com lei escrita.
+        Some("attest") => match names.first().map(String::as_str) {
+            Some("keygen") => match (names.get(1), names.get(2)) {
+                (Some(name), Some(path)) => attest::keygen(name, std::path::Path::new(path)),
+                _ => fail(1, "attest keygen <nome> <arquivo-da-chave>"),
+            },
+            Some(pkg) => match (names.get(1), names.get(2)) {
+                (Some(builder), Some(key)) => {
+                    attest::attest(&ctx, pkg, builder, std::path::Path::new(key))
+                }
+                _ => fail(1, "attest <pacote> <builder> <arquivo-da-chave>"),
+            },
+            None => fail(
+                1,
+                "attest: 'keygen <nome> <arq>' ou '<pacote> <builder> <arq>'",
+            ),
+        },
+        Some("corroborate") => match names.first() {
+            Some(p) => attest::corroborate(&ctx, p),
+            None => fail(1, "corroborate: diga o pacote"),
         },
         Some("pack") => {
             let dir = match names.first() {

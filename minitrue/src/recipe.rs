@@ -36,6 +36,10 @@ pub struct Recipe {
     pub sig: Vec<String>,
     pub sigsums: Option<String>,
     pub sigkey: Option<String>,
+    /// Hash reprodutível canônico do artefato (SPEC-0009 §6): o sha256 do
+    /// `pack(STAGE)`. Pinado, é a AUTORIDADE ÚNICA da corroboração — o build
+    /// DEVE reproduzi-lo (crimestop se divergir).
+    pub reprocorr: Option<String>,
     pub requires_glibc: bool,
     pub provisional: bool,
     pub epoch: Option<String>,
@@ -86,6 +90,7 @@ printf 'LINKS=%s\n' "${LINKS:-}"
 printf 'SIG=%s\n' "${SIG:-}"
 printf 'SIGSUMS=%s\n' "${SIGSUMS:-}"
 printf 'SIGKEY=%s\n' "${SIGKEY:-}"
+printf 'REPROCORR=%s\n' "${REPROCORR:-}"
 printf 'REQUIRES_GLIBC=%s\n' "${REQUIRES_GLIBC:-}"
 printf 'PROVISIONAL=%s\n' "${PROVISIONAL:-}"
 printf 'SUPERSEDES=%s\n' "${SUPERSEDES:-}"
@@ -211,6 +216,12 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
     }
     let sigsums = Some(field("SIGSUMS")).filter(|s| !s.is_empty());
     let sigkey = Some(field("SIGKEY")).filter(|s| !s.is_empty());
+    let reprocorr = Some(field("REPROCORR")).filter(|s| !s.is_empty());
+    if let Some(rc) = &reprocorr {
+        if rc.len() != 64 || !rc.chars().all(|c| c.is_ascii_hexdigit()) {
+            return fail(2, format!("{name}: REPROCORR mal-formado (64 hex)"));
+        }
+    }
     let toolchain = match field("TOOLCHAIN").as_str() {
         "" | "seed" => Toolchain::Seed,
         "cross" => Toolchain::Cross,
@@ -242,6 +253,7 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         sig,
         sigsums,
         sigkey,
+        reprocorr,
         requires_glibc: field("REQUIRES_GLIBC") == "1",
         provisional: field("PROVISIONAL") == "1",
         epoch: Some(field("EPOCH")).filter(|s| !s.is_empty()),
@@ -399,6 +411,25 @@ mod tests {
         assert!(load(&ctx, "base").is_err(), "SHA256 sem SRC deve falhar");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// REPROCORR chega ao struct (regressão: o DUMP tem lista fixa de printf — um
+    /// campo esquecido lá vira None silencioso, desligando a verificação de raiz).
+    #[test]
+    fn reprocorr_parseado() {
+        let h = "d".repeat(64);
+        assert_eq!(
+            load_body(&format!("REPROCORR={h}"))
+                .unwrap()
+                .reprocorr
+                .as_deref(),
+            Some(h.as_str())
+        );
+        assert!(
+            load_body("REPROCORR=xyz").is_err(),
+            "REPROCORR mal-formado deve falhar"
+        );
+        assert!(load_body("").unwrap().reprocorr.is_none());
     }
 
     #[test]
