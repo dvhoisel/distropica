@@ -1,9 +1,9 @@
 # STATUS — o que está feito, testado e futuro
 
 Fonte única da verdade sobre a maturidade. As `specs/` descrevem a **norma**;
-este arquivo descreve o **estado**. Atualizado à mão (2026-07-20, após E3: kernel
-7.1.4 compilado pelo gcc nativo e bootado ao vivo em QEMU). Legenda: ✅ feito ·
-🟡 parcial · ⬜ design/futuro.
+este arquivo descreve o **estado**. Atualizado à mão (2026-07-21, após openssl
+4.0.1 nativo e o kernel com MÓDULOS ASSINADOS bootado em QEMU — o Ministério do
+Amor, SPEC-0012). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
 ## minitrue (a ferramenta)
 
@@ -38,7 +38,8 @@ este arquivo descreve o **estado**. Atualizado à mão (2026-07-20, após E3: ke
 | E0 — chroot musl-estático | ✅ | |
 | E1 — `./configure && make` | ✅ | |
 | E2 — glibc + gcc nativo | ✅ | **E2-clean: reproduzido a frio** (rootfs novo, seed limpo, 16 pacotes, gcc nativo compila C/C++, libs finais em /usr/lib). Falta só repetir num 2º ambiente independente |
-| E3 — kernel + boot QEMU | 🟡 | **kernel Linux 7.1.4 compilado pelo gcc NATIVO do E2 e BOOTADO ao vivo** (QEMU/KVM, root 9p read-only, init busybox PID 1, poweroff limpo). Prova recursiva: o banner diz "gcc 15.3.0 / ld 2.45" e o `/usr/bin/gcc` está no rootfs bootado. Build-tools novas: flex/bison/zlib/elfutils/**perl**. Falta: getty/login, `.config` enxuto (hoje defconfig), boot-como-script commitado, UKI/EFI-stub (SPEC-0008) |
+| E3 — kernel + boot QEMU | 🟡 | **kernel Linux 7.1.4 compilado pelo gcc NATIVO do E2 e BOOTADO ao vivo** (QEMU/KVM, root 9p read-only, init busybox PID 1, poweroff limpo). Prova recursiva: o banner diz "gcc 15.3.0 / ld 2.45" e o `/usr/bin/gcc` está no rootfs bootado. Build-tools novas: flex/bison/zlib/elfutils/**perl**/**openssl**. **MÓDULOS ASSINADOS (Miniluv):** religado o `SYSTEM_TRUSTED_KEYRING` que o E3 tinha desligado + `MODULE_SIG_FORCE`; chave gerada por `openssl req` (CN "Ministério da Verdade") embutida no chaveiro builtin; 12 módulos assinados no install. Provado em QEMU: assinado carrega, não-assinado o kernel recusa (`Loading of unsigned module is rejected`), adulterado dá `EKEYREJECTED`. `boot-qemu.sh` commitado. Falta: getty/login, `.config` enxuto (hoje defconfig), UKI/EFI-stub (SPEC-0008) |
+| — openssl 4.0.1 (base de confiança) | ✅ | mundo B, compilado a frio pela toolchain nativa (libcrypto/libssl, `-DZLIB`, epoch reprodutível); SHA oficial corroborado (GitHub+openssl.org), verify-on-download. Destrava o Miniluv (módulos assinados, cripto de attestation). Revelou+consertou bug do minitrue: `materialize_etc` seguia symlinks de `/etc` via `fs::copy` (openssl é o 1º pacote com symlink lá → `tsget`) e dava ENOENT — agora symlink-aware, com teste de regressão |
 | E4 — userland vendor / GUI | ⬜ | |
 
 ## Reprodutibilidade (SPEC-0010)
@@ -74,5 +75,5 @@ este arquivo descreve o **estado**. Atualizado à mão (2026-07-20, após E3: ke
 
 ## Ferramentas de CI (estado local)
 
-`cargo test` 20/20 · `cargo clippy -D warnings` ok · `cargo fmt --check` ok ·
+`cargo test` 23/23 · `cargo clippy -D warnings` ok · `cargo fmt --check` ok ·
 `sh -n` em receitas/scripts ok · ShellCheck e `cargo-audit` não instalados.
