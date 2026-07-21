@@ -12,6 +12,7 @@ Amor, SPEC-0012). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | `rectify` mundo A (vendor → /opt) | ✅ | 🟡 unit | fluxo real pouco coberto |
 | `rectify` mundo B (fonte → /usr) | ✅ | 🟡 unit | exercido no E2 (rootfs trabalhado) |
 | Perfis de toolchain (seed/cross/native) | ✅ | ✅ | parsing + seleção testados |
+| Receitas de montagem (sem SRC) | ✅ | ✅ | `build()` gera o pacote (config, esqueleto de /etc) — nada a baixar; usada pela receita `base`, dogfooda a fábrica /etc |
 | Runner hermético (bwrap, --unshare-net, --clearenv) | ✅ | ✅ | **rootfs montado gravável** (não read-only) |
 | `retry` de ICE | ✅ | — | usado no E2 |
 | `fingerprint` de build | ✅ | ✅ | **transitivo** (build-dep muda propaga aos dependentes) |
@@ -38,8 +39,9 @@ Amor, SPEC-0012). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | E0 — chroot musl-estático | ✅ | |
 | E1 — `./configure && make` | ✅ | |
 | E2 — glibc + gcc nativo | ✅ | **E2-clean: reproduzido a frio** (rootfs novo, seed limpo, 16 pacotes, gcc nativo compila C/C++, libs finais em /usr/lib). Falta só repetir num 2º ambiente independente |
-| E3 — kernel + boot QEMU | 🟡 | **kernel Linux 7.1.4 compilado pelo gcc NATIVO do E2 e BOOTADO ao vivo** (QEMU/KVM, root 9p read-only, init busybox PID 1, poweroff limpo). Prova recursiva: o banner diz "gcc 15.3.0 / ld 2.45" e o `/usr/bin/gcc` está no rootfs bootado. Build-tools novas: flex/bison/zlib/elfutils/**perl**/**openssl**. **MÓDULOS ASSINADOS (Miniluv):** religado o `SYSTEM_TRUSTED_KEYRING` que o E3 tinha desligado + `MODULE_SIG_FORCE`; chave gerada por `openssl req` (CN "Ministério da Verdade") embutida no chaveiro builtin; 12 módulos assinados no install. Provado em QEMU: assinado carrega, não-assinado o kernel recusa (`Loading of unsigned module is rejected`), adulterado dá `EKEYREJECTED`. `boot-qemu.sh` commitado. Falta: getty/login, `.config` enxuto (hoje defconfig), UKI/EFI-stub (SPEC-0008) |
+| E3 — kernel + boot QEMU | 🟡 | **kernel Linux 7.1.4 compilado pelo gcc NATIVO do E2 e BOOTADO ao vivo** (QEMU/KVM, root 9p read-only, init busybox PID 1, poweroff limpo). Prova recursiva: o banner diz "gcc 15.3.0 / ld 2.45" e o `/usr/bin/gcc` está no rootfs bootado. Build-tools novas: flex/bison/zlib/elfutils/**perl**/**openssl**. **MÓDULOS ASSINADOS (Miniluv):** religado o `SYSTEM_TRUSTED_KEYRING` que o E3 tinha desligado + `MODULE_SIG_FORCE`; chave gerada por `openssl req` (CN "Ministério da Verdade") embutida no chaveiro builtin; 12 módulos assinados no install. Provado em QEMU: assinado carrega, não-assinado o kernel recusa (`Loading of unsigned module is rejected`), adulterado dá `EKEYREJECTED`. **BOOT ATÉ LOGIN** (SPEC-0006 Fase B): `busybox init` → `/etc/inittab` → getty no ttyS0 → `login` autentica o root contra `/etc/shadow` (hash gerado pelo openssl da distro); config na receita `base`, `boot-qemu.sh --login`. Falta: `.config` enxuto (hoje defconfig), UKI/EFI-stub (SPEC-0008), contas de verdade (base-files/adduser/`doas`) |
 | — openssl 4.0.1 (base de confiança) | ✅ | mundo B, compilado a frio pela toolchain nativa (libcrypto/libssl, `-DZLIB`, epoch reprodutível); SHA oficial corroborado (GitHub+openssl.org), verify-on-download. Destrava o Miniluv (módulos assinados, cripto de attestation). Revelou+consertou bug do minitrue: `materialize_etc` seguia symlinks de `/etc` via `fs::copy` (openssl é o 1º pacote com symlink lá → `tsget`) e dava ENOENT — agora symlink-aware, com teste de regressão |
+| — base 0.1 (config Fase B) | ✅ | — | receita de montagem (sem SRC): `/etc/inittab`+`rc.d/rcS`+`rcK`+`os-release`+`hostname` via fábrica → materializam em `/etc`. Fecha o boot-até-login do E3 |
 | E4 — userland vendor / GUI | ⬜ | |
 
 ## Reprodutibilidade (SPEC-0010)
@@ -75,5 +77,5 @@ Amor, SPEC-0012). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
 ## Ferramentas de CI (estado local)
 
-`cargo test` 23/23 · `cargo clippy -D warnings` ok · `cargo fmt --check` ok ·
+`cargo test` 24/24 · `cargo clippy -D warnings` ok · `cargo fmt --check` ok ·
 `sh -n` em receitas/scripts ok · ShellCheck e `cargo-audit` não instalados.
