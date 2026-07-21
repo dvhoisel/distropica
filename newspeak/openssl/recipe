@@ -1,0 +1,30 @@
+NAME=openssl
+VERSION=4.0.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc zlib"
+BUILD_DEPS="gcc-pass2 binutils-glibc perl"
+ABOUT="Toolkit TLS/cripto: libcrypto + libssl. Mundo B (o openssl é distribuído como fonte). É a base de confiança da Distrópica: a libcrypto destrava os módulos de kernel ASSINADOS (o SYSTEM_TRUSTED_KEYRING que o E3 teve de desligar por falta de openssl — ver newspeak/linux) e a criptografia de attestation/federação (proveniência do minitrue). O Configure é perl, destravado no E3. Edge (P7): 4.0.1, o major mais recente do openssl.org; a linha LTS é a 3.5.x. Licença Apache-2.0 (relicenciada a partir do 3.0, fim do dual OpenSSL/SSLeay)."
+LICENSE="Apache-2.0"
+SRC="https://github.com/openssl/openssl/releases/download/openssl-$VERSION/openssl-$VERSION.tar.gz"
+SHA256=2db3f3a0d6ea4b59e1f094ace2c8cd536dffb87cdc39084c5afa1e6f7f37dd09
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    # openssl tem Configure próprio (perl — destravado no E3), não autotools.
+    #   linux-x86_64 : alvo explícito, sem a adivinhação do wrapper ./config
+    #   --libdir=lib : usr-merge, nada de lib64 (consistente com a distro)
+    #   --openssldir : /etc/ssl guarda os certs e o openssl.cnf (FHS)
+    #   shared       : gera libcrypto.so/libssl.so, não só os .a
+    #   zlib         : liga a libz da distro (é DEP; NEEDED explícito)
+    #   -rpath-link  : padrão recorrente da toolchain nativa — o ld não resolve
+    #                  deps transitivos em /usr/lib sozinho (aqui, a libz)
+    ./Configure linux-x86_64 \
+        --prefix=/usr --openssldir=/etc/ssl --libdir=lib \
+        shared zlib \
+        -Wl,-rpath-link,/usr/lib
+    make -j"$JOBS"
+    # install_sw + install_ssldirs: libs/bin/headers + os diretórios de config,
+    # SEM as man pages (install_docs é lento e não é superfície da distro hoje).
+    make install_sw install_ssldirs DESTDIR="$STAGE"
+}
