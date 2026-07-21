@@ -78,7 +78,7 @@ pub fn fail<T>(code: i32, msg: impl Into<String>) -> anyhow::Result<T> {
 const USO: &str = "\
 minitrue — o Ministério da Verdade (v0.1: mundos A e B)
 
-uso: minitrue [--root DIR] [--offline] [--tofu] [--jobs N] <comando> [args]
+uso: minitrue [--root DIR] [--offline] [--tofu] [--no-binary|--only-binary] [--jobs N] <comando> [args]
 
   rectify   <pacote>…   instala/atualiza; acrescenta ao world
   memoryhole <pacote>…  remove do sistema e do world
@@ -112,6 +112,8 @@ fn run() -> anyhow::Result<()> {
     let mut offline = false;
     let mut tofu = false;
     let mut sync = false;
+    let mut no_binary = false;
+    let mut only_binary = false;
     let mut jobs = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
@@ -128,6 +130,11 @@ fn run() -> anyhow::Result<()> {
             }
             "--offline" => offline = true,
             "--tofu" => tofu = true,
+            // O executor atual já compila KIND=source localmente. A flag torna
+            // esse contrato explícito para o minipax e continuará proibindo
+            // canais quando eles chegarem, sem mudar o resultado hoje.
+            "--no-binary" => no_binary = true,
+            "--only-binary" => only_binary = true,
             "--sync" => sync = true,
             "--jobs" => {
                 jobs = args
@@ -154,8 +161,21 @@ fn run() -> anyhow::Result<()> {
         jobs,
     };
 
+    if no_binary && only_binary {
+        return fail(1, "--no-binary e --only-binary são mutuamente exclusivos");
+    }
+    if (no_binary || only_binary) && cmd.as_deref() != Some("rectify") {
+        return fail(1, "--no-binary/--only-binary só se aplicam a rectify");
+    }
+
     match cmd.as_deref() {
         Some("rectify") => {
+            if only_binary {
+                return fail(
+                    1,
+                    "--only-binary exige canais binários, ainda não implementados (SPEC-0009)",
+                );
+            }
             if sync {
                 return fail(1, "rectify --sync chega no Marco 0.2");
             }

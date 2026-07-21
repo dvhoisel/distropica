@@ -1,6 +1,6 @@
 # SPEC-0005 — Bootstrap em estágios
 
-**Status:** rascunho v0.2 · 2026-07-19
+**Status:** rascunho v0.3 · 2026-07-21
 **Depende de:** todas as anteriores.
 
 ## 1. A tese do bootstrap
@@ -57,13 +57,76 @@ self-hosted — mas abre mão da reprodutibilidade-entre-builders do primeiro
 estágio. A dor do seed puro é aceita como o preço da pureza (e, convém
 notar, é temática). Decisão do mantenedor, 2026-07-19: **continua como está.**
 
+### 1.2 Um pipeline, três entradas públicas
+
+A ISO oficial não é a fonte privilegiada da distribuição. A fonte é o
+conjunto formado por **perfil + worlds + árvore newspeak + insumos pinados +
+lock**. O `minipax` resolve esse conjunto uma vez e entrega a mesma árvore a
+três entradas públicas:
+
+| Entrada | Contrato | Saída |
+|---------|----------|-------|
+| **Mídia oficial mínima** | iniciar a ISO/IMG publicada e executar o `minipax` contido nela | sistema instalado; os demais programas continuam sendo instalados pelo `minitrue` |
+| **Instalação direta num host Linux** | `distropica-bootstrap install --target /mnt --profile profiles/official` | interface implementada; o perfil oficial atual declara `INSTALL_READY=no` e recusa cedo até canais/toolchain fecharem a base vazia |
+| **Construção de mídia** | `distropica-bootstrap media build --profile profiles/official --mode online --format iso --boot-efi BOOTX64.EFI --output distropica.iso` | ISO ou imagem de disco gerada localmente a partir do mesmo perfil |
+
+`install --target` **não particiona** e nunca interpreta `/mnt` como nome
+mágico: o operador precisa preparar e montar o destino. A escrita destrutiva
+num disco inteiro pertence ao fluxo interativo do instalador (SPEC-0008), com
+alvo resolvido e confirmação explícita. A construção de mídia, por sua vez,
+só escreve um arquivo de saída novo.
+
+O perfil `official`, sem overrides, com o lock de release e a mesma época,
+define a tentativa de reproduzir a mídia oficial byte a byte. Trocar `world`,
+`live-world` ou `overlay` é uma operação suportada, mas classifica a saída
+como **custom**, muda seu lock e seus hashes e não lhe concede a assinatura nem
+o nome de artefato oficial do projeto.
+
+### 1.3 Usuário normal e reprodutor
+
+As três entradas acima admitem duas políticas de obtenção, sem criar dois
+instaladores:
+
+- o **usuário normal** consome, sob um snapshot/lock imutável, os binários
+  assinados dos canais para o mundo B e os binários upstream elegíveis para o
+  mundo A. Ele monta a distribuição localmente, mas não recompila glibc e GCC;
+- o **reprodutor** pede `--from-source`: o mesmo grafo recusa binários de canal,
+  reconstrói o mundo B a partir das fontes pinadas e compara os artefatos com
+  `REPROCORR`/attestations (SPEC-0009/0010). É a prova deliberadamente cara,
+  não o caminho obrigatório de instalação.
+
+`install --from-source` já é a forma da interface de desenvolvimento. O mesmo
+modificador para `media build` é **contrato futuro**, dependente da resolução
+de canais: primeiro constrói-se localmente o conteúdo fechado pelo lock, depois
+empacota-se a mídia pelo pipeline normal. Sem a opção, reproduzir a ISO oficial
+significa reproduzir sua composição a partir dos artefatos canônicos, e não
+necessariamente recompilar cada um deles.
+
+### 1.4 Entrada estática e estado de implementação
+
+A entrada pública de release DEVE ser um pequeno bundle verificável, baixado
+como arquivo e conferido antes da execução — **não** `curl | sh`. Ele conterá
+`distropica-bootstrap`, `minipax` e `minitrue` estáticos, a chave pública/pinos
+necessários e instruções curtas de verificação. Assim o host não precisará de
+Rust, GCC nem bibliotecas da distribuição hospedeira.
+
+**Estado em 2026-07-21:** existe a casca `bootstrap/distropica-bootstrap` e o
+envelope Rust do `minipax` para perfil, lock, instalação em raiz alternativa e
+montagem determinística de ISO/IMG. Em desenvolvimento, a casca ainda compila
+`minipax` e `minitrue` com Cargo quando não recebe binários prontos. O bundle
+estático assinado de release, a produção completa do `BOOTX64.EFI` (hoje ele é
+uma entrada fornecida ao comando), o fluxo destrutivo de instalação em disco e
+os canais binários ainda não estão fechados. Portanto, os comandos acima são o
+contrato público em construção, não a promessa de uma release instalável já
+publicada.
+
 ## 2. Estágio 0 — do host ao chroot (musl-estático)
 
 **Entregável:** rootfs FHS mínimo, habitável via chroot sem privilégio.
 
-Requisitos do host: `sh`, `tar`, `sha256sum`, `curl` ou `wget`, ~300 MB
-livres, cargo/rustup para construir o minitrue (ou, futuramente, o
-binário estático publicado nos releases do projeto — SPEC-0003 §10) e
+Requisitos do host na entrada de desenvolvimento: `sh`, `tar`, `sha256sum`,
+`curl` ou `wget`, ~300 MB livres, cargo/rustup para construir o minitrue (a
+entrada de release usará o bundle estático de §1.4 — SPEC-0003 §10) e
 **bubblewrap (`bwrap`) para a entrada rootless** — na falta dele, `sudo
 chroot` clássico.
 

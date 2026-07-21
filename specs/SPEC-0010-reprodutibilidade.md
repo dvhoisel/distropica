@@ -1,7 +1,8 @@
-# SPEC-0010 — Builds reprodutíveis
+# SPEC-0010 — Builds, sistemas e mídias reprodutíveis
 
 **Status:** rascunho v0.1 · 2026-07-19
-**Depende de:** SPEC-0003 (minitrue), SPEC-0004 (newspeak), SPEC-0009 (canais).
+**Depende de:** SPEC-0003 (minitrue), SPEC-0004 (newspeak), SPEC-0008
+(minipax), SPEC-0009 (canais).
 
 ## 1. Princípio: reprodutibilidade é a raiz da confiança
 
@@ -15,6 +16,20 @@ o mundo B distribuível com segurança e o usuário não recompilar a base.
 
 Definição operacional: **mesma receita + mesmo toolchain-semente → árvore
 `STAGE` byte-a-byte idêntica**, em qualquer máquina, a qualquer tempo.
+
+Essa definição é o primeiro degrau, não uma licença para chamar qualquer
+saída posterior de reprodutível. O projeto distingue os níveis abaixo:
+
+| Nível | Identidade comparada | Situação atual |
+|-------|----------------------|----------------|
+| **R1 — pacote** | tar normalizado do `STAGE` (`reprocorr`) | provado para m4, gmp, gcc e glibc |
+| **R2 — sistema declarado** | `profile.lock`: worlds, Newspeak, overlay, cache, arquitetura, epoch, tamanho de mídia e prontidão de instalação | implementado no `minipax`; torna os insumos auditáveis e repetíveis |
+| **R2b — rootfs byte-a-byte** | árvore instalada inteira, já materializada | **não provado**; registros contêm tempo de instalação e uid/gid ainda não fazem parte do contrato |
+| **R3 — mídia** | bytes finais de `.img` ou `.iso` para o mesmo conjunto completo de insumos | provado localmente com fixtures e o mesmo binário/toolchain; reprodução entre builders ainda não foi feita (§8) |
+| **R4 — reprodução funcional** | mídia dá boot e instala um sistema equivalente em outra máquina | **não provado**; requer BOOT EFI vivo e aceite QEMU/OVMF |
+
+Portanto, R3 não implica R4: uma imagem pode ser byte-reprodutível e ainda
+conter apenas um PE/COFF sintaticamente válido usado como fixture de teste.
 
 ## 2. As fontes de não-determinismo e os consertos
 
@@ -191,7 +206,178 @@ passam `-ffile-prefix-map=$WORK=.` como defesa-em-profundidade (cobre
 `__FILE__` e `comp_dir` onde ocorram), tornando a reprodutibilidade
 independente do caminho — não só do caminho canônico do chroot.
 
-## 7. Questões em aberto
+## 7. Identidade declarativa do sistema
+
+O `minipax` não usa o nome de um perfil como prova de identidade. Ele resolve
+o perfil, normaliza `target.world` e `live.world`, empacota deterministicamente
+overlay, árvore Newspeak e cache, e grava um `profile.lock` textual, formato 1.
+O lock também registra `INSTALL_READY`; `STATUS=release` exige valor `yes`.
+O lock contém os hashes desses insumos, o hash de conteúdo calculado, os três
+pinos oficiais, além de nome, classe, arquitetura,
+`SOURCE_DATE_EPOCH` e `MEDIA_SIZE_MIB`; o sha256 do próprio lock é a identidade
+curta do plano. Um perfil com `STATUS=release` precisa pinar os três campos
+`OFFICIAL_CONTENT_SHA256`, `OFFICIAL_BOOT_EFI_SHA256` e
+`OFFICIAL_MINITRUE_SHA256`. Só a coincidência exata do conteúdo calculado com
+o primeiro pode produzir `PROFILE_CLASS=official-inputs`; qualquer world,
+Newspeak, overlay ou cache divergente é classificado como `custom`. Essa classe
+atesta os insumos declarados, não uma reprodução oficial. O perfil versionado
+atual segue em `development`, declara `INSTALL_READY=no` e não pode emitir a
+classe `official-inputs` nem iniciar a materialização do target oficial.
+`minipax lock --profile <dir>` expõe exatamente esse documento para auditoria
+ou o grava, sem sobrescrever, quando recebe `--output`.
+
+Uma instalação direta usa exatamente esse snapshot. O Minipax copia a árvore
+Newspeak e o cache fechados e congela também o executor: abre o Minitrue
+resolvido, copia seus bytes para um `memfd`, sela escrita e mudança de tamanho,
+calcula o hash desse snapshot e executa o mesmo descritor por `/proc/self/fd`.
+Cada invocação parte de ambiente limpo e recebe apenas o conjunto explícito de
+variáveis determinísticas, caminho e, quando presentes, proxies. Assim, trocar
+o arquivo original entre o hash e a execução não troca o programa executado.
+
+O Minipax chama `minitrue --root <alvo> rectify <target.world>`, exige `verify`
+antes e depois do overlay administrativo e só então promove
+`profile.lock.pending` a `profile.lock`. O `install.manifest` prende o hash e a
+classe do perfil, `INSTALL_CLASS`, arquitetura, hash do overlay, hash do
+Minitrue efetivamente executado, versão e hash do executável Minipax e as opções `OFFLINE` e
+`FROM_SOURCE`; `--resume` exige o mesmo lock e o mesmo manifesto. A instalação
+só recebe `INSTALL_CLASS=official-inputs` quando o perfil já tem essa classe e
+o executor reproduz `OFFICIAL_MINITRUE_SHA256`; caso contrário, é rebaixada
+para `custom` (ou permanece `development` para o perfil de desenvolvimento).
+
+O coletor atual limita **cada** árvore Newspeak, overlay ou cache a 128 MiB de
+arquivos regulares e 50.000 entradas. Ele mantém conteúdo e tar normalizado em
+memória; esses são limites explícitos do protótipo, não capacidade de release.
+Streaming é necessário antes de aceitar árvores reais maiores.
+
+Isso fecha **R2 (sistema declarado)**: duas execuções podem demonstrar que
+partiram da mesma intenção e dos mesmos insumos. Ainda não fecha R2b. Entre os
+bytes voláteis ou incompletamente modelados estão `INSTALLED_AT` dos registros,
+uid/gid, mtimes da árvore aplicada, xattrs/ACLs/capabilities e qualquer saída
+não determinística de receita sem `REPROCORR`. A comparação byte-a-byte do
+rootfs completo só poderá ser reivindicada depois que esses campos forem
+normalizados ou explicitamente separados como estado de máquina.
+
+## 8. Normalização do envelope de mídia
+
+`minipax media build` recebe o perfil resolvido, o modo `online|offline`, o
+formato `img|iso` e um `BOOTX64.EFI` externo. O hash do EFI, o lock, os worlds,
+o snapshot Newspeak, o overlay e, no modo offline, o cache entram no payload.
+O builder valida cabeçalhos DOS/PE, máquina AMD64, optional header PE32+,
+subsystem de aplicação EFI, número de seções e limites das tabelas. Isso prova
+apenas a forma e a arquitetura declarada do executável: **não** prova que ele
+inicia nem que contém o ambiente vivo.
+
+Os três pinos de release fecham fronteiras diferentes. O conteúdo exato produz
+`PROFILE_CLASS=official-inputs`; a mídia só preserva
+`MEDIA_CLASS=official-inputs` quando também reproduz
+`OFFICIAL_BOOT_EFI_SHA256`; e a instalação só preserva
+`INSTALL_CLASS=official-inputs` quando executa o snapshot que reproduz
+`OFFICIAL_MINITRUE_SHA256`. Uma divergência é permitida para desenvolvimento ou
+customização, mas rebaixa a classe correspondente.
+
+`official-inputs` é deliberadamente uma autoatribuição estreita: afirma que os
+bytes locais coincidem com os pinos do perfil, nunca que a saída final é a mídia
+oficial nem que foi reproduzida independentemente. A expressão **reprodução
+oficial** fica reservada ao cotejo do sha256 final da imagem com um manifesto
+oficial externo, publicado e assinado por uma raiz de release. O `.sha256` e o
+`.manifest` gerados ao lado de uma construção local são evidência, não essa
+autoridade externa.
+
+### 8.1 Imagem de disco (`.img`)
+
+O compositor interno, versionado como `minipax-fatfs-gpt-v1`, normaliza:
+
+- tamanho de setor de 512 bytes, MBR protetor, GPT primária e de backup;
+- início da ESP no LBA 2048 e tabela com 128 entradas de 128 bytes;
+- tamanho total vindo de `MEDIA_SIZE_MIB`, com regiões não usadas zeradas;
+- GUID do disco, GUID da partição e serial FAT derivados deterministicamente
+  de `MEDIA_INPUT_SHA256`, o hash com domínio e framing do payload completo,
+  com domínios distintos para cada identificador;
+- ESP FAT32, label `DISTROPICA`, ordem canônica dos payloads e timestamps FAT
+  derivados de `SOURCE_DATE_EPOCH`;
+- CRCs GPT recalculados sobre as tabelas normalizadas.
+
+Não há `losetup`, mount nem dependência de `mkfs`: GPT e FAT são compostos em
+Rust. `MEDIA_INPUT_SHA256` enquadra, em ordem canônica, caminho, tamanho e bytes
+de cada arquivo do payload. O `profile.lock` dentro dele prende
+`MEDIA_SIZE_MIB` e os pinos; `media.meta` prende modo, hash efetivo do BOOT EFI
+e versão do Minipax. Formato e compositor ficam no manifesto externo da mídia.
+Todos esses campos são necessários para explicar os bytes finais, embora só o
+payload completo alimente os GUIDs e o serial FAT.
+
+### 8.2 ISO (`.iso`)
+
+A ISO contém a mesma árvore de payload e uma ESP FAT determinística para a
+entrada UEFI El Torito. O `minipax` fixa uid/gid, modos, volume, datas de todos
+os arquivos, `SOURCE_DATE_EPOCH`, GUID GPT e parâmetros ISO9660/El Torito. A
+composição final é delegada ao `xorriso`. O Minipax resolve seu caminho via
+`PATH`, canonicaliza um arquivo real absoluto, calcula seu sha256 e usa esse
+mesmo caminho absoluto para consultar a versão e compor a ISO, em ambiente
+fechado. Ao terminar, recalcula o hash do executável e recusa se ele mudou;
+também reabre a saída e exige o descritor ISO9660 `CD001`. Versão e hash do
+`xorriso` ficam em `TOOL` no manifesto e fazem parte da evidência necessária
+para reprodução byte-a-byte. Trocar de binário ou versão ainda não é prometido
+como neutro.
+
+### 8.3 Publicação e sidecars
+
+A mídia nasce em arquivo temporário irmão e é concluída pelo compositor. Os
+três sidecars também são preparados integralmente em temporários; em seguida,
+são publicados um a um e, somente depois deles, a imagem recebe o nome final.
+Cada publicação é uma criação atômica **sem substituição**. Uma saída
+preexistente — inclusive criada numa corrida após o preflight — faz a operação
+falhar; arquivo ou symlink jamais é substituído. Para `<saída>`, o `minipax`
+cria:
+
+- `<saída>.sha256` — hash dos bytes finais;
+- `<saída>.media.lock` — cópia exata do `profile.lock`;
+- `<saída>.manifest` — formato, modo, arquitetura, classe, hashes da mídia,
+  do payload completo, do lock e do BOOT EFI, e compositor usado.
+
+O lock e metadados essenciais também vão dentro da mídia. A ordem impede que o
+Minipax publique a imagem antes de seus sidecars, mas os quatro nomes externos
+**não** formam uma transação única. Falha ou corrida durante a sequência pode
+deixar um prefixo dos sidecars — ou todos eles — sem a imagem; não há rollback
+multi-arquivo automático. A assinatura e publicação do manifesto oficial
+externo, contra o qual se compara o hash final para reconhecer uma reprodução,
+continuam pertencendo ao pipeline futuro de release.
+
+### 8.4 Escala do modo offline
+
+O cache offline entra hoje no mesmo payload e está sujeito, como árvore, aos
+limites de desenvolvimento de 128 MiB e 50.000 entradas (§7). Um cache de
+release real tende a superar tanto essa estratégia em memória quanto o desenho
+de uma única ESP/FAT contendo tudo. O caminho esperado exige coleta e escrita
+em streaming e provavelmente uma partição de dados offline separada; formato,
+integridade e montagem dessa partição ainda precisam ser especificados.
+
+## 9. Evidência atual e gates de mídia
+
+Os testes do `minipax` executam duas composições locais da mesma fixture, em
+saídas separadas, e exigem o mesmo sha256 usando o mesmo binário, dependências
+e versão do compositor. Para IMG, também conferem a assinatura GPT; para ISO,
+quando `xorriso` está disponível, conferem byte-identidade e o descritor
+ISO9660 `CD001`. Há ainda testes do lock, normalização de world, confinamento
+de overlay, recusa de target sujo e orquestração do mesmo `target.world` por um
+`minitrue` falso. Ainda não houve cotejo R3 entre builders independentes.
+
+Essas provas exercitam localmente R2 e o compositor de R3, não fecham um
+release. Permanecem gates:
+
+- construir um BOOT EFI vivo com kernel+initramfs+minipax+minitrue e fixar os
+  três pinos de release (`CONTENT`, `BOOT_EFI` e `MINITRUE`);
+- bootar IMG e ISO em QEMU/OVMF e instalar num disco vazio;
+- remover a mídia e provar boot do sistema instalado com `minitrue verify`;
+- implementar canais e a meta-receita normativa `base`, para que o caminho
+  comum não recompile o Estágio 2;
+- substituir os snapshots de árvores em memória por streaming e definir a
+  partição de dados do modo offline;
+- definir uid/gid e os metadados hoje ausentes antes de afirmar R2b;
+- pinar a versão do `xorriso` no ambiente oficial de reprodução;
+- repetir IMG e ISO em builders independentes, publicar um manifesto oficial
+  externo assinado e comparar nele os hashes finais.
+
+## 10. Questões em aberto
 
 - ~~**gcc/glibc reprodutíveis**~~ — **resolvido (2026-07-20):** apesar dos
   geradores do gcc e dos `configure`s-durante-o-`make` da glibc, os dois

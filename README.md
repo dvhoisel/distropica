@@ -59,7 +59,7 @@ ideológica** — cada premissa existe por um fim prático, não por dogma, e a
 | [SPEC-0005](specs/SPEC-0005-bootstrap.md) | Bootstrap em estágios (E0 chroot → E4 desktop) |
 | [SPEC-0006](specs/SPEC-0006-init.md) | Init e serviços sem systemd (busybox init → runit) |
 | [SPEC-0007](specs/SPEC-0007-censo-binarios.md) | Censo de binários upstream (quem publica o quê) |
-| [SPEC-0008](specs/SPEC-0008-instalador.md) | `minipax` — o instalador (mídia viva, EFI stub sem bootloader) |
+| [SPEC-0008](specs/SPEC-0008-instalador.md) | `minipax` — instalação direta e composição determinística de mídia pelo mesmo perfil |
 | [SPEC-0009](specs/SPEC-0009-canais-binarios.md) | Canais binários (oficial e samizdat) — o usuário não compila a base |
 | [SPEC-0010](specs/SPEC-0010-reprodutibilidade.md) | Builds reprodutíveis — a raiz de confiança dos canais |
 | [SPEC-0011](specs/SPEC-0011-release-rolling.md) | Modelo de release: rolling *edge* — sempre o estável mais recente |
@@ -88,6 +88,17 @@ partir de nada além de binários upstream — foi **demonstrada**:
   recuperação global no mundo B, runner de build em rootfs via bwrap e
   **`explain`/`why`** (a proveniência como comando).
   Há uma suíte local automatizada; a matriz de cobertura vive no `STATUS.md`.
+- **`minipax` — núcleo implementado** (Rust): resolve um perfil comum, sela
+  seus insumos num `profile.lock`, materializa o sistema em um `--target` e
+  compõe mídias determinísticas nos formatos GPT/FAT32 (`.img`) e ISO9660
+  UEFI (`.iso`). Instalação direta e geração de mídia usam o mesmo
+  `target.world`, `live.world`, overlay, árvore Newspeak e cache fechado.
+  Perfil, mídia e instalação recebem classes separadas que descrevem apenas
+  quais **insumos** foram pinados — nunca se autoatribuem a condição de
+  reprodução oficial.
+  Isso ainda não equivale a uma mídia oficial inicializável: o perfil oficial
+  continua marcado como desenvolvimento e o `BOOTX64.EFI` precisa ser
+  fornecido pronto ao compositor.
 - **Bootstrap (Estágio 3) — smoke parcial.** O kernel compilado pelo gcc nativo
   boota em QEMU com raiz 9p somente-leitura e `busybox init`. O login foi
   observado num rootfs com `/etc/shadow` previamente provisionado; initramfs,
@@ -95,13 +106,82 @@ partir de nada além de binários upstream — foi **demonstrada**:
 - **Reprodutibilidade — provada.** Dois builds independentes de m4, gmp, gcc e
   glibc produzem artefato byte-a-byte idêntico (SPEC-0010).
 
-Ainda em design ou não implementados: o instalador (`minipax`), o init
-(runit), os canais binários, o `--sync` e o rollback retido do mundo B entre
-versões ou de uma sincronização inteira. O mundo A ainda não tem transação de
-conjunto e a durabilidade do journal não cobre perda de energia (`fsync` é
-dívida). Ver [STATUS.md](STATUS.md).
+Ainda não fechados: o instalador interativo e destrutivo de disco, o init
+(runit), o kernel EFI com initramfs da mídia viva, os canais binários, o
+`--sync` e o rollback retido do mundo B entre versões ou de uma sincronização
+inteira. O mundo A ainda não tem transação de conjunto e a durabilidade do
+journal não cobre perda de energia (`fsync` é dívida). Ver
+[STATUS.md](STATUS.md).
 
 Alvo inicial: **x86_64**.
+
+## Um perfil, três entradas
+
+O contrato almejado faz da futura ISO mínima oficial, da instalação iniciada
+de outra distribuição e da mídia gerada pelo próprio usuário três entradas
+para o **mesmo pipeline**. A fonte da identidade dos insumos é o perfil
+resolvido e seu `profile.lock`, que vincula os worlds do ambiente vivo e do
+sistema-alvo, o overlay, a árvore Newspeak, o cache opcional, a arquitetura,
+o `SOURCE_DATE_EPOCH` e a prontidão declarada para instalação.
+
+O invólucro público de desenvolvimento pode ser usado assim:
+
+```sh
+# Forma da instalação direta numa raiz montada; não particiona discos.
+./bootstrap/distropica-bootstrap install \
+  --profile profiles/official --target /mnt
+
+# Compor uma imagem de pendrive GPT/FAT32 a partir do mesmo perfil.
+./bootstrap/distropica-bootstrap media build \
+  --profile profiles/official --mode online --format img \
+  --boot-efi caminho/BOOTX64.EFI --output distropica.img
+
+# Compor a variante ISO9660 UEFI (requer xorriso).
+./bootstrap/distropica-bootstrap media build \
+  --profile profiles/official --mode online --format iso \
+  --boot-efi caminho/BOOTX64.EFI --output distropica.iso
+```
+
+O perfil `profiles/official` ainda declara `INSTALL_READY=no`, pois hoje faltam
+os canais/toolchain capazes de fechar `base` e `linux` num alvo vazio. Portanto
+o primeiro comando documenta a interface e **recusa antes de tocar em `/mnt`
+neste marco**; ele funciona para perfis de desenvolvimento que declarem
+`INSTALL_READY=yes` e possuam um world materializável. As composições de mídia
+continuam estruturais e exigem um EFI fornecido pelo chamador.
+
+O modo `online` não incorpora cache e deixa a obtenção dos artefatos para a
+instalação. O modo `offline` exige `--cache DIR` e leva esse snapshot fechado
+na mídia; a instalação direta equivalente usa `--offline --cache DIR`.
+`--world`, `--live-world` e `--overlay` criam uma variante personalizada,
+identificada como `custom` no lock e nos manifestos. Saídas de mídia recebem
+os sidecars `.sha256`, `.media.lock` e `.manifest`; cada nome é publicado sem
+sobrescrita. O conjunto de quatro arquivos, contudo, ainda não é uma transação
+única contra outros escritores: uma corrida pode deixar sidecars já publicados
+sem a imagem final.
+
+Um perfil de release precisa pinar três hashes:
+`OFFICIAL_CONTENT_SHA256`, `OFFICIAL_BOOT_EFI_SHA256` e
+`OFFICIAL_MINITRUE_SHA256`. `PROFILE_CLASS` confirma somente o primeiro;
+`MEDIA_CLASS` acrescenta a conferência do EFI; `INSTALL_CLASS`, a do executável
+`minitrue`. O valor máximo positivo é `official-inputs`, não “reprodução”. Uma
+reprodução oficial só fica comprovada quando o SHA-256 final da mídia coincide
+com um manifesto oficial externo e assinado.
+
+Na instalação, o `minitrue` escolhido é copiado para um `memfd`, selado contra
+escrita e executado sempre desse snapshot; seu hash entra no
+`install.manifest`. Neste marco, cada árvore de Newspeak, overlay ou cache é
+limitada a 128 MiB de conteúdo regular e 50 mil entradas. Streaming e uma
+partição de dados própria para caches maiores continuam gates de release.
+
+Neste marco, o script constrói os binários Rust quando Cargo está disponível,
+ou aceita `MINIPAX` e `MINITRUE` já fornecidos. O bundle estático assinado, os
+canais que alimentam uma instalação comum e o kernel vivo EFI ainda são gates
+de release. Na variante ISO, versão e SHA-256 do `xorriso` são registrados e o
+compositor recusa se o binário mudar durante a execução, mas a toolchain e o
+bundle completos ainda não estão pinados. Por isso o repositório **não anuncia
+uma ISO oficial pronta, instalável ou com boot comprovado**; o compositor
+existente produz e descreve a mídia a partir de um executável EFI fornecido
+explicitamente.
 
 ## Segurança e validação
 
@@ -129,11 +209,15 @@ canais. Os limites detalhados e a matriz de cobertura estão no
 Os verificadores usados no desenvolvimento podem ser reproduzidos com:
 
 ```sh
-cd minitrue
-cargo test --all-targets
-cargo clippy --all-targets -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
-cargo fmt --check
+(cd minitrue && cargo test --all-targets)
+(cd minitrue && cargo clippy --all-targets -- -D warnings)
+(cd minipax && cargo test --all-targets)
+(cd minipax && cargo clippy --all-targets -- -D warnings)
+(cd minitrue && RUSTDOCFLAGS="-D warnings" cargo doc --no-deps)
+(cd minipax && RUSTDOCFLAGS="-D warnings" cargo doc --no-deps)
+(cd minitrue && cargo fmt --check)
+(cd minipax && cargo fmt --check)
+sh -n bootstrap/distropica-bootstrap
 ```
 
 ## Vocabulário

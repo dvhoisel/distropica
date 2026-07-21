@@ -1,0 +1,17 @@
+[package]
+name = "minipax"
+version = "0.1.0"
+edition = "2021"
+description = "O Ministério da Paz: materializa perfis e compõe mídias da Distrópica."
+
+[dependencies]
+anyhow = "1"
+crc32fast = "1"
+fatfs = "0.3.6"
+hex = "0.4"
+rustix = { version = "1", features = ["fs"] }
+sha2 = "0.10"
+tar = "0.4"
+tempfile = "3"
+
+[dev-dependencies]

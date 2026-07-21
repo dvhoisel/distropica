@@ -1,0 +1,33 @@
+#!/bin/sh
+# Casca pública de desenvolvimento. O bundle de release substituirá o Cargo
+# por binários estáticos assinados; a lógica de instalação/mídia vive no minipax.
+set -eu
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+BUILD_TARGET=${DISTROPICA_TARGET_DIR:-"$REPO/target/bootstrap"}
+
+if [ -n "${MINIPAX:-}" ] && [ -n "${MINITRUE:-}" ]; then
+    [ -f "$MINIPAX" ] && [ -x "$MINIPAX" ] || {
+        echo "erro: MINIPAX não é arquivo regular executável" >&2; exit 1;
+    }
+    [ -f "$MINITRUE" ] && [ -x "$MINITRUE" ] || {
+        echo "erro: MINITRUE não é arquivo regular executável" >&2; exit 1;
+    }
+    MINIPAX=$(CDPATH= cd -- "$(dirname -- "$MINIPAX")" && pwd -P)/$(basename -- "$MINIPAX")
+    MINITRUE=$(CDPATH= cd -- "$(dirname -- "$MINITRUE")" && pwd -P)/$(basename -- "$MINITRUE")
+else
+    command -v cargo >/dev/null 2>&1 || {
+        echo "erro: cargo ausente; use o futuro bundle estático assinado ou instale Rust" >&2
+        exit 1
+    }
+    CARGO_TARGET_DIR="$BUILD_TARGET/minipax" \
+        cargo build --locked --release --quiet --manifest-path "$REPO/minipax/Cargo.toml"
+    CARGO_TARGET_DIR="$BUILD_TARGET/minitrue" \
+        cargo build --locked --release --quiet --manifest-path "$REPO/minitrue/Cargo.toml"
+    MINIPAX="$BUILD_TARGET/minipax/release/minipax"
+    MINITRUE="$BUILD_TARGET/minitrue/release/minitrue"
+fi
+
+export MINITRUE
+export DISTROPICA_NEWSPEAK=${DISTROPICA_NEWSPEAK:-"$REPO/newspeak"}
+exec "$MINIPAX" "$@"

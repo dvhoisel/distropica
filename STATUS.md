@@ -1,9 +1,9 @@
 # STATUS — o que está feito, testado e futuro
 
 Fonte única da verdade sobre a maturidade. As `specs/` descrevem a **norma**;
-este arquivo descreve o **estado**. Atualizado à mão (2026-07-21, após openssl
-4.0.1 nativo e o kernel com MÓDULOS ASSINADOS bootado em QEMU — o Ministério do
-Amor, SPEC-0012). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
+este arquivo descreve o **estado**. Atualizado à mão (2026-07-21, após o
+primeiro compositor estrutural do Minipax; o BOOT EFI vivo e a instalação em
+QEMU continuam gates). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
 ## minitrue (a ferramenta)
 
@@ -36,6 +36,30 @@ Amor, SPEC-0012). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | `reprocorr` (raiz de confiança) | ✅ | ✅ | build de fonte grava `ARTIFACT_HASH`=`pack(STAGE)`; receita que pina `REPROCORR` exige reprodução (crimestop). SPEC-0009 §8.1 |
 | Attestation + corroboração (`attest`/`corroborate`) | ✅ | ✅ | `ATTEST_FORMAT=1`, ed25519-dalek; versão+fingerprint impedem replay e a emissão exige registro v2, txid, baseline, snapshots e claims íntegros. ≥2 builders pinados concordam. **Independência ainda simulada** (1 máquina) |
 
+## minipax (perfil, instalação e mídia)
+
+| Recurso | Estado | Testado | Nota |
+|---|---|---|---|
+| CLI única (`install`, `media build`, `lock`) | ✅ | ✅ unit | binário Rust separado; `bootstrap/distropica-bootstrap` apenas o localiza/compila e delega |
+| Perfil estrito + `profile.lock` | ✅ | ✅ unit | normaliza worlds; o lock prende hashes Newspeak/overlay/cache, arch, epoch, `MEDIA_SIZE_MIB`, `INSTALL_READY` e os três pinos oficiais. Release exige `INSTALL_READY=yes` e pinos `CONTENT`+`BOOT_EFI`+`MINITRUE`; conteúdo divergente vira `custom` |
+| Instalação em rootfs (`--target`) | ✅ | 🟡 unit | prepara FHS/usr-merge, congela Newspeak/cache, chama `minitrue rectify` + `verify`, aplica overlay e promove pending→lock; teste usa Minitrue falso. O perfil oficial declara `INSTALL_READY=no` e recusa antes de tocar no alvo até canais/toolchain fecharem `base`+`linux` |
+| Executor e `install.manifest` | ✅ | 🟡 unit | copia Minitrue para `memfd` selado, mede e executa o mesmo snapshot em ambiente fechado; manifesto prende hash do executor, versão/hash Minipax, opções `OFFLINE`/`FROM_SOURCE` e `INSTALL_CLASS` |
+| Retomada e proteção do target | ✅ | ✅ unit | recusa `/`, target sujo e perfil divergente; `--resume` exige marca anterior do Minipax |
+| IMG GPT+FAT32 | ✅ | ✅ unit local | GPT/FAT internos; GUIDs e serial FAT derivam do hash do payload completo. Duas composições da fixture dão o mesmo sha256; ainda não há prova entre builders nem de boot |
+| ISO UEFI/El Torito | ✅ | ✅ unit local | fixa metadados; usa caminho absoluto do `xorriso`, hash antes/depois e ambiente fechado, registra versão+hash e pós-valida `CD001`. Reproduziu só localmente |
+| Sidecars (`.sha256`, `.media.lock`, `.manifest`) | ✅ | ✅ unit | temporários publicados sem sobrescrever antes da imagem; não há transação multi-arquivo, logo corrida/falha pode deixar sidecars sem imagem |
+| Classes de insumos de release | ✅ | 🟡 unit | `PROFILE_CLASS`, `MEDIA_CLASS` e `INSTALL_CLASS` podem ser `official-inputs` após os respectivos pinos; isso não declara reprodução oficial |
+| Limites das árvores | ✅ | 🟡 unit | 128 MiB e 50.000 entradas por árvore Newspeak/overlay/cache; conteúdo e tar ficam em memória, e streaming é gate de release |
+| Modo offline/cache | 🟡 | 🟡 unit | exige cache fechado e o inclui no lock/payload; faltam instalação real sem rede, streaming e provável partição de dados separada |
+| BOOT EFI vivo (kernel+initramfs+Minipax+Minitrue) | ⬜ | — | `--boot-efi` valida PE32+/AMD64/subsystem EFI e limites estruturais; fixture de teste não é bootável |
+| Instalação por IMG/ISO em QEMU/OVMF | ⬜ | — | gate para chamar a mídia de instalável; reconhecimento oficial exige ainda manifesto externo assinado |
+| Particionamento/escrita destrutiva em disco | ⬜ | — | `install --target` opera somente numa raiz alternativa; fluxo de disco será separado e confirmado |
+
+O perfil `profiles/official` continua com `STATUS=development`. Logo, mesmo sem
+customização, as saídas atuais se identificam como desenvolvimento. Mesmo uma
+futura classe `official-inputs` não será, por si, reprodução oficial: isso
+dependerá do sha256 final pinado num manifesto oficial externo assinado.
+
 ## Bootstrap (SPEC-0005)
 
 | Estágio | Estado | Nota |
@@ -58,6 +82,14 @@ Amor, SPEC-0012). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | Hash de artefato via `pack` = `reprocorr` | ✅ (m4/gcc/glibc) |
 | `REPROCORR` pinado + verificado no build | ✅ (`m4` pina; build de fonte grava `ARTIFACT_HASH` e exige reproduzir o pinado — crimestop se divergir) |
 | Cotejo do artefato completo produzido pelo E2-clean | ⬜ (passo posterior à primeira execução a frio) |
+| Identidade declarativa do sistema (`profile.lock`) | ✅ (conteúdo normalizado; lock inclui tamanho, prontidão, hash calculado e os três pinos oficiais) |
+| Executor da instalação medido = executado | ✅ local (`memfd` selado, ambiente fechado e hash no `install.manifest`) |
+| Rootfs instalado byte-a-byte idêntico | ⬜ (`INSTALLED_AT`, uid/gid e demais metadados ainda impedem o claim) |
+| IMG byte-idêntica em duas composições | ✅ local (fixture, mesmo binário/toolchain; GPT/FAT normalizados) |
+| ISO byte-idêntica em duas composições | ✅ local (fixture, mesmo binário e mesmo `xorriso`, cujo executável é medido) |
+| IMG/ISO byte-idênticas entre builders independentes | ⬜ |
+| Reprodução reconhecida contra manifesto oficial externo assinado | ⬜ (sidecars locais não são autoridade) |
+| Boot e instalação funcionais da mídia reproduzida | ⬜ (falta BOOT EFI vivo + QEMU/OVMF) |
 
 ## Limitações conhecidas (do parecer externo)
 
@@ -66,6 +98,38 @@ Amor, SPEC-0012). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
   (SUPERSEDES seed→busybox; libstdc++ lib64×lib usr-merge). Falta repetir num
   **2º ambiente independente** para "reproduzível ×2" e mover scripts, hashes
   e logs de prova hoje transitórios para um diretório versionado `proofs/e2/`.
+- **Minipax estrutural, não mídia instalável:** o perfil, o lock, a instalação
+  em raiz alternativa e os compositores IMG/ISO existem. O teste de instalação
+  usa um `minitrue` falso; o teste de mídia usa um PE/COFF sintático. Ainda
+  faltam BOOT EFI vivo, initramfs do instalador, boot QEMU/OVMF, instalação em
+  disco vazio e reboot sem mídia. `profile.lock` prende conteúdo, tamanho e os
+  pinos de executáveis; modo/formato e hash efetivo do BOOT entram no payload e
+  no manifesto. GUIDs GPT e serial FAT derivam do hash desse payload completo.
+  Na ISO, versão e sha256 do `xorriso` absoluto são registrados após medição
+  antes/depois, e a saída é pós-validada por `CD001`. A prova de byte-identidade
+  ainda é local, com o mesmo binário e toolchain, não entre builders.
+- **Gates do perfil oficial:** canais binários e `--only-binary`, a verdadeira
+  meta-receita `base`, runit/contas e a política uid/gid continuam abertos. O
+  `base` atual ainda é `base-config` de fato. Até fechá-los,
+  `profiles/official` permanece `STATUS=development` e `INSTALL_READY=no`;
+  a instalação direta recusa antes de tocar no target e nenhuma saída recebe a
+  classe de insumos oficiais. `STATUS=release` já exige três pinos separados:
+  `OFFICIAL_CONTENT_SHA256`, `OFFICIAL_BOOT_EFI_SHA256` e
+  `OFFICIAL_MINITRUE_SHA256`. A coincidência gera apenas `official-inputs`; o
+  claim de reprodução depende de comparar o sha256 final com um manifesto
+  oficial externo assinado, cuja publicação ainda não existe.
+- **Publicação da mídia não é transação de conjunto:** os três sidecars são
+  preparados e publicados sem substituição antes da imagem. Isso evita imagem
+  publicada pelo Minipax sem sidecars, mas corrida ou falha pode deixar parte
+  ou todos os sidecars sem imagem; não existe rollback multi-arquivo.
+- **Escala do Minipax:** cada árvore Newspeak, overlay ou cache está limitada a
+  128 MiB e 50.000 entradas e é materializada integralmente em memória, junto
+  do tar normalizado. Um offline real exige streaming e provavelmente uma
+  partição de dados separada da ESP/FAT; ambos continuam gates de release.
+- **Bootstrap ainda é de desenvolvimento:** a casca versionada compila
+  `minipax` e `minitrue` com Cargo (ou aceita binários indicados pelo ambiente)
+  e delega. O bundle estático, imutável e assinado para execução em outra
+  distribuição ainda não foi publicado nem verificado por essa casca.
 - **Transacional (mundo B):** payload, registro e cessões de manifesto passam
   pelo journal por pacote. Cada intenção precede a mutação; o `TRANSACTION_ID`
   do `meta` é a marca final. Sob o lock, um sweep recupera o único journal antes
@@ -120,5 +184,6 @@ Amor, SPEC-0012). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
 ## Ferramentas de CI (estado local)
 
-`cargo test` (suíte local) · `cargo clippy -D warnings` · `cargo fmt --check` ·
-`sh -n` em receitas/scripts. ShellCheck e `cargo-audit` não instalados.
+`cargo test`/Clippy/fmt no `minitrue` e no `minipax` · `sh -n` em
+receitas/scripts. O teste ISO usa `xorriso` quando disponível. ShellCheck e
+`cargo-audit` não instalados.
