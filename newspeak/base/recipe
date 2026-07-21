@@ -1,0 +1,59 @@
+NAME=base
+VERSION=0.1
+KIND=source
+TOOLCHAIN=native
+DEPS="busybox"
+ABOUT="Config de boot da Fase B (SPEC-0006): /etc/inittab (busybox init → getty → login), rc.d/rcS (monta proc/sys/devtmpfs/tmpfs, mdev, hostname), rc.d/rcK, hostname, os-release. Receita de MONTAGEM: sem SRC (não baixa nada), o build() gera os arquivos inline — legíveis, como o SPEC-0006 promete ('cat /etc/inittab responde o que roda no boot'). Instala como default de fábrica (/usr/share/factory/etc → materializa em /etc). NÃO gerencia contas: passwd/shadow são estado do admin (um futuro base-files/adduser + doas cuida disso; SPEC-0006 §5)."
+LICENSE="MIT-0"
+
+build() {
+    mkdir -p "$STAGE/etc/rc.d"
+
+    cat > "$STAGE/etc/inittab" <<'INITTAB'
+# /etc/inittab — busybox init (SPEC-0006 Fase B). Legivel de cabo a rabo:
+# `cat /etc/inittab` responde "o que roda no boot?".
+::sysinit:/etc/rc.d/rcS
+# console serial (QEMU/serial) e VGA tty1 — getty -> login
+ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100
+tty1::respawn:/sbin/getty 38400 tty1
+::ctrlaltdel:/sbin/reboot
+::shutdown:/etc/rc.d/rcK
+INITTAB
+
+    cat > "$STAGE/etc/rc.d/rcS" <<'RCS'
+#!/bin/sh
+# rcS — inicializacao unica (SPEC-0006 §3): monta o basico, popula /dev, hostname.
+BB=/bin/busybox
+$BB mount -t proc     proc /proc 2>/dev/null
+$BB mount -t sysfs    sys  /sys  2>/dev/null
+$BB mount -t devtmpfs dev  /dev  2>/dev/null
+$BB mount -t tmpfs    tmp  /tmp  2>/dev/null
+$BB mount -t tmpfs    run  /run  2>/dev/null
+$BB mdev -s 2>/dev/null
+[ -f /etc/hostname ] && $BB hostname -F /etc/hostname 2>/dev/null
+$BB ip link set lo up 2>/dev/null
+echo "distropica: rcS ok (mounts, mdev, hostname)"
+RCS
+    chmod 755 "$STAGE/etc/rc.d/rcS"
+
+    cat > "$STAGE/etc/rc.d/rcK" <<'RCK'
+#!/bin/sh
+# rcK — desligamento ordenado (SPEC-0006 §3).
+/bin/busybox sync
+/bin/busybox umount -a -r 2>/dev/null
+RCK
+    chmod 755 "$STAGE/etc/rc.d/rcK"
+
+    cat > "$STAGE/etc/hostname" <<'HOST'
+distropica
+HOST
+
+    cat > "$STAGE/etc/os-release" <<'OSREL'
+NAME="Distropica"
+ID=distropica
+PRETTY_NAME="Distropica (edge/rolling)"
+VERSION="rolling"
+ANSI_COLOR="1;30"
+HOME_URL="https://github.com/dvhoisel/distropica"
+OSREL
+}

@@ -6,6 +6,7 @@
 # imprime a identidade do sistema e desliga; com --shell, cai num shell.
 #
 # Uso:  bootstrap/boot-qemu.sh [dir-do-rootfs]      (padrão: ./rootfs-clean)
+#         --login            boot real até o login (busybox init → getty; requer 'rectify base')
 #         --shell            boota num shell interativo (init=/bin/sh, sem timeout)
 #       MEM=2048 TIMEOUT=100 bootstrap/boot-qemu.sh    (via ambiente)
 set -eu
@@ -13,9 +14,11 @@ set -eu
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 SHELL_MODE=0
+LOGIN_MODE=0
 ROOTFS=""
 for a in "$@"; do
     case "$a" in
+        --login) LOGIN_MODE=1 ;;
         --shell) SHELL_MODE=1 ;;
         -*) echo "erro: opção desconhecida: $a"; exit 2 ;;
         *)  ROOTFS=$a ;;
@@ -39,8 +42,14 @@ ACCEL=tcg
 [ -w /dev/kvm ] && ACCEL=kvm:tcg
 echo "-- acel: $ACCEL --"
 
-# init: prova (padrão, auto-poweroff) ou shell interativo
-if [ "$SHELL_MODE" = 1 ]; then
+# init: login real (--login), shell (--shell) ou prova (padrão, auto-poweroff)
+if [ "$LOGIN_MODE" = 1 ]; then
+    # sem init= → o kernel roda /sbin/init (busybox) → /etc/inittab → getty →
+    # login. Requer a config da receita 'base' + uma conta em /etc/shadow.
+    INIT=""
+    TIMEOUT=0
+    echo "-- boot real até login (Ctrl-A X encerra o QEMU) --"
+elif [ "$SHELL_MODE" = 1 ]; then
     INIT=/bin/sh
     TIMEOUT=0
     echo "-- shell interativo (Ctrl-A X encerra o QEMU) --"
@@ -66,7 +75,9 @@ fi
 
 # 9p-root read-only: protege a árvore do host; msize=512000 é o máximo do
 # transporte virtio (o kernel corta acima disso).
-APPEND="root=/dev/root rootfstype=9p rootflags=trans=virtio,version=9p2000.L,cache=loose,msize=512000 ro console=ttyS0 init=$INIT panic=1"
+INITARG=""
+[ -n "$INIT" ] && INITARG="init=$INIT"
+APPEND="root=/dev/root rootfstype=9p rootflags=trans=virtio,version=9p2000.L,cache=loose,msize=512000 ro console=ttyS0 $INITARG panic=1"
 
 set -- qemu-system-x86_64 \
     -machine "accel=$ACCEL" -m "$MEM" \
