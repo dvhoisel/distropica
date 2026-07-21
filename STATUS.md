@@ -1,8 +1,9 @@
 # STATUS — o que está feito, testado e futuro
 
 Fonte única da verdade sobre a maturidade. As `specs/` descrevem a **norma**;
-este arquivo descreve o **estado**. Atualizado à mão (2026-07-20, HEAD após o
-parecer externo). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
+este arquivo descreve o **estado**. Atualizado à mão (2026-07-20, após E3: kernel
+7.1.4 compilado pelo gcc nativo e bootado ao vivo em QEMU). Legenda: ✅ feito ·
+🟡 parcial · ⬜ design/futuro.
 
 ## minitrue (a ferramenta)
 
@@ -37,7 +38,7 @@ parecer externo). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | E0 — chroot musl-estático | ✅ | |
 | E1 — `./configure && make` | ✅ | |
 | E2 — glibc + gcc nativo | ✅ | **E2-clean: reproduzido a frio** (rootfs novo, seed limpo, 16 pacotes, gcc nativo compila C/C++, libs finais em /usr/lib). Falta só repetir num 2º ambiente independente |
-| E3 — boot QEMU até login | ⬜ | kernel EFI-stub/UKI desenhado (SPEC-0008) |
+| E3 — kernel + boot QEMU | 🟡 | **kernel Linux 7.1.4 compilado pelo gcc NATIVO do E2 e BOOTADO ao vivo** (QEMU/KVM, root 9p read-only, init busybox PID 1, poweroff limpo). Prova recursiva: o banner diz "gcc 15.3.0 / ld 2.45" e o `/usr/bin/gcc` está no rootfs bootado. Build-tools novas: flex/bison/zlib/elfutils/**perl**. Falta: getty/login, `.config` enxuto (hoje defconfig), boot-como-script commitado, UKI/EFI-stub (SPEC-0008) |
 | E4 — userland vendor / GUI | ⬜ | |
 
 ## Reprodutibilidade (SPEC-0010)
