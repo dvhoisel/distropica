@@ -1,61 +1,186 @@
 use crate::recipe::{self, Kind, Recipe, Toolchain};
 use crate::{fail, fetch, iso_now, Ctx};
-use anyhow::Result;
+use anyhow::{bail, Result};
 use fs2::FileExt;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ffi::{CString, OsStr};
 use std::fs;
-use std::io::{Read, Write};
-use std::os::unix::fs::{symlink, PermissionsExt};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{symlink, FileExt as UnixFileExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Versão do esquema de registro (gravada em `RECORD_FORMAT=`). Muda quando o
 /// formato de `meta`/`manifest` muda — permite migração e leitura consciente.
-const RECORD_FORMAT: &str = "1";
+const RECORD_FORMAT: &str = "2";
+const JOURNAL_FORMAT: &str = "2";
+
+static TX_COUNTER: AtomicU64 = AtomicU64::new(0);
+static MOVE_COUNTER: AtomicU64 = AtomicU64::new(0);
+static ATOMIC_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Escreve `bytes` em `path` **atomicamente**: grava num temporário irmão e
 /// `rename` por cima (atômico no mesmo filesystem). Um leitor nunca vê um
 /// arquivo meio-escrito, e um crash não deixa `path` corrompido (SPEC-0003 §6).
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("x");
-    let tmp = path.with_file_name(format!("{name}.tmp-{}", std::process::id()));
-    fs::write(&tmp, bytes)?;
-    fs::rename(&tmp, path)?;
+    for _ in 0..128 {
+        let serial = ATOMIC_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = path.with_file_name(format!(
+            ".{name}.minitrue-atomic-{}-{serial}",
+            std::process::id()
+        ));
+        let mut file = match fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let result = (|| -> Result<()> {
+            file.write_all(bytes)?;
+            file.flush()?;
+            drop(file);
+            fs::rename(&tmp, path)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        return result;
+    }
+    bail!(
+        "não consegui reservar temporário atômico irmão de {}",
+        path.display()
+    )
+}
+
+/// Cria um snapshot novo sem seguir um symlink no nome final. Usado para a
+/// receita executável dentro de WORK, cujo nome é reservado em `files/`.
+fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)?;
+    file.write_all(bytes)?;
+    file.flush()?;
     Ok(())
+}
+
+const MAX_RECORD_FILE: u64 = 64 * 1024 * 1024;
+
+/// Lê uma folha regular sem seguir symlink no nome final. Diretórios de
+/// registro já são validados como reais nos fluxos críticos; `O_NOFOLLOW`
+/// fecha a assimetria restante para meta/manifest/recipe.
+fn read_regular_nofollow(path: &Path) -> Result<Vec<u8>> {
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file() {
+        bail!("{} não é arquivo regular", path.display());
+    }
+    if metadata.len() > MAX_RECORD_FILE {
+        bail!("{} excede o limite de registro", path.display());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn read_regular_text_nofollow(path: &Path) -> Result<String> {
+    String::from_utf8(read_regular_nofollow(path)?)
+        .map_err(|_| anyhow::anyhow!("{} não é UTF-8", path.display()))
 }
 
 /// Trava exclusiva **por rootfs** — impede dois `minitrue` mutando o mesmo
 /// sistema ao mesmo tempo. É advisory (`flock`) e **auto-liberada quando o
-/// processo sai**, então um crash não deixa o lock preso. O `File` devolvido é
+/// processo sai**, então um crash não deixa o lock preso. O guarda devolvido é
 /// o guarda: segure-o pela operação inteira; soltá-lo libera a trava.
-fn acquire_lock(ctx: &Ctx) -> Result<fs::File> {
+struct RootLock(fs::File);
+
+impl Drop for RootLock {
+    fn drop(&mut self) {
+        // Explicita a fronteira inclusive em retornos antecipados. O close do
+        // File também liberaria o flock, mas o unlock evita que temporários de
+        // erro/postergamento de drop tornem um relock sequencial intermitente.
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
+
+fn acquire_lock(ctx: &Ctx) -> Result<RootLock> {
     let dir = ctx.root.join("var/lib/minitrue");
+    ensure_real_directory_or_absent(&ctx.root, &dir, "estado do minitrue")?;
     fs::create_dir_all(&dir)?;
     let f = fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
         .open(dir.join("lock"))?;
+    if !f.metadata()?.file_type().is_file() {
+        bail!("lock do minitrue precisa ser arquivo regular");
+    }
     f.try_lock_exclusive().map_err(|_| crate::Fail {
         code: 1,
         msg: "outro minitrue já opera este sistema (lock em var/lib/minitrue/lock)".into(),
     })?;
-    Ok(f)
+    Ok(RootLock(f))
 }
 
 // ---------- rectify ----------
 
 pub fn rectify(ctx: &Ctx, names: &[String]) -> Result<()> {
     let _lock = acquire_lock(ctx)?; // segurado até o fim da operação
+                                    // Uma transação órfã de outro pacote pode ter substituído justamente um
+                                    // caminho que o pacote pedido pretende tomar. Resolva-a antes de carregar
+                                    // ownership, executar builds ou fazer qualquer mutação nova.
+    Journal::recover_all(ctx)?;
+    ensure_real_directory_or_absent(
+        &ctx.root,
+        &ctx.root.join("etc/minitrue"),
+        "configuração do minitrue",
+    )?;
+    ensure_no_internal_claims(ctx)?;
     let explicit: HashSet<&str> = names.iter().map(String::as_str).collect();
     let mut order: Vec<Recipe> = Vec::new();
     let mut seen = HashSet::new();
     for n in names {
         collect(ctx, n, &mut seen, &mut Vec::new(), &mut order)?;
     }
+    // Congela o grafo inteiro antes do primeiro build: todos os pacotes usam a
+    // mesma closure de receitas/files tanto no build quanto no registro.
+    let fingerprints = recipe::build_fingerprints(&order)?;
+    // A coleta é sequencial; releitura antes da primeira mutação impede que
+    // uma edição concorrente misture revisões distintas dentro da closure.
+    for frozen in &order {
+        let current = recipe::load(ctx, &frozen.name)?;
+        if current.recipe_bytes != frozen.recipe_bytes
+            || current.own_fingerprint()? != frozen.own_fingerprint()?
+        {
+            return fail(
+                2,
+                format!(
+                    "{} mudou enquanto o grafo era congelado; repita o rectify",
+                    frozen.name
+                ),
+            );
+        }
+    }
     for r in &order {
-        install_one(ctx, r, explicit.contains(r.name.as_str()))?;
+        let fingerprint = fingerprints.get(&r.name).ok_or_else(|| crate::Fail {
+            code: 2,
+            msg: format!("snapshot sem fingerprint para {}", r.name),
+        })?;
+        install_one(ctx, r, explicit.contains(r.name.as_str()), fingerprint)?;
     }
     Ok(())
 }
@@ -88,7 +213,10 @@ fn collect(
     Ok(())
 }
 
-fn install_one(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
+fn install_one(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> Result<()> {
+    // Vale inclusive se uma receita mudou de mundo B para A: nenhum fast path
+    // pode observar/declarar sucesso enquanto há transação anterior por resolver.
+    Journal::recover_all(ctx)?;
     if r.requires_glibc && !ctx.root.join("usr/lib/ld-linux-x86-64.so.2").exists() {
         return fail(
             5,
@@ -99,47 +227,92 @@ fn install_one(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         );
     }
     match r.kind {
-        Kind::Binary => install_binary(ctx, r, explicit),
-        Kind::Source => install_source(ctx, r, explicit),
+        Kind::Binary => install_binary(ctx, r, explicit, fingerprint),
+        Kind::Source => install_source(ctx, r, explicit, fingerprint),
     }
 }
 
 // ---------- mundo A: binário do mantenedor ----------
 
-fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
+fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> Result<()> {
     let rec_dir = ctx.records_dir().join(&r.name);
     let opt = ctx.opt(&r.name);
-    let fp = recipe::build_fingerprint(ctx, &r.name)?;
-    if let Some(meta) = read_meta(&rec_dir) {
+    ensure_real_directory_or_absent(&ctx.root, &rec_dir, "registro do pacote")?;
+    ensure_real_directory_or_absent(&ctx.root, &opt, "prefixo mundo A")?;
+    if let Some(meta) = read_meta_strict(&rec_dir)? {
+        ensure_supported_record_format(&meta, &r.name)?;
         if meta.get("VERSION") == Some(&r.version)
-            && meta.get("FINGERPRINT") == Some(&fp)
+            && meta.get("FINGERPRINT").map(String::as_str) == Some(fingerprint)
             && fs::read_link(opt.join("current")).ok() == Some(PathBuf::from(&r.version))
             && opt.join(&r.version).is_dir()
         {
-            println!("os registros já estão corretos: {} {}", r.name, r.version);
-            return Ok(());
+            migrate_legacy_record(ctx, &rec_dir, r, fingerprint)?;
+            if record_is_intact(ctx, &rec_dir, r) {
+                if explicit {
+                    world_add(ctx, &r.name)?;
+                }
+                println!("os registros já estão corretos: {} {}", r.name, r.version);
+                return Ok(());
+            }
+        }
+        // Exceção histórica: uma semente legado/fingerprint antigo que já
+        // cedeu parte do baseline não pode ser reconstruída, pois retomaria os
+        // arquivos dos sucessores. v2 com identidade atual passou primeiro
+        // pelo fast path forte acima.
+        match provisional_cession_state(ctx, &rec_dir, r)? {
+            ProvisionalCession::Intact => {
+                if explicit {
+                    world_add(ctx, &r.name)?;
+                }
+                println!(
+                    "provisório {} {} já cedeu caminhos; baseline preservado.",
+                    r.name,
+                    meta.get("VERSION").map(String::as_str).unwrap_or("?")
+                );
+                return Ok(());
+            }
+            ProvisionalCession::Incoherent => bail!(
+                "{}: cessão provisional incoerente; rode verify e repare os registros antes de reconstruir",
+                r.name
+            ),
+            ProvisionalCession::NotCeded => {}
         }
     }
 
     println!("retificando os registros: {} {}", r.name, r.version);
     let artifacts = fetch::ensure_artifacts(ctx, r)?;
 
-    fs::create_dir_all(&opt)?;
     let staging = opt.join(format!(".{}.tmp", r.version));
-    let _ = fs::remove_dir_all(&staging);
-    fs::create_dir_all(&staging)?;
     let work = ctx
         .root
         .join("tmp")
         .join(format!("minitrue-work-{}", r.name));
+    ensure_paths_unclaimed(
+        ctx,
+        &r.name,
+        &[(&opt, "prefixo mundo A"), (&work, "workspace mundo A")],
+    )?;
+    fs::create_dir_all(&opt)?;
+    let _ = fs::remove_dir_all(&staging);
+    fs::create_dir_all(&staging)?;
+    ensure_mutation_confined(&ctx.root, &work)?;
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work)?;
+    r.materialize_files(&work)?;
+    let recipe_snapshot = work.join("recipe");
+    write_new(&recipe_snapshot, &r.recipe_bytes)?;
 
     let mut cmd = Command::new("sh");
     cmd.arg("-ec")
         .arg(". \"$RECIPE\"\ninstall_pkg")
         .current_dir(&work)
-        .env("RECIPE", &r.path)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", &work)
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .env("TZ", "UTC")
+        .env("RECIPE", &recipe_snapshot)
         .env("PREFIX", &staging)
         .env("WORK", &work)
         .env("ROOT", &ctx.root)
@@ -172,26 +345,23 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     }
     let _ = fs::remove_dir_all(&work);
 
+    // Falhas determinísticas de topologia/permissão do payload precisam surgir
+    // antes de trocar `current`. O hash final ainda é recalculado no registro.
+    let _ = crate::pack::pack_deterministic(&staging, 0, std::io::sink())?;
+
     let verdir = opt.join(&r.version);
-    let previous = read_meta(&rec_dir)
+    let previous = read_meta_strict(&rec_dir)?
         .and_then(|m| m.get("VERSION").cloned())
         .filter(|v| *v != r.version);
-    if verdir.exists() {
-        fs::remove_dir_all(&verdir)?;
-    }
-    fs::rename(&staging, &verdir)?;
-
-    let tmp_cur = opt.join(".current.tmp");
-    let _ = fs::remove_file(&tmp_cur);
-    symlink(&r.version, &tmp_cur)?;
-    fs::rename(&tmp_cur, opt.join("current"))?;
-
     let pairs: Vec<(String, String)> = if r.links.is_empty() {
-        let bin = verdir.join("bin");
+        let bin = staging.join("bin");
         let mut v = Vec::new();
         if bin.is_dir() {
             for e in fs::read_dir(&bin)? {
-                let name = e?.file_name().to_string_lossy().into_owned();
+                let name = e?
+                    .file_name()
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("{}: comando não UTF-8 em bin/", r.name))?;
                 v.push((name.clone(), format!("bin/{name}")));
             }
         }
@@ -200,60 +370,180 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     } else {
         r.links.clone()
     };
+    for (command, relative) in &pairs {
+        recipe::validate_link(&r.name, command, relative)?;
+    }
 
-    let old_links: HashSet<String> = read_manifest(&rec_dir)
-        .iter()
-        .map(|l| manifest_path(l).to_string())
-        .filter(|l| l.starts_with("/usr/"))
-        .collect();
-    let claims = all_manifests(ctx);
-    fs::create_dir_all(ctx.usr_bin())?;
+    let old_links: HashSet<String> = if rec_dir.join("meta").is_file() {
+        read_manifest_strict(&rec_dir)?
+    } else {
+        Vec::new()
+    }
+    .iter()
+    .map(|l| manifest_path(l).to_string())
+    .filter(|l| l.starts_with("/usr/"))
+    .collect();
+    let claims = all_manifests(ctx)?;
     let mut manifest: Vec<String> = vec![
         format!("/opt/{}/{}", r.name, r.version),
         format!("/opt/{}/current", r.name),
     ];
+    let mut takeovers = HashSet::new();
+    // Ownership é decidido antes de tocar qualquer link e independe de os
+    // bytes/alvo atuais coincidirem. Alvo idêntico com outro dono ainda é
+    // doublethink; objeto idêntico sem dono não é adotado implicitamente.
+    for (cmdname, _) in &pairs {
+        let raw_virt = format!("/usr/bin/{cmdname}");
+        let virt = canonical_virtual_path(&ctx.root, &raw_virt)?;
+        let owners: Vec<&str> = claims
+            .iter()
+            .filter(|(_, _, set)| set.contains(&virt))
+            .map(|(owner, _, _)| owner.as_str())
+            .collect();
+        let external: Vec<&str> = owners
+            .iter()
+            .copied()
+            .filter(|owner| *owner != r.name)
+            .collect();
+        if external.len() == 1
+            && is_provisional(ctx, external[0])
+            && r.supersedes.iter().any(|name| name == external[0])
+        {
+            takeovers.insert(virt.clone());
+        } else if !external.is_empty() {
+            return fail(
+                4,
+                format!(
+                    "doublethink detectado: {virt} tem donos incompatíveis: {}",
+                    external.join(", ")
+                ),
+            );
+        }
+        let owned = owners.iter().any(|owner| *owner == r.name) || takeovers.contains(&virt);
+        if confined_exists(&ctx.root, &raw_virt)? && !owned {
+            return fail(
+                4,
+                format!("doublethink detectado: {virt} já existe sem dono compatível"),
+            );
+        }
+    }
+
+    let directory_claims = all_directory_claims(ctx)?;
+    for (raw, is_directory) in [
+        (format!("/opt/{}/{}", r.name, r.version), true),
+        (format!("/opt/{}/current", r.name), false),
+    ] {
+        let virt = canonical_virtual_path(&ctx.root, &raw)?;
+        let owned_by_self = claims
+            .iter()
+            .any(|(owner, _, set)| owner == &r.name && set.contains(&virt));
+        if let Some((owner, version, path)) = claims.iter().find_map(|(owner, version, set)| {
+            (owner != &r.name)
+                .then(|| {
+                    set.iter().find(|path| {
+                        path.as_str() == virt
+                            || (is_directory
+                                && path
+                                    .strip_prefix(virt.as_str())
+                                    .is_some_and(|suffix| suffix.starts_with('/')))
+                    })
+                })
+                .flatten()
+                .map(|path| (owner, version, path))
+        }) {
+            return fail(
+                4,
+                format!("doublethink detectado: {virt} sobrepõe {path} de {owner} {version}"),
+            );
+        }
+        if let Some((owner, version, directory)) =
+            directory_claims.iter().find(|(owner, _, directory)| {
+                owner != &r.name
+                    && (virt == directory.as_str()
+                        || virt
+                            .strip_prefix(directory.as_str())
+                            .is_some_and(|suffix| suffix.starts_with('/')))
+            })
+        {
+            return fail(
+                4,
+                format!(
+                    "doublethink detectado: {virt} está sob diretório {directory} de {owner} {version}"
+                ),
+            );
+        }
+        if confined_exists(&ctx.root, &virt)? && !owned_by_self {
+            return fail(
+                4,
+                format!("doublethink detectado: {virt} já existe sem dono compatível"),
+            );
+        }
+    }
+
+    ensure_mutation_confined(&ctx.root, &ctx.usr_bin())?;
+    match fs::symlink_metadata(ctx.usr_bin()) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            open_confined(&ctx.root, "/usr/bin", libc::O_PATH | libc::O_DIRECTORY)?;
+        }
+        Ok(_) => bail!("/usr/bin existe e não é diretório"),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            fs::create_dir_all(ctx.usr_bin())?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    for (command, _) in &pairs {
+        let virt = format!("/usr/bin/{command}");
+        if let Ok(fd) = open_confined(&ctx.root, &virt, libc::O_PATH | libc::O_NOFOLLOW) {
+            if fs::File::from(fd).metadata()?.file_type().is_dir() {
+                bail!("{virt} é diretório e não pode virar link de comando");
+            }
+        }
+    }
+    let current_path = opt.join("current");
+    if fs::symlink_metadata(&current_path).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+        bail!(
+            "{} é diretório e não pode virar symlink",
+            current_path.display()
+        );
+    }
+    let tmp_cur = move_temp_path(&current_path)?;
+    symlink(&r.version, &tmp_cur)?;
+
+    // A fase de decisão termina antes de publicar a versão. Uma colisão ou
+    // registro corrompido deixa `current`, verdir e links antigos intocados.
+    if verdir.exists() {
+        fs::remove_dir_all(&verdir)?;
+    }
+    fs::rename(&staging, &verdir)?;
+    fs::rename(&tmp_cur, &current_path)?;
+
     for (cmdname, rel) in &pairs {
         let linkpath = ctx.usr_bin().join(cmdname);
+        ensure_mutation_confined(&ctx.root, &linkpath)?;
         let target = format!("../../opt/{}/current/{}", r.name, rel);
-        let virt = format!("/usr/bin/{cmdname}");
-        match fs::symlink_metadata(&linkpath) {
-            Ok(md) if md.file_type().is_symlink() => {
-                let cur = fs::read_link(&linkpath)?;
-                if cur != Path::new(&target) {
-                    if let Some(prov) = adopt_provisional_path(ctx, &virt, &r.name, &r.supersedes) {
-                        eprintln!("  {virt}: assume o controle de {prov} (provisório)");
-                    } else {
-                        let owner = claims
-                            .iter()
-                            .find(|(n, _, set)| *n != r.name && set.contains(&virt))
-                            .map(|(n, v, _)| format!("{n} {v}"))
-                            .unwrap_or_else(|| "algo fora dos registros".into());
-                        return fail(
-                            4,
-                            format!("doublethink detectado: {virt} já pertence a {owner}"),
-                        );
-                    }
-                }
-            }
-            Ok(_) => {
-                return fail(
-                    4,
-                    format!("doublethink detectado: {virt} existe e não é link gerido"),
-                )
-            }
-            Err(_) => {}
+        let raw_virt = format!("/usr/bin/{cmdname}");
+        let virt = canonical_virtual_path(&ctx.root, &raw_virt)?;
+        if takeovers.contains(&virt) {
+            let owner = adopt_provisional_path(ctx, &virt, &r.name, &r.supersedes, None)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("{virt}: dono provisional mudou durante a operação")
+                })?;
+            eprintln!("  {virt}: assume o controle de {owner} (provisório)");
         }
-        let _ = fs::remove_file(&linkpath);
+        if confined_exists(&ctx.root, &raw_virt)? {
+            remove_confined(&ctx.root, &raw_virt, false)?;
+        }
         symlink(&target, &linkpath)?;
-        manifest.push(virt);
+        manifest.push(raw_virt);
     }
 
     for l in &old_links {
         if !manifest.contains(l) {
-            let p = ctx.root.join(l.trim_start_matches('/'));
-            if let Ok(t) = fs::read_link(&p) {
-                if t.to_string_lossy().contains(&format!("/opt/{}/", r.name)) {
-                    let _ = fs::remove_file(&p);
+            rooted_path(&ctx.root, l)?;
+            if let Ok(target) = readlink_confined(&ctx.root, l) {
+                if String::from_utf8_lossy(&target).contains(&format!("/opt/{}/", r.name)) {
+                    remove_confined(&ctx.root, l, false)?;
                 }
             }
         }
@@ -277,7 +567,19 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         }
     }
 
-    write_record(ctx, &rec_dir, r, "A", &mut manifest, None)?;
+    write_record(
+        ctx,
+        &rec_dir,
+        r,
+        "A",
+        &mut manifest,
+        RecordWrite {
+            artifact_hash: None,
+            fingerprint,
+            manifest_typed: false,
+            journal: None,
+        },
+    )?;
     if explicit {
         world_add(ctx, &r.name)?;
     }
@@ -497,7 +799,10 @@ fn build_command(
 
     if root == Path::new("/") {
         let mut cmd = Command::new("sh");
-        cmd.arg("-ec").arg(BUILD_PREAMBLE).current_dir(&src_dir);
+        cmd.arg("-ec")
+            .arg(BUILD_PREAMBLE)
+            .current_dir(&src_dir)
+            .env_clear();
         for (k, v) in &envs {
             cmd.env(k, v);
         }
@@ -525,170 +830,1065 @@ fn build_command(
     }
 }
 
-/// Move um caminho (arquivo ou symlink) preservando a natureza; `rename` atômico,
-/// com fallback copy+remove p/ EXDEV (backup e destino em mounts diferentes).
+/// Reserva um temporário irmão de `dst`. Por estar no mesmo filesystem do
+/// destino, a publicação final por `rename` é atômica inclusive no fallback
+/// entre mounts. `create_new`/`symlink` recusam colisões em vez de seguir links.
+fn move_temp_path(dst: &Path) -> Result<PathBuf> {
+    let parent = dst
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("destino sem diretório pai: {}", dst.display()))?;
+    let name = dst.file_name().and_then(|n| n.to_str()).unwrap_or("path");
+    for _ in 0..128 {
+        let serial = MOVE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = parent.join(format!(
+            ".{name}.minitrue-move-{}-{serial}",
+            std::process::id()
+        ));
+        if fs::symlink_metadata(&tmp).is_err_and(|e| e.kind() == ErrorKind::NotFound) {
+            return Ok(tmp);
+        }
+    }
+    bail!(
+        "não consegui reservar temporário irmão de {}",
+        dst.display()
+    )
+}
+
+/// Copia um regular para um temporário e só publica o nome final depois de
+/// conteúdo, flush e permissões completos. Uma cópia parcial jamais aparece
+/// como `dst`, que é precisamente a distinção de que o rollback depende.
+fn copy_regular_atomically<R: Read>(
+    source: &mut R,
+    dst: &Path,
+    permissions: fs::Permissions,
+) -> Result<()> {
+    let tmp = move_temp_path(dst)?;
+    let result = (|| -> Result<()> {
+        let mut out = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp)?;
+        std::io::copy(source, &mut out)?;
+        out.flush()?;
+        out.set_permissions(permissions)?;
+        drop(out);
+        fs::rename(&tmp, dst)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
+/// Congela a saída do build numa imagem tar selada pelo kernel. O hash e a
+/// instalação passam a consumir os mesmos bytes; alterações tardias no STAGE
+/// original (por processo órfão ou corrida) não mudam o payload atestado.
+fn sealed_stage_snapshot(stage: &Path, epoch: u64) -> Result<(fs::File, String)> {
+    let name = CString::new("minitrue-stage")?;
+    // SAFETY: CString válida; flags são os definidos pelo ABI Linux.
+    let fd =
+        unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: fd recém-criado, transferido para File com dono único.
+    let mut file = unsafe { fs::File::from_raw_fd(fd) };
+    let hash = crate::pack::pack_deterministic(stage, epoch, &mut file)?;
+    file.flush()?;
+    let seals = libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
+    // SAFETY: fcntl opera no fd válido e não retém ponteiros.
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_ADD_SEALS, seals) } < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    file.seek(SeekFrom::Start(0))?;
+    Ok((file, hash))
+}
+
+#[derive(Debug)]
+enum SealedStageKind {
+    Directory {
+        mode: u32,
+    },
+    Symlink {
+        target: PathBuf,
+    },
+    Regular {
+        mode: u32,
+        offset: u64,
+        size: u64,
+        integrity: String,
+    },
+}
+
+#[derive(Debug)]
+struct SealedStageEntry {
+    relative: String,
+    kind: SealedStageKind,
+}
+
+impl SealedStageEntry {
+    fn is_dir(&self) -> bool {
+        matches!(self.kind, SealedStageKind::Directory { .. })
+    }
+
+    fn mode(&self) -> u32 {
+        match self.kind {
+            SealedStageKind::Directory { mode } | SealedStageKind::Regular { mode, .. } => mode,
+            SealedStageKind::Symlink { .. } => 0o777,
+        }
+    }
+
+    fn integrity(&self, empty_tree_hash: &str) -> String {
+        match &self.kind {
+            SealedStageKind::Directory { mode } => {
+                format!("d:{}", directory_integrity_mode(*mode, empty_tree_hash))
+            }
+            SealedStageKind::Symlink { target } => {
+                let mut hash = Sha256::new();
+                hash.update(target.as_os_str().as_bytes());
+                format!("l:{}", hex::encode(hash.finalize()))
+            }
+            SealedStageKind::Regular {
+                mode, integrity, ..
+            } => format!("f:{}", regular_integrity(*mode, integrity)),
+        }
+    }
+}
+
+fn hash_sealed_range(file: &fs::File, offset: u64, size: u64) -> Result<String> {
+    let mut hasher = Sha256::new();
+    let mut consumed = 0u64;
+    let mut buffer = [0u8; 65_536];
+    while consumed < size {
+        let wanted = usize::try_from((size - consumed).min(buffer.len() as u64))?;
+        let read = file.read_at(&mut buffer[..wanted], offset + consumed)?;
+        if read == 0 {
+            bail!("imagem selada terminou antes do payload declarado");
+        }
+        hasher.update(&buffer[..read]);
+        consumed += read as u64;
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// Indexa o tar selado sem materializá-lo num diretório gravável. A primeira
+/// passagem fornece toda a topologia para o preflight; regulares guardam apenas
+/// offset/tamanho e depois são copiados diretamente do descritor selado.
+fn index_sealed_stage(file: &fs::File) -> Result<Vec<SealedStageEntry>> {
+    let mut archive_file = file.try_clone()?;
+    archive_file.seek(SeekFrom::Start(0))?;
+    let mut archive = tar::Archive::new(archive_file);
+    let mut entries = Vec::new();
+    let mut names = HashSet::new();
+    for raw in archive.entries()? {
+        let entry = raw?;
+        let entry_type = entry.header().entry_type();
+        if entry_type.as_byte() == b'g' {
+            continue;
+        }
+        let path_bytes = entry.path_bytes();
+        let relative = std::str::from_utf8(&path_bytes)
+            .map_err(|_| anyhow::anyhow!("STAGE contém nome não UTF-8"))?
+            .to_string();
+        let relative_path = Path::new(&relative);
+        if relative.is_empty()
+            || relative.chars().any(char::is_control)
+            || relative.split('/').any(|part| part.is_empty())
+            || relative_path
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            bail!("STAGE contém caminho não canônico: {relative:?}");
+        }
+        if !names.insert(relative.clone()) {
+            bail!("STAGE contém entrada duplicada: {relative}");
+        }
+        let mode = entry.header().mode()? & 0o7777;
+        let kind = if entry_type.is_dir() {
+            SealedStageKind::Directory { mode }
+        } else if entry_type.is_symlink() {
+            let target = entry
+                .link_name_bytes()
+                .ok_or_else(|| anyhow::anyhow!("symlink sem alvo em {relative}"))?;
+            SealedStageKind::Symlink {
+                target: PathBuf::from(OsStr::from_bytes(&target)),
+            }
+        } else if entry_type.is_file() {
+            let offset = entry.raw_file_position();
+            let size = entry.size();
+            SealedStageKind::Regular {
+                mode,
+                offset,
+                size,
+                integrity: hash_sealed_range(file, offset, size)?,
+            }
+        } else if entry_type.is_hard_link() {
+            bail!(
+                "STAGE contém hardlink em {relative:?}; instalação ainda não preserva essa topologia"
+            );
+        } else {
+            bail!("STAGE contém tipo de entrada não instalável em {relative:?}");
+        };
+        entries.push(SealedStageEntry { relative, kind });
+    }
+    Ok(entries)
+}
+
+fn canonical_stage_topology(
+    root: &Path,
+    entries: &[SealedStageEntry],
+) -> Result<HashMap<String, String>> {
+    let mut by_relative = HashMap::new();
+    let mut by_virtual: HashMap<String, String> = HashMap::new();
+    for entry in entries {
+        let relative = &entry.relative;
+        let raw_virtual = relative
+            .strip_prefix("etc/")
+            .map(|sub| format!("/usr/share/factory/etc/{sub}"))
+            .unwrap_or_else(|| virt_path(relative));
+        let virtual_path = canonical_virtual_path(root, &raw_virtual)?;
+        if let Some(previous) = by_virtual.insert(virtual_path.clone(), relative.clone()) {
+            bail!("doublethink no próprio STAGE: {previous} e {relative} viram {virtual_path}");
+        }
+        by_relative.insert(relative.clone(), virtual_path);
+    }
+
+    for (relative, virtual_path) in &by_relative {
+        let mut ancestor = Path::new(virtual_path).parent();
+        while let Some(path) = ancestor {
+            if path == Path::new("/") {
+                break;
+            }
+            let ancestor_virtual = path
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("ancestral canônico não UTF-8"))?;
+            if let Some(ancestor_relative) = by_virtual.get(ancestor_virtual) {
+                let raw_is_descendant = relative
+                    .strip_prefix(ancestor_relative.as_str())
+                    .is_some_and(|suffix| suffix.starts_with('/'));
+                if !raw_is_descendant {
+                    bail!(
+                        "doublethink no próprio STAGE: {ancestor_relative} e {relative} se sobrepõem como {ancestor_virtual} / {virtual_path}"
+                    );
+                }
+            }
+            ancestor = path.parent();
+        }
+    }
+    Ok(by_relative)
+}
+
+fn virtual_at_or_below(path: &str, root: &str) -> bool {
+    path == root
+        || path
+            .strip_prefix(root)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+/// Payload nunca pode ocupar o plano de controle nem os workspaces efêmeros
+/// que o próprio minitrue limpa. Diretórios estruturais ancestrais (`/var`,
+/// `/tmp`) continuam válidos; uma folha não-diretório nesses ancestrais não.
+fn ensure_stage_avoids_control_plane(
+    root: &Path,
+    entries: &[SealedStageEntry],
+    stage_paths: &HashMap<String, String>,
+) -> Result<()> {
+    let control_roots = ["/var/lib/minitrue", "/var/cache/minitrue", "/etc/minitrue"]
+        .into_iter()
+        .map(|path| canonical_virtual_path(root, path))
+        .collect::<Result<Vec<_>>>()?;
+    let tmp_sentinel = canonical_virtual_path(root, "/tmp/minitrue-namespace-sentinel")?;
+    let tmp_root = Path::new(&tmp_sentinel)
+        .parent()
+        .and_then(Path::to_str)
+        .ok_or_else(|| anyhow::anyhow!("namespace temporário não canônico"))?;
+    let tmp_prefix = format!("{tmp_root}/");
+    let overlaps_internal = |path: &str, is_dir: bool| {
+        let control = control_roots.iter().any(|control| {
+            virtual_at_or_below(path, control) || (!is_dir && virtual_at_or_below(control, path))
+        });
+        let temporary = path
+            .strip_prefix(&tmp_prefix)
+            .and_then(|suffix| suffix.split('/').next())
+            .is_some_and(|component| {
+                component.starts_with("minitrue-build-") || component.starts_with("minitrue-work-")
+            })
+            || (!is_dir && path == tmp_root);
+        control || temporary
+    };
+
+    for entry in entries {
+        let virt = stage_paths
+            .get(&entry.relative)
+            .ok_or_else(|| anyhow::anyhow!("STAGE sem identidade canônica"))?;
+        let raw_etc_control =
+            entry.relative == "etc/minitrue" || entry.relative.starts_with("etc/minitrue/");
+        let live_etc_internal = if let Some(sub) = entry.relative.strip_prefix("etc/") {
+            let live = canonical_virtual_path(root, &format!("/etc/{sub}"))?;
+            overlaps_internal(&live, entry.is_dir())
+        } else {
+            false
+        };
+        if raw_etc_control || overlaps_internal(virt, entry.is_dir()) || live_etc_internal {
+            bail!(
+                "STAGE tenta ocupar namespace interno do minitrue: {} ({virt})",
+                entry.relative
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Move um caminho (arquivo ou symlink) preservando a natureza. O caminho
+/// comum é um `rename` atômico. Só `EXDEV` ativa o fallback: ele constrói um
+/// temporário completo no filesystem de destino, publica-o por `rename` e
+/// remove a origem por último. Assim um crash/falha de cópia não transforma
+/// bytes parciais em backup aparentemente válido.
 fn move_path(src: &Path, dst: &Path) -> Result<()> {
     mkparent(dst)?;
-    if fs::rename(src, dst).is_ok() {
-        return Ok(());
+    match fs::rename(src, dst) {
+        Ok(()) => return Ok(()),
+        Err(e) if e.kind() == ErrorKind::CrossesDevices => {}
+        Err(e) => return Err(e.into()),
     }
-    let ft = fs::symlink_metadata(src)?.file_type();
+
+    let md = fs::symlink_metadata(src)?;
+    let ft = md.file_type();
     if ft.is_symlink() {
-        let _ = fs::remove_file(dst);
-        symlink(fs::read_link(src)?, dst)?;
+        let tmp = move_temp_path(dst)?;
+        let result = (|| -> Result<()> {
+            symlink(fs::read_link(src)?, &tmp)?;
+            fs::rename(&tmp, dst)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        result?;
+    } else if ft.is_file() {
+        let mut input = fs::File::open(src)?;
+        copy_regular_atomically(&mut input, dst, md.permissions())?;
     } else {
-        fs::copy(src, dst)?;
+        bail!(
+            "fallback entre filesystems não suporta diretório/especial: {}",
+            src.display()
+        );
     }
     fs::remove_file(src)?;
     Ok(())
 }
 
-/// Núcleo transacional da cópia mundo-B (SPEC-0003 §4): registra cada mutação em
-/// `/` num journal PERSISTENTE **antes** de fazê-la. Erro no meio ⇒ `rollback`
-/// (desfaz na ordem inversa); sucesso ⇒ `commit` (descarta). Um journal órfão
-/// (processo morto no meio) é revertido no `begin` seguinte — crash-safety.
+/// Núcleo transacional da cópia mundo-B (SPEC-0003 §4). Cada intenção entra no
+/// log **antes** da mutação. O `TRANSACTION_ID` do `meta`, escrito por último, é
+/// o ponto de commit: recovery descarta um journal com o mesmo id e reverte os
+/// demais. Não há `fsync`; isto protege contra término do processo com o estado
+/// já entregue ao kernel, não promete durabilidade diante de perda de energia.
 ///
-/// O log é gravado por `write` (syscall → page cache): sobrevive a `kill -9`
-/// (o matador de background), que é o crash real aqui; só perda de energia (sem
-/// fsync) fica de fora, aceitável no v0. Formato por linha:
+/// Formato por linha:
 ///   `N␉<dst>`        — dst era novo (rollback: remove)
-///   `B␉<dst>␉<n>`    — dst existia, movido p/ backup/<n> (rollback: restaura)
+///   `B␉<dst>␉<n>`    — dst existia e será movido para `backup/<n>`
 struct Journal {
     dir: PathBuf,
     root: PathBuf,
+    rec_dir: PathBuf,
+    txid: String,
     log: fs::File,
     next: u32,
-    touched: Vec<PathBuf>,
+    next_tmp: u32,
+}
+
+fn new_transaction_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let serial = TX_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{:x}-{nanos:x}-{serial:x}", std::process::id())
+}
+
+fn record_transaction_id(rec_dir: &Path) -> Result<Option<String>> {
+    Ok(read_meta_strict(rec_dir)?
+        .and_then(|meta| meta.get("TRANSACTION_ID").cloned())
+        .filter(|id| !id.is_empty()))
+}
+
+fn remove_leaf_if_exists(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(md) if md.file_type().is_dir() => fs::remove_dir(path)?,
+        Ok(_) => fs::remove_file(path)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    Ok(())
+}
+
+fn journal_path_text(root: &Path, path: &Path) -> Result<String> {
+    if path == root || !path.starts_with(root) {
+        bail!(
+            "journal recusou caminho fora do root {}: {}",
+            root.display(),
+            path.display()
+        );
+    }
+    let rel = path
+        .strip_prefix(root)
+        .map_err(|_| anyhow::anyhow!("caminho fora do root"))?;
+    if rel.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        bail!(
+            "journal recusou caminho não-normalizado: {}",
+            path.display()
+        );
+    }
+    let text = path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("journal não representa caminho não-UTF-8"))?;
+    if text.contains(['\t', '\n', '\r']) {
+        bail!("journal recusou TAB/LF/CR no caminho: {}", path.display());
+    }
+    Ok(text.to_string())
+}
+
+/// Confere o pai de uma mutação feita pelas APIs de caminho do std. Symlinks
+/// relativos do usr-merge (`/bin -> usr/bin`, `/lib -> usr/lib`) são aceitos
+/// quando resolvem dentro do rootfs; alvo absoluto/relativo externo, dangling
+/// ou ancestral que não é diretório falha antes de `rename`, `copy` ou unlink.
+///
+/// O lock global serializa mutações do próprio minitrue. Esta checagem fecha o
+/// escape persistente que `starts_with(root)` não detecta; as leituras e
+/// remoções factuais usam ainda `openat2(RESOLVE_IN_ROOT)` fd-relative.
+fn ensure_mutation_confined(root: &Path, path: &Path) -> Result<()> {
+    journal_path_text(root, path)?;
+    let root_real = fs::canonicalize(root)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("caminho sem diretório pai: {}", path.display()))?;
+    let relative = parent
+        .strip_prefix(root)
+        .map_err(|_| anyhow::anyhow!("caminho fora do root"))?;
+    let mut cursor = root.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            bail!("caminho de mutação não-canônico: {}", path.display());
+        };
+        cursor.push(name);
+        match fs::symlink_metadata(&cursor) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let resolved = fs::canonicalize(&cursor).map_err(|error| {
+                    anyhow::anyhow!(
+                        "ancestral symlink inválido em {}: {error}",
+                        cursor.display()
+                    )
+                })?;
+                if !resolved.starts_with(&root_real) {
+                    bail!(
+                        "mutação recusada: ancestral {} resolve fora do root {}",
+                        cursor.display(),
+                        root.display()
+                    );
+                }
+                if !fs::metadata(&resolved)?.is_dir() {
+                    bail!("ancestral não é diretório: {}", cursor.display());
+                }
+                cursor = resolved;
+            }
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => bail!("ancestral não é diretório: {}", cursor.display()),
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_real_directory_or_absent(root: &Path, path: &Path, what: &str) -> Result<()> {
+    ensure_mutation_confined(root, path)?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(()),
+        Ok(_) => bail!(
+            "{what} precisa ser diretório real, não symlink/arquivo: {}",
+            path.display()
+        ),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 impl Journal {
-    fn begin(ctx: &Ctx, pkg: &str) -> Result<Journal> {
-        let dir = ctx.root.join("var/lib/minitrue/journal").join(pkg);
-        if dir.exists() {
-            // Journal órfão: um rectify anterior morreu no meio da cópia. Reverte
-            // antes de recomeçar, pra `/` voltar ao estado consistente pré-crash.
-            eprintln!("  journal órfão de {pkg}: revertendo cópia interrompida");
-            Self::replay_rollback(&dir, &ctx.root);
-            let _ = fs::remove_dir_all(&dir);
+    fn active_dir(ctx: &Ctx, pkg: &str) -> PathBuf {
+        ctx.root.join("var/lib/minitrue/journal").join(pkg)
+    }
+
+    /// Restabelece a fronteira global: sob o lock, nenhuma operação nova pode
+    /// começar enquanto existir uma transação anterior. Desde que essa regra
+    /// vale, há no máximo um journal ativo. Mais de um representa estado legado
+    /// ambíguo (a ordem correta de rollback não é demonstrável), então falha
+    /// fechado e preserva todos os backups para reparo explícito.
+    fn recover_all(ctx: &Ctx) -> Result<()> {
+        let base = ctx.root.join("var/lib/minitrue/journal");
+        ensure_real_directory_or_absent(&ctx.root, &base, "diretório de journals")?;
+        let entries = match fs::read_dir(&base) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        let mut active = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("journal com nome não UTF-8"))?;
+            if name.starts_with('.') {
+                continue;
+            }
+            if !entry.file_type()?.is_dir() {
+                bail!(
+                    "journal ativo não é diretório real: {}",
+                    entry.path().display()
+                );
+            }
+            recipe::validate_name(&name)?;
+            active.push(name);
         }
-        fs::create_dir_all(dir.join("backup"))?;
+        active.sort();
+        match active.as_slice() {
+            [] => Ok(()),
+            [pkg] => Self::recover(ctx, pkg),
+            packages => bail!(
+                "mais de um journal ativo ({}) — ordem de rollback ambígua; backups preservados",
+                packages.join(", ")
+            ),
+        }
+    }
+
+    /// Resolve um journal órfão. Só o `meta` com o mesmo txid prova commit; sem
+    /// ele, todas as mutações (inclusive registros cedentes) são revertidas.
+    /// Qualquer falha de rollback deixa o journal e seus backups no lugar.
+    fn recover(ctx: &Ctx, pkg: &str) -> Result<()> {
+        let dir = Self::active_dir(ctx, pkg);
+        ensure_mutation_confined(&ctx.root, &dir)?;
+        match fs::symlink_metadata(&dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+            Ok(md) if !md.file_type().is_dir() => {
+                bail!("journal inválido (não é diretório): {}", dir.display())
+            }
+            Ok(_) => {}
+        }
+
+        let format = read_regular_text_nofollow(&dir.join("format")).map_err(|error| {
+            anyhow::anyhow!(
+                "journal legado/sem formato seguro em {}: {error}; recovery automático recusado",
+                dir.display()
+            )
+        })?;
+        if format != format!("{JOURNAL_FORMAT}\n") {
+            bail!(
+                "journal de formato desconhecido em {}; recovery automático recusado",
+                dir.display()
+            );
+        }
+        Self::ensure_control_untouched(&dir)?;
+        let txid_text = read_regular_text_nofollow(&dir.join("txid"))?;
+        let txid = txid_text.trim().to_string();
+        if txid.is_empty()
+            || txid_text.lines().count() != 1
+            || !txid
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+        {
+            bail!("journal sem transaction id: {}", dir.display());
+        }
+        let rec_dir = ctx.records_dir().join(pkg);
+        if record_transaction_id(&rec_dir)?.as_deref() == Some(txid.as_str()) {
+            eprintln!("  journal já commitado de {pkg}: concluindo limpeza");
+            return Self::retire(&dir, &txid, "committed");
+        }
+
+        Self::ensure_rollback_not_superseded(ctx, pkg, &dir)?;
+        eprintln!("  journal órfão de {pkg}: revertendo cópia interrompida");
+        Self::replay_rollback(&dir, &ctx.root)?;
+        Self::retire(&dir, &txid, "rolled-back")
+    }
+
+    /// Versões anteriores ao guard de namespace podiam deixar o próprio
+    /// `journal/<pkg>/log` entrar no STAGE. Nesse caso o log original era movido
+    /// para `backup/<n>` e o nome público recebia bytes controlados pelo payload.
+    /// A linha autorreferente gravada antes do move é uma assinatura inequívoca;
+    /// detecte-a antes de confiar em `txid` ou interpretar o log vivo.
+    fn ensure_control_untouched(dir: &Path) -> Result<()> {
+        let inspect = |path: &Path| -> Result<()> {
+            let bytes = read_regular_nofollow(path)?;
+            let Ok(text) = std::str::from_utf8(&bytes) else {
+                // Backups comuns são executáveis/dados. O log original gerado
+                // pelo minitrue é sempre ASCII, portanto um binário não pode ser
+                // a prova autorreferente que procuramos aqui.
+                return Ok(());
+            };
+            for line in text.lines() {
+                let fields: Vec<&str> = line.split('\t').collect();
+                let destination = match fields.as_slice() {
+                    ["N", destination] => Some(*destination),
+                    ["B", destination, index] if index.parse::<u32>().is_ok() => Some(*destination),
+                    _ => None,
+                };
+                if destination.is_some_and(|destination| {
+                    let destination = Path::new(destination);
+                    destination == dir || destination.starts_with(dir)
+                }) {
+                    bail!(
+                        "journal alterou o próprio plano de controle; recovery automático recusado em {}",
+                        dir.display()
+                    );
+                }
+            }
+            Ok(())
+        };
+
+        inspect(&dir.join("log"))?;
+        let backup = dir.join("backup");
+        match fs::symlink_metadata(&backup) {
+            Ok(metadata) if metadata.file_type().is_dir() => {}
+            Ok(_) => bail!(
+                "backup de journal não é diretório real: {}",
+                backup.display()
+            ),
+            Err(error) => return Err(error.into()),
+        }
+        for entry in fs::read_dir(&backup)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() && entry.metadata()?.len() <= MAX_RECORD_FILE {
+                inspect(&entry.path())?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Compatibilidade segura com estados criados antes da recuperação global:
+    /// se outro pacote já commitou ownership sobre um destino do journal órfão,
+    /// reverter agora apagaria o sucessor. Nesse caso não há ordem demonstrável;
+    /// conserva journal/backups e exige reparo explícito.
+    fn ensure_rollback_not_superseded(ctx: &Ctx, pkg: &str, dir: &Path) -> Result<()> {
+        let log = read_regular_text_nofollow(&dir.join("log"))?;
+        let mut destinations = Vec::new();
+        let mut touched_records = HashSet::new();
+        for line in log.lines() {
+            let fields: Vec<&str> = line.split('\t').collect();
+            let dst = match fields.as_slice() {
+                ["N", dst] if !dst.is_empty() => *dst,
+                ["B", dst, n] if !dst.is_empty() && n.parse::<u32>().is_ok() => *dst,
+                _ => bail!("journal inválido: {line:?}"),
+            };
+            let dst = Path::new(dst);
+            journal_path_text(&ctx.root, dst)?;
+            if let Ok(relative) = dst.strip_prefix(ctx.records_dir()) {
+                if let Some(std::path::Component::Normal(owner)) = relative.components().next() {
+                    let owner = owner
+                        .to_str()
+                        .ok_or_else(|| anyhow::anyhow!("registro tocado não UTF-8"))?;
+                    recipe::validate_name(owner)?;
+                    touched_records.insert(owner.to_string());
+                }
+            }
+            destinations.push(dst.to_path_buf());
+        }
+
+        let excluded = HashSet::from([pkg.to_string()]);
+        let claims = all_manifests_for_recovery(ctx, &excluded, &touched_records)?;
+        let external = index_manifest_claims(&claims, None);
+        if external.is_empty() {
+            return Ok(());
+        }
+        for dst in destinations {
+            let relative = dst
+                .strip_prefix(&ctx.root)
+                .map_err(|_| anyhow::anyhow!("destino de journal fora do rootfs"))?;
+            let relative = relative
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("destino de journal não UTF-8"))?;
+            if relative.is_empty() {
+                bail!("journal tentou alterar a raiz do sistema");
+            }
+            let virt = canonical_virtual_path(&ctx.root, &format!("/{relative}"))?;
+            let conflict = indexed_claim_at_or_above(&external, &virt, true)
+                .or_else(|| indexed_descendant(&external, &virt));
+            if let Some((owner, version, claim)) = conflict {
+                bail!(
+                    "rollback de {pkg} recusado: {virt} sobrepõe claim commitada {claim} de {owner} {version}; journal e backups preservados"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn begin(ctx: &Ctx, pkg: &str) -> Result<Journal> {
+        Self::recover_all(ctx)?;
+        let dir = Self::active_dir(ctx, pkg);
+        ensure_mutation_confined(&ctx.root, &dir)?;
+        let base = dir
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("journal sem diretório pai"))?;
+        fs::create_dir_all(base)?;
+        let txid = new_transaction_id();
+        let pending = base.join(format!(".new-{txid}"));
+        fs::create_dir(&pending)?;
+        fs::create_dir(pending.join("backup"))?;
+        fs::write(pending.join("format"), format!("{JOURNAL_FORMAT}\n"))?;
+        fs::write(pending.join("txid"), format!("{txid}\n"))?;
         let log = fs::OpenOptions::new()
-            .create(true)
+            .create_new(true)
             .append(true)
-            .open(dir.join("log"))?;
+            .open(pending.join("log"))?;
+        // O journal só fica ativo depois de estar completamente inicializado.
+        fs::rename(&pending, &dir)?;
         Ok(Journal {
             dir,
             root: ctx.root.clone(),
+            rec_dir: ctx.records_dir().join(pkg),
+            txid,
             log,
             next: 0,
-            touched: Vec::new(),
+            next_tmp: 0,
         })
     }
 
     fn record(&mut self, line: &str) -> Result<()> {
-        self.log.write_all(line.as_bytes())?;
-        self.log.write_all(b"\n")?;
+        let mut bytes = line.as_bytes().to_vec();
+        bytes.push(b'\n');
+        self.log.write_all(&bytes)?;
+        self.log.flush()?;
         Ok(())
     }
 
-    /// Tira o dst do caminho (move p/ backup se existir) e loga — deixando dst
-    /// AUSENTE, pronto p/ o chamador escrever o novo. Loga ANTES de mover o quê já
-    /// está seguro; a ordem garante que o rollback nunca perca o original.
-    fn stash(&mut self, dst: &Path) -> Result<()> {
-        self.touched.push(dst.to_path_buf());
-        if fs::symlink_metadata(dst).is_ok() {
-            let n = self.next;
-            self.next += 1;
-            let bak = self.dir.join("backup").join(n.to_string());
-            move_path(dst, &bak)?;
-            self.record(&format!("B\t{}\t{n}", dst.display()))?;
-        } else {
-            self.record(&format!("N\t{}", dst.display()))?;
+    fn record_new_intent(&mut self, dst: &Path) -> Result<()> {
+        let dst = journal_path_text(&self.root, dst)?;
+        self.record(&format!("N\t{dst}"))
+    }
+
+    fn record_backup_intent(&mut self, dst: &Path, n: u32) -> Result<()> {
+        let dst = journal_path_text(&self.root, dst)?;
+        self.record(&format!("B\t{dst}\t{n}"))
+    }
+
+    /// Tira `dst` do caminho. A intenção B é registrada antes de mover o original;
+    /// recovery aceita tanto "backup ainda ausente" quanto "backup já criado".
+    fn stash(&mut self, dst: &Path, allow_directory: bool) -> Result<()> {
+        journal_path_text(&self.root, dst)?;
+        ensure_mutation_confined(&self.root, dst)?;
+        match fs::symlink_metadata(dst) {
+            Ok(metadata) => {
+                if metadata.file_type().is_dir() && !allow_directory {
+                    bail!(
+                        "recusei substituir diretório sem claim d: íntegra: {}",
+                        dst.display()
+                    );
+                }
+                let n = self.next;
+                self.next += 1;
+                let bak = self.dir.join("backup").join(n.to_string());
+                ensure_mutation_confined(&self.root, &bak)?;
+                self.record_backup_intent(dst, n)?;
+                move_path(dst, &bak)?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.record_new_intent(dst)?;
+            }
+            Err(e) => return Err(e.into()),
         }
         Ok(())
     }
 
     fn place_file(&mut self, dst: &Path, src: &Path) -> Result<()> {
-        self.stash(dst)?;
-        mkparent(dst)?;
+        if let Some(parent) = dst.parent().filter(|parent| *parent != self.root) {
+            self.ensure_dir(parent, fs::Permissions::from_mode(0o755), false, false)?;
+        }
+        self.stash(dst, false)?;
         fs::copy(src, dst)?;
         Ok(())
     }
 
+    fn place_sealed_file(
+        &mut self,
+        dst: &Path,
+        image: &fs::File,
+        offset: u64,
+        size: u64,
+        mode: u32,
+    ) -> Result<()> {
+        if let Some(parent) = dst.parent().filter(|parent| *parent != self.root) {
+            self.ensure_dir(parent, fs::Permissions::from_mode(0o755), false, false)?;
+        }
+        self.stash(dst, false)?;
+        let mut output = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(dst)?;
+        let mut consumed = 0u64;
+        let mut buffer = [0u8; 65_536];
+        while consumed < size {
+            let wanted = usize::try_from((size - consumed).min(buffer.len() as u64))?;
+            let read = image.read_at(&mut buffer[..wanted], offset + consumed)?;
+            if read == 0 {
+                bail!("imagem selada terminou antes de copiar {}", dst.display());
+            }
+            output.write_all(&buffer[..read])?;
+            consumed += read as u64;
+        }
+        output.set_permissions(fs::Permissions::from_mode(mode))?;
+        output.flush()?;
+        Ok(())
+    }
+
     fn place_symlink(&mut self, dst: &Path, target: &Path) -> Result<()> {
-        self.stash(dst)?;
-        mkparent(dst)?;
+        if let Some(parent) = dst.parent().filter(|parent| *parent != self.root) {
+            self.ensure_dir(parent, fs::Permissions::from_mode(0o755), false, false)?;
+        }
+        self.stash(dst, false)?;
         symlink(target, dst)?;
+        Ok(())
+    }
+
+    /// Garante diretório sem deixá-lo fora da transação. Componentes pais que
+    /// ainda não existam também recebem intenção N; em rollback, filhos saem
+    /// primeiro e cada diretório recém-criado é removido quando vazio.
+    fn ensure_dir(
+        &mut self,
+        dst: &Path,
+        permissions: fs::Permissions,
+        enforce_permissions: bool,
+        allow_existing_claim: bool,
+    ) -> Result<bool> {
+        journal_path_text(&self.root, dst)?;
+        ensure_mutation_confined(&self.root, dst)?;
+        match fs::symlink_metadata(dst) {
+            Ok(metadata) if metadata.file_type().is_dir() => {
+                if enforce_permissions {
+                    if fs::read_dir(dst)?.next().transpose()?.is_some() {
+                        bail!(
+                            "diretório {} deveria estar vazio, mas contém dados; claim d: recusada",
+                            dst.display()
+                        );
+                    }
+                    if metadata.permissions().mode() & 0o7777 != permissions.mode() & 0o7777 {
+                        bail!(
+                            "diretório vazio {} existe com modo {:04o}, mas o STAGE exige {:04o}",
+                            dst.display(),
+                            metadata.permissions().mode() & 0o7777,
+                            permissions.mode() & 0o7777
+                        );
+                    }
+                    if !allow_existing_claim {
+                        // Infraestrutura vazia preexistente satisfaz o STAGE,
+                        // mas não muda de dono. Só um diretório criado nesta
+                        // transação ou já reclamado por este pacote vira d:.
+                        return Ok(false);
+                    }
+                }
+                return Ok(true);
+            }
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let text = journal_path_text(&self.root, dst)?;
+                let relative = Path::new(&text)
+                    .strip_prefix(&self.root)
+                    .map_err(|_| anyhow::anyhow!("diretório fora do root"))?;
+                let virt = format!("/{}", relative.display());
+                open_confined(&self.root, &virt, libc::O_PATH | libc::O_DIRECTORY).map_err(
+                    |error| {
+                        anyhow::anyhow!(
+                            "{} é symlink, mas não resolve para diretório interno: {error}",
+                            dst.display()
+                        )
+                    },
+                )?;
+                // O link do usr-merge é infraestrutura preexistente, não claim
+                // do pacote cujo STAGE apenas atravessa esse diretório.
+                return Ok(false);
+            }
+            Ok(_) => bail!("{} existe e não é diretório", dst.display()),
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        if let Some(parent) = dst.parent() {
+            if parent != self.root && !parent.as_os_str().is_empty() {
+                self.ensure_dir(parent, fs::Permissions::from_mode(0o755), false, false)?;
+            }
+        }
+        self.record_new_intent(dst)?;
+        fs::create_dir(dst)?;
+        fs::set_permissions(dst, permissions)?;
+        Ok(true)
+    }
+
+    /// Troca um arquivo de registro sem expor conteúdo parcial. O temporário
+    /// também recebe intenção N antes de ser criado e é removido no rollback.
+    fn place_bytes(&mut self, dst: &Path, bytes: &[u8]) -> Result<()> {
+        ensure_mutation_confined(&self.root, dst)?;
+        if let Some(parent) = dst.parent().filter(|parent| *parent != self.root) {
+            self.ensure_dir(parent, fs::Permissions::from_mode(0o755), false, false)?;
+        }
+        let name = dst.file_name().and_then(|n| n.to_str()).unwrap_or("record");
+        let tmp = dst.with_file_name(format!(".{name}.minitrue-{}-{}", self.txid, self.next_tmp));
+        self.next_tmp += 1;
+        self.record_new_intent(&tmp)?;
+        let mut f = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp)?;
+        f.write_all(bytes)?;
+        f.flush()?;
+        drop(f);
+        self.stash(dst, false)?;
+        fs::rename(&tmp, dst)?;
         Ok(())
     }
 
     /// Remove dst transacionalmente (upgrade: caminhos que sumiram do novo
     /// manifesto). Rollback restaura.
-    fn drop_path(&mut self, dst: &Path) -> Result<()> {
-        if fs::symlink_metadata(dst).is_ok() {
-            self.stash(dst)?;
+    fn drop_path(&mut self, dst: &Path, allow_directory: bool) -> Result<()> {
+        match fs::symlink_metadata(dst) {
+            Ok(_) => self.stash(dst, allow_directory)?,
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
         }
         Ok(())
     }
 
-    fn commit(self) -> Result<()> {
-        // Sucesso: o registro (write_record) já é a marca de commit; descarta o
-        // journal e os backups.
-        let _ = fs::remove_dir_all(&self.dir);
-        Ok(())
+    fn commit(mut self) -> Result<()> {
+        self.log.flush()?;
+        if record_transaction_id(&self.rec_dir)?.as_deref() != Some(self.txid.as_str()) {
+            bail!(
+                "recusei commit sem meta TRANSACTION_ID={} em {}",
+                self.txid,
+                self.rec_dir.display()
+            );
+        }
+        let dir = self.dir.clone();
+        let txid = self.txid.clone();
+        drop(self.log);
+        Self::retire(&dir, &txid, "committed")
     }
 
-    fn rollback(self) {
-        Self::replay_rollback(&self.dir, &self.root);
-        for p in &self.touched {
-            if let Some(par) = p.parent() {
-                prune_empty(&self.root, par);
-            }
-        }
-        let _ = fs::remove_dir_all(&self.dir);
+    fn rollback(mut self) -> Result<()> {
+        self.log.flush()?;
+        let dir = self.dir.clone();
+        let root = self.root.clone();
+        let txid = self.txid.clone();
+        drop(self.log);
+        Self::replay_rollback(&dir, &root)?;
+        Self::retire(&dir, &txid, "rolled-back")
     }
 
     /// Desfaz um journal (em processo ou órfão): lê o log e reverte na ordem
     /// INVERSA. Idempotente — seguro reexecutar (crash durante o próprio rollback).
-    fn replay_rollback(dir: &Path, root: &Path) {
-        let log = fs::read_to_string(dir.join("log")).unwrap_or_default();
-        for line in log.lines().rev() {
-            let mut it = line.split('\t');
-            match it.next() {
-                Some("N") => {
-                    if let Some(dst) = it.next() {
-                        let _ = fs::remove_file(dst);
-                        let _ = fs::remove_dir(dst);
-                        if let Some(par) = Path::new(dst).parent() {
-                            prune_empty(root, par);
-                        }
-                    }
+    fn replay_rollback(dir: &Path, root: &Path) -> Result<()> {
+        let log = read_regular_text_nofollow(&dir.join("log"))?;
+        for (rev_idx, line) in log.lines().rev().enumerate() {
+            let fields: Vec<&str> = line.split('\t').collect();
+            match fields.as_slice() {
+                ["N", dst] if !dst.is_empty() => {
+                    let dst = Path::new(dst);
+                    journal_path_text(root, dst)?;
+                    ensure_mutation_confined(root, dst)?;
+                    remove_leaf_if_exists(dst)?;
                 }
-                Some("B") => {
-                    let (Some(dst), Some(n)) = (it.next(), it.next()) else {
-                        continue;
-                    };
+                ["B", dst, n] if !dst.is_empty() => {
+                    let dst = Path::new(dst);
+                    journal_path_text(root, dst)?;
+                    ensure_mutation_confined(root, dst)?;
+                    let _: u32 = n
+                        .parse()
+                        .map_err(|_| anyhow::anyhow!("journal inválido: índice de backup '{n}'"))?;
                     let bak = dir.join("backup").join(n);
-                    if bak.exists() {
-                        let _ = fs::remove_file(dst);
-                        let _ = move_path(&bak, Path::new(dst));
+                    ensure_mutation_confined(root, &bak)?;
+                    match fs::symlink_metadata(&bak) {
+                        Ok(_) => {
+                            remove_leaf_if_exists(dst)?;
+                            move_path(&bak, dst)?;
+                        }
+                        // Intenção gravada, mas o processo morreu antes do move;
+                        // ou esta entrada já foi restaurada por rollback anterior.
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            match fs::symlink_metadata(dst) {
+                                Ok(_) => {}
+                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => bail!(
+                                    "rollback inseguro: backup {} e destino {} ausentes",
+                                    bak.display(),
+                                    dst.display()
+                                ),
+                                Err(e) => return Err(e.into()),
+                            }
+                        }
+                        Err(e) => return Err(e.into()),
                     }
                 }
-                _ => {}
+                _ => bail!(
+                    "journal inválido na entrada reversa {}: {:?}",
+                    rev_idx + 1,
+                    line
+                ),
             }
         }
+        Ok(())
+    }
+
+    /// Primeiro renomeia o journal para fora do nome ativo. Só se chega aqui
+    /// após commit provado ou rollback integral; uma falha anterior preserva o
+    /// diretório ativo e todos os backups para nova tentativa/diagnóstico.
+    fn retire(dir: &Path, txid: &str, label: &str) -> Result<()> {
+        let base = dir
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("journal sem diretório pai"))?;
+        let retired = base.join(format!(".{label}-{txid}"));
+        fs::rename(dir, &retired)?;
+        fs::remove_dir_all(&retired)?;
+        Ok(())
     }
 }
 
-fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
+fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> Result<()> {
     let rec_dir = ctx.records_dir().join(&r.name);
-    let fp = recipe::build_fingerprint(ctx, &r.name)?;
-    if let Some(meta) = read_meta(&rec_dir) {
+    ensure_real_directory_or_absent(&ctx.root, &rec_dir, "registro do pacote")?;
+    if let Some(meta) = read_meta_strict(&rec_dir)? {
+        ensure_supported_record_format(&meta, &r.name)?;
         // Idempotência por FINGERPRINT, não só VERSION (SPEC-0011 §4): uma
         // receita corrigida com a MESMA versão muda o fingerprint e re-builda.
-        if meta.get("VERSION") == Some(&r.version) && meta.get("FINGERPRINT") == Some(&fp) {
-            println!("os registros já estão corretos: {} {}", r.name, r.version);
-            return Ok(());
+        if meta.get("VERSION") == Some(&r.version)
+            && meta.get("FINGERPRINT").map(String::as_str) == Some(fingerprint)
+        {
+            migrate_legacy_record(ctx, &rec_dir, r, fingerprint)?;
+            if record_is_intact(ctx, &rec_dir, r) {
+                if explicit {
+                    world_add(ctx, &r.name)?;
+                }
+                println!("os registros já estão corretos: {} {}", r.name, r.version);
+                return Ok(());
+            }
+        }
+        match provisional_cession_state(ctx, &rec_dir, r)? {
+            ProvisionalCession::Intact => {
+                if explicit {
+                    world_add(ctx, &r.name)?;
+                }
+                println!(
+                    "provisório {} {} já cedeu caminhos; baseline preservado.",
+                    r.name,
+                    meta.get("VERSION").map(String::as_str).unwrap_or("?")
+                );
+                return Ok(());
+            }
+            ProvisionalCession::Incoherent => bail!(
+                "{}: cessão provisional incoerente; rode verify e repare os registros antes de reconstruir",
+                r.name
+            ),
+            ProvisionalCession::NotCeded => {}
         }
     }
 
@@ -699,16 +1899,22 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         .root
         .join("tmp")
         .join(format!("minitrue-build-{}", r.name));
+    ensure_paths_unclaimed(ctx, &r.name, &[(&work, "workspace mundo B")])?;
+    ensure_mutation_confined(&ctx.root, &work)?;
     let _ = fs::remove_dir_all(&work);
     let src_dir = work.join("src");
     let stage = work.join("stage");
     fs::create_dir_all(&src_dir)?;
     fs::create_dir_all(&stage)?;
     let be = setup_toolchain(ctx, &work, r)?;
-    fs::create_dir_all(ctx.cache_dir().join("zig"))?;
-    // A receita é copiada para dentro do work (montado no chroot), então fica
-    // acessível lá como /tmp/minitrue-build-<nome>/recipe.
-    fs::copy(&r.path, work.join("recipe"))?;
+    let zig_cache = ctx.cache_dir().join("zig");
+    ensure_real_directory_or_absent(&ctx.root, &zig_cache, "cache global do zig")?;
+    fs::create_dir_all(&zig_cache)?;
+    ensure_real_directory_or_absent(&ctx.root, &zig_cache, "cache global do zig")?;
+    // Receita e auxiliares são os snapshots capturados por `recipe::load`: o
+    // build, o fingerprint e o registro observam exatamente os mesmos bytes.
+    r.materialize_files(&work)?;
+    write_new(&work.join("recipe"), &r.recipe_bytes)?;
     // EPOCH default fixo (2024-01-01) sobreponível pela receita (SPEC-0010).
     let epoch = r.epoch.clone().unwrap_or_else(|| "1704067200".into());
 
@@ -745,12 +1951,12 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     // não-determinístico ou adulterado), não um aviso. Gravado no registro sempre,
     // é o que uma attestation assina e a corroboração compara (SPEC-0009 §8).
     let epoch_u64: u64 = epoch.parse().unwrap_or(1_704_067_200);
-    let reprocorr = crate::pack::pack_deterministic(&stage, epoch_u64, std::io::sink())?;
+    let (sealed_artifact, reprocorr) = sealed_stage_snapshot(&stage, epoch_u64)?;
     if let Some(pinned) = &r.reprocorr {
         if pinned != &reprocorr {
             let _ = fs::remove_dir_all(&work);
             return fail(
-                4,
+                8,
                 format!(
                     "crimestop (reprodução): {} produziu reprocorr {} mas a receita pina {}",
                     r.name,
@@ -765,29 +1971,99 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         );
     }
 
-    // Coleta o que foi para o staging (pré-ordem: pais antes dos filhos).
-    let mut entries = Vec::new();
-    walk(&stage, &stage, &mut entries)?;
+    // Indexa a própria imagem imutável que produziu `reprocorr`. Não há árvore
+    // extraída gravável entre o hash e a aplicação: regulares serão copiados
+    // por offset diretamente do memfd selado.
+    let entries = index_sealed_stage(&sealed_artifact)?;
 
     // Colisão (doublethink): confere alvos contra os manifestos dos outros.
     // Pacote provisório (busybox) não gera doublethink — cede o caminho na cópia.
-    let claims = all_manifests(ctx);
-    for (_, rel, ft) in &entries {
-        if ft.is_dir() {
-            continue;
+    let claims = all_manifests(ctx)?;
+    let directory_claims = all_directory_claims(ctx)?;
+    let all_claim_index = index_manifest_claims(&claims, None);
+    let external_claim_index = index_manifest_claims(&claims, Some(&r.name));
+    let external_directory_index = index_directory_claims(&directory_claims, &r.name);
+    let stage_paths = canonical_stage_topology(&ctx.root, &entries)?;
+    ensure_stage_avoids_control_plane(&ctx.root, &entries, &stage_paths)?;
+    let mut stage_dirs_with_children = HashSet::new();
+    for entry in &entries {
+        let mut parent = Path::new(&entry.relative).parent();
+        while let Some(path) = parent.filter(|path| !path.as_os_str().is_empty()) {
+            stage_dirs_with_children.insert(path.to_string_lossy().into_owned());
+            parent = path.parent();
         }
-        let virt = virt_path(rel);
-        // Colisão é doublethink, EXCETO quando o dono é um provisional que esta
-        // receita declarou superseder (SPEC-0003 §7) — aí a cópia cede.
-        if let Some((n, v, _)) = claims.iter().find(|(n, _, set)| {
-            *n != r.name
-                && set.contains(&virt)
-                && !(is_provisional(ctx, n) && r.supersedes.iter().any(|s| s == n))
-        }) {
+    }
+    for entry in &entries {
+        let rel = &entry.relative;
+        let virt = stage_paths
+            .get(rel)
+            .ok_or_else(|| anyhow::anyhow!("STAGE indexado sem caminho canônico"))?
+            .clone();
+        if let Some((owner, version, directory)) =
+            indexed_claim_at_or_above(&external_directory_index, &virt, true)
+        {
             let _ = fs::remove_dir_all(&work);
             return fail(
                 4,
-                format!("doublethink detectado: {virt} já pertence a {n} {v}"),
+                format!(
+                    "doublethink detectado: {virt} sobrepõe diretório {directory} de {owner} {version}"
+                ),
+            );
+        }
+        let overlap = if entry.is_dir() {
+            indexed_claim_at_or_above(&external_claim_index, &virt, true).or_else(|| {
+                (!stage_dirs_with_children.contains(rel))
+                    .then(|| indexed_descendant(&external_claim_index, &virt))
+                    .flatten()
+            })
+        } else {
+            // A claim exata é tratada abaixo pela regra declarativa de
+            // takeover; ancestrais/descendentes nunca podem ser cedidos.
+            indexed_claim_at_or_above(&external_claim_index, &virt, false)
+                .or_else(|| indexed_descendant(&external_claim_index, &virt))
+        };
+        if let Some((owner, version, path)) = overlap {
+            let _ = fs::remove_dir_all(&work);
+            return fail(
+                4,
+                format!("doublethink detectado: {virt} sobrepõe {path} de {owner} {version}"),
+            );
+        }
+        if entry.is_dir() {
+            continue;
+        }
+        // Exatamente um provisional declarado pode ceder a claim. Múltiplos
+        // donos nunca são resolvidos pela ordem de `read_dir`.
+        let owners: Vec<&str> = all_claim_index
+            .get(&virt)
+            .into_iter()
+            .flatten()
+            .map(|(owner, _)| *owner)
+            .collect();
+        let external: Vec<&str> = owners
+            .iter()
+            .copied()
+            .filter(|owner| *owner != r.name)
+            .collect();
+        let eligible_takeover = external.len() == 1
+            && is_provisional(ctx, external[0])
+            && r.supersedes.iter().any(|name| name == external[0]);
+        if !external.is_empty() && !eligible_takeover {
+            let _ = fs::remove_dir_all(&work);
+            return fail(
+                4,
+                format!(
+                    "doublethink detectado: {virt} tem donos incompatíveis: {}",
+                    external.join(", ")
+                ),
+            );
+        }
+        let replace_is_owned = owners.iter().any(|owner| *owner == r.name) || eligible_takeover;
+        if !replace_is_owned && confined_exists(&ctx.root, &virt)? {
+            let _ = fs::remove_dir_all(&work);
+            return fail(
+                4,
+                format!("doublethink detectado: {virt} já existe sem dono compatível"),
             );
         }
     }
@@ -796,20 +2072,53 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     // qualquer arquivo antes do registro ⇒ rollback (/ volta ao estado anterior,
     // sem arquivos soltos sem dono).
     let mut jrnl = Journal::begin(ctx, &r.name)?;
-    let mut manifest = match apply_stage(ctx, &entries, r, &mut jrnl) {
+    let mut manifest = match apply_stage(ctx, &sealed_artifact, &entries, r, &mut jrnl) {
         Ok(m) => m,
         Err(e) => {
-            jrnl.rollback();
+            if let Err(rb) = jrnl.rollback() {
+                let _ = fs::remove_dir_all(&work);
+                return Err(anyhow::anyhow!(
+                    "aplicação falhou: {e}; rollback também falhou: {rb}"
+                ));
+            }
             let _ = fs::remove_dir_all(&work);
             return Err(e);
         }
     };
     let _ = fs::remove_dir_all(&work);
 
+    if manifest.is_empty() {
+        if let Err(rb) = jrnl.rollback() {
+            return Err(anyhow::anyhow!(
+                "STAGE sem payload e rollback também falhou: {rb}"
+            ));
+        }
+        return fail(
+            1,
+            format!("{}: STAGE não produziu nenhuma claim instalável", r.name),
+        );
+    }
+
     // O registro é a marca de commit (temp+rename, meta por último). Se ele falha,
     // desfaz a cópia.
-    if let Err(e) = write_record(ctx, &rec_dir, r, "B", &mut manifest, Some(&reprocorr)) {
-        jrnl.rollback();
+    if let Err(e) = write_record(
+        ctx,
+        &rec_dir,
+        r,
+        "B",
+        &mut manifest,
+        RecordWrite {
+            artifact_hash: Some(&reprocorr),
+            fingerprint,
+            manifest_typed: true,
+            journal: Some(&mut jrnl),
+        },
+    ) {
+        if let Err(rb) = jrnl.rollback() {
+            return Err(anyhow::anyhow!(
+                "registro falhou: {e}; rollback também falhou: {rb}"
+            ));
+        }
         return Err(e);
     }
     jrnl.commit()?;
@@ -828,56 +2137,163 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
 /// upgrade por `jrnl.drop_path`. Um erro aqui é revertido pelo chamador.
 fn apply_stage(
     ctx: &Ctx,
-    entries: &[(PathBuf, String, fs::FileType)],
+    image: &fs::File,
+    entries: &[SealedStageEntry],
     r: &Recipe,
     jrnl: &mut Journal,
 ) -> Result<Vec<String>> {
+    let rec_dir = ctx.records_dir().join(&r.name);
+    let old_manifest = if rec_dir.join("meta").is_file() {
+        read_manifest_strict(&rec_dir)?
+    } else {
+        Vec::new()
+    };
+    // Valida o registro antigo antes da primeira mutação. Uma tag futura ou
+    // malformada jamais pode virar autorização para substituir/remover o path;
+    // divergência de uma prova conhecida continua sendo tratada pela política
+    // específica de upgrade/preservação abaixo.
+    for line in &old_manifest {
+        let path = manifest_path(line);
+        rooted_path(&ctx.root, path)?;
+        let _ = confined_claim_matches(line, &ctx.root, path)?;
+    }
+
     let mut manifest: Vec<String> = Vec::new();
-    for (src, rel, ft) in entries {
+    let mut dirs_with_children: HashSet<String> = HashSet::new();
+    let mut present_dirs: HashSet<String> = HashSet::new();
+    let empty_tree_hash = crate::pack::empty_deterministic_hash()?;
+    for entry in entries {
+        let rel = &entry.relative;
+        let mut parent = Path::new(rel).parent();
+        while let Some(path) = parent.filter(|path| !path.as_os_str().is_empty()) {
+            dirs_with_children.insert(path.to_string_lossy().into_owned());
+            parent = path.parent();
+        }
+        if entry.is_dir() {
+            if let Some(sub) = rel.strip_prefix("etc/") {
+                present_dirs.insert(canonical_virtual_path(
+                    &ctx.root,
+                    &format!("/usr/share/factory/etc/{sub}"),
+                )?);
+            } else if rel != "etc" {
+                present_dirs.insert(canonical_virtual_path(&ctx.root, &virt_path(rel))?);
+            }
+        }
+    }
+    for entry in entries {
+        let rel = &entry.relative;
         if let Some(sub) = rel.strip_prefix("etc/") {
             // Nenhum pacote é dono de /etc: o default vai para a fábrica…
             let factory = ctx.root.join("usr/share/factory/etc").join(sub);
-            if ft.is_dir() {
-                fs::create_dir_all(&factory)?;
-            } else if ft.is_symlink() {
-                jrnl.place_symlink(&factory, &fs::read_link(src)?)?;
-            } else {
-                jrnl.place_file(&factory, src)?;
+            let factory_virt =
+                canonical_virtual_path(&ctx.root, &format!("/usr/share/factory/etc/{sub}"))?;
+            if !entry.is_dir() {
+                if let Some(prov) =
+                    adopt_provisional_path(ctx, &factory_virt, &r.name, &r.supersedes, Some(jrnl))?
+                {
+                    eprintln!("  {factory_virt}: assume o controle de {prov} (provisório)");
+                }
             }
-            if !ft.is_dir() {
-                manifest.push(format!("/usr/share/factory/etc/{sub}"));
+            if entry.is_dir() {
+                let empty = !dirs_with_children.contains(rel);
+                let virt = factory_virt.clone();
+                let owned = old_manifest.iter().any(|line| {
+                    canonical_virtual_path(&ctx.root, manifest_path(line))
+                        .is_ok_and(|path| path == virt)
+                        && manifest_integrity(line).is_some_and(|tag| tag.starts_with("d:"))
+                });
+                let claimable = jrnl.ensure_dir(
+                    &factory,
+                    fs::Permissions::from_mode(entry.mode()),
+                    empty,
+                    owned,
+                )?;
+                if empty && claimable {
+                    manifest.push(format!("{}  {virt}", entry.integrity(&empty_tree_hash)));
+                }
+            } else {
+                match &entry.kind {
+                    SealedStageKind::Symlink { target } => {
+                        jrnl.place_symlink(&factory, target)?;
+                    }
+                    SealedStageKind::Regular {
+                        mode, offset, size, ..
+                    } => {
+                        jrnl.place_sealed_file(&factory, image, *offset, *size, *mode)?;
+                    }
+                    SealedStageKind::Directory { .. } => unreachable!(),
+                }
+            }
+            if !entry.is_dir() {
+                let virt = factory_virt;
+                manifest.push(format!("{}  {virt}", entry.integrity(&empty_tree_hash)));
                 // …e é materializado em /etc só se o administrador ainda não decidiu.
                 materialize_etc(jrnl, ctx, &factory, sub)?;
             }
         } else {
             let dst = ctx.root.join(rel);
-            if ft.is_dir() {
-                fs::create_dir_all(&dst)?;
+            if entry.is_dir() {
+                let empty = !dirs_with_children.contains(rel);
+                let virt = canonical_virtual_path(&ctx.root, &virt_path(rel))?;
+                let owned = old_manifest.iter().any(|line| {
+                    canonical_virtual_path(&ctx.root, manifest_path(line))
+                        .is_ok_and(|path| path == virt)
+                        && manifest_integrity(line).is_some_and(|tag| tag.starts_with("d:"))
+                });
+                let claimable =
+                    jrnl.ensure_dir(&dst, fs::Permissions::from_mode(entry.mode()), empty, owned)?;
+                // `/etc` vivo nunca tem dono. Outros diretórios vazios são
+                // payload real e entram no manifesto v2 (`d:`).
+                if rel != "etc" && empty && claimable {
+                    manifest.push(format!("{}  {virt}", entry.integrity(&empty_tree_hash)));
+                }
             } else {
-                let virt = virt_path(rel);
-                if let Some(prov) = adopt_provisional_path(ctx, &virt, &r.name, &r.supersedes) {
+                let virt = canonical_virtual_path(&ctx.root, &virt_path(rel))?;
+                if let Some(prov) =
+                    adopt_provisional_path(ctx, &virt, &r.name, &r.supersedes, Some(jrnl))?
+                {
                     eprintln!("  {virt}: assume o controle de {prov} (provisório)");
                 }
-                if ft.is_symlink() {
-                    jrnl.place_symlink(&dst, &fs::read_link(src)?)?;
-                } else {
-                    jrnl.place_file(&dst, src)?;
+                match &entry.kind {
+                    SealedStageKind::Symlink { target } => {
+                        jrnl.place_symlink(&dst, target)?;
+                    }
+                    SealedStageKind::Regular {
+                        mode, offset, size, ..
+                    } => {
+                        jrnl.place_sealed_file(&dst, image, *offset, *size, *mode)?;
+                    }
+                    SealedStageKind::Directory { .. } => unreachable!(),
                 }
-                manifest.push(virt);
+                manifest.push(format!("{}  {virt}", entry.integrity(&empty_tree_hash)));
             }
         }
     }
 
     // Upgrade: recolhe caminhos do manifesto antigo que sumiram do novo.
-    let new_set: HashSet<&str> = manifest.iter().map(String::as_str).collect();
-    let rec_dir = ctx.records_dir().join(&r.name);
-    for old in read_manifest(&rec_dir) {
+    let new_set: HashSet<&str> = manifest.iter().map(|line| manifest_path(line)).collect();
+    for old in old_manifest {
         let path = manifest_path(&old);
-        if !new_set.contains(path) {
-            let p = ctx.root.join(path.trim_start_matches('/'));
-            jrnl.drop_path(&p)?;
-            if let Some(par) = p.parent() {
-                prune_empty(&ctx.root, par);
+        let canonical_path = canonical_virtual_path(&ctx.root, path)?;
+        if !new_set.contains(canonical_path.as_str()) && !present_dirs.contains(&canonical_path) {
+            let p = rooted_path(&ctx.root, path)?;
+            let current = match confined_path_integrity(&ctx.root, path) {
+                Ok(current) => current,
+                Err(error) if error_is_not_found(&error) => continue,
+                Err(error) => return Err(error),
+            };
+            if current.starts_with("d:") {
+                let unchanged_owned_directory = manifest_integrity(&old)
+                    .is_some_and(|expected| expected.starts_with("d:") && expected == current);
+                if !unchanged_owned_directory {
+                    eprintln!(
+                        "  {path}: diretório ganhou conteúdo/metadados ou não tem prova d: — preservado"
+                    );
+                    continue;
+                }
+                jrnl.drop_path(&p, true)?;
+            } else {
+                jrnl.drop_path(&p, false)?;
             }
         }
     }
@@ -924,11 +2340,19 @@ fn materialize_etc(jrnl: &mut Journal, ctx: &Ctx, factory: &Path, sub: &str) -> 
     }
 
     // Default regular: copia se ausente; se o admin já mexeu, grava `<nome>.new`.
-    if !live.exists() {
-        jrnl.place_file(&live, factory)?;
-        return Ok(());
+    match fs::symlink_metadata(&live) {
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            jrnl.place_file(&live, factory)?;
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
     }
-    let same = fs::read(&live).ok() == fs::read(factory).ok();
+    let live_virt = format!("/etc/{sub}");
+    rooted_path(&ctx.root, &live_virt)?;
+    let factory_hash = sha256_bytes(&read_regular_nofollow(factory)?);
+    let same = confined_regular_content_hash(&ctx.root, &live_virt)?.as_deref()
+        == Some(factory_hash.as_str());
     if !same {
         let new = live.with_file_name(format!(
             "{}.new",
@@ -939,25 +2363,6 @@ fn materialize_etc(jrnl: &mut Journal, ctx: &Ctx, factory: &Path, sub: &str) -> 
             "  aviso: /etc/{sub} foi modificado pelo administrador; novo default em {}",
             new.display()
         );
-    }
-    Ok(())
-}
-
-fn walk(base: &Path, dir: &Path, out: &mut Vec<(PathBuf, String, fs::FileType)>) -> Result<()> {
-    let mut entries: Vec<_> = fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
-    entries.sort_by_key(|e| e.file_name());
-    for e in entries {
-        let path = e.path();
-        let rel = path
-            .strip_prefix(base)
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        let ft = fs::symlink_metadata(&path)?.file_type();
-        out.push((path.clone(), rel, ft));
-        if ft.is_dir() {
-            walk(base, &path, out)?;
-        }
     }
     Ok(())
 }
@@ -973,28 +2378,15 @@ fn mkparent(p: &Path) -> Result<()> {
     Ok(())
 }
 
-fn prune_empty(root: &Path, start: &Path) {
-    let mut p = start.to_path_buf();
-    while p.starts_with(root) && p != *root {
-        let empty = fs::read_dir(&p)
-            .map(|mut d| d.next().is_none())
-            .unwrap_or(false);
-        if !empty || fs::remove_dir(&p).is_err() {
-            break;
-        }
-        match p.parent() {
-            Some(par) => p = par.to_path_buf(),
-            None => break,
-        }
-    }
-}
-
 fn room101(ctx: &Ctx, r: &Recipe, stdout: &[u8], stderr: &[u8]) -> Result<()> {
-    fs::create_dir_all(ctx.room101())?;
+    let room = ctx.room101();
+    ensure_real_directory_or_absent(&ctx.root, &room, "diretório Room 101")?;
+    fs::create_dir_all(&room)?;
+    ensure_real_directory_or_absent(&ctx.root, &room, "diretório Room 101")?;
     let log = ctx.room101().join(format!("{}-{}.log", r.name, r.version));
     let mut body = stdout.to_vec();
     body.extend_from_slice(stderr);
-    fs::write(&log, body)?;
+    write_atomic(&log, &body)?;
     Ok(())
 }
 
@@ -1002,20 +2394,34 @@ fn room101(ctx: &Ctx, r: &Recipe, stdout: &[u8], stderr: &[u8]) -> Result<()> {
 
 pub fn memoryhole(ctx: &Ctx, names: &[String]) -> Result<()> {
     let _lock = acquire_lock(ctx)?; // segurado até o fim da operação
+    Journal::recover_all(ctx)?;
+    ensure_real_directory_or_absent(
+        &ctx.root,
+        &ctx.root.join("etc/minitrue"),
+        "configuração do minitrue",
+    )?;
+    ensure_no_internal_claims(ctx)?;
+    for name in names {
+        recipe::validate_name(name)?;
+    }
     let removing: HashSet<&str> = names.iter().map(String::as_str).collect();
     for name in names {
         let rec_dir = ctx.records_dir().join(name);
+        ensure_real_directory_or_absent(&ctx.root, &rec_dir, "registro do pacote")?;
+        // Nunca remova um pacote sobre estado intermediário: resolve primeiro
+        // a transação órfã desse mesmo pacote, com a mesma regra do rectify.
+        Journal::recover(ctx, name)?;
         if !rec_dir.is_dir() {
             return fail(
                 2,
                 format!("{name}: não há registro — talvez nunca tenha existido"),
             );
         }
-        for (other, _, _) in all_manifests(ctx) {
+        for (other, _, _) in all_manifests(ctx)? {
             if removing.contains(other.as_str()) {
                 continue;
             }
-            let deps = read_meta(&ctx.records_dir().join(&other))
+            let deps = read_meta_strict(&ctx.records_dir().join(&other))?
                 .and_then(|m| m.get("DEPS").cloned())
                 .unwrap_or_default();
             if deps.split_whitespace().any(|d| d == name) {
@@ -1026,42 +2432,85 @@ pub fn memoryhole(ctx: &Ctx, names: &[String]) -> Result<()> {
             }
         }
 
-        let world = read_meta(&rec_dir)
-            .and_then(|m| m.get("WORLD").cloned())
+        let record_meta = read_meta_strict(&rec_dir)?.ok_or_else(|| crate::Fail {
+            code: 1,
+            msg: format!("{name}: registro sem meta — memoryhole recusado"),
+        })?;
+        ensure_supported_record_format(&record_meta, name)?;
+        let world = record_meta
+            .get("WORLD")
+            .cloned()
             .unwrap_or_else(|| "A".into());
+        // Resolve e valida o manifesto inteiro ANTES da primeira remoção. Um
+        // registro truncado/adulterado nunca pode causar travessia nem deixar
+        // um memoryhole pela metade até descobrirmos uma linha inválida.
+        let manifest = read_manifest_strict(&rec_dir).map_err(|error| crate::Fail {
+            code: 1,
+            msg: format!("{name}: manifesto ilegível — memoryhole recusado: {error}"),
+        })?;
+        if manifest.is_empty() && record_meta.get("PROVISIONAL").map(String::as_str) != Some("1") {
+            return fail(
+                1,
+                format!("{name}: manifesto ausente/vazio — memoryhole recusado"),
+            );
+        }
+        let mut claims = manifest
+            .into_iter()
+            .map(|line| {
+                let virt = manifest_path(&line).to_string();
+                // `openat2(RESOLVE_IN_ROOT)` prende inclusive symlinks
+                // intermediários ao rootfs; a validação lexical sozinha não
+                // basta para uma operação destrutiva.
+                let matches = confined_claim_matches(&line, &ctx.root, &virt)?;
+                Ok((line, virt, matches))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        claims.sort_by(|a, b| a.1.cmp(&b.1));
         if world == "A" {
-            for line in read_manifest(&rec_dir) {
-                let path = manifest_path(&line);
+            let opt_prefix = format!("/opt/{name}/");
+            for (line, path, matches) in claims.iter().rev() {
+                if matches == &Some(false) && confined_exists(&ctx.root, path)? {
+                    println!("  {path}: modificado desde a instalação — preservado");
+                    continue;
+                }
                 if path.starts_with("/usr/") {
-                    let p = ctx.root.join(path.trim_start_matches('/'));
-                    if let Ok(t) = fs::read_link(&p) {
-                        if t.to_string_lossy().contains(&format!("/opt/{name}/")) {
-                            let _ = fs::remove_file(&p);
-                        }
+                    // Defesa adicional para registros v0/v1: link mundo A só é
+                    // gerido se ainda aponta para o /opt deste pacote.
+                    let target = match readlink_confined(&ctx.root, path) {
+                        Ok(target) => target,
+                        Err(error) if error_is_not_found(&error) => continue,
+                        Err(error) => return Err(error),
+                    };
+                    if String::from_utf8_lossy(&target).contains(&format!("/opt/{name}/")) {
+                        remove_confined(&ctx.root, path, false)?;
                     }
+                } else if path.starts_with(&opt_prefix) {
+                    let recursive = manifest_integrity(line)
+                        .is_some_and(|tag| tag.starts_with("d:"))
+                        || (manifest_integrity(line).is_none()
+                            && confined_path_integrity(&ctx.root, path)
+                                .is_ok_and(|tag| tag.starts_with("d:")));
+                    remove_confined(&ctx.root, path, recursive)?;
                 }
             }
-            let _ = fs::remove_dir_all(ctx.opt(name));
+            let _ = remove_empty_confined_dir(&ctx.root, &format!("/opt/{name}"))?;
         } else {
-            let mut lines = read_manifest(&rec_dir);
-            lines.sort_by(|a, b| manifest_path(a).cmp(manifest_path(b)));
-            for line in lines.iter().rev() {
-                let path = manifest_path(line);
-                let p = ctx.root.join(path.trim_start_matches('/'));
-                // Veredito intacto×modificado (SPEC-0003 §4): arquivo cujo
-                // conteúdo diverge do hash registrado foi mexido pelo usuário —
-                // preserva por padrão, com aviso. `-` (virou symlink/dir ou
-                // ficou ilegível) também é divergência: um regular registrado
-                // não deveria ter mudado de tipo.
-                if let Some(recorded) = manifest_hash(line) {
-                    if file_hash(&p) != recorded {
-                        println!("  {path}: modificado desde a instalação — preservado");
-                        continue;
-                    }
+            for (line, path, matches) in claims.iter().rev() {
+                // v2 prende conteúdo+tipo+alvo/árvore; v1 prende regulares.
+                // Legado sem prova conserva a política histórica de presença.
+                if matches == &Some(false) && confined_exists(&ctx.root, path)? {
+                    println!("  {path}: modificado desde a instalação — preservado");
+                    continue;
                 }
-                let _ = fs::remove_file(&p);
-                if let Some(par) = p.parent() {
-                    prune_empty(&ctx.root, par);
+                if manifest_integrity(line).is_some_and(|tag| tag.starts_with("d:")) {
+                    // Mundo B só registra diretórios vazios. Nunca remove sua
+                    // árvore recursivamente: se outro pacote/admin acrescentou
+                    // filhos, `rmdir` falha e o conteúdo é preservado.
+                    if !remove_empty_confined_dir(&ctx.root, path)? {
+                        println!("  {path}: diretório não está vazio — preservado");
+                    }
+                } else {
+                    remove_confined(&ctx.root, path, false)?;
                 }
             }
         }
@@ -1077,9 +2526,17 @@ pub fn memoryhole(ctx: &Ctx, names: &[String]) -> Result<()> {
 
 pub fn archives(ctx: &Ctx) -> Result<()> {
     let dir = ctx.records_dir();
+    ensure_real_directory_or_absent(&ctx.root, &dir, "diretório de registros")?;
     let mut rows: Vec<String> = Vec::new();
     if let Ok(entries) = fs::read_dir(&dir) {
-        for e in entries.flatten() {
+        for entry in entries {
+            let e = entry?;
+            if !e.file_type()?.is_dir() {
+                bail!(
+                    "entrada de registro não é diretório real: {}",
+                    e.path().display()
+                );
+            }
             let name = e.file_name().to_string_lossy().into_owned();
             let meta = read_meta(&e.path()).unwrap_or_default();
             let n_paths = read_manifest(&e.path()).len();
@@ -1104,25 +2561,134 @@ pub fn archives(ctx: &Ctx) -> Result<()> {
 
 pub fn verify(ctx: &Ctx) -> Result<()> {
     let mut problems = 0usize;
-    let mut claimed: HashSet<String> = HashSet::new();
+    let mut claimed: HashMap<String, String> = HashMap::new();
+    ensure_real_directory_or_absent(&ctx.root, &ctx.records_dir(), "diretório de registros")?;
+    let journal_dir = ctx.root.join("var/lib/minitrue/journal");
+    if let Ok(entries) = fs::read_dir(&journal_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with('.') && entry.path().is_dir() {
+                println!(
+                    "wrongthink: transação pendente de {name}; rode `rectify {name}` antes de confiar no estado"
+                );
+                problems += 1;
+            }
+        }
+    }
     if let Ok(entries) = fs::read_dir(ctx.records_dir()) {
-        for e in entries.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            for line in read_manifest(&e.path()) {
-                let path = manifest_path(&line);
-                claimed.insert(path.to_string());
-                let p = ctx.root.join(path.trim_start_matches('/'));
-                if fs::symlink_metadata(&p).is_err() {
-                    println!("wrongthink: {path} (de {name}) sumiu do filesystem");
+        for entry in entries {
+            let e = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    println!("wrongthink: não pude ler uma entrada de registro: {error}");
                     problems += 1;
                     continue;
                 }
-                // Integridade por arquivo (manifesto v1): conteúdo vs. hash
-                // registrado. `-` (regular virou symlink/dir ou ficou ilegível)
-                // também é divergência. Legado v0 (sem hash) só confere presença.
-                if let Some(recorded) = manifest_hash(&line) {
-                    if file_hash(&p) != recorded {
-                        println!("wrongthink: {path} (de {name}) foi modificado — hash/tipo difere do registro");
+            };
+            let name = e.file_name().to_string_lossy().into_owned();
+            if !e.file_type().is_ok_and(|file_type| file_type.is_dir()) {
+                println!("wrongthink: registro de {name} não é diretório real");
+                problems += 1;
+                continue;
+            }
+            let meta = match read_meta_strict(&e.path()) {
+                Ok(Some(meta)) => meta,
+                Ok(None) => {
+                    println!("wrongthink: registro de {name} não tem meta legível");
+                    problems += 1;
+                    continue;
+                }
+                Err(error) => {
+                    println!("wrongthink: meta de {name} é inválido: {error}");
+                    problems += 1;
+                    continue;
+                }
+            };
+            if let Err(error) = ensure_supported_record_format(&meta, &name) {
+                println!("wrongthink: {error}");
+                problems += 1;
+                continue;
+            }
+            if meta.get("RECORD_FORMAT").map(String::as_str) == Some(RECORD_FORMAT) {
+                let version = meta.get("VERSION").map(String::as_str);
+                let baseline = version.and_then(|version| {
+                    recipe::validate_version(&name, version).ok().and_then(|_| {
+                        read_regular_nofollow(&e.path().join(format!("manifest@{version}"))).ok()
+                    })
+                });
+                match baseline {
+                    Some(bytes) => {
+                        let baseline_hash = sha256_bytes(&bytes);
+                        if meta.get("MANIFEST_BASELINE_SHA256") != Some(&baseline_hash) {
+                            println!(
+                                "wrongthink: baseline versionado de {name} não confere com o meta"
+                            );
+                            problems += 1;
+                        }
+                    }
+                    None => {
+                        println!("wrongthink: baseline versionado de {name} está ausente/inválido");
+                        problems += 1;
+                    }
+                }
+            }
+            let manifest = match read_manifest_strict(&e.path()) {
+                Ok(manifest) => manifest,
+                Err(error) => {
+                    println!("wrongthink: manifesto de {name} é ilegível: {error}");
+                    problems += 1;
+                    continue;
+                }
+            };
+            if manifest.is_empty() && !is_provisional(ctx, &name) {
+                println!("wrongthink: manifesto de {name} está ausente/vazio");
+                problems += 1;
+            }
+            for line in manifest {
+                let path = manifest_path(&line);
+                match rooted_path(&ctx.root, path) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        println!("wrongthink: manifesto de {name} tem caminho inválido: {err}");
+                        problems += 1;
+                        continue;
+                    }
+                };
+                let canonical = match canonical_virtual_path(&ctx.root, path) {
+                    Ok(canonical) => canonical,
+                    Err(error) => {
+                        println!(
+                            "wrongthink: claim {path} de {name} não pôde ser canonicalizada: {error}"
+                        );
+                        problems += 1;
+                        continue;
+                    }
+                };
+                if let Some(previous) = claimed.insert(canonical.clone(), name.clone()) {
+                    println!("wrongthink: ownership duplicado de {canonical}: {previous} e {name}");
+                    problems += 1;
+                }
+                match confined_exists(&ctx.root, path) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        println!("wrongthink: {path} (de {name}) sumiu do filesystem");
+                        problems += 1;
+                        continue;
+                    }
+                    Err(err) => {
+                        println!("wrongthink: {path} (de {name}) não pôde ser inspecionado: {err}");
+                        problems += 1;
+                        continue;
+                    }
+                }
+                match confined_claim_matches(&line, &ctx.root, path) {
+                    Ok(Some(false)) => {
+                        println!("wrongthink: {path} (de {name}) foi modificado — conteúdo/tipo/alvo difere do registro");
+                        problems += 1;
+                    }
+                    Ok(Some(true) | None) => {}
+                    Err(err) => {
+                        println!("wrongthink: manifesto de {name} é inválido em {path}: {err}");
                         problems += 1;
                     }
                 }
@@ -1137,7 +2703,8 @@ pub fn verify(ctx: &Ctx) -> Result<()> {
                 continue;
             }
             let virt = format!("/usr/bin/{}", e.file_name().to_string_lossy());
-            if !claimed.contains(&virt) {
+            let canonical = canonical_virtual_path(&ctx.root, &virt).unwrap_or(virt.clone());
+            if !claimed.contains_key(&canonical) {
                 println!(
                     "wrongthink: {virt} é órfão (aponta {} sem dono em manifesto)",
                     t.display()
@@ -1166,22 +2733,39 @@ pub fn newspeak_show(ctx: &Ctx, name: &str) -> Result<()> {
 
 // ---------- registros e world ----------
 
+struct RecordWrite<'a> {
+    artifact_hash: Option<&'a str>,
+    fingerprint: &'a str,
+    manifest_typed: bool,
+    journal: Option<&'a mut Journal>,
+}
+
 fn write_record(
     ctx: &Ctx,
     rec_dir: &Path,
     r: &Recipe,
     world: &str,
     manifest: &mut Vec<String>,
-    artifact_hash: Option<&str>,
+    mut write: RecordWrite<'_>,
 ) -> Result<()> {
-    fs::create_dir_all(rec_dir)?;
+    ensure_real_directory_or_absent(&ctx.root, rec_dir, "registro do pacote")?;
+    if let Some(journal) = write.journal.as_deref_mut() {
+        journal.ensure_dir(rec_dir, fs::Permissions::from_mode(0o755), false, false)?;
+    } else {
+        fs::create_dir_all(rec_dir)?;
+    }
     manifest.sort();
     manifest.dedup();
     // ORIGIN: quando os canais (SPEC-0009) chegarem, a instalação de canal grava
     // `canal:<nome>` (+ TRUST, CHANNEL_SHA256); por ora deriva do mundo.
     let origin = if world == "A" { "vendor" } else { "fonte" };
-    let meta = format!(
-        "RECORD_FORMAT={RECORD_FORMAT}\nNAME={}\nVERSION={}\nKIND={}\nWORLD={}\nORIGIN={}\nSHA256={}\nDEPS={}\nFINGERPRINT={}\nINSTALLED_AT={}\n{}{}",
+    let transaction = write
+        .journal
+        .as_ref()
+        .map(|j| format!("TRANSACTION_ID={}\n", j.txid))
+        .unwrap_or_default();
+    let mut meta = format!(
+        "RECORD_FORMAT={RECORD_FORMAT}\nNAME={}\nVERSION={}\nKIND={}\nWORLD={}\nORIGIN={}\nSHA256={}\nDEPS={}\nFINGERPRINT={}\nINSTALLED_AT={}\n",
         r.name,
         r.version,
         if r.kind == Kind::Binary { "binary" } else { "source" },
@@ -1189,42 +2773,79 @@ fn write_record(
         origin,
         r.sha256.join(" "),
         r.deps.join(" "),
-        recipe::build_fingerprint(ctx, &r.name)?,
+        write.fingerprint,
         iso_now(),
-        artifact_hash
-            .map(|h| format!("ARTIFACT_HASH={h}\n"))
-            .unwrap_or_default(),
-        if r.provisional { "PROVISIONAL=1\n" } else { "" }
     );
-    // Manifesto v1: cada linha vira `<sha256>␠␠<caminho>` (hash do arquivo real;
-    // `-` p/ symlink/diretório). É o que dá integridade por arquivo ao `verify`
-    // e o veredito intacto×modificado ao `memoryhole` (SPEC-0003 §4/§6).
-    let decorated: Vec<String> = manifest
-        .iter()
-        .map(|p| {
-            format!(
-                "{}  {p}",
-                file_hash(&ctx.root.join(p.trim_start_matches('/')))
-            )
-        })
-        .collect();
+    if let Some(hash) = write.artifact_hash {
+        meta.push_str(&format!("ARTIFACT_HASH={hash}\n"));
+    }
+    if r.provisional {
+        meta.push_str("PROVISIONAL=1\n");
+    }
+    // A licença de tomar claims de uma semente faz parte do registro histórico.
+    // Ela também prova cadeias provisional→provisional após um restart.
+    meta.push_str(&format!("SUPERSEDES={}\n", r.supersedes.join(" ")));
+    if !r.about.is_empty() {
+        meta.push_str(&format!("ABOUT={}\n", r.about));
+    }
+    if let Some(pinned) = &r.reprocorr {
+        meta.push_str(&format!("REPROCORR={pinned}\n"));
+    }
+    // Manifesto v2: cada linha prende tipo+conteúdo (`f:`), alvo de link (`l:`)
+    // ou árvore de diretório (`d:`). Além do `verify`/`memoryhole`, isso impede
+    // que o fast path aceite um link retargetado ou payload mundo-A adulterado.
+    let decorated: Vec<String> = if write.manifest_typed {
+        manifest
+            .iter()
+            .map(|line| -> Result<String> {
+                let path = manifest_path(line);
+                rooted_path(&ctx.root, path)?;
+                if manifest_integrity(line).is_none() {
+                    bail!("manifesto pré-calculado contém claim inválida: {line:?}");
+                }
+                Ok(line.clone())
+            })
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        manifest
+            .iter()
+            .map(|p| -> Result<String> {
+                rooted_path(&ctx.root, p)?;
+                Ok(format!("{}  {p}", confined_path_integrity(&ctx.root, p)?))
+            })
+            .collect::<Result<Vec<_>>>()?
+    };
     let body = decorated.join("\n") + "\n";
-    // Tudo por temporário + rename (atômico). O `meta` é gravado **por último**:
-    // é a marca de commit do registro — um crash entre o manifest e o meta deixa
-    // um registro sem meta, que `read_meta` trata como não-instalado (⇒ reinstala
-    // no próximo rectify), em vez de um registro meio-escrito tido por bom.
-    write_atomic(&rec_dir.join("manifest"), body.as_bytes())?;
-    write_atomic(
-        &rec_dir.join(format!("manifest@{}", r.version)),
-        body.as_bytes(),
-    )?;
-    let recipe_bytes = fs::read(&r.path)?;
-    write_atomic(&rec_dir.join("recipe"), &recipe_bytes)?;
-    write_atomic(
-        &rec_dir.join(format!("recipe@{}", r.version)),
-        &recipe_bytes,
-    )?;
-    write_atomic(&rec_dir.join("meta"), meta.as_bytes())?;
+    meta.push_str(&format!(
+        "MANIFEST_BASELINE_SHA256={}\n",
+        sha256_bytes(body.as_bytes())
+    ));
+    // Sempre por último: é a única marca que autoriza recovery a concluir uma
+    // transação mundo B em vez de revertê-la.
+    meta.push_str(&transaction);
+    // Todas as partes são preparadas antes da primeira mutação. No mundo B cada
+    // troca também entra no journal; o `meta` com txid é sempre a última e única
+    // marca de commit. No mundo A mantém-se a troca atômica arquivo-a-arquivo.
+    let files = [
+        (rec_dir.join("manifest"), body.as_bytes()),
+        (
+            rec_dir.join(format!("manifest@{}", r.version)),
+            body.as_bytes(),
+        ),
+        (rec_dir.join("recipe"), r.recipe_bytes.as_slice()),
+        (
+            rec_dir.join(format!("recipe@{}", r.version)),
+            r.recipe_bytes.as_slice(),
+        ),
+        (rec_dir.join("meta"), meta.as_bytes()),
+    ];
+    for (path, bytes) in files {
+        if let Some(jrnl) = write.journal.as_deref_mut() {
+            jrnl.place_bytes(&path, bytes)?;
+        } else {
+            write_atomic(&path, bytes)?;
+        }
+    }
     Ok(())
 }
 
@@ -1243,8 +2864,22 @@ fn adopt_provisional_path(
     virt: &str,
     myself: &str,
     supersedes: &[String],
-) -> Option<String> {
-    for e in fs::read_dir(ctx.records_dir()).ok()?.flatten() {
+    mut journal: Option<&mut Journal>,
+) -> Result<Option<String>> {
+    ensure_real_directory_or_absent(&ctx.root, &ctx.records_dir(), "diretório de registros")?;
+    let entries = match fs::read_dir(ctx.records_dir()) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    for entry in entries {
+        let e = entry?;
+        if !e.file_type()?.is_dir() {
+            bail!(
+                "entrada de registro não é diretório real: {}",
+                e.path().display()
+            );
+        }
         let owner = e.file_name().to_string_lossy().into_owned();
         // Só cede de provisional que ESTA receita declarou superseder
         // (SPEC-0003 §7). Provisional não-declarado não é cedido — vira
@@ -1252,32 +2887,732 @@ fn adopt_provisional_path(
         if owner == myself || !is_provisional(ctx, &owner) || !supersedes.contains(&owner) {
             continue;
         }
-        let mut m = read_manifest(&e.path());
-        if let Some(pos) = m.iter().position(|l| manifest_path(l) == virt) {
+        let mut m = read_manifest_strict(&e.path())?;
+        if let Some(pos) = m.iter().position(|line| {
+            canonical_virtual_path(&ctx.root, manifest_path(line)).is_ok_and(|path| path == virt)
+        }) {
             m.remove(pos);
-            let _ = write_atomic(&e.path().join("manifest"), (m.join("\n") + "\n").as_bytes());
-            return Some(owner);
+            let body = m.join("\n") + "\n";
+            let path = e.path().join("manifest");
+            if let Some(jrnl) = journal.as_deref_mut() {
+                jrnl.place_bytes(&path, body.as_bytes())?;
+            } else {
+                write_atomic(&path, body.as_bytes())?;
+            }
+            return Ok(Some(owner));
         }
     }
-    None
+    Ok(None)
+}
+
+fn read_meta_strict(rec_dir: &Path) -> Result<Option<HashMap<String, String>>> {
+    let path = rec_dir.join("meta");
+    let text = match read_regular_text_nofollow(&path) {
+        Ok(text) => text,
+        Err(error) if error_is_not_found(&error) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut meta = HashMap::new();
+    for (index, line) in text.lines().enumerate() {
+        let (key, value) = line
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("meta linha {} malformada", index + 1))?;
+        let valid_key = !key.is_empty()
+            && key
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+            && key.as_bytes()[0].is_ascii_uppercase();
+        if !valid_key || value.chars().any(char::is_control) {
+            bail!("meta linha {} não é canônica", index + 1);
+        }
+        if meta.insert(key.to_string(), value.to_string()).is_some() {
+            bail!("meta contém campo duplicado: {key}");
+        }
+    }
+    if meta.is_empty() {
+        bail!("meta está vazio");
+    }
+    Ok(Some(meta))
 }
 
 pub(crate) fn read_meta(rec_dir: &Path) -> Option<HashMap<String, String>> {
-    let txt = fs::read_to_string(rec_dir.join("meta")).ok()?;
-    Some(
-        txt.lines()
-            .filter_map(|l| {
-                l.split_once('=')
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-            })
-            .collect(),
-    )
+    read_meta_strict(rec_dir).ok().flatten()
+}
+
+/// Valida a identidade instalada antes de ela virar uma declaração assinada.
+/// Não basta o `ARTIFACT_HASH` ser hex: o registro v2, baseline, snapshots e
+/// todas as claims ativas precisam formar um estado íntegro de mundo B.
+pub(crate) fn attestable_meta(ctx: &Ctx, pkg: &str) -> Result<HashMap<String, String>> {
+    recipe::validate_name(pkg)?;
+    let rec_dir = ctx.records_dir().join(pkg);
+    ensure_real_directory_or_absent(&ctx.root, &rec_dir, "registro atestável")?;
+    let meta = read_meta_strict(&rec_dir)?.ok_or_else(|| crate::Fail {
+        code: 1,
+        msg: format!("{pkg} não está instalado (sem registro)"),
+    })?;
+    ensure_supported_record_format(&meta, pkg)?;
+    if meta.get("RECORD_FORMAT").map(String::as_str) != Some(RECORD_FORMAT)
+        || meta.get("NAME").map(String::as_str) != Some(pkg)
+        || meta.get("KIND").map(String::as_str) != Some("source")
+        || meta.get("WORLD").map(String::as_str) != Some("B")
+        || meta
+            .get("TRANSACTION_ID")
+            .is_none_or(|value| value.is_empty())
+    {
+        bail!("{pkg}: somente registro v2 íntegro de mundo B pode ser atestado");
+    }
+    let version = meta
+        .get("VERSION")
+        .ok_or_else(|| anyhow::anyhow!("{pkg}: registro sem VERSION"))?;
+    recipe::validate_version(pkg, version)?;
+    let baseline_bytes = read_regular_nofollow(&rec_dir.join(format!("manifest@{version}")))?;
+    let baseline_hash = sha256_bytes(&baseline_bytes);
+    if baseline_bytes.is_empty() || meta.get("MANIFEST_BASELINE_SHA256") != Some(&baseline_hash) {
+        bail!("{pkg}: baseline do manifesto não confere");
+    }
+    let baseline_text = std::str::from_utf8(&baseline_bytes)
+        .map_err(|_| anyhow::anyhow!("{pkg}: baseline não UTF-8"))?;
+    let baseline: Vec<&str> = baseline_text
+        .lines()
+        .filter(|line| !line.is_empty())
+        .collect();
+    if baseline
+        .iter()
+        .any(|line| manifest_integrity(line).is_none())
+    {
+        bail!("{pkg}: baseline contém claim que não é v2");
+    }
+
+    let active_bytes = read_regular_nofollow(&rec_dir.join("manifest"))?;
+    if active_bytes.is_empty() {
+        bail!("{pkg}: manifesto ativo vazio/corrompido");
+    }
+    let active_text = std::str::from_utf8(&active_bytes)
+        .map_err(|_| anyhow::anyhow!("{pkg}: manifesto ativo não UTF-8"))?;
+    let active: Vec<&str> = active_text
+        .lines()
+        .filter(|line| !line.is_empty())
+        .collect();
+    let provisional = meta.get("PROVISIONAL").map(String::as_str) == Some("1");
+    let coherent = if provisional {
+        provisional_manifest_coherent(ctx, pkg, &active, &baseline, false)?
+    } else {
+        active_bytes == baseline_bytes && !active.is_empty()
+    };
+    if !coherent {
+        bail!("{pkg}: manifesto ativo não é coerente com o baseline");
+    }
+    for line in &active {
+        let path = manifest_path(line);
+        if manifest_integrity(line).is_none()
+            || confined_claim_matches(line, &ctx.root, path)? != Some(true)
+        {
+            bail!("{pkg}: claim ativa não confere: {path}");
+        }
+    }
+    if let Some(pinned) = meta.get("REPROCORR") {
+        if meta.get("ARTIFACT_HASH") != Some(pinned) {
+            bail!("{pkg}: ARTIFACT_HASH diverge do REPROCORR pinado");
+        }
+    }
+    let current_recipe = rec_dir.join("recipe");
+    let versioned_recipe = rec_dir.join(format!("recipe@{version}"));
+    for path in [&current_recipe, &versioned_recipe] {
+        if !fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file()) {
+            bail!("{pkg}: snapshot de receita ausente ou não-regular");
+        }
+    }
+    if read_regular_nofollow(&current_recipe)? != read_regular_nofollow(&versioned_recipe)? {
+        bail!("{pkg}: snapshots de receita divergem");
+    }
+    Ok(meta)
 }
 
 fn read_manifest(rec_dir: &Path) -> Vec<String> {
-    fs::read_to_string(rec_dir.join("manifest"))
-        .map(|t| t.lines().map(str::to_string).collect())
+    read_regular_text_nofollow(&rec_dir.join("manifest"))
+        // Um provisional pode ceder todas as claims e ficar com o corpo
+        // canônico "\n". Linha vazia não é caminho; o status PROVISIONAL no
+        // meta decide se um manifesto sem claims é legítimo.
+        .map(|t| {
+            t.lines()
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default()
+}
+
+/// Leitura factual de um manifesto persistido. Diferentemente de
+/// `read_manifest`, distingue o corpo canônico sem claims (`"\n"`) de arquivo
+/// ausente, vazio, ilegível ou não UTF-8. Operações que decidem integridade,
+/// colisão ou remoção nunca podem tratar corrupção como "zero caminhos".
+fn read_manifest_strict(rec_dir: &Path) -> Result<Vec<String>> {
+    let bytes = read_regular_nofollow(&rec_dir.join("manifest"))?;
+    if bytes.is_empty() {
+        bail!("arquivo vazio");
+    }
+    let text = String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("conteúdo não UTF-8"))?;
+    Ok(text
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+fn read_versioned_manifest_strict(rec_dir: &Path, version: &str) -> Result<Vec<String>> {
+    let bytes = read_regular_nofollow(&rec_dir.join(format!("manifest@{version}")))?;
+    if bytes.is_empty() {
+        bail!("manifest@{version} vazio");
+    }
+    let text =
+        String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("manifest@{version} não é UTF-8"))?;
+    Ok(text
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+/// Formatos futuros são estado desconhecido, não "legado". Regravá-los como
+/// v2 seria um downgrade silencioso e poderia descartar invariantes que esta
+/// versão do minitrue não entende.
+fn ensure_supported_record_format(meta: &HashMap<String, String>, name: &str) -> Result<()> {
+    match meta.get("RECORD_FORMAT").map(String::as_str) {
+        None | Some("0" | "1" | RECORD_FORMAT) => Ok(()),
+        Some(format) => bail!(
+            "{name}: RECORD_FORMAT={format} não é suportado por este minitrue (máximo {RECORD_FORMAT})"
+        ),
+    }
+}
+
+/// Coerência comum a provisionals v2 e legados congelados. Cessão normal só
+/// remove linhas: as restantes precisam ser byte-idênticas ao baseline, e
+/// toda linha ausente precisa aparecer no manifesto ativo de um sucessor. Um
+/// sucessor ainda provisional só prova a cessão quando seu snapshot histórico
+/// declara `SUPERSEDES=<cedente>`; sem isso, subconjunto também poderia ser
+/// truncamento.
+fn successor_authorizes_cession(ctx: &Ctx, successor: &str, cedent: &str) -> Result<bool> {
+    let rec_dir = ctx.records_dir().join(successor);
+    let Some(meta) = read_meta_strict(&rec_dir)? else {
+        return Ok(false);
+    };
+    ensure_supported_record_format(&meta, successor)?;
+    if meta.get("NAME").map(String::as_str) != Some(successor) {
+        return Ok(false);
+    }
+    if meta.get("PROVISIONAL").map(String::as_str) != Some("1") {
+        return Ok(true);
+    }
+
+    let declaration = if let Some(value) = meta.get("SUPERSEDES") {
+        Some(value.clone())
+    } else {
+        // Compatibilidade com registros anteriores ao campo congelado. A
+        // receita é aberta sem seguir link e apenas atribuições literais são
+        // aceitas; nenhum shell histórico é executado.
+        read_regular_nofollow(&rec_dir.join("recipe"))
+            .ok()
+            .and_then(|bytes| recipe::literal_assignment_bytes(&bytes, "SUPERSEDES"))
+    };
+    let Some(declaration) = declaration else {
+        return Ok(false);
+    };
+    for package in declaration.split_whitespace() {
+        recipe::validate_name(package)?;
+    }
+    Ok(declaration
+        .split_whitespace()
+        .any(|package| package == cedent))
+}
+
+fn provisional_manifest_coherent(
+    ctx: &Ctx,
+    name: &str,
+    active: &[&str],
+    baseline: &[&str],
+    require_cession: bool,
+) -> Result<bool> {
+    let active_by_path: HashMap<&str, &str> = active
+        .iter()
+        .map(|line| (manifest_path(line), *line))
+        .collect();
+    let baseline_by_path: HashMap<&str, &str> = baseline
+        .iter()
+        .map(|line| (manifest_path(line), *line))
+        .collect();
+    if active_by_path.len() != active.len()
+        || baseline_by_path.len() != baseline.len()
+        || active_by_path.len() > baseline_by_path.len()
+        || (require_cession && active_by_path.len() == baseline_by_path.len())
+        || active_by_path
+            .iter()
+            .any(|(path, line)| baseline_by_path.get(path) != Some(line))
+    {
+        return Ok(false);
+    }
+    for line in baseline {
+        validate_manifest_line_syntax(line)?;
+        rooted_path(&ctx.root, manifest_path(line))?;
+    }
+    if active_by_path.len() == baseline_by_path.len() {
+        return Ok(true);
+    }
+    let owners = all_manifests(ctx)?;
+    for removed in baseline_by_path
+        .keys()
+        .filter(|path| !active_by_path.contains_key(*path))
+    {
+        let canonical_removed = canonical_virtual_path(&ctx.root, removed)?;
+        let mut proved = false;
+        for (owner, _, claims) in &owners {
+            if owner != name
+                && claims.contains(&canonical_removed)
+                && successor_authorizes_cession(ctx, owner, name)?
+            {
+                proved = true;
+                break;
+            }
+        }
+        if !proved {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Reconhece uma semente provisional que já cedeu claims. `manifest@VERSION`
+/// é o baseline imutável; `manifest` é o conjunto ainda ativo. Uma inclusão
+/// própria e estrita prova que houve cessão, mesmo se a receita/fingerprint
+/// corrente mudou desde o bootstrap. Só as claims ativas são inspecionadas —
+/// as ausentes pertencem justamente aos sucessores e não podem ser re-hashadas
+/// como se ainda fossem da semente.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProvisionalCession {
+    NotCeded,
+    Intact,
+    Incoherent,
+}
+
+fn provisional_cession_state(
+    ctx: &Ctx,
+    rec_dir: &Path,
+    recipe: &Recipe,
+) -> Result<ProvisionalCession> {
+    let Some(meta) = read_meta_strict(rec_dir)? else {
+        return Ok(ProvisionalCession::NotCeded);
+    };
+    ensure_supported_record_format(&meta, &recipe.name)?;
+    if meta.get("NAME") != Some(&recipe.name)
+        || meta.get("PROVISIONAL").map(String::as_str) != Some("1")
+    {
+        return Ok(ProvisionalCession::NotCeded);
+    }
+    let expected_kind = if recipe.kind == Kind::Binary {
+        "binary"
+    } else {
+        "source"
+    };
+    let expected_world = if recipe.kind == Kind::Binary {
+        "A"
+    } else {
+        "B"
+    };
+    if !recipe.provisional
+        || meta.get("VERSION") != Some(&recipe.version)
+        || meta.get("KIND").map(String::as_str) != Some(expected_kind)
+        || meta.get("WORLD").map(String::as_str) != Some(expected_world)
+    {
+        return Ok(ProvisionalCession::Incoherent);
+    }
+    let Some(version) = meta.get("VERSION") else {
+        return Ok(ProvisionalCession::Incoherent);
+    };
+    recipe::validate_version(&recipe.name, version)?;
+
+    let active = read_manifest_strict(rec_dir)?;
+    let baseline = read_versioned_manifest_strict(rec_dir, version)?;
+    if meta.get("RECORD_FORMAT").map(String::as_str) == Some(RECORD_FORMAT) {
+        let baseline_bytes = read_regular_nofollow(&rec_dir.join(format!("manifest@{version}")))?;
+        let baseline_hash = sha256_bytes(&baseline_bytes);
+        if meta.get("MANIFEST_BASELINE_SHA256") != Some(&baseline_hash) {
+            return Ok(ProvisionalCession::Incoherent);
+        }
+    }
+    let active_lines: Vec<&str> = active.iter().map(String::as_str).collect();
+    let baseline_lines: Vec<&str> = baseline.iter().map(String::as_str).collect();
+    if active.len() > baseline.len() {
+        return Ok(ProvisionalCession::Incoherent);
+    }
+    if active.len() == baseline.len() {
+        return Ok(
+            if provisional_manifest_coherent(
+                ctx,
+                &recipe.name,
+                &active_lines,
+                &baseline_lines,
+                false,
+            )? {
+                ProvisionalCession::NotCeded
+            } else {
+                ProvisionalCession::Incoherent
+            },
+        );
+    }
+    if !provisional_manifest_coherent(ctx, &recipe.name, &active_lines, &baseline_lines, true)? {
+        return Ok(ProvisionalCession::Incoherent);
+    }
+    for line in &active {
+        let path = manifest_path(line);
+        match confined_claim_matches(line, &ctx.root, path)? {
+            Some(true) => {}
+            Some(false) => return Ok(ProvisionalCession::Incoherent),
+            None if confined_exists(&ctx.root, path)? => {}
+            None => return Ok(ProvisionalCession::Incoherent),
+        }
+    }
+
+    let historical = [
+        rec_dir.join("recipe"),
+        rec_dir.join(format!("recipe@{version}")),
+    ];
+    if historical.iter().any(|path| {
+        !fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+    }) {
+        return Ok(ProvisionalCession::Incoherent);
+    }
+    let Ok(current_recipe) = read_regular_nofollow(&historical[0]) else {
+        return Ok(ProvisionalCession::Incoherent);
+    };
+    let Ok(versioned_recipe) = read_regular_nofollow(&historical[1]) else {
+        return Ok(ProvisionalCession::Incoherent);
+    };
+    if current_recipe != versioned_recipe {
+        return Ok(ProvisionalCession::Incoherent);
+    }
+
+    Ok(ProvisionalCession::Intact)
+}
+
+/// Valor de integridade do manifesto v2:
+///
+/// - `f:<sha256>`: modo + conteúdo de arquivo regular;
+/// - `l:<sha256>`: bytes crus do alvo de symlink;
+/// - `d:<sha256>`: modo do diretório-raiz + tar canônico do conteúdo.
+///
+/// O prefixo prende também o tipo. Assim trocar link por arquivo, retargetar um
+/// link ou adulterar o payload sob `/opt/<pkg>/<versão>` invalida o fast path.
+#[cfg(test)]
+fn path_integrity(path: &Path) -> Result<String> {
+    let md = fs::symlink_metadata(path)?;
+    if md.file_type().is_file() {
+        let hash = file_hash(path);
+        if hash == "-" {
+            bail!("não consegui hashear arquivo regular {}", path.display());
+        }
+        Ok(format!(
+            "f:{}",
+            regular_integrity(md.permissions().mode() & 0o7777, &hash)
+        ))
+    } else if md.file_type().is_symlink() {
+        let mut h = Sha256::new();
+        h.update(fs::read_link(path)?.as_os_str().as_bytes());
+        Ok(format!("l:{}", hex::encode(h.finalize())))
+    } else if md.file_type().is_dir() {
+        let tree_hash = crate::pack::pack_deterministic(path, 0, std::io::sink())?;
+        Ok(format!("d:{}", directory_integrity(&md, &tree_hash)))
+    } else {
+        bail!("tipo especial não registrável: {}", path.display())
+    }
+}
+
+fn directory_integrity(metadata: &fs::Metadata, tree_hash: &str) -> String {
+    directory_integrity_mode(metadata.permissions().mode() & 0o7777, tree_hash)
+}
+
+pub(crate) fn regular_integrity(mode: u32, content_hash: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"minitrue-regular-integrity-v2\0");
+    hash.update((mode & 0o7777).to_be_bytes());
+    hash.update(content_hash.as_bytes());
+    hex::encode(hash.finalize())
+}
+
+fn directory_integrity_mode(mode: u32, tree_hash: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"minitrue-directory-integrity-v1\0");
+    hash.update((mode & 0o7777).to_be_bytes());
+    hash.update(tree_hash.as_bytes());
+    hex::encode(hash.finalize())
+}
+
+fn canonical_integrity(value: &str) -> bool {
+    value.len() == 66
+        && matches!(value.as_bytes().first(), Some(b'f' | b'l' | b'd'))
+        && value.as_bytes().get(1) == Some(&b':')
+        && value[2..]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn manifest_integrity(line: &str) -> Option<&str> {
+    line.split_once("  ")
+        .map(|(value, _)| value)
+        .filter(|value| canonical_integrity(value))
+}
+
+fn validate_manifest_line_syntax(line: &str) -> Result<()> {
+    if manifest_integrity(line).is_some() || manifest_hash(line).is_some() {
+        return Ok(());
+    }
+    match line.split_once("  ") {
+        None | Some(("-", _)) => Ok(()),
+        Some((tag, _)) => bail!("tag de integridade inválida no manifesto: {tag:?}"),
+    }
+}
+
+fn record_meta_matches(meta: &HashMap<String, String>, recipe: &Recipe) -> bool {
+    let expected_kind = if recipe.kind == Kind::Binary {
+        "binary"
+    } else {
+        "source"
+    };
+    let expected_world = if recipe.kind == Kind::Binary {
+        "A"
+    } else {
+        "B"
+    };
+    let expected_origin = if recipe.kind == Kind::Binary {
+        "vendor"
+    } else {
+        "fonte"
+    };
+    let field = |name: &str| meta.get(name).map(String::as_str);
+    if field("RECORD_FORMAT") != Some(RECORD_FORMAT)
+        || field("NAME") != Some(recipe.name.as_str())
+        || field("VERSION") != Some(recipe.version.as_str())
+        || field("KIND") != Some(expected_kind)
+        || field("WORLD") != Some(expected_world)
+        || field("ORIGIN") != Some(expected_origin)
+        || field("SHA256") != Some(recipe.sha256.join(" ").as_str())
+        || field("DEPS") != Some(recipe.deps.join(" ").as_str())
+        || field("SUPERSEDES") != Some(recipe.supersedes.join(" ").as_str())
+        || field("INSTALLED_AT").is_none_or(str::is_empty)
+        || !field("MANIFEST_BASELINE_SHA256").is_some_and(|hash| {
+            hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+        || (if recipe.about.is_empty() {
+            field("ABOUT").is_some()
+        } else {
+            field("ABOUT") != Some(recipe.about.as_str())
+        })
+        || field("REPROCORR") != recipe.reprocorr.as_deref()
+        || (if recipe.provisional {
+            field("PROVISIONAL") != Some("1")
+        } else {
+            field("PROVISIONAL").is_some()
+        })
+        || (if recipe.kind == Kind::Source {
+            field("TRANSACTION_ID").is_none_or(str::is_empty)
+        } else {
+            field("TRANSACTION_ID").is_some_and(str::is_empty)
+        })
+    {
+        return false;
+    }
+    if recipe.kind == Kind::Source {
+        field("ARTIFACT_HASH").is_some_and(|hash| {
+            hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                && recipe
+                    .reprocorr
+                    .as_deref()
+                    .is_none_or(|pinned| pinned == hash)
+        })
+    } else {
+        field("ARTIFACT_HASH").is_none()
+    }
+}
+
+/// A idempotência só é verdadeira para um registro v2 completo: receita
+/// histórica e cópias versionadas precisam ser os snapshots atuais, e cada
+/// claim precisa conservar conteúdo, tipo e (para links) alvo. Num provisional,
+/// `manifest@` é o baseline instalado e o manifesto ativo pode ser um subconjunto
+/// após cessões declaradas; nos demais eles precisam ser idênticos.
+fn record_is_intact(ctx: &Ctx, rec_dir: &Path, recipe: &Recipe) -> bool {
+    let meta = match read_meta_strict(rec_dir) {
+        Ok(Some(meta)) if record_meta_matches(&meta, recipe) => meta,
+        _ => return false,
+    };
+    let version = match meta.get("VERSION") {
+        Some(version) => version,
+        None => return false,
+    };
+    let recipe_paths = [
+        rec_dir.join("recipe"),
+        rec_dir.join(format!("recipe@{version}")),
+    ];
+    if recipe_paths.iter().any(|path| {
+        !fs::symlink_metadata(path).is_ok_and(|md| md.file_type().is_file())
+            || read_regular_nofollow(path).ok().as_deref() != Some(recipe.recipe_bytes.as_slice())
+    }) {
+        return false;
+    }
+
+    let manifest_path_versioned = rec_dir.join(format!("manifest@{version}"));
+    let manifest_bytes = match read_regular_nofollow(&rec_dir.join("manifest")) {
+        Ok(bytes) if !bytes.is_empty() => bytes,
+        _ => return false,
+    };
+    let manifest = match String::from_utf8(manifest_bytes) {
+        Ok(manifest) => manifest,
+        Err(_) => return false,
+    };
+    let versioned = match read_regular_text_nofollow(&manifest_path_versioned) {
+        Ok(versioned) => versioned,
+        Err(_) => return false,
+    };
+    let baseline_hash = sha256_bytes(versioned.as_bytes());
+    if meta.get("MANIFEST_BASELINE_SHA256") != Some(&baseline_hash) {
+        return false;
+    }
+    let lines: Vec<&str> = manifest.lines().filter(|line| !line.is_empty()).collect();
+    let versioned_lines: Vec<&str> = versioned.lines().filter(|line| !line.is_empty()).collect();
+    let manifests_coherent = if recipe.provisional {
+        provisional_manifest_coherent(ctx, &recipe.name, &lines, &versioned_lines, false)
+            .unwrap_or(false)
+    } else {
+        manifest.as_bytes() == versioned.as_bytes()
+            && lines.iter().copied().collect::<HashSet<_>>().len() == lines.len()
+    };
+    manifests_coherent
+        && versioned_lines
+            .iter()
+            .all(|line| manifest_integrity(line).is_some())
+        && (recipe.provisional || !lines.is_empty())
+        && lines.iter().all(|line| {
+            let Some(expected) = manifest_integrity(line) else {
+                return false;
+            };
+            let path = manifest_path(line);
+            rooted_path(&ctx.root, path)
+                .and_then(|_| confined_path_integrity(&ctx.root, path))
+                .is_ok_and(|actual| actual == expected)
+        })
+}
+
+/// Migração in-place do registro v0/v1 para v2, sem reinstalar o payload. É
+/// essencial para provisionals que já cederam claims: reconstruí-los tentaria
+/// tomar de volta arquivos hoje pertencentes aos sucessores e produziria
+/// doublethink. A migração só ocorre quando identidade e snapshot da receita já
+/// coincidem; provas v1 existentes precisam conferir. Claims legadas sem prova
+/// viram baseline v2 do estado atual — não piora a confiança que o esquema
+/// antigo oferecia e passa a detectar mudanças futuras.
+fn migrate_legacy_record(
+    ctx: &Ctx,
+    rec_dir: &Path,
+    recipe: &Recipe,
+    fingerprint: &str,
+) -> Result<bool> {
+    let meta = match read_meta_strict(rec_dir)? {
+        Some(meta) => meta,
+        None => return Ok(false),
+    };
+    ensure_supported_record_format(&meta, &recipe.name)?;
+    match meta.get("RECORD_FORMAT").map(String::as_str) {
+        Some(RECORD_FORMAT) => return Ok(false),
+        None | Some("0" | "1") => {}
+        Some(_) => unreachable!("ensure_supported_record_format filtrou o valor"),
+    }
+    if meta.get("VERSION") != Some(&recipe.version)
+        || meta.get("FINGERPRINT").map(String::as_str) != Some(fingerprint)
+        || !fs::symlink_metadata(rec_dir.join("recipe"))
+            .is_ok_and(|metadata| metadata.file_type().is_file())
+        || read_regular_nofollow(&rec_dir.join("recipe"))
+            .ok()
+            .as_deref()
+            != Some(recipe.recipe_bytes.as_slice())
+        || !fs::symlink_metadata(rec_dir.join(format!("recipe@{}", recipe.version)))
+            .is_ok_and(|metadata| metadata.file_type().is_file())
+        || read_regular_nofollow(&rec_dir.join(format!("recipe@{}", recipe.version)))
+            .ok()
+            .as_deref()
+            != Some(recipe.recipe_bytes.as_slice())
+    {
+        return Ok(false);
+    }
+
+    let old_manifest = read_manifest_strict(rec_dir)?;
+    if old_manifest.is_empty() && meta.get("PROVISIONAL").map(String::as_str) != Some("1") {
+        return Ok(false);
+    }
+    let baseline = match read_versioned_manifest_strict(rec_dir, &recipe.version) {
+        Ok(baseline) => baseline,
+        Err(_) => return Ok(false),
+    };
+    if meta.get("PROVISIONAL").map(String::as_str) == Some("1") {
+        let active_lines: Vec<&str> = old_manifest.iter().map(String::as_str).collect();
+        let baseline_lines: Vec<&str> = baseline.iter().map(String::as_str).collect();
+        if !provisional_manifest_coherent(ctx, &recipe.name, &active_lines, &baseline_lines, false)?
+            || active_lines.len() != baseline_lines.len()
+        {
+            // Não achata a história de uma cessão (nem truncamento). O fast
+            // path congelado preserva uma cessão provada; o resto reconstrói.
+            return Ok(false);
+        }
+    } else if old_manifest != baseline {
+        return Ok(false);
+    }
+    let mut paths = Vec::with_capacity(old_manifest.len());
+    for line in &old_manifest {
+        let virt = manifest_path(line);
+        rooted_path(&ctx.root, virt)?;
+        match confined_claim_matches(line, &ctx.root, virt)? {
+            Some(true) => {}
+            Some(false) => return Ok(false),
+            None if confined_exists(&ctx.root, virt)? => {}
+            None => return Ok(false),
+        }
+        paths.push(virt.to_string());
+    }
+
+    let world = match meta.get("WORLD").map(String::as_str) {
+        Some("A") => "A",
+        Some("B") => "B",
+        _ => return Ok(false),
+    };
+    let artifact_hash = meta.get("ARTIFACT_HASH").map(String::as_str);
+    let mut journal = Journal::begin(ctx, &recipe.name)?;
+    if let Err(error) = write_record(
+        ctx,
+        rec_dir,
+        recipe,
+        world,
+        &mut paths,
+        RecordWrite {
+            artifact_hash,
+            fingerprint,
+            manifest_typed: false,
+            journal: Some(&mut journal),
+        },
+    ) {
+        if let Err(rollback) = journal.rollback() {
+            return Err(anyhow::anyhow!(
+                "migração do registro falhou: {error}; rollback também falhou: {rollback}"
+            ));
+        }
+        return Err(error);
+    }
+    journal.commit()?;
+    eprintln!(
+        "  registro legado de {} migrado para RECORD_FORMAT={RECORD_FORMAT}",
+        recipe.name
+    );
+    Ok(true)
 }
 
 /// O caminho de uma linha de manifesto. Registro **v1**: `<sha256>␠␠<caminho>`;
@@ -1286,15 +3621,484 @@ fn manifest_path(line: &str) -> &str {
     line.split_once("  ").map(|(_, p)| p).unwrap_or(line)
 }
 
-/// O hash gravado de uma linha de manifesto v1, se houver (`-` e ausência ⇒ None).
+/// Resolve um caminho virtual de manifesto sem permitir `..`, caminho relativo
+/// ou controles. Registros são estado persistente e podem estar truncados ou
+/// adulterados; nenhuma rotina de upgrade/memoryhole deve transformar isso em
+/// acesso fora do rootfs.
+fn rooted_path(root: &Path, virt: &str) -> Result<PathBuf> {
+    if virt.chars().any(char::is_control) {
+        bail!("caminho de manifesto contém controle: {virt:?}");
+    }
+    let rel_text = virt
+        .strip_prefix("/")
+        .ok_or_else(|| anyhow::anyhow!("caminho de manifesto não é absoluto: {virt:?}"))?;
+    let rel = Path::new(rel_text);
+    if rel_text
+        .split('/')
+        .any(|part| part.is_empty() || matches!(part, "." | ".."))
+        || rel.as_os_str().is_empty()
+        || rel
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        bail!("caminho de manifesto não é canônico: {virt:?}");
+    }
+    Ok(root.join(rel))
+}
+
+/// Identidade canônica de ownership para uma folha, resolvendo apenas seus
+/// ancestrais. Assim `/lib/x` e `/usr/lib/x` são a mesma claim num rootfs com
+/// `/lib -> usr/lib`, enquanto o próprio symlink `/lib` continua sendo uma
+/// folha distinta e nunca é seguido. Componentes ainda inexistentes são
+/// anexados ao ancestral existente mais próximo.
+fn canonical_virtual_path(root: &Path, virt: &str) -> Result<String> {
+    let path = rooted_path(root, virt)?;
+    ensure_mutation_confined(root, &path)?;
+    let leaf = path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("caminho virtual sem folha: {virt:?}"))?
+        .to_os_string();
+    let mut ancestor = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("caminho virtual sem pai: {virt:?}"))?
+        .to_path_buf();
+    let mut missing = Vec::new();
+    let mut resolved = loop {
+        match fs::symlink_metadata(&ancestor) {
+            Ok(_) => break fs::canonicalize(&ancestor)?,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                let name = ancestor.file_name().ok_or_else(|| {
+                    anyhow::anyhow!("não encontrei ancestral existente para {virt:?}")
+                })?;
+                missing.push(name.to_os_string());
+                ancestor = ancestor
+                    .parent()
+                    .ok_or_else(|| anyhow::anyhow!("caminho escapou do root"))?
+                    .to_path_buf();
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+    let root_real = fs::canonicalize(root)?;
+    if !resolved.starts_with(&root_real) {
+        bail!("{virt:?} resolve para fora do rootfs");
+    }
+    for component in missing.iter().rev() {
+        resolved.push(component);
+    }
+    resolved.push(leaf);
+    let relative = resolved
+        .strip_prefix(&root_real)
+        .map_err(|_| anyhow::anyhow!("caminho canônico fora do rootfs"))?;
+    let text = relative
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("caminho canônico não UTF-8"))?;
+    Ok(format!("/{text}"))
+}
+
+#[repr(C)]
+struct OpenHow {
+    flags: u64,
+    mode: u64,
+    resolve: u64,
+}
+
+const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
+const RESOLVE_IN_ROOT: u64 = 0x10;
+
+fn path_cstring(path: &OsStr) -> Result<CString> {
+    CString::new(path.as_bytes())
+        .map_err(|_| anyhow::anyhow!("caminho contém NUL e não pode ser aberto"))
+}
+
+fn open_root_fd(root: &Path) -> Result<OwnedFd> {
+    let root = path_cstring(root.as_os_str())?;
+    // SAFETY: `root` é NUL-terminated; flags não exigem argumento mode.
+    let fd = unsafe {
+        libc::open(
+            root.as_ptr(),
+            libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: fd >= 0 acabou de ser transferido por `open` e tem dono único.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+fn openat2_confined(root_fd: &OwnedFd, relative: &Path, flags: i32) -> Result<OwnedFd> {
+    let relative = path_cstring(relative.as_os_str())?;
+    let how = OpenHow {
+        flags: (flags | libc::O_CLOEXEC) as u64,
+        mode: 0,
+        resolve: RESOLVE_IN_ROOT | RESOLVE_NO_MAGICLINKS,
+    };
+    // SAFETY: ponteiros apontam para `CString`/`OpenHow` válidos durante a
+    // syscall; o tamanho casa exatamente com a estrutura do ABI openat2.
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            root_fd.as_raw_fd(),
+            relative.as_ptr(),
+            &how,
+            std::mem::size_of::<OpenHow>(),
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: fd >= 0 acabou de ser transferido por `openat2`.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
+}
+
+fn confined_relative(virt: &str) -> Result<PathBuf> {
+    // Reutiliza toda a validação lexical; o root fictício não é usado depois.
+    let checked = rooted_path(Path::new("/"), virt)?;
+    checked
+        .strip_prefix("/")
+        .map(Path::to_path_buf)
+        .map_err(|_| anyhow::anyhow!("caminho virtual inválido: {virt:?}"))
+}
+
+fn open_confined(root: &Path, virt: &str, flags: i32) -> Result<OwnedFd> {
+    let root_fd = open_root_fd(root)?;
+    let relative = confined_relative(virt)?;
+    openat2_confined(&root_fd, &relative, flags)
+}
+
+fn confined_parent(root: &Path, virt: &str) -> Result<(OwnedFd, CString)> {
+    let relative = confined_relative(virt)?;
+    let name = relative
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("caminho sem nome final: {virt:?}"))?;
+    let name = path_cstring(name)?;
+    let root_fd = open_root_fd(root)?;
+    let parent = match relative.parent().filter(|p| !p.as_os_str().is_empty()) {
+        Some(parent) => openat2_confined(&root_fd, parent, libc::O_PATH | libc::O_DIRECTORY)?,
+        None => root_fd,
+    };
+    Ok((parent, name))
+}
+
+fn readlink_confined(root: &Path, virt: &str) -> Result<Vec<u8>> {
+    let (parent, name) = confined_parent(root, virt)?;
+    let mut capacity = 256usize;
+    loop {
+        let mut bytes = vec![0u8; capacity];
+        // SAFETY: parent/name são descritores/CString válidos e o buffer possui
+        // `capacity` bytes graváveis. readlinkat não acrescenta NUL.
+        let len = unsafe {
+            libc::readlinkat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                bytes.as_mut_ptr().cast(),
+                bytes.len(),
+            )
+        };
+        if len < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let len = len as usize;
+        if len < bytes.len() {
+            bytes.truncate(len);
+            return Ok(bytes);
+        }
+        capacity = capacity
+            .checked_mul(2)
+            .ok_or_else(|| anyhow::anyhow!("alvo de symlink grande demais"))?;
+    }
+}
+
+fn hash_reader(mut reader: impl Read) -> Result<String> {
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 65536];
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    Ok(hex::encode(hash.finalize()))
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(bytes);
+    hex::encode(hash.finalize())
+}
+
+/// Hash de conteúdo apenas quando a folha confinada continua sendo regular.
+/// O primeiro `O_PATH` classifica sem bloquear; a segunda abertura usa
+/// `O_NONBLOCK` e revalida o tipo para fechar a corrida entre classificação e
+/// leitura. Symlink/FIFO/socket significam “não é o regular esperado”.
+fn confined_regular_content_hash(root: &Path, virt: &str) -> Result<Option<String>> {
+    let path_fd = match open_confined(root, virt, libc::O_PATH | libc::O_NOFOLLOW) {
+        Ok(fd) => fd,
+        Err(error) if error_is_not_found(&error) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if !fs::File::from(path_fd).metadata()?.file_type().is_file() {
+        return Ok(None);
+    }
+    let file_fd = open_confined(
+        root,
+        virt,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+    )?;
+    let file = fs::File::from(file_fd);
+    if !file.metadata()?.file_type().is_file() {
+        return Ok(None);
+    }
+    Ok(Some(hash_reader(file)?))
+}
+
+/// Versão confinada de `path_integrity`: todos os symlinks intermediários são
+/// resolvidos pelo kernel dentro do fd de `root`. Um link absoluto passa a ser
+/// relativo ao rootfs; magic-links de `/proc` são recusados.
+fn confined_path_integrity(root: &Path, virt: &str) -> Result<String> {
+    let path_fd = open_confined(root, virt, libc::O_PATH | libc::O_NOFOLLOW)?;
+    let path_file = fs::File::from(path_fd);
+    let metadata = path_file.metadata()?;
+    if metadata.file_type().is_file() {
+        let Some(content_hash) = confined_regular_content_hash(root, virt)? else {
+            bail!("tipo de {virt} mudou durante a inspeção");
+        };
+        Ok(format!(
+            "f:{}",
+            regular_integrity(metadata.permissions().mode() & 0o7777, &content_hash)
+        ))
+    } else if metadata.file_type().is_symlink() {
+        let mut hash = Sha256::new();
+        hash.update(readlink_confined(root, virt)?);
+        Ok(format!("l:{}", hex::encode(hash.finalize())))
+    } else if metadata.file_type().is_dir() {
+        let dir_fd = open_confined(
+            root,
+            virt,
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        )?;
+        let proc_path = PathBuf::from(format!("/proc/self/fd/{}", dir_fd.as_raw_fd()));
+        let tree_hash = crate::pack::pack_deterministic(&proc_path, 0, std::io::sink())?;
+        Ok(format!("d:{}", directory_integrity(&metadata, &tree_hash)))
+    } else {
+        bail!("tipo especial não registrável: {virt}")
+    }
+}
+
+fn error_is_not_found(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|error| error.kind() == ErrorKind::NotFound)
+}
+
+fn confined_claim_matches(line: &str, root: &Path, virt: &str) -> Result<Option<bool>> {
+    if let Some(expected) = manifest_integrity(line) {
+        return match confined_path_integrity(root, virt) {
+            Ok(actual) => Ok(Some(actual == expected)),
+            Err(error) if error_is_not_found(&error) => Ok(Some(false)),
+            Err(error) => Err(error),
+        };
+    }
+    if let Some(expected) = manifest_hash(line) {
+        return Ok(Some(
+            confined_regular_content_hash(root, virt)?.as_deref() == Some(expected),
+        ));
+    }
+    match line.split_once("  ") {
+        None | Some(("-", _)) => Ok(None),
+        Some((tag, _)) => bail!("tag de integridade inválida no manifesto: {tag:?}"),
+    }
+}
+
+fn confined_exists(root: &Path, virt: &str) -> Result<bool> {
+    match open_confined(root, virt, libc::O_PATH | libc::O_NOFOLLOW) {
+        Ok(_) => Ok(true),
+        Err(error) if error_is_not_found(&error) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// Lê todos os regulares de um diretório virtual sem seguir symlinks nem no
+/// diretório nem nas entradas. Usado para raízes de confiança e attestations.
+pub(crate) fn confined_regular_files(
+    root: &Path,
+    directory: &str,
+) -> Result<Vec<(String, Vec<u8>)>> {
+    let dir_fd = open_confined(
+        root,
+        directory,
+        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+    )?;
+    let proc_path = PathBuf::from(format!("/proc/self/fd/{}", dir_fd.as_raw_fd()));
+    let mut files = Vec::new();
+    for entry in fs::read_dir(proc_path)? {
+        let entry = entry?;
+        let name = entry
+            .file_name()
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("entrada não UTF-8 em {directory}"))?
+            .to_string();
+        if name.is_empty() || name.contains('/') || name.chars().any(char::is_control) {
+            bail!("entrada inválida em {directory}: {name:?}");
+        }
+        let virt = format!("{directory}/{name}");
+        let fd = open_confined(
+            root,
+            &virt,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+        )?;
+        let mut file = fs::File::from(fd);
+        let metadata = file.metadata()?;
+        if !metadata.file_type().is_file() {
+            bail!("{virt} não é arquivo regular");
+        }
+        if metadata.len() > 1024 * 1024 {
+            bail!("{virt} excede 1 MiB");
+        }
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        files.push((name, bytes));
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(files)
+}
+
+fn unlinkat_checked(parent: &OwnedFd, name: &CString, flags: i32) -> Result<()> {
+    // SAFETY: descritor e CString são válidos; unlinkat não retém ponteiros.
+    let result = unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), flags) };
+    if result == 0 {
+        Ok(())
+    } else {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == ErrorKind::NotFound {
+            Ok(())
+        } else {
+            Err(error.into())
+        }
+    }
+}
+
+fn remove_dir_contents(dir: &OwnedFd) -> Result<()> {
+    let proc_path = PathBuf::from(format!("/proc/self/fd/{}", dir.as_raw_fd()));
+    let entries = fs::read_dir(&proc_path)?.collect::<std::io::Result<Vec<_>>>()?;
+    for entry in entries {
+        let name = path_cstring(&entry.file_name())?;
+        // Diretório real: abre sem seguir link, esvazia e remove pelo parent fd.
+        // SAFETY: fd/CString válidos; flags não exigem mode.
+        let child = unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if child >= 0 {
+            // SAFETY: fd recém-transferido por openat, com dono único.
+            let child = unsafe { OwnedFd::from_raw_fd(child) };
+            remove_dir_contents(&child)?;
+            unlinkat_checked(dir, &name, libc::AT_REMOVEDIR)?;
+        } else {
+            // Arquivo ou symlink: unlinkat no diretório já ancorado nunca segue
+            // o alvo. Se houve um erro real (ex.: submount), falha fechado.
+            unlinkat_checked(dir, &name, 0)?;
+        }
+    }
+    Ok(())
+}
+
+fn remove_confined(root: &Path, virt: &str, recursive_directory: bool) -> Result<()> {
+    let (parent, name) = match confined_parent(root, virt) {
+        Ok(parts) => parts,
+        Err(error) if error_is_not_found(&error) => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if recursive_directory {
+        // SAFETY: fd/CString válidos; O_NOFOLLOW impede aceitar symlink final.
+        let dir = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if dir < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == ErrorKind::NotFound {
+                return Ok(());
+            }
+            return Err(error.into());
+        }
+        // SAFETY: fd recém-transferido por openat, com dono único.
+        let dir = unsafe { OwnedFd::from_raw_fd(dir) };
+        remove_dir_contents(&dir)?;
+        unlinkat_checked(&parent, &name, libc::AT_REMOVEDIR)
+    } else {
+        unlinkat_checked(&parent, &name, 0)
+    }
+}
+
+fn remove_empty_confined_dir(root: &Path, virt: &str) -> Result<bool> {
+    let (parent, name) = match confined_parent(root, virt) {
+        Ok(parts) => parts,
+        Err(error) if error_is_not_found(&error) => return Ok(true),
+        Err(error) => return Err(error),
+    };
+    // SAFETY: descritor/CString válidos; AT_REMOVEDIR não segue symlink.
+    let result = unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) };
+    if result == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == ErrorKind::NotFound {
+        Ok(true)
+    } else if matches!(
+        error.raw_os_error(),
+        Some(libc::ENOTEMPTY) | Some(libc::EEXIST) | Some(libc::ENOTDIR) | Some(libc::ELOOP)
+    ) {
+        Ok(false)
+    } else {
+        Err(error.into())
+    }
+}
+
+/// Hash regular gravado, para mensagens/compatibilidade. Aceita v2 (`f:`) e o
+/// v1 histórico de 64 hex; links/diretórios não são hashes de arquivo.
 fn manifest_hash(line: &str) -> Option<&str> {
-    line.split_once("  ")
-        .map(|(h, _)| h)
-        .filter(|h| *h != "-" && h.len() == 64)
+    line.split_once("  ").map(|(h, _)| h).and_then(|h| {
+        if let Some(hash) = h.strip_prefix("f:") {
+            canonical_integrity(h).then_some(hash)
+        } else {
+            (h.len() == 64
+                && h.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+            .then_some(h)
+        }
+    })
+}
+
+/// Confere uma claim persistida. `None` é formato legado sem prova de
+/// conteúdo; `Some` é uma prova v1/v2. Tags desconhecidas falham fechado.
+#[cfg(test)]
+fn manifest_claim_matches(line: &str, path: &Path) -> Result<Option<bool>> {
+    if let Some(expected) = manifest_integrity(line) {
+        return Ok(Some(
+            path_integrity(path).is_ok_and(|actual| actual == expected),
+        ));
+    }
+    if let Some(expected) = manifest_hash(line) {
+        return Ok(Some(file_hash(path) == expected));
+    }
+    match line.split_once("  ") {
+        None | Some(("-", _)) => Ok(None),
+        Some((tag, _)) => bail!("tag de integridade inválida no manifesto: {tag:?}"),
+    }
 }
 
 /// sha256 (hex) de um arquivo regular, em streaming; `-` para symlink, diretório
 /// ou ausente. É o hash por arquivo do manifesto v1 (SPEC-0003 §6).
+#[cfg(test)]
 fn file_hash(path: &Path) -> String {
     let Ok(md) = fs::symlink_metadata(path) else {
         return "-".into();
@@ -1317,31 +4121,277 @@ fn file_hash(path: &Path) -> String {
     hex::encode(h.finalize())
 }
 
-fn all_manifests(ctx: &Ctx) -> Vec<(String, String, HashSet<String>)> {
-    let mut v = Vec::new();
-    if let Ok(entries) = fs::read_dir(ctx.records_dir()) {
-        for e in entries.flatten() {
-            // Registro sem `meta` = instalação não-commitada (crash entre o
-            // manifest e o meta): ignora, para não reivindicar caminhos que
-            // pertencem a um pacote meio-instalado (SPEC-0003 §6).
-            let Some(meta) = read_meta(&e.path()) else {
-                continue;
-            };
-            let name = e.file_name().to_string_lossy().into_owned();
-            let ver = meta.get("VERSION").cloned().unwrap_or_else(|| "?".into());
-            let set: HashSet<String> = read_manifest(&e.path())
-                .iter()
-                .map(|l| manifest_path(l).to_string())
-                .collect();
-            v.push((name, ver, set));
+type IndexedClaims<'a> = BTreeMap<String, Vec<(&'a str, &'a str)>>;
+
+/// Índice ordenado de ownership. Exato/ancestral custam O(profundidade × log n)
+/// e o primeiro descendente custa O(log n), evitando comparar cada entrada de
+/// um STAGE grande com todas as claims do sistema.
+fn index_manifest_claims<'a>(
+    claims: &'a [(String, String, HashSet<String>)],
+    exclude_owner: Option<&str>,
+) -> IndexedClaims<'a> {
+    let mut index = BTreeMap::new();
+    for (owner, version, paths) in claims {
+        if exclude_owner == Some(owner.as_str()) {
+            continue;
+        }
+        for path in paths {
+            index
+                .entry(path.clone())
+                .or_insert_with(Vec::new)
+                .push((owner.as_str(), version.as_str()));
         }
     }
-    v
+    index
+}
+
+fn index_directory_claims<'a>(
+    claims: &'a [(String, String, String)],
+    exclude_owner: &str,
+) -> IndexedClaims<'a> {
+    let mut index = BTreeMap::new();
+    for (owner, version, path) in claims {
+        if owner == exclude_owner {
+            continue;
+        }
+        index
+            .entry(path.clone())
+            .or_insert_with(Vec::new)
+            .push((owner.as_str(), version.as_str()));
+    }
+    index
+}
+
+fn indexed_claim_at_or_above<'a, 'b>(
+    index: &'b IndexedClaims<'a>,
+    path: &str,
+    include_exact: bool,
+) -> Option<(&'a str, &'a str, &'b str)> {
+    let mut candidate = path;
+    let mut exact = true;
+    loop {
+        if !exact || include_exact {
+            if let Some((claim, owners)) = index.get_key_value(candidate) {
+                if let Some((owner, version)) = owners.first() {
+                    return Some((*owner, *version, claim.as_str()));
+                }
+            }
+        }
+        let slash = candidate.rfind('/')?;
+        if slash == 0 {
+            return None;
+        }
+        candidate = &candidate[..slash];
+        exact = false;
+    }
+}
+
+fn indexed_descendant<'a, 'b>(
+    index: &'b IndexedClaims<'a>,
+    path: &str,
+) -> Option<(&'a str, &'a str, &'b str)> {
+    let prefix = format!("{path}/");
+    let (claim, owners) = index.range(prefix.clone()..).next()?;
+    if !claim.starts_with(&prefix) {
+        return None;
+    }
+    let (owner, version) = owners.first()?;
+    Some((*owner, *version, claim.as_str()))
+}
+
+fn all_manifests(ctx: &Ctx) -> Result<Vec<(String, String, HashSet<String>)>> {
+    all_manifests_for_recovery(ctx, &HashSet::new(), &HashSet::new())
+}
+
+fn record_manifest_claims(
+    ctx: &Ctx,
+    rec_dir: &Path,
+    name: &str,
+) -> Result<Option<(String, String, HashSet<String>)>> {
+    // Registro sem `meta` = instalação não-commitada (crash entre o manifest e
+    // o meta): ignora, para não reivindicar caminhos de pacote meio-instalado.
+    let Some(meta) = read_meta_strict(rec_dir)? else {
+        return Ok(None);
+    };
+    ensure_supported_record_format(&meta, name)?;
+    let ver = meta.get("VERSION").cloned().unwrap_or_else(|| "?".into());
+    let lines = read_manifest_strict(rec_dir)
+        .map_err(|error| anyhow::anyhow!("{name}: manifesto instalado ilegível: {error}"))?;
+    for line in &lines {
+        validate_manifest_line_syntax(line)?;
+        if meta.get("RECORD_FORMAT").map(String::as_str) == Some(RECORD_FORMAT)
+            && manifest_integrity(line).is_none()
+        {
+            bail!("{name}: registro v2 contém claim não tipada");
+        }
+    }
+    let set: HashSet<String> = lines
+        .iter()
+        .map(|line| canonical_virtual_path(&ctx.root, manifest_path(line)))
+        .collect::<Result<HashSet<_>>>()?;
+    if set.len() != lines.len() {
+        bail!("{name}: manifesto contém claims duplicadas");
+    }
+    Ok(Some((name.to_string(), ver, set)))
+}
+
+/// Visão de ownership usada também durante recovery. `excluded` contém o
+/// próprio pacote transacional. Para registros que o journal está alterando,
+/// um estado intermediário ilegível é tolerado; se já estiver novamente válido
+/// (por exemplo, um commit posterior), suas claims continuam sendo consideradas.
+fn all_manifests_for_recovery(
+    ctx: &Ctx,
+    excluded: &HashSet<String>,
+    tolerate_intermediate: &HashSet<String>,
+) -> Result<Vec<(String, String, HashSet<String>)>> {
+    let mut v = Vec::new();
+    ensure_real_directory_or_absent(&ctx.root, &ctx.records_dir(), "diretório de registros")?;
+    match fs::read_dir(ctx.records_dir()) {
+        Ok(entries) => {
+            for entry in entries {
+                let e = entry?;
+                if !e.file_type()?.is_dir() {
+                    bail!(
+                        "entrada de registro não é diretório real: {}",
+                        e.path().display()
+                    );
+                }
+                let name = e
+                    .file_name()
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("registro com nome não UTF-8"))?;
+                if excluded.contains(&name) {
+                    continue;
+                }
+                match record_manifest_claims(ctx, &e.path(), &name) {
+                    Ok(Some(claims)) => v.push(claims),
+                    Ok(None) => {}
+                    Err(_) if tolerate_intermediate.contains(&name) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(v)
+}
+
+/// Registros antigos também não podem reivindicar nomes que uma execução
+/// futura tratará como estado/temporário descartável. Falhar antes do fetch ou
+/// do build evita apagar payload legado sem consultar ownership.
+fn ensure_no_internal_claims(ctx: &Ctx) -> Result<()> {
+    let claims = all_manifests(ctx)?;
+    let control_roots = ["/var/lib/minitrue", "/var/cache/minitrue", "/etc/minitrue"]
+        .into_iter()
+        .map(|path| canonical_virtual_path(&ctx.root, path))
+        .collect::<Result<Vec<_>>>()?;
+    let tmp_sentinel = canonical_virtual_path(&ctx.root, "/tmp/minitrue-namespace-sentinel")?;
+    let tmp_root = Path::new(&tmp_sentinel)
+        .parent()
+        .and_then(Path::to_str)
+        .ok_or_else(|| anyhow::anyhow!("namespace temporário não canônico"))?;
+    let tmp_prefix = format!("{tmp_root}/");
+
+    for (owner, version, paths) in &claims {
+        for path in paths {
+            let control_overlap = control_roots.iter().any(|control| {
+                virtual_at_or_below(path, control) || virtual_at_or_below(control, path)
+            });
+            let temporary_overlap = path
+                .strip_prefix(&tmp_prefix)
+                .and_then(|suffix| suffix.split('/').next())
+                .is_some_and(|component| {
+                    component.starts_with("minitrue-build-")
+                        || component.starts_with("minitrue-work-")
+                })
+                || path == tmp_root;
+            if control_overlap || temporary_overlap {
+                bail!(
+                    "registro {owner} {version} reivindica namespace interno do minitrue: {path}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ensure_paths_unclaimed(ctx: &Ctx, current_owner: &str, paths: &[(&Path, &str)]) -> Result<()> {
+    let claims = all_manifests(ctx)?;
+    let external = index_manifest_claims(&claims, Some(current_owner));
+    for (path, description) in paths {
+        journal_path_text(&ctx.root, path)?;
+        let relative = path
+            .strip_prefix(&ctx.root)
+            .map_err(|_| anyhow::anyhow!("workspace fora do rootfs"))?
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("workspace não UTF-8"))?;
+        let virt = canonical_virtual_path(&ctx.root, &format!("/{relative}"))?;
+        if let Some((owner, version, claim)) = indexed_claim_at_or_above(&external, &virt, true)
+            .or_else(|| indexed_descendant(&external, &virt))
+        {
+            bail!(
+                "{description} {virt} sobrepõe claim {claim} de {owner} {version}; limpeza recusada"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn all_directory_claims(ctx: &Ctx) -> Result<Vec<(String, String, String)>> {
+    let mut claims = Vec::new();
+    ensure_real_directory_or_absent(&ctx.root, &ctx.records_dir(), "diretório de registros")?;
+    match fs::read_dir(ctx.records_dir()) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry?;
+                if !entry.file_type()?.is_dir() {
+                    bail!(
+                        "entrada de registro não é diretório real: {}",
+                        entry.path().display()
+                    );
+                }
+                let Some(meta) = read_meta_strict(&entry.path())? else {
+                    continue;
+                };
+                let name = entry.file_name().to_string_lossy().into_owned();
+                ensure_supported_record_format(&meta, &name)?;
+                let version = meta.get("VERSION").cloned().unwrap_or_else(|| "?".into());
+                for line in read_manifest_strict(&entry.path()).map_err(|error| {
+                    anyhow::anyhow!("{name}: manifesto instalado ilegível: {error}")
+                })? {
+                    validate_manifest_line_syntax(&line)?;
+                    if meta.get("RECORD_FORMAT").map(String::as_str) == Some(RECORD_FORMAT)
+                        && manifest_integrity(&line).is_none()
+                    {
+                        bail!("{name}: registro v2 contém claim não tipada");
+                    }
+                    if manifest_integrity(&line).is_some_and(|tag| tag.starts_with("d:")) {
+                        let path = manifest_path(&line);
+                        claims.push((
+                            name.clone(),
+                            version.clone(),
+                            canonical_virtual_path(&ctx.root, path)?,
+                        ));
+                    }
+                }
+            }
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(claims)
 }
 
 fn world_add(ctx: &Ctx, name: &str) -> Result<()> {
     let p = ctx.world_path();
-    fs::create_dir_all(p.parent().unwrap())?;
+    ensure_mutation_confined(&ctx.root, &p)?;
+    let directory = p
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("world sem diretório pai"))?;
+    ensure_real_directory_or_absent(&ctx.root, directory, "configuração do minitrue")?;
+    fs::create_dir_all(directory)?;
+    ensure_real_directory_or_absent(&ctx.root, directory, "configuração do minitrue")?;
     let mut lines: Vec<String> = fs::read_to_string(&p)
         .map(|t| t.lines().map(str::to_string).collect())
         .unwrap_or_default();
@@ -1354,6 +4404,11 @@ fn world_add(ctx: &Ctx, name: &str) -> Result<()> {
 
 fn world_remove(ctx: &Ctx, name: &str) -> Result<()> {
     let p = ctx.world_path();
+    ensure_mutation_confined(&ctx.root, &p)?;
+    let directory = p
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("world sem diretório pai"))?;
+    ensure_real_directory_or_absent(&ctx.root, directory, "configuração do minitrue")?;
     if let Ok(txt) = fs::read_to_string(&p) {
         let lines: Vec<&str> = txt.lines().filter(|l| l.trim() != name).collect();
         write_atomic(&p, (lines.join("\n") + "\n").as_bytes())?;
@@ -1463,31 +4518,32 @@ fn origin_label(meta: &HashMap<String, String>) -> String {
     }
 }
 
-/// Extrai o `REPROCORR` (hash reprodutível pinado) de uma cópia de receita no
-/// registro — a base da corroboração (SPEC-0009 §6, SPEC-0010). None se ausente.
-fn reprocorr_of(rec_dir: &Path) -> Option<String> {
-    let recipe = rec_dir.join("recipe");
-    if !recipe.is_file() {
-        return None;
-    }
-    let out = Command::new("sh")
-        .arg("-c")
-        .arg(". \"$1\"; printf '%s' \"${REPROCORR:-}\"")
-        .arg("sh")
-        .arg(&recipe)
-        .output()
-        .ok()?;
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+/// Lê um metadado congelado no registro. Para registros anteriores à adição do
+/// campo, aceita apenas uma atribuição comprovadamente literal na cópia da
+/// receita — jamais executa shell durante `explain`.
+fn recorded_recipe_field(
+    rec_dir: &Path,
+    meta: &HashMap<String, String>,
+    key: &str,
+) -> Option<String> {
+    meta.get(key)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .or_else(|| recipe::literal_assignment(&rec_dir.join("recipe"), key))
+        .filter(|value| !value.is_empty())
+}
+
+/// Extrai o `REPROCORR` pinado, preferindo o snapshot do `meta` e mantendo
+/// compatibilidade segura com registros antigos.
+fn reprocorr_of(rec_dir: &Path, meta: &HashMap<String, String>) -> Option<String> {
+    recorded_recipe_field(rec_dir, meta, "REPROCORR")
+        .filter(|value| value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
 /// `explain <caminho>` — quem é o dono de um arquivo e toda a sua proveniência.
 pub fn explain(ctx: &Ctx, target: &str) -> Result<()> {
     let virt = resolve_virt(target);
+    let real = rooted_path(&ctx.root, &virt)?;
     match owner_of(ctx, &virt) {
         Some(name) => {
             let rec = ctx.records_dir().join(&name);
@@ -1504,7 +4560,7 @@ pub fn explain(ctx: &Ctx, target: &str) -> Result<()> {
                 println!("  confiança:   {trust}");
             }
             let short = |s: &str| s[..s.len().min(16)].to_string();
-            match (meta.get("ARTIFACT_HASH"), reprocorr_of(&rec)) {
+            match (meta.get("ARTIFACT_HASH"), reprocorr_of(&rec, &meta)) {
                 (Some(b), Some(p)) if b == &p => println!(
                     "  reprocorr:   {} — build reproduziu o hash PINADO (SPEC-0009 §6)",
                     short(b)
@@ -1534,7 +4590,7 @@ pub fn explain(ctx: &Ctx, target: &str) -> Result<()> {
             if let Some(fp) = meta.get("FINGERPRINT") {
                 println!("  fingerprint: {}", &fp[..fp.len().min(16)]);
             }
-            // Hash do próprio arquivo no manifesto v1 (integridade por arquivo).
+            // Hash do próprio regular no manifesto v1/v2.
             if let Some(line) = read_manifest(&rec).iter().find(|l| {
                 let p = manifest_path(l);
                 p == virt
@@ -1549,20 +4605,18 @@ pub fn explain(ctx: &Ctx, target: &str) -> Result<()> {
             }
             println!("  instalado:   {}", field("INSTALLED_AT"));
             println!("  receita:     {}", rec.join("recipe").display());
-            if let Some(about) = about_of(&rec) {
+            if let Some(about) = about_of(&rec, &meta) {
                 println!("  é:           {about}");
             }
             if virt.starts_with("/etc/") {
                 println!("  nota:        default de /etc (a fábrica é a fonte; a sua cópia pode divergir — SPEC-0002 §6)");
             }
-            let real = ctx.root.join(virt.trim_start_matches('/'));
             if let Ok(t) = fs::read_link(&real) {
                 println!("  link →       {}", t.display());
             }
             Ok(())
         }
         None => {
-            let real = ctx.root.join(virt.trim_start_matches('/'));
             if real.symlink_metadata().is_ok() {
                 println!(
                     "{virt}: existe, mas nenhum registro o reivindica — wrongthink (veja `verify`)"
@@ -1577,6 +4631,7 @@ pub fn explain(ctx: &Ctx, target: &str) -> Result<()> {
 
 /// `why <pacote>` — por que este pacote está no sistema.
 pub fn why(ctx: &Ctx, name: &str) -> Result<()> {
+    recipe::validate_name(name)?;
     let rec = ctx.records_dir().join(name);
     let meta = match read_meta(&rec) {
         Some(m) => m,
@@ -1604,30 +4659,17 @@ pub fn why(ctx: &Ctx, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Extrai o `ABOUT` de uma cópia de receita no registro (uma linha).
-fn about_of(rec_dir: &Path) -> Option<String> {
-    let recipe = rec_dir.join("recipe");
-    if !recipe.is_file() {
-        return None;
-    }
-    let out = Command::new("sh")
-        .arg("-c")
-        .arg(". \"$1\"; printf '%s' \"${ABOUT:-}\"")
-        .arg("sh")
-        .arg(&recipe)
-        .output()
-        .ok()?;
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+/// Extrai o `ABOUT` congelado, sem sourcear código histórico.
+fn about_of(rec_dir: &Path, meta: &HashMap<String, String>) -> Option<String> {
+    recorded_recipe_field(rec_dir, meta, "ABOUT")
+        .filter(|value| !value.chars().any(char::is_control))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::FileTypeExt;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static CNT: AtomicU32 = AtomicU32::new(0);
@@ -1644,6 +4686,22 @@ mod tests {
         assert_eq!(fs::read_to_string(&p).unwrap(), "conteudo\n");
         write_atomic(&p, b"novo\n").unwrap(); // sobrescreve
         assert_eq!(fs::read_to_string(&p).unwrap(), "novo\n");
+
+        // Uma colisão adversarial no primeiro nome temporário é ignorada, não
+        // seguida. Isso protege inclusive contra symlink que apontaria para
+        // fora do diretório do registro.
+        let victim = root.join("vitima");
+        fs::write(&victim, b"INTEGRA").unwrap();
+        let serial = ATOMIC_COUNTER.load(Ordering::Relaxed);
+        let planted = root.join(format!(
+            ".meta.minitrue-atomic-{}-{serial}",
+            std::process::id()
+        ));
+        symlink(&victim, &planted).unwrap();
+        write_atomic(&p, b"apos-colisao\n").unwrap();
+        assert_eq!(fs::read(&victim).unwrap(), b"INTEGRA");
+        assert_eq!(fs::read_to_string(&p).unwrap(), "apos-colisao\n");
+        fs::remove_file(&planted).unwrap();
         // nenhum temporário sobrou
         let leftovers: Vec<_> = fs::read_dir(&root)
             .unwrap()
@@ -1662,7 +4720,62 @@ mod tests {
         let g1 = acquire_lock(&ctx).expect("1º lock");
         assert!(acquire_lock(&ctx).is_err(), "2º lock deveria falhar");
         drop(g1);
-        assert!(acquire_lock(&ctx).is_ok(), "após soltar, relockeia");
+        let g2 = acquire_lock(&ctx).expect("após soltar, relockeia");
+        drop(g2);
+
+        let lock = root.join("var/lib/minitrue/lock");
+        fs::remove_file(&lock).unwrap();
+        let lock_victim = root.join("lock-victim");
+        fs::write(&lock_victim, b"INTEGRA").unwrap();
+        symlink(&lock_victim, &lock).unwrap();
+        assert!(acquire_lock(&ctx).is_err(), "lock não segue symlink");
+        assert_eq!(fs::read(&lock_victim).unwrap(), b"INTEGRA");
+        fs::remove_file(&lock).unwrap();
+        let fifo = CString::new(lock.as_os_str().as_bytes()).unwrap();
+        // SAFETY: caminho NUL-terminated e modo válido.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        assert!(acquire_lock(&ctx).is_err(), "FIFO não pode bloquear o lock");
+        assert!(read_regular_nofollow(&lock).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn copia_fallback_so_publica_depois_de_completa() {
+        struct PartialThenError(bool);
+        impl Read for PartialThenError {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.0 {
+                    return Err(std::io::Error::other("falha injetada após parcial"));
+                }
+                self.0 = true;
+                let bytes = b"PARCIAL";
+                buf[..bytes.len()].copy_from_slice(bytes);
+                Ok(bytes.len())
+            }
+        }
+
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-copy-{}-{n}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let dst = root.join("backup");
+        let permissions = fs::Permissions::from_mode(0o640);
+        assert!(copy_regular_atomically(&mut PartialThenError(false), &dst, permissions).is_err());
+        assert!(
+            fs::symlink_metadata(&dst).is_err_and(|e| e.kind() == ErrorKind::NotFound),
+            "bytes parciais não podem aparecer sob o nome final"
+        );
+        assert!(
+            fs::read_dir(&root).unwrap().next().is_none(),
+            "temporário parcial deve ser limpo numa falha observável"
+        );
+
+        let mut complete = std::io::Cursor::new(b"COMPLETO".as_slice());
+        copy_regular_atomically(&mut complete, &dst, fs::Permissions::from_mode(0o640)).unwrap();
+        assert_eq!(fs::read(&dst).unwrap(), b"COMPLETO");
+        assert_eq!(
+            fs::metadata(&dst).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1693,6 +4806,690 @@ mod tests {
         assert_eq!(file_hash(&dir.join("l")), "-", "symlink → -");
         assert_eq!(file_hash(&dir.join("ausente")), "-");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn manifesto_v2_prende_tipo_alvo_e_arvore() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-manifest-v2-{}-{n}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+
+        let file = root.join("file");
+        fs::write(&file, b"A").unwrap();
+        let file_claim = format!("{}  /file", path_integrity(&file).unwrap());
+        assert_eq!(
+            manifest_claim_matches(&file_claim, &file).unwrap(),
+            Some(true)
+        );
+        fs::write(&file, b"B").unwrap();
+        assert_eq!(
+            manifest_claim_matches(&file_claim, &file).unwrap(),
+            Some(false)
+        );
+
+        let link = root.join("link");
+        symlink("alvo-a", &link).unwrap();
+        let link_claim = format!("{}  /link", path_integrity(&link).unwrap());
+        fs::remove_file(&link).unwrap();
+        symlink("alvo-b", &link).unwrap();
+        assert_eq!(
+            manifest_claim_matches(&link_claim, &link).unwrap(),
+            Some(false)
+        );
+
+        let tree = root.join("tree");
+        fs::create_dir(&tree).unwrap();
+        fs::write(tree.join("payload"), b"original").unwrap();
+        let tree_claim = format!("{}  /tree", path_integrity(&tree).unwrap());
+        fs::write(tree.join("payload"), b"adulterado").unwrap();
+        assert_eq!(
+            manifest_claim_matches(&tree_claim, &tree).unwrap(),
+            Some(false)
+        );
+        fs::remove_file(tree.join("payload")).unwrap();
+        let empty_claim = format!("{}  /tree", path_integrity(&tree).unwrap());
+        fs::set_permissions(&tree, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            manifest_claim_matches(&empty_claim, &tree).unwrap(),
+            Some(false),
+            "a prova d: também prende o modo do diretório-raiz"
+        );
+
+        assert!(rooted_path(&root, "/usr/../etc/passwd").is_err());
+        assert!(rooted_path(&root, "../../fora").is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stage_recusa_nome_nao_utf8_em_vez_de_manglear() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-stage-name-{}-{n}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let name = std::ffi::OsString::from_vec(vec![b'n', b'o', b'm', b'e', 0xff]);
+        fs::write(root.join(name), b"X").unwrap();
+        let (image, _) = sealed_stage_snapshot(&root, 0).unwrap();
+        assert!(index_sealed_stage(&image).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stage_recusa_hardlink_que_a_instalacao_nao_preservaria() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("mt-stage-hardlink-{}-{n}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("a"), b"mesmo inode").unwrap();
+        fs::hard_link(root.join("a"), root.join("b")).unwrap();
+        let (image, _) = sealed_stage_snapshot(&root, 0).unwrap();
+        assert!(index_sealed_stage(&image).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn snapshot_selado_e_a_fonte_unica_do_hash_e_da_instalacao() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-sealed-stage-{}-{n}", std::process::id()));
+        let stage = root.join("stage");
+        fs::create_dir_all(stage.join("usr/bin")).unwrap();
+        fs::create_dir_all(stage.join("usr/share/sticky")).unwrap();
+        fs::write(stage.join("usr/bin/tool"), b"VERSAO-A").unwrap();
+        fs::set_permissions(
+            stage.join("usr/bin/tool"),
+            fs::Permissions::from_mode(0o4755),
+        )
+        .unwrap();
+        fs::set_permissions(
+            stage.join("usr/share/sticky"),
+            fs::Permissions::from_mode(0o1777),
+        )
+        .unwrap();
+
+        let recipe_dir = root.join("var/lib/minitrue/newspeak/pkg");
+        fs::create_dir_all(&recipe_dir).unwrap();
+        fs::write(
+            recipe_dir.join("recipe"),
+            "NAME=pkg\nVERSION=1\nKIND=source\nbuild(){ :; }\n",
+        )
+        .unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let recipe = recipe::load(&ctx, "pkg").unwrap();
+
+        let (mut image, hash) = sealed_stage_snapshot(&stage, 1_704_067_200).unwrap();
+        assert_eq!(hash.len(), 64);
+        assert!(
+            image.write_all(b"adulteracao").is_err(),
+            "o memfd precisa estar selado contra escrita"
+        );
+        let entries = index_sealed_stage(&image).unwrap();
+        fs::write(stage.join("usr/bin/tool"), b"VERSAO-B").unwrap();
+        let mut journal = Journal::begin(&ctx, "pkg").unwrap();
+        let manifest = apply_stage(&ctx, &image, &entries, &recipe, &mut journal).unwrap();
+
+        assert_eq!(fs::read(root.join("usr/bin/tool")).unwrap(), b"VERSAO-A");
+        assert_eq!(
+            fs::metadata(root.join("usr/bin/tool"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o4755
+        );
+        assert_eq!(
+            fs::metadata(root.join("usr/share/sticky"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o1777
+        );
+        for line in &manifest {
+            assert_eq!(
+                confined_claim_matches(line, &root, manifest_path(line)).unwrap(),
+                Some(true)
+            );
+        }
+        journal.rollback().unwrap();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stage_recusa_colisoes_canonicas_de_usr_merge_e_factory() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-stage-alias-{}-{n}", std::process::id()));
+        fs::create_dir_all(root.join("usr/lib")).unwrap();
+        symlink("usr/lib", root.join("lib")).unwrap();
+
+        let exact = root.join("stage-exact");
+        fs::create_dir_all(exact.join("lib")).unwrap();
+        fs::create_dir_all(exact.join("usr/lib")).unwrap();
+        fs::write(exact.join("lib/x"), b"A").unwrap();
+        fs::write(exact.join("usr/lib/x"), b"B").unwrap();
+        let (image, _) = sealed_stage_snapshot(&exact, 0).unwrap();
+        let entries = index_sealed_stage(&image).unwrap();
+        assert!(canonical_stage_topology(&root, &entries).is_err());
+
+        let ancestor = root.join("stage-ancestor");
+        fs::create_dir_all(ancestor.join("lib/foo")).unwrap();
+        fs::create_dir_all(ancestor.join("usr/lib/foo")).unwrap();
+        fs::write(ancestor.join("usr/lib/foo/bar"), b"B").unwrap();
+        let (image, _) = sealed_stage_snapshot(&ancestor, 0).unwrap();
+        let entries = index_sealed_stage(&image).unwrap();
+        assert!(canonical_stage_topology(&root, &entries).is_err());
+
+        let factory = root.join("stage-factory");
+        fs::create_dir_all(factory.join("etc/app")).unwrap();
+        fs::create_dir_all(factory.join("usr/share/factory/etc/app")).unwrap();
+        fs::write(factory.join("usr/share/factory/etc/app/x"), b"X").unwrap();
+        let (image, _) = sealed_stage_snapshot(&factory, 0).unwrap();
+        let entries = index_sealed_stage(&image).unwrap();
+        assert!(canonical_stage_topology(&root, &entries).is_err());
+
+        for (index, internal) in [
+            "var/lib/minitrue/journal/pkg/log",
+            "var/lib/minitrue/records/victim/meta",
+            "var/cache/minitrue/download",
+            "etc/minitrue/world",
+            "tmp/minitrue-build-pkg/installed",
+            "tmp/minitrue-work-pkg/installed",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let stage = root.join(format!("stage-control-{index}"));
+            let payload = stage.join(internal);
+            mkparent(&payload).unwrap();
+            fs::write(&payload, b"NAO-PUBLICAR").unwrap();
+            let (image, _) = sealed_stage_snapshot(&stage, 0).unwrap();
+            let entries = index_sealed_stage(&image).unwrap();
+            let paths = canonical_stage_topology(&root, &entries).unwrap();
+            assert!(
+                ensure_stage_avoids_control_plane(&root, &entries, &paths).is_err(),
+                "namespace interno aceito: {internal}"
+            );
+        }
+        assert!(!root.join("var/lib/minitrue/journal/pkg/log").exists());
+
+        fs::create_dir_all(root.join("etc")).unwrap();
+        fs::create_dir_all(root.join("var/lib/minitrue/journal/pkg")).unwrap();
+        symlink("../var/lib/minitrue/journal/pkg", root.join("etc/app")).unwrap();
+        let aliased = root.join("stage-etc-alias/etc/app/log");
+        mkparent(&aliased).unwrap();
+        fs::write(&aliased, b"NAO-TOCAR-JOURNAL").unwrap();
+        let (image, _) = sealed_stage_snapshot(&root.join("stage-etc-alias"), 0).unwrap();
+        let entries = index_sealed_stage(&image).unwrap();
+        let paths = canonical_stage_topology(&root, &entries).unwrap();
+        assert!(ensure_stage_avoids_control_plane(&root, &entries, &paths).is_err());
+
+        let claimed_temp = root.join("opt/foo/.1.tmp/payload");
+        mkparent(&claimed_temp).unwrap();
+        fs::write(&claimed_temp, b"B").unwrap();
+        let outsider = root.join("var/lib/minitrue/records/outsider");
+        fs::create_dir_all(&outsider).unwrap();
+        fs::write(outsider.join("meta"), "NAME=outsider\nVERSION=1\n").unwrap();
+        fs::write(outsider.join("manifest"), "/opt/foo/.1.tmp/payload\n").unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        assert!(
+            ensure_paths_unclaimed(&ctx, "foo", &[(&root.join("opt/foo"), "prefixo mundo A")])
+                .is_err()
+        );
+        assert_eq!(fs::read(&claimed_temp).unwrap(), b"B");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn memoryhole_recusa_manifesto_vazio_ou_com_travessia() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-memory-safe-{}-{n}", std::process::id()));
+        let rec = root.join("var/lib/minitrue/records/pkg");
+        fs::create_dir_all(&rec).unwrap();
+        fs::write(rec.join("meta"), "NAME=pkg\nWORLD=B\nDEPS=\n").unwrap();
+        fs::write(
+            rec.join("manifest"),
+            "f:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /usr/../../fora\n",
+        )
+        .unwrap();
+        let victim = root.with_extension("fora");
+        fs::write(&victim, b"INTEGRO").unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        assert!(memoryhole(&ctx, &["pkg".into()]).is_err());
+        assert_eq!(fs::read(&victim).unwrap(), b"INTEGRO");
+        assert!(rec.is_dir());
+
+        fs::write(rec.join("manifest"), "").unwrap();
+        assert!(memoryhole(&ctx, &["pkg".into()]).is_err());
+        assert!(rec.is_dir());
+
+        fs::write(
+            rec.join("meta"),
+            "RECORD_FORMAT=99\nNAME=pkg\nWORLD=B\nDEPS=\nPROVISIONAL=1\n",
+        )
+        .unwrap();
+        fs::write(rec.join("manifest"), "/guardado\n").unwrap();
+        fs::write(root.join("guardado"), b"PRESERVAR").unwrap();
+        assert!(memoryhole(&ctx, &["pkg".into()]).is_err());
+        assert_eq!(fs::read(root.join("guardado")).unwrap(), b"PRESERVAR");
+        assert!(verify(&ctx).is_err(), "verify reporta formato futuro");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_file(&victim);
+    }
+
+    #[test]
+    fn memoryhole_nao_remove_plano_de_controle_reivindicado() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("mt-memory-control-{}-{n}", std::process::id()));
+        let rec = root.join("var/lib/minitrue/records/adversarial");
+        fs::create_dir_all(&rec).unwrap();
+        fs::write(
+            rec.join("meta"),
+            "NAME=adversarial\nVERSION=1\nWORLD=B\nDEPS=\n",
+        )
+        .unwrap();
+        fs::write(rec.join("manifest"), "/var/lib/minitrue/lock\n").unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+
+        assert!(memoryhole(&ctx, &["adversarial".into()]).is_err());
+        assert!(root.join("var/lib/minitrue/lock").is_file());
+        assert!(rec.is_dir());
+
+        fs::create_dir_all(root.join("etc")).unwrap();
+        fs::create_dir_all(root.join("opt/cfg")).unwrap();
+        fs::write(root.join("opt/cfg/world"), b"OUTRO-DONO\n").unwrap();
+        symlink("../opt/cfg", root.join("etc/minitrue")).unwrap();
+        assert!(world_add(&ctx, "pkg").is_err());
+        assert_eq!(
+            fs::read(root.join("opt/cfg/world")).unwrap(),
+            b"OUTRO-DONO\n"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn meta_corrompido_nao_apaga_o_pacote_da_visao_de_ownership() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-meta-strict-{}-{n}", std::process::id()));
+        let rec = root.join("var/lib/minitrue/records/pkg");
+        let outside = root.with_extension("outside-meta");
+        fs::create_dir_all(&rec).unwrap();
+        fs::write(&outside, "NAME=pkg\nVERSION=1\nWORLD=B\n").unwrap();
+        symlink(&outside, rec.join("meta")).unwrap();
+        fs::write(rec.join("manifest"), "/usr/bin/owned\n").unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        assert!(all_manifests(&ctx).is_err());
+        fs::remove_file(rec.join("meta")).unwrap();
+        fs::write(
+            rec.join("meta"),
+            "NAME=pkg\nVERSION=1\nWORLD=B\nTRANSACTION_ID=a\nTRANSACTION_ID=b\n",
+        )
+        .unwrap();
+        assert!(all_manifests(&ctx).is_err());
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_file(&outside);
+    }
+
+    #[test]
+    fn memoryhole_nao_segue_symlink_intermediario_para_fora_do_root() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-memory-link-{}-{n}", std::process::id()));
+        let outside = root.with_extension("outside");
+        let rec = root.join("var/lib/minitrue/records/pkg");
+        fs::create_dir_all(&rec).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let victim = outside.join("victim");
+        fs::write(&victim, b"NAO-APAGAR").unwrap();
+        symlink(&outside, root.join("escape")).unwrap();
+        fs::write(rec.join("meta"), "NAME=pkg\nWORLD=B\nDEPS=\n").unwrap();
+        fs::write(rec.join("manifest"), "/escape/victim\n").unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+
+        assert!(memoryhole(&ctx, &["pkg".into()]).is_err());
+        assert_eq!(fs::read(&victim).unwrap(), b"NAO-APAGAR");
+        assert!(rec.exists(), "a recusa preserva o registro para inspeção");
+        fs::remove_dir_all(&rec).unwrap();
+
+        // Symlink relativo que permanece dentro do rootfs continua suportado
+        // (usr-merge real: /lib -> usr/lib, /sbin -> usr/bin).
+        let rec = root.join("var/lib/minitrue/records/internal");
+        fs::create_dir_all(&rec).unwrap();
+        fs::create_dir_all(root.join("usr/lib")).unwrap();
+        symlink("usr/lib", root.join("lib")).unwrap();
+        fs::write(root.join("usr/lib/owned"), b"X").unwrap();
+        fs::write(rec.join("meta"), "NAME=internal\nWORLD=B\nDEPS=\n").unwrap();
+        fs::write(rec.join("manifest"), "/lib/owned\n").unwrap();
+        memoryhole(&ctx, &["internal".into()]).unwrap();
+        assert!(!root.join("usr/lib/owned").exists());
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn journal_recusa_symlink_externo_e_aceita_usr_merge_interno() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-journal-link-{}-{n}", std::process::id()));
+        let outside = root.with_extension("outside");
+        fs::create_dir_all(root.join("usr/lib")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("victim"), b"FORA").unwrap();
+        symlink(&outside, root.join("escape")).unwrap();
+        symlink("usr/lib", root.join("lib")).unwrap();
+        let source = root.join("source");
+        fs::write(&source, b"NOVO").unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let mut journal = Journal::begin(&ctx, "pkg").unwrap();
+
+        assert!(journal
+            .place_file(&root.join("escape/victim"), &source)
+            .is_err());
+        assert_eq!(fs::read(outside.join("victim")).unwrap(), b"FORA");
+        journal
+            .place_file(&root.join("lib/owned"), &source)
+            .unwrap();
+        assert_eq!(fs::read(root.join("usr/lib/owned")).unwrap(), b"NOVO");
+        journal.rollback().unwrap();
+        assert!(!root.join("usr/lib/owned").exists());
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn memoryhole_nao_remove_diretorio_mundo_b_que_ganhou_filhos() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-memory-dir-{}-{n}", std::process::id()));
+        let rec = root.join("var/lib/minitrue/records/pkg");
+        let owned = root.join("usr/share/pkg-empty");
+        fs::create_dir_all(&rec).unwrap();
+        fs::create_dir_all(&owned).unwrap();
+        let claim = format!(
+            "{}  /usr/share/pkg-empty\n",
+            path_integrity(&owned).unwrap()
+        );
+        fs::write(
+            rec.join("meta"),
+            "RECORD_FORMAT=2\nNAME=pkg\nVERSION=1\nWORLD=B\nDEPS=\n",
+        )
+        .unwrap();
+        fs::write(rec.join("manifest"), claim).unwrap();
+        fs::write(owned.join("foreign"), b"PRESERVAR").unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+
+        memoryhole(&ctx, &["pkg".into()]).unwrap();
+        assert_eq!(fs::read(owned.join("foreign")).unwrap(), b"PRESERVAR");
+        assert!(!rec.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn memoryhole_mundo_a_preserva_payload_modificado() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-memory-a-{}-{n}", std::process::id()));
+        let rec = root.join("var/lib/minitrue/records/tool");
+        let version = root.join("opt/tool/1");
+        let current = root.join("opt/tool/current");
+        let command = root.join("usr/bin/tool");
+        fs::create_dir_all(&rec).unwrap();
+        fs::create_dir_all(&version).unwrap();
+        mkparent(&command).unwrap();
+        fs::write(version.join("payload"), b"ORIGINAL").unwrap();
+        symlink("1", &current).unwrap();
+        symlink("../../opt/tool/current/payload", &command).unwrap();
+        let manifest = format!(
+            "{}  /opt/tool/1\n{}  /opt/tool/current\n{}  /usr/bin/tool\n",
+            path_integrity(&version).unwrap(),
+            path_integrity(&current).unwrap(),
+            path_integrity(&command).unwrap()
+        );
+        fs::write(rec.join("meta"), "NAME=tool\nWORLD=A\nDEPS=\n").unwrap();
+        fs::write(rec.join("manifest"), manifest).unwrap();
+        fs::write(version.join("payload"), b"MODIFICADO").unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+
+        memoryhole(&ctx, &["tool".into()]).unwrap();
+        assert_eq!(fs::read(version.join("payload")).unwrap(), b"MODIFICADO");
+        assert!(!current.exists());
+        assert!(!command.exists());
+        assert!(!rec.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn idempotencia_exige_registro_integro() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-idempotencia-{}-{n}", std::process::id()));
+        let rec = root.join("var/lib/minitrue/records/pkg");
+        let source = root.join("var/lib/minitrue/newspeak/pkg/recipe");
+        let installed = root.join("usr/bin/tool");
+        mkparent(&installed).unwrap();
+        fs::create_dir_all(&rec).unwrap();
+        mkparent(&source).unwrap();
+        fs::write(&source, "NAME=pkg\nVERSION=1\nKIND=source\nbuild(){ :; }\n").unwrap();
+        fs::write(&installed, b"original\n").unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let recipe = recipe::load(&ctx, "pkg").unwrap();
+        let manifest = format!("{}  /usr/bin/tool\n", path_integrity(&installed).unwrap());
+        let baseline_hash = sha256_bytes(manifest.as_bytes());
+        fs::write(
+            rec.join("meta"),
+            format!(
+                "RECORD_FORMAT=2\nNAME=pkg\nVERSION=1\nKIND=source\nWORLD=B\nORIGIN=fonte\nSHA256=\nDEPS=\nSUPERSEDES=\nFINGERPRINT=x\nINSTALLED_AT=2026-07-21T00:00:00Z\nARTIFACT_HASH={}\nMANIFEST_BASELINE_SHA256={baseline_hash}\nTRANSACTION_ID=teste\n",
+                "a".repeat(64),
+            ),
+        )
+        .unwrap();
+        fs::write(rec.join("manifest"), &manifest).unwrap();
+        fs::write(rec.join("manifest@1"), &manifest).unwrap();
+        fs::write(rec.join("recipe"), &recipe.recipe_bytes).unwrap();
+        fs::write(rec.join("recipe@1"), &recipe.recipe_bytes).unwrap();
+
+        assert!(record_is_intact(&ctx, &rec, &recipe));
+        fs::write(&installed, b"adulterado\n").unwrap();
+        assert!(!record_is_intact(&ctx, &rec, &recipe));
+        fs::write(&installed, b"original\n").unwrap();
+        fs::write(rec.join("recipe"), b"# adulterada\n").unwrap();
+        assert!(!record_is_intact(&ctx, &rec, &recipe));
+        fs::write(rec.join("recipe"), &recipe.recipe_bytes).unwrap();
+        fs::remove_file(&installed).unwrap();
+        assert!(!record_is_intact(&ctx, &rec, &recipe));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn migracao_v1_promove_provisional_legitimamente_vazio() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-migrate-v1-{}-{n}", std::process::id()));
+        let recipe_dir = root.join("var/lib/minitrue/newspeak/seed");
+        let rec = root.join("var/lib/minitrue/records/seed");
+        fs::create_dir_all(&recipe_dir).unwrap();
+        fs::create_dir_all(&rec).unwrap();
+        fs::write(
+            recipe_dir.join("recipe"),
+            "NAME=seed\nVERSION=1\nKIND=source\nPROVISIONAL=1\nbuild(){ :; }\n",
+        )
+        .unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let recipe = recipe::load(&ctx, "seed").unwrap();
+        let fingerprint = recipe::build_fingerprints(std::slice::from_ref(&recipe))
+            .unwrap()
+            .remove("seed")
+            .unwrap();
+        fs::write(
+            rec.join("meta"),
+            format!(
+                "RECORD_FORMAT=1\nNAME=seed\nVERSION=1\nKIND=source\nWORLD=B\nFINGERPRINT={fingerprint}\nPROVISIONAL=1\nARTIFACT_HASH={}\n",
+                "a".repeat(64)
+            ),
+        )
+        .unwrap();
+        fs::write(rec.join("recipe"), &recipe.recipe_bytes).unwrap();
+        fs::write(rec.join("recipe@1"), &recipe.recipe_bytes).unwrap();
+        fs::write(rec.join("manifest"), "\n").unwrap();
+        fs::write(rec.join("manifest@1"), "\n").unwrap();
+
+        assert!(migrate_legacy_record(&ctx, &rec, &recipe, &fingerprint).unwrap());
+        assert_eq!(
+            read_meta(&rec)
+                .unwrap()
+                .get("RECORD_FORMAT")
+                .map(String::as_str),
+            Some("2")
+        );
+        assert_eq!(fs::read(rec.join("manifest")).unwrap(), b"\n");
+        assert_eq!(
+            fs::read(rec.join("manifest")).unwrap(),
+            fs::read(rec.join("manifest@1")).unwrap()
+        );
+        assert!(record_is_intact(&ctx, &rec, &recipe));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn provisional_ja_cedido_fica_congelado_mesmo_com_fingerprint_novo() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-frozen-v1-{}-{n}", std::process::id()));
+        let recipe_dir = root.join("var/lib/minitrue/newspeak/seed");
+        let rec = root.join("var/lib/minitrue/records/seed");
+        fs::create_dir_all(&recipe_dir).unwrap();
+        fs::create_dir_all(&rec).unwrap();
+        fs::write(
+            recipe_dir.join("recipe"),
+            "NAME=seed\nVERSION=1\nKIND=source\nPROVISIONAL=1\nABOUT=novo\nbuild(){ :; }\n",
+        )
+        .unwrap();
+        let historical = b"NAME=seed\nVERSION=1\nKIND=source\nPROVISIONAL=1\nbuild(){ :; }\n";
+        fs::write(rec.join("recipe"), historical).unwrap();
+        fs::write(rec.join("recipe@1"), historical).unwrap();
+        fs::write(
+            rec.join("meta"),
+            "RECORD_FORMAT=1\nNAME=seed\nVERSION=1\nKIND=source\nWORLD=B\nFINGERPRINT=antigo\nPROVISIONAL=1\n",
+        )
+        .unwrap();
+        fs::write(rec.join("manifest"), "\n").unwrap();
+        fs::write(rec.join("manifest@1"), "/usr/bin/cedido\n").unwrap();
+        let successor = root.join("var/lib/minitrue/records/real");
+        fs::create_dir_all(&successor).unwrap();
+        fs::write(
+            successor.join("meta"),
+            "RECORD_FORMAT=1\nNAME=real\nVERSION=1\nWORLD=B\n",
+        )
+        .unwrap();
+        fs::write(successor.join("manifest"), "/usr/bin/cedido\n").unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let recipe = recipe::load(&ctx, "seed").unwrap();
+
+        assert_eq!(
+            provisional_cession_state(&ctx, &rec, &recipe).unwrap(),
+            ProvisionalCession::Intact
+        );
+        fs::remove_dir_all(&successor).unwrap();
+        assert_eq!(
+            provisional_cession_state(&ctx, &rec, &recipe).unwrap(),
+            ProvisionalCession::Incoherent,
+            "linha removida sem sucessor não pode parecer uma cessão legítima"
+        );
+        fs::create_dir_all(&successor).unwrap();
+        fs::write(
+            successor.join("meta"),
+            "RECORD_FORMAT=1\nNAME=real\nVERSION=1\nWORLD=B\nPROVISIONAL=1\nSUPERSEDES=seed\n",
+        )
+        .unwrap();
+        fs::write(successor.join("manifest"), "/usr/bin/cedido\n").unwrap();
+        assert_eq!(
+            provisional_cession_state(&ctx, &rec, &recipe).unwrap(),
+            ProvisionalCession::Intact,
+            "sucessor provisional declarado preserva a prova transitiva"
+        );
+        fs::write(
+            successor.join("meta"),
+            "RECORD_FORMAT=1\nNAME=real\nVERSION=1\nWORLD=B\nPROVISIONAL=1\nSUPERSEDES=outra-semente\n",
+        )
+        .unwrap();
+        assert_eq!(
+            provisional_cession_state(&ctx, &rec, &recipe).unwrap(),
+            ProvisionalCession::Incoherent,
+            "provisional arbitrário não pode legitimar truncamento"
+        );
+        fs::write(
+            successor.join("meta"),
+            "RECORD_FORMAT=1\nNAME=real\nVERSION=1\nWORLD=B\n",
+        )
+        .unwrap();
+        fs::write(successor.join("manifest"), "/usr/bin/cedido\n").unwrap();
+        install_source(&ctx, &recipe, false, "fingerprint-novo").unwrap();
+        assert_eq!(
+            read_meta(&rec)
+                .unwrap()
+                .get("FINGERPRINT")
+                .map(String::as_str),
+            Some("antigo")
+        );
+        assert_eq!(fs::read(rec.join("manifest")).unwrap(), b"\n");
+        assert_eq!(
+            fs::read(rec.join("manifest@1")).unwrap(),
+            b"/usr/bin/cedido\n"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// materialize_etc trata symlink em /etc — regressão do openssl (instala
@@ -1740,6 +5537,40 @@ mod tests {
             "# cnf\n"
         );
 
+        // Um link administrativo pendente também conta como decisão local:
+        // o default novo vai para `.new` e o link original não é seguido.
+        let factory_dangling = root.join("usr/share/factory/etc/app.conf");
+        fs::write(&factory_dangling, b"novo-default\n").unwrap();
+        let live_dangling = root.join("etc/app.conf");
+        symlink("alvo-ausente", &live_dangling).unwrap();
+        materialize_etc(&mut jrnl, &ctx, &factory_dangling, "app.conf").unwrap();
+        assert_eq!(
+            fs::read_link(&live_dangling).unwrap(),
+            PathBuf::from("alvo-ausente")
+        );
+        assert_eq!(
+            fs::read(root.join("etc/app.conf.new")).unwrap(),
+            b"novo-default\n"
+        );
+
+        // Tipo administrativo inesperado não pode bloquear o rectify nem ser
+        // seguido. FIFO conta como modificação local e recebe apenas `.new`.
+        let factory_fifo = root.join("usr/share/factory/etc/pipe.conf");
+        fs::write(&factory_fifo, b"default-seguro\n").unwrap();
+        let live_fifo = root.join("etc/pipe.conf");
+        let fifo_name = CString::new(live_fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: CString válida; caminho está dentro do root temporário.
+        assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+        materialize_etc(&mut jrnl, &ctx, &factory_fifo, "pipe.conf").unwrap();
+        assert!(fs::symlink_metadata(&live_fifo)
+            .unwrap()
+            .file_type()
+            .is_fifo());
+        assert_eq!(
+            fs::read(root.join("etc/pipe.conf.new")).unwrap(),
+            b"default-seguro\n"
+        );
+
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1775,7 +5606,7 @@ mod tests {
         j.place_file(&novo, &mk("b", b"CAT")).unwrap();
         assert_eq!(fs::read(&existing).unwrap(), b"NOVO");
         assert!(novo.exists());
-        j.rollback();
+        j.rollback().unwrap();
         assert_eq!(
             fs::read(&existing).unwrap(),
             b"ORIGINAL",
@@ -1797,15 +5628,429 @@ mod tests {
             b"ORIGINAL",
             "recovery restaurou o órfão"
         );
+        j2.rollback().unwrap();
+
+        // Pais novos também pertencem à transação; `create_dir_all` fora do
+        // log deixava estrutura órfã depois de uma falha.
+        let deep = root.join("novo/a/b/tool");
+        let mut j = Journal::begin(&ctx, "deep").unwrap();
+        j.place_file(&deep, &mk("deep", b"X")).unwrap();
+        assert!(deep.exists());
+        j.rollback().unwrap();
+        assert!(!root.join("novo").exists());
 
         // 3) commit mantém as mudanças e descarta o journal
-        j2.commit().unwrap();
         let mut j = Journal::begin(&ctx, "coreutils").unwrap();
         j.place_file(&existing, &mk("d", b"FINAL")).unwrap();
+        let txid = j.txid.clone();
+        let meta = ctx.records_dir().join("coreutils/meta");
+        j.place_bytes(&meta, format!("TRANSACTION_ID={txid}\n").as_bytes())
+            .unwrap();
         j.commit().unwrap();
         assert_eq!(fs::read(&existing).unwrap(), b"FINAL");
         assert!(!jpath.exists(), "journal descartado no commit");
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recovery_global_precede_transacao_de_outro_pacote() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("mt-journal-global-{}-{n}", std::process::id()));
+        fs::create_dir_all(root.join("usr/bin")).unwrap();
+        let target = root.join("usr/bin/tool");
+        fs::write(&target, b"A").unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+
+        {
+            let mut orphan = Journal::begin(&ctx, "provisional-a").unwrap();
+            orphan.place_bytes(&target, b"PARCIAL").unwrap();
+            // Simula crash: sem commit nem rollback.
+        }
+        assert_eq!(fs::read(&target).unwrap(), b"PARCIAL");
+
+        // O pacote B não pode sequer abrir sua transação sobre o estado
+        // parcial de A. `begin` primeiro recupera globalmente A.
+        let next = Journal::begin(&ctx, "sucessor-b").unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"A");
+        next.rollback().unwrap();
+
+        // Compatibilidade com um estado anterior à fronteira global: A ficou
+        // pendente, mas B já publicou ownership e retirou seu journal. Reverter
+        // A cegamente apagaria B, portanto o backup precisa ser preservado.
+        {
+            let mut orphan = Journal::begin(&ctx, "provisional-a").unwrap();
+            orphan.place_bytes(&target, b"PARCIAL-2").unwrap();
+        }
+        fs::write(&target, b"B-COMMITADO").unwrap();
+        let successor = ctx.records_dir().join("sucessor-b");
+        fs::create_dir_all(&successor).unwrap();
+        fs::write(successor.join("meta"), "NAME=sucessor-b\nVERSION=1\n").unwrap();
+        fs::write(successor.join("manifest"), "/usr/bin/tool\n").unwrap();
+        assert!(Journal::recover_all(&ctx).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"B-COMMITADO");
+        assert!(Journal::active_dir(&ctx, "provisional-a").is_dir());
+        fs::remove_dir_all(&successor).unwrap();
+        Journal::recover_all(&ctx).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"A");
+
+        // Estado antigo com duas transações não tem ordem de rollback provada.
+        // Falha fechado sem consumir nenhum backup.
+        let base = root.join("var/lib/minitrue/journal");
+        for pkg in ["a", "b"] {
+            let dir = base.join(pkg);
+            fs::create_dir_all(dir.join("backup")).unwrap();
+            fs::write(dir.join("txid"), format!("{pkg}-tx\n")).unwrap();
+            fs::write(dir.join("log"), b"").unwrap();
+        }
+        assert!(Journal::recover_all(&ctx).is_err());
+        assert!(base.join("a").is_dir());
+        assert!(base.join("b").is_dir());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn diretorio_vazio_do_stage_participa_do_journal_e_manifesto() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-empty-dir-{}-{n}", std::process::id()));
+        let stage = root.join("stage");
+        let empty = stage.join("usr/share/pkg/empty");
+        fs::create_dir_all(&empty).unwrap();
+        fs::set_permissions(&empty, fs::Permissions::from_mode(0o750)).unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let preexisting_parent = root.join("usr/share/pkg");
+        fs::create_dir_all(&preexisting_parent).unwrap();
+        fs::set_permissions(&preexisting_parent, fs::Permissions::from_mode(0o711)).unwrap();
+        let recipe_dir = root.join("var/lib/minitrue/newspeak/pkg");
+        fs::create_dir_all(&recipe_dir).unwrap();
+        fs::write(
+            recipe_dir.join("recipe"),
+            "NAME=pkg\nVERSION=1\nKIND=source\nbuild(){ :; }\n",
+        )
+        .unwrap();
+        let recipe = recipe::load(&ctx, "pkg").unwrap();
+        let (image, _) = sealed_stage_snapshot(&stage, 0).unwrap();
+        let entries = index_sealed_stage(&image).unwrap();
+        let mut journal = Journal::begin(&ctx, "pkg").unwrap();
+        let manifest = apply_stage(&ctx, &image, &entries, &recipe, &mut journal).unwrap();
+        let installed = root.join("usr/share/pkg/empty");
+        assert!(installed.is_dir());
+        assert_eq!(
+            fs::metadata(&installed).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+        assert!(manifest
+            .iter()
+            .any(|line| manifest_path(line) == "/usr/share/pkg/empty"
+                && manifest_integrity(line).is_some_and(|tag| tag.starts_with("d:"))));
+        journal.rollback().unwrap();
+        assert!(
+            !installed.exists(),
+            "rollback deve remover diretório vazio novo"
+        );
+        assert!(preexisting_parent.is_dir());
+        assert_eq!(
+            fs::metadata(&preexisting_parent)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o711,
+            "rollback não pode podar/recriar pai preexistente"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn diretorio_vazio_do_stage_nao_adota_diretorio_preexistente_com_dados() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("mt-dir-preexisting-{}-{n}", std::process::id()));
+        let stage = root.join("stage");
+        let staged = stage.join("usr/share/pkg/state");
+        let installed = root.join("usr/share/pkg/state");
+        fs::create_dir_all(&staged).unwrap();
+        fs::create_dir_all(&installed).unwrap();
+        fs::write(installed.join("admin"), b"PRESERVAR").unwrap();
+        let recipe_dir = root.join("var/lib/minitrue/newspeak/pkg");
+        fs::create_dir_all(&recipe_dir).unwrap();
+        fs::write(
+            recipe_dir.join("recipe"),
+            "NAME=pkg\nVERSION=1\nKIND=source\nbuild(){ :; }\n",
+        )
+        .unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let recipe = recipe::load(&ctx, "pkg").unwrap();
+        let (image, _) = sealed_stage_snapshot(&stage, 0).unwrap();
+        let entries = index_sealed_stage(&image).unwrap();
+        let mut journal = Journal::begin(&ctx, "pkg").unwrap();
+        assert!(apply_stage(&ctx, &image, &entries, &recipe, &mut journal).is_err());
+        journal.rollback().unwrap();
+        assert_eq!(fs::read(installed.join("admin")).unwrap(), b"PRESERVAR");
+        assert!(!ctx.records_dir().join("pkg/manifest").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Janela adversarial 1: a intenção B existe, mas o move ainda não ocorreu.
+    /// Recovery não pode apagar/trocar o original. Também cobre backup que é um
+    /// symlink pendente: `symlink_metadata`, não `exists`, precisa restaurá-lo.
+    #[test]
+    fn journal_intencao_precede_move_e_restaura_dangling_symlink() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-jintent-{}-{n}", std::process::id()));
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let dst = root.join("usr/bin/tool");
+        mkparent(&dst).unwrap();
+        fs::write(&dst, b"ORIGINAL").unwrap();
+
+        // Estado possível após record(B), imediatamente antes de move(dst,bak).
+        {
+            let mut j = Journal::begin(&ctx, "pkg").unwrap();
+            j.record_backup_intent(&dst, 0).unwrap();
+        }
+        Journal::recover(&ctx, "pkg").unwrap();
+        assert_eq!(fs::read(&dst).unwrap(), b"ORIGINAL");
+
+        fs::remove_file(&dst).unwrap();
+        symlink("alvo-ausente", &dst).unwrap();
+        {
+            let mut j = Journal::begin(&ctx, "pkg").unwrap();
+            j.stash(&dst, false).unwrap();
+            fs::write(&dst, b"SUBSTITUTO").unwrap();
+        }
+        Journal::recover(&ctx, "pkg").unwrap();
+        let md = fs::symlink_metadata(&dst).unwrap();
+        assert!(md.file_type().is_symlink());
+        assert_eq!(fs::read_link(&dst).unwrap(), PathBuf::from("alvo-ausente"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Janela adversarial 2: meta final já contém o txid, mas o processo morreu
+    /// antes de retirar o journal. Recovery reconhece commit e NÃO restaura backup.
+    #[test]
+    fn journal_orfao_commitado_nao_e_revertido() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-jcommit-{}-{n}", std::process::id()));
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let dst = root.join("usr/bin/tool");
+        let src = root.join("stage/tool");
+        mkparent(&dst).unwrap();
+        mkparent(&src).unwrap();
+        fs::write(&dst, b"ANTIGO").unwrap();
+        fs::write(&src, b"NOVO").unwrap();
+        let rec = ctx.records_dir().join("pkg");
+        fs::create_dir_all(&rec).unwrap();
+        fs::write(rec.join("meta"), "TRANSACTION_ID=anterior\n").unwrap();
+
+        {
+            let mut j = Journal::begin(&ctx, "pkg").unwrap();
+            j.place_file(&dst, &src).unwrap();
+            let txid = j.txid.clone();
+            j.place_bytes(
+                &rec.join("meta"),
+                format!("NAME=pkg\nTRANSACTION_ID={txid}\n").as_bytes(),
+            )
+            .unwrap();
+        }
+        Journal::recover(&ctx, "pkg").unwrap();
+        assert_eq!(fs::read(&dst).unwrap(), b"NOVO");
+        assert!(!Journal::active_dir(&ctx, "pkg").exists());
+
+        let ambiguous = ctx.records_dir().join("ambiguous");
+        {
+            let mut j = Journal::begin(&ctx, "ambiguous").unwrap();
+            let txid = j.txid.clone();
+            j.place_bytes(
+                &ambiguous.join("meta"),
+                format!("NAME=ambiguous\nTRANSACTION_ID={txid}\nTRANSACTION_ID=outro\n").as_bytes(),
+            )
+            .unwrap();
+        }
+        assert!(Journal::recover(&ctx, "ambiguous").is_err());
+        assert!(Journal::active_dir(&ctx, "ambiguous").is_dir());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Recovery que não consegue remover o destino atual deve falhar fechado:
+    /// mantém o journal ativo e o único backup intacto para nova tentativa.
+    #[test]
+    fn journal_falha_de_recovery_preserva_backup() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-jfail-{}-{n}", std::process::id()));
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let dst = root.join("usr/bin/tool");
+        mkparent(&dst).unwrap();
+        fs::write(&dst, b"ORIGINAL").unwrap();
+        {
+            let mut j = Journal::begin(&ctx, "pkg").unwrap();
+            j.stash(&dst, false).unwrap();
+            fs::create_dir(&dst).unwrap();
+            fs::write(dst.join("impede-remove-dir"), b"x").unwrap();
+        }
+
+        assert!(Journal::recover(&ctx, "pkg").is_err());
+        let active = Journal::active_dir(&ctx, "pkg");
+        assert!(active.is_dir(), "journal deve continuar ativo");
+        assert!(
+            fs::symlink_metadata(active.join("backup/0")).is_ok(),
+            "backup não pode ser apagado após rollback falho"
+        );
+        assert!(dst.join("impede-remove-dir").is_file());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Estados/logs ambíguos falham fechados: B sem backup E sem destino não é
+    /// aceito; caminhos fora do root ou com delimitadores nunca são executados.
+    #[test]
+    fn journal_recusa_estado_ambiguo_e_caminhos_adversariais() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-jpath-{}-{n}", std::process::id()));
+        let outside = root.with_extension("outside");
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let dst = root.join("usr/bin/tool");
+        mkparent(&dst).unwrap();
+        fs::write(&dst, b"ORIGINAL").unwrap();
+        {
+            let mut j = Journal::begin(&ctx, "missing").unwrap();
+            j.record_backup_intent(&dst, 0).unwrap();
+            fs::remove_file(&dst).unwrap();
+        }
+        assert!(Journal::recover(&ctx, "missing").is_err());
+        assert!(Journal::active_dir(&ctx, "missing").is_dir());
+        fs::remove_dir_all(Journal::active_dir(&ctx, "missing")).unwrap();
+
+        fs::write(&outside, b"NAO-TOCAR").unwrap();
+        {
+            let mut j = Journal::begin(&ctx, "escape").unwrap();
+            // Simula log adulterado/legado; replay precisa validar novamente.
+            j.record(&format!("N\t{}", outside.display())).unwrap();
+        }
+        assert!(Journal::recover(&ctx, "escape").is_err());
+        assert_eq!(fs::read(&outside).unwrap(), b"NAO-TOCAR");
+        fs::remove_dir_all(Journal::active_dir(&ctx, "escape")).unwrap();
+
+        let tab = root.join("usr/bin/com\ttab");
+        fs::write(&tab, b"TAB").unwrap();
+        let mut j = Journal::begin(&ctx, "tab").unwrap();
+        assert!(j.stash(&tab, false).is_err());
+        assert_eq!(fs::read(&tab).unwrap(), b"TAB");
+        j.rollback().unwrap();
+
+        // Assinatura de um journal produzido pela versão antiga vulnerável:
+        // o log original foi movido para backup e o nome público, envenenado.
+        let lock = root.join("var/lib/minitrue/lock");
+        fs::write(&lock, b"LOCK-INTEGRO").unwrap();
+        {
+            let mut j = Journal::begin(&ctx, "poison").unwrap();
+            let live_log = j.dir.join("log");
+            j.record_backup_intent(&live_log, 0).unwrap();
+            fs::rename(&live_log, j.dir.join("backup/0")).unwrap();
+            fs::write(&live_log, format!("N\t{}\n", lock.display())).unwrap();
+        }
+        assert!(Journal::recover(&ctx, "poison").is_err());
+        assert_eq!(fs::read(&lock).unwrap(), b"LOCK-INTEGRO");
+        assert!(Journal::active_dir(&ctx, "poison").is_dir());
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_file(&outside);
+    }
+
+    /// Arquivos do registro também pertencem à transação. Sem o meta final com
+    /// txid, um crash restaura o manifesto anterior em vez de deixá-lo híbrido.
+    #[test]
+    fn journal_reverte_registro_parcial() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-jrecord-{}-{n}", std::process::id()));
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let rec = ctx.records_dir().join("pkg");
+        fs::create_dir_all(&rec).unwrap();
+        fs::write(rec.join("manifest"), "/usr/bin/a\n").unwrap();
+        fs::write(rec.join("meta"), "NAME=pkg\nVERSION=1\n").unwrap();
+        {
+            let mut j = Journal::begin(&ctx, "pkg").unwrap();
+            j.place_bytes(&rec.join("manifest"), b"/usr/bin/b\n")
+                .unwrap();
+        }
+        Journal::recover(&ctx, "pkg").unwrap();
+        assert_eq!(
+            fs::read_to_string(rec.join("manifest")).unwrap(),
+            "/usr/bin/a\n"
+        );
+        assert_eq!(
+            fs::read_to_string(rec.join("meta")).unwrap(),
+            "NAME=pkg\nVERSION=1\n"
+        );
+
+        let fresh = ctx.records_dir().join("fresh");
+        {
+            let mut j = Journal::begin(&ctx, "fresh").unwrap();
+            j.place_bytes(&fresh.join("manifest"), b"claim\n").unwrap();
+        }
+        Journal::recover(&ctx, "fresh").unwrap();
+        assert!(
+            !fresh.exists(),
+            "rollback precisa remover o diretório de registro que criou"
+        );
+
+        // Cessão de provisional altera o manifesto de outro pacote dentro da
+        // mesma transação. Recovery precisa tolerar a janela em que essa folha
+        // está no backup e ainda não foi republicada.
+        let cedent = ctx.records_dir().join("cedente");
+        fs::create_dir_all(&cedent).unwrap();
+        fs::write(cedent.join("meta"), "NAME=cedente\nVERSION=1\n").unwrap();
+        fs::write(cedent.join("manifest"), "/usr/bin/cedido\n").unwrap();
+        {
+            let mut j = Journal::begin(&ctx, "sucessor").unwrap();
+            j.stash(&cedent.join("manifest"), false).unwrap();
+        }
+        assert!(!cedent.join("manifest").exists());
+        Journal::recover(&ctx, "sucessor").unwrap();
+        assert_eq!(
+            fs::read_to_string(cedent.join("manifest")).unwrap(),
+            "/usr/bin/cedido\n"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1875,6 +6120,45 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn explain_le_metadados_sem_executar_receita_historica() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-inspecao-{}-{n}", std::process::id()));
+        let rec = root.join("record");
+        fs::create_dir_all(&rec).unwrap();
+        let marker = root.join("nao-executou");
+        fs::write(
+            rec.join("recipe"),
+            format!(
+                "ABOUT=\"$(touch {})\"\nREPROCORR={}\n",
+                marker.display(),
+                "b".repeat(64)
+            ),
+        )
+        .unwrap();
+
+        let meta = HashMap::from([
+            ("ABOUT".to_string(), "snapshot confiável".to_string()),
+            ("REPROCORR".to_string(), "a".repeat(64)),
+        ]);
+        assert_eq!(about_of(&rec, &meta).as_deref(), Some("snapshot confiável"));
+        assert_eq!(
+            reprocorr_of(&rec, &meta).as_deref(),
+            Some("a".repeat(64).as_str())
+        );
+        assert!(!marker.exists());
+
+        // Legado literal continua legível; a expansão dinâmica é recusada.
+        let legacy = HashMap::new();
+        assert_eq!(about_of(&rec, &legacy), None);
+        assert_eq!(
+            reprocorr_of(&rec, &legacy).as_deref(),
+            Some("b".repeat(64).as_str())
+        );
+        assert!(!marker.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// Supersessão provisional (SPEC-0005 §4): um pacote-semente PROVISIONAL
     /// (gmp/binutils/gcc musl) cede seus caminhos ao rebuild-glibc que os
     /// reivindica — sem doublethink — como busybox cede a coreutils.
@@ -1895,6 +6179,11 @@ mod tests {
             "/usr/lib/libgmp.so.10\n/usr/lib/libgmp.so\n",
         )
         .unwrap();
+        fs::write(
+            recs.join("gmp/manifest@6.3.0"),
+            "/usr/lib/libgmp.so.10\n/usr/lib/libgmp.so\n",
+        )
+        .unwrap();
         // pacote real (não-provisional) para contraste
         fs::create_dir_all(recs.join("outro")).unwrap();
         fs::write(recs.join("outro/meta"), "NAME=outro\nVERSION=1\n").unwrap();
@@ -1911,13 +6200,15 @@ mod tests {
 
         // quem NÃO declara superseder gmp NÃO cede (viraria doublethink)
         assert_eq!(
-            adopt_provisional_path(&ctx, "/usr/lib/libgmp.so.10", "estranho", &[]),
+            adopt_provisional_path(&ctx, "/usr/lib/libgmp.so.10", "estranho", &[], None).unwrap(),
             None,
             "sem SUPERSEDES, não cede"
         );
         // o rebuild-glibc que DECLARA superseder gmp cede
         let sup = vec!["gmp".to_string()];
-        let owner = adopt_provisional_path(&ctx, "/usr/lib/libgmp.so.10", "mathlibs-glibc", &sup);
+        let owner =
+            adopt_provisional_path(&ctx, "/usr/lib/libgmp.so.10", "mathlibs-glibc", &sup, None)
+                .unwrap();
         assert_eq!(owner.as_deref(), Some("gmp"));
         let m = read_manifest(&recs.join("gmp"));
         assert!(
@@ -1928,10 +6219,48 @@ mod tests {
             m.contains(&"/usr/lib/libgmp.so".to_string()),
             "os outros caminhos ficam"
         );
+        assert_ne!(
+            fs::read(recs.join("gmp/manifest")).unwrap(),
+            fs::read(recs.join("gmp/manifest@6.3.0")).unwrap(),
+            "manifest@ mantém o baseline anterior à cessão"
+        );
+
+        // Com journal, a cessão do manifesto também volta no rollback.
+        let mut j = Journal::begin(&ctx, "mathlibs-glibc").unwrap();
+        let owner = adopt_provisional_path(
+            &ctx,
+            "/usr/lib/libgmp.so",
+            "mathlibs-glibc",
+            &sup,
+            Some(&mut j),
+        )
+        .unwrap();
+        assert_eq!(owner.as_deref(), Some("gmp"));
+        assert!(!read_manifest(&recs.join("gmp"))
+            .iter()
+            .any(|line| manifest_path(line) == "/usr/lib/libgmp.so"));
+        assert_ne!(
+            fs::read(recs.join("gmp/manifest")).unwrap(),
+            fs::read(recs.join("gmp/manifest@6.3.0")).unwrap()
+        );
+        j.rollback().unwrap();
+        assert!(read_manifest(&recs.join("gmp"))
+            .iter()
+            .any(|line| manifest_path(line) == "/usr/lib/libgmp.so"));
+        assert!(fs::read_to_string(recs.join("gmp/manifest@6.3.0"))
+            .unwrap()
+            .contains("/usr/lib/libgmp.so.10"));
 
         // caminho de pacote NÃO-provisional não é cedido (viraria doublethink)
         assert_eq!(
-            adopt_provisional_path(&ctx, "/usr/lib/liboutro.so", "x", &["outro".to_string()]),
+            adopt_provisional_path(
+                &ctx,
+                "/usr/lib/liboutro.so",
+                "x",
+                &["outro".to_string()],
+                None,
+            )
+            .unwrap(),
             None
         );
         let _ = fs::remove_dir_all(&root);

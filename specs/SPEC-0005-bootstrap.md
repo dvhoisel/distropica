@@ -164,23 +164,25 @@ O ICE flaky do gcc-passada-1 vira contrato: a receita declara `RETRIES` e
 envolve o comando em `retry` (SPEC-0004 §3); o `make` incremental resume a
 cada tentativa até fechar. A `glibc` e o `gcc` já declaram `RETRIES=50`.
 
-**O runner hermético (2026-07-20).** O executor roda os builds mundo-B de um
+**O runner com rede e ambiente isolados (2026-07-20).** O executor roda os builds mundo-B de um
 rootfs (`--root` != `/`) **dentro** dele, via `bwrap`: o rootfs montado em
 `/`, `--clearenv` (só as variáveis do contrato — fim do vazamento do ambiente
 do host) e `--unshare-net` (nenhum insumo pela rede; o fetch é no host —
 SPEC-0004 §3.2). É necessário para o perfil `native` (o gcc da passada 2 é
 **dinâmico** e usa o loader/libs glibc do rootfs em `/lib64`,`/usr/lib`
 absolutos, que só são os do rootfs sob chroot); o `cross` (estático, e o gcc é
-relocável) rodaria fora também, mas o runner o roda igual, hermético. Smoke
+relocável) rodaria fora também, mas o runner o roda no mesmo ambiente limpo. O
+rootfs ainda é montado **gravável**, portanto isto não é hermeticidade completa:
+uma receita confiável continua obrigada a escrever só em WORK/STAGE. Smoke
 verificado: sob `bwrap`, o `x86_64-distropica-linux-gnu-gcc` compila
 in-chroot achando o `cc1`, e a rede fica isolada. No próprio sistema
 (`--root /`) o build roda direto (o alvo já é `/`; sandbox de rede lá é dívida
 de SPEC-0003 §8).
 
-**Falta para o E2 fechar:** a **execução ponta-a-ponta** — `rectify` levando
-gcc→glibc→passada 2→libstdc++ até bater com os hashes reprodutíveis já
-provados (SPEC-0010 §6) — e as receitas da **passada 2 + libstdc++**, que
-ainda não existem.
+**Estado do E2:** a execução ponta-a-ponta e as receitas de passada 2 +
+libstdc++ já foram concluídas pelo `rectify`, inclusive numa execução a frio;
+o registro de aceite e das correções encontradas está ao fim desta seção. Falta
+repetir o E2-clean num segundo ambiente independente e versionar as evidências.
 
 A partir daqui `CC` do contrato de receitas (SPEC-0004 §3) passa a ser o
 gcc nativo; `zig cc` permanece disponível como pacote comum.
@@ -552,7 +554,9 @@ com SHA256 real pinado.
   **Falta para "reproduzível ×2":** repetir num **segundo** ambiente limpo
   independente (a reprodutibilidade *de artefato* — byte-a-byte — já está
   provada para gcc e glibc em SPEC-0010 §6; o cotejo do artefato do E2-clean
-  completo é o passo restante). Scripts da investigação em `rootfs/tmp/*.sh`.
+  completo é o passo restante). Os scripts hoje transitórios em
+  `rootfs/tmp/*.sh` DEVEM ser promovidos, junto com hashes e logs, para
+  `proofs/e2/` versionado; o rootfs em si continua fora do repositório.
 
 ## 5. Estágio 3 — boot de verdade
 

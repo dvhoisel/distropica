@@ -108,11 +108,13 @@ Rolling quebra mais que point-release; a rede de proteção não é opcional.
 
 ### 5.1 Rollback do mundo inteiro
 
-- **Mundo A** já rola com segurança: versões lado a lado em `/opt`, `rollback`
-  = flip de symlink, retenção corrente+1 (SPEC-0003 §5).
-- **Mundo B** é a lacuna: hoje copia direto sobre `/`, sem volta — um `--sync`
-  de glibc/gcc quebrado não teria rollback. O rolling DEVE ter **rollback de
-  mundo B**: um snapshot do estado retificável antes de cada `--sync`. O
+- **Mundo A** já retém versões lado a lado em `/opt` (corrente+1), mas o comando
+  `rollback` que faria o flip de symlink ainda é stub (SPEC-0003 §5).
+- **Mundo B** possui journal por pacote para reverter uma instalação que falha
+  antes do commit; isso **não** é rollback de release. Um `--sync` de
+  glibc/gcc já commitado ainda não volta como conjunto. O rolling DEVE ter
+  **rollback de mundo B**: um snapshot do estado retificável antes de cada
+  `--sync`. O
   mecanismo (manifesto+backup por caminho, ou retenção do artefato de canal, ou
   snapshot de filesystem) é questão aberta (§8).
 

@@ -1,6 +1,6 @@
 # SPEC-0003 — minitrue, a ferramenta
 
-**Status:** rascunho v0.5 · 2026-07-19
+**Status:** rascunho v0.6 · 2026-07-21
 **Depende de:** SPEC-0001 (política), SPEC-0002 (layout), SPEC-0004 (receitas).
 
 ## 1. Identidade
@@ -11,9 +11,12 @@
 em qualquer Linux x86_64 — inclusive no rootfs nu do Estágio 0, onde não há
 libc instalada.
 
-Ele faz exatamente quatro coisas: **busca, verifica, registra, apaga**.
-O que ele não é: solver, formato de repositório, banco de dados, init,
-build system. Builds e extração são delegados a `sh` e `tar` (busybox).
+O núcleo voltado ao usuário faz quatro coisas: **busca, verifica, registra,
+apaga**. O binário ainda abriga operações de mantenedor (`pack` e `attest`)
+enquanto a fronteira Miniplenty não ganha um executável próprio (SPEC-0012).
+O que ele não é: solver, protocolo sofisticado de repositório, banco de dados
+opaco ou init. A orquestração pertence ao minitrue; build e extração são
+delegados a `sh` e `tar` (busybox).
 
 ## 2. Interface de linha de comando
 
@@ -35,7 +38,16 @@ minitrue why       <pacote>       por que este pacote está no sistema (§6)
 minitrue lint      [<árvore>]     valida a árvore newspeak (SPEC-0004 §6)
 minitrue channel   <sub>          add|remove|list|refresh de canais (SPEC-0009 §7)
 minitrue pack      <dir> [saída]  tar normalizado determinístico + sha256 (SPEC-0010 §4)
+minitrue attest keygen <nome> <chave> gera chave ed25519 de builder (SPEC-0009 §8.1)
+minitrue attest <pkg> <builder> <chave> emite attestation assinada
+minitrue corroborate <pkg>        confere attestations contra a identidade instalada
 ```
+
+Esta é a interface normativa. No protótipo atual estão implementados
+`rectify <pkg>`, `memoryhole`, `archives`, `verify`, `newspeak`, `explain`,
+`why`, `pack`, `attest` e `corroborate`; `--sync`, `--emit`, rollback,
+`unperson`, `lint`, canais e as variantes de remoção/varredura acima continuam
+no Marco 0.2 (ver `STATUS.md`).
 
 Opções globais:
 
@@ -44,7 +56,7 @@ Opções globais:
 | `--root <dir>` | opera sobre outro rootfs (Estágio 0 popula o chroot assim); env `MINITRUE_ROOT` |
 | `--jobs N` | paralelismo passado aos builds (`$JOBS`); default: nproc |
 | `--offline` | proíbe rede; só aceita artefato já presente no cache |
-| `--no-binary` / `--only-binary` | `rectify`: força build de fonte / proíbe o fallback de fonte (SPEC-0009 §5) |
+| `--no-binary` / `--only-binary` | norma futura: força build de fonte / proíbe o fallback de fonte (SPEC-0009 §5); ainda não implementada |
 | `NEWSPEAK_PATH` (env ou `conf`) | árvores de receitas separadas por `:`, em ordem de precedência — a primeira ocorrência do pacote vence (herança `KISS_PATH`); default `/var/lib/minitrue/newspeak` |
 | `--tofu` | permite receita sem `SHA256`: baixa, calcula, imprime a linha `SHA256=…` pronta para colar, instala com aviso gritante. Se a receita pina `SIGKEY`, a assinatura continua obrigatória mesmo em TOFU — é o que torna a repinagem de versão segura. NÃO DEVE existir em builds de release da ferramenta destinados a usuários finais. É a única exceção a P6, e reconciliada lá: o TOFU **cria** o pino (aid de autoria), não o dispensa — SPEC-0001 P6 |
 
@@ -66,8 +78,12 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
 
 ## 3. Fluxo de `rectify`
 
-1. **Carregar receita** (SPEC-0004): avaliada por `sh`, campos lidos de
-   volta. Receita inválida ⇒ erro 2.
+1. **Carregar receita** (SPEC-0004): congela um snapshot do arquivo `recipe` e
+   de `files/`, avalia o top-level por `sh` e lê os campos de volta. O mesmo
+   snapshot de `recipe` é executado/registrado e o mesmo `files/` é
+   materializado no `WORK`; edição concorrente da árvore não troca insumos no
+   meio da operação. Receita inválida ⇒ erro 2. A avaliação top-level ainda
+   ocorre no host (§8).
 2. **Pré-condições**: `REQUIRES_GLIBC=1` e ausência de
    `/usr/lib/ld-linux-x86-64.so.2` ⇒ erro 5 com mensagem indicando o
    Estágio 2 (SPEC-0005).
@@ -77,27 +93,32 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
 4. **Fetch**: para cada URL de `SRC`, baixar para
    `/var/cache/minitrue/<sha256>` (nome do arquivo no cache = hash
    esperado). Se já existe com hash válido, rede não é tocada.
-   Idempotência: pacote já na versão da receita e `verify` limpo ⇒ no-op
-   ("os registros já estão corretos").
+   Idempotência atual: pacote já na versão e no fingerprint da receita, com
+   meta/snapshots coerentes e todas as provas tipadas do manifesto íntegras ⇒
+   no-op ("os registros já estão corretos"). Em provisionals,
+   `manifest@<versão>` é o baseline e o manifesto ativo pode ser um subconjunto
+   após cessões comprovadas (§6). O fast path faz essa conferência local;
+   `verify` continua sendo a varredura explícita do sistema.
 5. **Verificação**: (a) SHA-256 do artefato ≠ pinado ⇒ apagar o download,
    erro 3, mensagem *crimestop* com esperado/obtido. Sem flag de contorno.
-   (b) Se a receita pina assinatura (`SIG`/`SIGSUMS`, SPEC-0004 §5), ela é
-   conferida contra a chave versionada na árvore, com verificador embutido
-   no próprio minitrue — nunca chamando gpg externo. Falha ou ausência do
-   arquivo de assinatura ⇒ erro 7. Assinaturas são reconferidas mesmo em
-   cache-hit; sob `--offline`, a assinatura precisa estar no cache.
+   (b) Se a receita pina assinatura por artefato (`SIG`, SPEC-0004 §5), ela é
+   conferida como minisign/signify contra a chave versionada na árvore, com
+   verificador embutido — nunca chamando gpg externo. O cache da assinatura é
+   ligado ao hash do artefato, chave e URL e é revalidado em cache-hit; sob
+   `--offline`, precisa estar presente. Falha ⇒ erro 7. `SIGSUMS` e OpenPGP são
+   norma do Marco 0.2 e hoje falham explicitamente como não implementados.
 6. **Instalação**:
    - **Mundo A** (`KIND=binary`): executa `install_pkg()` da receita com
      `PREFIX=/opt/<nome>/<versão>.tmp`; sucesso ⇒ rename atômico para
      `/opt/<nome>/<versão>`, flip do symlink `current`, criação dos links
      de comando (`LINKS`) em `/usr/bin`.
-   - **Mundo B** (`KIND=source`): antes de compilar, consulta os canais
-     binários (SPEC-0009) por um binário pré-buildado da versão da receita;
+   - **Mundo B** (`KIND=source`): na norma futura, antes de compilar consulta os
+     canais binários (SPEC-0009) por um binário pré-buildado da versão da receita;
      havendo um aceitável, o instala **como mundo B pré-buildado** — mesmo
      *fetch* de um tarball passivo (baixa/verifica/extrai), mas layout mundo
      B (árvore em `/usr`, `/etc`→factory, manifesto plano, `WORLD=B`), **não**
-     em `/opt` — e o `build()` não roda (SPEC-0009 §4). Só na falta é que
-     executa `build()` com
+     em `/opt` — e o `build()` não roda (SPEC-0009 §4). Canais ainda não estão
+     implementados; o fluxo atual executa `build()` com
      `STAGE=` (DESTDIR)
      em diretório temporário; sucesso ⇒ checagem de colisão (§7) ⇒ cópia
      para `/`; se já havia versão anterior, caminhos órfãos do manifesto
@@ -106,7 +127,10 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
      desviado para `/usr/share/factory/etc/` e materializado pela política
      do administrador (SPEC-0002 §6) — copia se ausente; se existir
      modificado, grava `<arquivo>.new` ao lado e avisa; o hash do default
-     pristine entra no registro (§6).
+     pristine entra no registro (§6). Depois do build, o STAGE é empacotado
+     diretamente num `memfd` selado; `ARTIFACT_HASH` e aplicação consomem essa
+     mesma imagem imutável por offsets, sem uma extração gravável intermediária.
+     STAGE vazio, hardlinks, nomes não-UTF-8 e tipos especiais são recusados.
 7. **Registro**: grava `/var/lib/minitrue/records/<nome>/{meta,manifest,recipe}` (§6);
    nomes pedidos explicitamente na linha de comando entram no `world` (§2).
 8. **Falha de build**: log integral movido para
@@ -115,13 +139,16 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
 
 ## 4. Fluxo de `memoryhole`
 
-1. Ler manifesto; remover na ordem inversa: links de comando, árvore
-   `/opt/<nome>` (mundo A) ou cada caminho listado (mundo B); diretórios
-   que ficarem vazios são removidos.
+1. Recuperar primeiro eventual journal órfão do pacote e ler o manifesto em
+   modo estrito; formato futuro, arquivo ausente/vazio ou tag desconhecida
+   fazem a remoção falhar fechado. Remover na ordem inversa: links de comando,
+   claims sob `/opt/<nome>` (mundo A) ou cada caminho listado (mundo B).
+   Diretório vazio de mundo B sai somente por `rmdir`; pais não reivindicados
+   não são podados.
 2. Preservados por padrão: `/etc/opt/<nome>`, `/var/opt/<nome>` e qualquer
-   arquivo cujo sha256 diferir do registrado no manifesto (§6) — modificado
-   pelo usuário ⇒ fica, com aviso. É o hash por arquivo do registro v1 que
-   torna essa promessa **enforçável** (sem ele, não há como saber o que o
+   caminho cuja prova de conteúdo/tipo/alvo diferir do manifesto (§6) —
+   modificado pelo usuário ⇒ fica, com aviso. É a prova tipada do registro v2
+   que torna essa promessa **enforçável** (sem ela, não há como saber o que o
    usuário mexeu). `--tudo` remove também esses.
 3. Registro apagado por último. Saída: `"<nome> nunca existiu."`
 4. Pacote requerido por outro registro (`DEPS` reversa) ⇒ recusa com a
@@ -157,12 +184,18 @@ são removidas no upgrade. `memoryhole` remove tudo. Ajustável via
 
 ## 6. O registro (`/var/lib/minitrue/records/<nome>/`)
 
-Três arquivos-texto:
+Três papéis, persistidos em cinco folhas (`meta`, `manifest`,
+`manifest@<versão>`, `recipe`, `recipe@<versão>`):
 
-- `meta` — `RECORD_FORMAT=`, `VERSION=`, `KIND=`, `WORLD=A|B`, `ORIGIN=`,
-  `SHA256=` (por artefato), `FINGERPRINT=`, `INSTALLED_AT=` (ISO-8601),
-  `RECIPE_COMMIT=` (se conhecido). O **`RECORD_FORMAT`** versiona o esquema do
-  registro (hoje `1`), para migração e leitura consciente. O **`ORIGIN`** é de
+- `meta` — `RECORD_FORMAT=`, `NAME=`, `VERSION=`, `KIND=`, `WORLD=A|B`,
+  `ORIGIN=`, `SHA256=` (por artefato), `DEPS=`, `SUPERSEDES=`, `FINGERPRINT=`,
+  `ABOUT=`, `REPROCORR=`, `ARTIFACT_HASH=` (mundo B),
+  `MANIFEST_BASELINE_SHA256=`, `INSTALLED_AT=` (ISO-8601) e
+  `TRANSACTION_ID=` (mundo B). `ABOUT` e o
+  pino `REPROCORR` são congelados no momento da instalação: inspeção posterior
+  não precisa executar a receita histórica. O **`RECORD_FORMAT`** versiona o
+  esquema do registro (hoje `2`), para migração e leitura consciente. O
+  **`ORIGIN`** é de
   onde veio o artefato — `vendor` (mundo A),
   `fonte` (mundo B compilado localmente) ou `canal:<nome>` quando os canais
   (SPEC-0009 §8) o instalam, caso em que `TRUST=` e `CHANNEL_SHA256=` também
@@ -174,34 +207,91 @@ Três arquivos-texto:
   corrigida com a mesma versão muda o fingerprint e re-builda (conserta o
   "GCC 15.3.0 mudou várias vezes sem bump"), e uma mudança num build-dep
   propaga para os dependentes (transitivo).
-- `manifest` — uma entrada por linha, ordenada, no formato `sha256sum`:
-  **`<sha256>␠␠<caminho absoluto>`** (registro **v1**) — o hash do conteúdo
-  instalado. Symlinks e diretórios levam `-` no lugar do hash (o alvo do
-  link é conferido à parte). Para mundo A: a raiz `/opt/<nome>/<versão>` e
-  cada link criado em `/usr`. O hash por arquivo é o que sustenta o veredito
-  intacto × modificado do `memoryhole` (§4) e dá ao `verify` integridade por
-  arquivo — não só para `/etc`.
-- `recipe` — cópia fiel da receita usada (torna `memoryhole` e `verify`
-  independentes de mudanças posteriores na árvore newspeak).
+  O fast path exige ainda registro v2 íntegro: `recipe` e `recipe@<versão>`
+  precisam coincidir byte a byte com o snapshot corrente e todas as provas do
+  manifesto precisam conferir no filesystem. Em pacote comum,
+  `manifest@<versão>` coincide com `manifest`; em provisional, a cópia
+  versionada é o baseline imutável e o ativo pode conter apenas um subconjunto
+  de linhas byte-idênticas após cessões.
+- `manifest` — uma entrada por linha, ordenada, no formato
+  **`<prova>␠␠<caminho absoluto>`** (registro **v2**). A prova é
+  `f:<sha256>` para **modo + conteúdo** de um regular, `l:<sha256>` para os bytes crus
+  do alvo de um symlink e `d:<sha256>` para **modo do diretório-raiz + tar
+  canônico da árvore**. O prefixo prende o tipo; portanto retargetar um link,
+  trocar o tipo, mudar o modo de um diretório reclamado ou adulterar qualquer
+  arquivo sob `/opt/<nome>/<versão>` invalida a claim. Isto sustenta o veredito
+  intacto × modificado do `memoryhole`, o `verify` e o fast path.
+  Xattrs/ACLs/caps, uid/gid e timestamps ainda não entram.
 
-Mundo A com retenção: `manifest` e `recipe` ganham cópia por versão retida
-(`manifest@<versão>`, `recipe@<versão>`); `meta` registra a versão ativa e
-o estado (`UNPERSON=1` quando desativado). É o que permite `rollback` e
-`unperson`/reativação relinkarem sem rede (§5).
+  Leitura permanece compatível com v1 (`<sha256>`/`-`) e v0 (somente caminho).
+  Quando versão, fingerprint e snapshot já coincidem, o `rectify` pode migrar
+  v0/v1 **in-place**, decorando claims legadas com o estado presente; uma claim
+  v0 sem hash é promovida confiando nesse estado, pois o formato antigo não
+  tinha prova melhor. Se esses guardas falham, há reconstrução. Um provisional
+  legado que já cedeu claims não é achatado nem reconstruído: fica congelado
+  somente quando cada linha ativa é idêntica ao baseline e cada linha removida
+  possui hoje sucessor não-provisional, ou sucessor provisional cujo registro
+  declara `SUPERSEDES=<cedente>`. Formato maior/desconhecido falha fechado,
+  nunca é regravado como v2.
+- `recipe` — snapshot fiel da receita avaliada e usada. O diretório `files/`
+  também é congelado para o fingerprint e o mesmo snapshot é materializado no
+  `WORK` do build, evitando mudança de insumo entre parse e execução.
 
-Mundo B: os hashes dos defaults de `/etc` materializados também ficam no
-registro — é a base do veredito intacto × modificado-pelo-admin que o
-`verify` emite (§3, passo 6).
+`manifest` e `recipe` ganham cópia da versão ativa nos dois mundos
+(`manifest@<versão>`, `recipe@<versão>`). A receita versionada coincide com a
+corrente; o manifesto versionado coincide em pacotes comuns e vira baseline
+em provisionals, cujo ativo só perde linhas por cessão declarada. No mundo A
+essas cópias também sustentam a retenção:
+`meta` registra a versão ativa e o estado (`UNPERSON=1` quando desativado). É o
+que permitirá `rollback` e `unperson`/reativação relinkarem sem rede (§5).
 
-**Escrita atômica e recuperação.** Cada arquivo do registro (e o `world`) é
-gravado por **temporário + `rename`** — atômico no mesmo filesystem, então
-nenhum leitor vê um arquivo meio-escrito. O `meta` é gravado **por último**: é
-a **marca de commit** do registro. Um crash entre o `manifest` e o `meta`
-deixa um registro **sem `meta`**, que a leitura trata como *não-instalado*
-(`all_manifests` o ignora, e o `rectify` reinstala) — em vez de tê-lo por bom
-meio-escrito. **Dívida restante:** a cópia mundo-B de `STAGE` para `/` ainda
-não é transacional (um crash no meio deixa arquivos soltos sem registro); um
-journal com rollback é trabalho próprio.
+Mundo B: o manifesto registra o default pristine em
+`/usr/share/factory/etc`; a cópia viva em `/etc` é estado do administrador e
+fica fora dele. O `verify` atual confere a fábrica, não diagnostica divergência
+da cópia viva.
+
+**Transação e recuperação do mundo B.** A instalação por pacote cobre a cópia
+de `STAGE` para `/`, as remoções do upgrade, as cessões de manifestos
+provisórios e os arquivos do próprio registro. Cada intenção (`novo` ou
+`backup`) é registrada no journal **antes** da mutação. O `meta`, escrito por
+último, leva o `TRANSACTION_ID` da operação e é a marca de commit.
+
+Sob o lock, recovery faz um **sweep global antes de qualquer nova mutação**:
+journal cujo `txid` aparece no `meta` já commitou e só precisa ser retirado;
+sem esse vínculo, as entradas são revertidas em ordem inversa. O invariante
+novo admite no máximo um journal ativo; estado legado com mais de um, ou
+rollback tardio que sobreporia claim commitada por outro pacote, falha fechado
+e preserva journal/backups. Journals novos levam marcador de formato `2`;
+órfão anterior a esse marcador não é interpretado automaticamente, pois uma
+versão antiga permitia que o payload substituísse o próprio log. `verify` não
+muta e apenas denuncia journals
+pendentes. Isto cobre falha e término abrupto do processo depois que as
+escritas chegaram ao kernel. **Não há `fsync` dos arquivos e diretórios da
+transação**, portanto o v0 não promete recuperação coerente após perda de
+energia. No mundo A, as trocas continuam atômicas arquivo-a-arquivo, sem uma
+transação equivalente para o conjunto inteiro; em particular, a cessão feita
+por sucessor mundo A ainda não tem rollback de conjunto.
+
+Se backup e destino estão em mounts diferentes, o fallback copia primeiro
+para um temporário no filesystem do destino e só publica o nome final por
+`rename` após conteúdo, flush e permissões completos. A origem é removida por
+último: uma cópia parcial nunca pode ser interpretada pelo recovery como
+backup válido. Esse fallback preserva bytes, natureza arquivo/link e modo, mas
+ainda não preserva uid/gid, timestamps, xattrs/ACLs/capabilities nem relações
+de hardlink; diretório/especial entre mounts é recusado.
+
+Toda mutação do Journal valida também ancestrais: symlink relativo do
+usr-merge é aceito se resolver dentro do rootfs; symlink que resolve para fora,
+dangling ou ancestral não-diretório falha antes da mutação. Inspeção e remoção
+destrutiva usam resolução fd-relative confinada no kernel
+  (`openat2(RESOLVE_IN_ROOT|RESOLVE_NO_MAGICLINKS)`).
+
+O STAGE não pode ocupar o plano de controle (`/var/lib/minitrue`,
+`/var/cache/minitrue`, `/etc/minitrue`) nem workspaces `minitrue-{build,work}-*`;
+aliases canônicos e o destino vivo de `etc/*` são verificados antes de abrir o
+journal. Limpezas temporárias de mundo A/B também consultam ownership antes de
+remover qualquer árvore. As raízes de estado/cache/configuração precisam ser
+diretórios reais (não symlinks), inclusive antes de ler ou atualizar `world`.
 
 **Exclusão mútua.** Comandos que mutam (`rectify`, `memoryhole`) tomam uma
 **trava exclusiva por rootfs** (`flock` em `var/lib/minitrue/lock`), advisory
@@ -220,13 +310,18 @@ respondem, sem estado extra:
   quando de canal), o **`reprocorr`** da receita (se pina hash reprodutível —
   a base da corroboração, SPEC-0010 §5) e os **corroboradores** (quando o canal
   os registra), se é **provisório**, o `FINGERPRINT`, o **hash do próprio
-  arquivo** (manifesto v1), quando foi instalado, a receita e o seu `ABOUT`, o
+  arquivo regular** (manifesto v1/v2), quando foi instalado, a receita e o seu
+  `ABOUT`, o
   alvo se for link, e a nota de fábrica se for um default de `/etc`. Um caminho
   sem dono é
   apontado como *wrongthink* (existe sem registro). Aceita caminho absoluto ou
   nome de comando (resolvido em `/usr/bin`); um `/etc/X` resolve pelo seu
   default de fábrica (`/usr/share/factory/etc/X`). Onde um provisório e o seu
   sucessor ainda coexistem no manifesto, vence o **não-provisório**.
+  `ABOUT` e `REPROCORR` vêm do `meta` congelado. Para registros legados que não
+  os possuam, o fallback aceita apenas uma atribuição shell comprovadamente
+  literal na cópia de `recipe`; expansão, substituição de comando ou forma
+  ambígua é omitida, nunca executada.
 - **`why <pacote>`** — por que ele está no sistema: se é **desejado
   explicitamente** (consta no `world`, §2), quais pacotes o **requerem**
   (dependência reversa, lendo `DEPS` dos registros), e se é **órfão** (nem
@@ -235,8 +330,30 @@ respondem, sem estado extra:
 
 É a característica distintiva: não "tenho um gerenciador pequeno", e sim
 "todo arquivo do sistema explica a si mesmo". Habilitada pelo registro —
-especialmente pelo `FINGERPRINT` (SPEC-0011 §4) e, quando chegar, pelo hash
-por arquivo do manifesto v1.
+especialmente pelo `FINGERPRINT` (SPEC-0011 §4) e pelas provas tipadas do
+manifesto v2.
+
+### 6.2 Attestations e identidade de reprodução
+
+A attestation v1 é Ed25519 e assina, em ordem canônica,
+`ATTEST_FORMAT=1`, `PACKAGE`, `VERSION`, `RECIPE_FINGERPRINT`,
+`ARTIFACT_HASH`, `BUILDER` e `BUILDER_KEY` (SPEC-0009 §8.1). A corroboração só
+compara attestations da **mesma versão e do mesmo fingerprint** do registro
+local; uma attestation válida de identidade anterior é histórica e não vira
+divergência. Dois builders pinados e distintos concordando com o hash local
+corroboram; um builder pinado divergindo nessa mesma identidade dispara
+*crimestop*.
+
+A implementação usa `ed25519-dalek` dentro do minitrue e **não depende de
+OpenSSL**. O OpenSSL da base é necessário hoje para a assinatura dos módulos do
+kernel, não para este protocolo.
+
+Antes de emitir, a implementação exige registro mundo B v2 commitado, baseline
+hashado, `recipe`/`recipe@` idênticos e claims tipadas conferindo no rootfs; um
+`REPROCORR` pinado também precisa coincidir com `ARTIFACT_HASH`. Limite de
+confiança: sem pino externo, `ARTIFACT_HASH` e `FINGERPRINT` continuam vindo do
+registro local. Defender contra adulteração privilegiada posterior requer
+reter a imagem selada, usar índice/canal assinado ou emitir no instante do build.
 
 ## 7. Colisões (*doublethink*)
 
@@ -259,21 +376,48 @@ pacote toma o caminho de qualquer provisional". É o que torna a cadeia de
 substituição do E2 (seed → cross → glibc/nativo, SPEC-0005 §4) explícita e
 auditável, e não um efeito colateral do flag `PROVISIONAL`.
 
-*(Dívida registrada: remover o sucessor ainda não restaura o payload do
-cedente — o rollback da supersessão é território do journal de mundo B, §6.)*
+Quando o sucessor é mundo B, se sua instalação falha a mudança no manifesto
+cedente participa do journal e é revertida com o restante da operação. Mundo A
+ainda não possui transação de conjunto equivalente. **Dívida registrada:**
+remover depois um sucessor já instalado ainda não restaura o payload do
+cedente; isso exige retenção/rollback de supersessão além do journal de falha.
+
+Claims `d:` também participam da exclusão de ownership: instalar um caminho
+igual ou descendente de diretório reclamado por outro pacote é *doublethink*.
+No upgrade do próprio dono, um diretório retirado só é removido se sua prova
+`d:` ainda confere; se ganhou conteúdo/metadados, permanece no filesystem e
+apenas deixa de ser reclamado.
 
 ## 8. Execução de receitas e confinamento
 
-- Receitas rodam via `sh -e`, com ambiente mínimo controlado (§ SPEC-0004
-  define as variáveis do contrato: `DL`, `WORK`, `PREFIX`/`STAGE`, `JOBS`,
-  `CC`…).
+- O arquivo `recipe` e `files/` são congelados antes da operação. A avaliação
+  top-level da receita ainda roda via `sh -e` **no host**, fora de bwrap; por
+  isso a árvore de receitas continua sendo código confiável, não dados
+  adversariais. O mesmo snapshot da receita é usado no build/registro e o
+  snapshot de `files/` é materializado em `WORK`.
+- `files/recipe` é nome reservado (qualquer tipo, inclusive symlink/hardlink)
+  e o snapshot executável é criado com exclusão (`create_new`), sem seguir link
+  no nome final. `VERSION`, dependências e `LINKS` também são componentes
+  canônicos: não podem introduzir `/`, `..` ou controles em caminhos internos.
+- Funções de receita recebem o ambiente mínimo controlado (a SPEC-0004 define
+  `DL`, `WORK`, `PREFIX`/`STAGE`, `JOBS`, `CC`…). `install_pkg()` do mundo A
+  também ainda roda no host, sem sandbox.
 - Regra normativa: receita NÃO DEVE acessar rede (todo insumo entra por
   `SRC`) nem escrever fora de `WORK`/`PREFIX`/`STAGE`. Para builds de um
-  rootfs (`--root` != `/`), isso já é **sandbox**, não só contrato: o
-  executor os roda dentro do rootfs via `bwrap` com `--clearenv` (ambiente
-  hermético) e `--unshare-net` (sem rede) — SPEC-0005. **Dívida restante:** o
-  build no próprio sistema (`--root /`) ainda roda direto (sem netns nem
-  usuário dedicado), e o mundo A (`install_pkg`) ainda não é sandboxado.
+  rootfs (`--root` != `/`), o `build()` de mundo B roda dentro dele via
+  `bwrap` com `--clearenv` e `--unshare-net` — SPEC-0005. O rootfs, porém, é
+  montado **gravável**, então ainda é possível escrever fora de `STAGE`. O
+  build no próprio sistema (`--root /`) roda direto, sem netns nem usuário
+  dedicado. Alvo: rootfs read-only com binds graváveis só para WORK/STAGE e
+  confinamento também da avaliação e do mundo A.
+- O `pack` representa nomes não-UTF-8 e hardlinks, mas o aplicador de mundo B
+  ainda opera com caminhos UTF-8 e não possui `linkat` transacional. Por isso
+  `rectify` **recusa** ambos no `STAGE`, em vez de instalar uma topologia
+  diferente daquela coberta por `ARTIFACT_HASH`.
+- O tar normalizado fica inteiro num `memfd` selado enquanto é indexado e
+  aplicado. Isso fecha a corrida hash→cópia, mas é Linux-only e consome RAM/swap
+  proporcional ao artefato; stdout/stderr de `build()`/`install_pkg()` também
+  são acumulados em memória na implementação atual.
 - Maintainer scripts de `.deb`/`.rpm`: nunca executados (SPEC-0001 §2).
 
 ## 9. Saídas e códigos de erro
@@ -287,7 +431,13 @@ cedente — o rollback da supersessão é território do journal de mundo B, §6
 | 4 | colisão de arquivos (*doublethink*) |
 | 5 | pré-condição ausente (ex.: glibc antes do Estágio 2) |
 | 6 | falha de rede |
-| 7 | assinatura upstream inválida ou ausente (*crimestop*, variante assinatura) |
+| 7 | assinatura obrigatória ausente no modo offline ou falha criptográfica (*crimestop*, variante assinatura) |
+| 8 | divergência de reprodução/corroboração na mesma identidade (*crimestop*) |
+
+Falha de transporte ao buscar assinatura continua sendo 6; entrada/receita
+malformada é 2. Attestation coletada que seja malformada, não confiável,
+histórica ou criptograficamente inválida é ignorada pela corroboração; o código
+7 é usado quando a operação explicitamente exige uma assinatura válida.
 
 Tom das mensagens: diagnóstico primeiro, tema depois (SPEC-0001 §3).
 Sucesso de `rectify` termina em `doubleplusgood.`; `verify` limpo:
@@ -295,10 +445,11 @@ Sucesso de `rectify` termina em `doubleplusgood.`; `verify` limpo:
 
 ## 10. Implementação v0 (Rust)
 
-- Crates: `ureq` (HTTP, rustls), `sha2`, `hex`, `anyhow`. Verificação de
-  assinaturas embutida no binário: `minisign-verify` para minisign/signify
-  e OpenPGP destacado via crate puro-Rust (candidata: rPGP) — **sem gpg em
-  runtime**. Nada de async. Ensaio verificado no spike (SPEC-0005 §8):
+- Crates centrais: `ureq` (HTTP, rustls), `sha2`, `hex`, `anyhow`, `tar`, `fs2`
+  e `ed25519-dalek`. Verificação de assinaturas embutida no binário:
+  `minisign-verify` para minisign/signify e Ed25519 para attestations. OpenPGP
+  destacado continua futuro (candidata: rPGP) — **sem gpg em runtime**. Nada de
+  async. Ensaio verificado no spike (SPEC-0005 §8):
   ureq com raízes embutidas buscou HTTPS num rootfs sem `/etc/ssl`, e
   `minisign-verify` validou o tarball real do Zig; binário `static-pie` de
   2,4 MB. Build do minitrue para musl com crates que embutem C (ring)
@@ -315,13 +466,11 @@ Sucesso de `rectify` termina em `doubleplusgood.`; `verify` limpo:
 
 ## 11. Questões em aberto
 
-- ~~hash por arquivo instalado fica para v0.2~~ — **implementado** (registro
-  **v1**, §6): o `write_record` decora cada linha do manifesto como
-  `<sha256>␠␠<caminho>` (hash em streaming do arquivo real; `-` p/ symlink e
-  diretório). O `verify` confere a integridade por arquivo (conteúdo × hash
-  registrado, não só presença) e o `memoryhole` do mundo B **preserva o
-  arquivo modificado** (hash diverge ⇒ fica, com aviso). Leitura
-  retrocompatível: uma linha sem os dois espaços é o próprio caminho (v0).
+- ~~hash por arquivo instalado fica para v0.2~~ — **implementado e ampliado**
+  (registro **v2**, §6): o `write_record` grava prova tipada de regular,
+  symlink ou diretório. O `verify` confere conteúdo × tipo × alvo/árvore e o
+  `memoryhole` do mundo B **preserva o caminho modificado**. Leitura continua
+  retrocompatível com o hash v1 e com a linha apenas de caminho do v0.
 - A própria árvore newspeak como pacote gerido (`minitrue rectify newspeak`
   puxando tarball do repositório oficial da Distrópica): elegante e
   resolve atualização sem git instalado; especificar o pacote especial —

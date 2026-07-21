@@ -150,7 +150,27 @@ pub fn pack_deterministic<W: Write>(dir: &Path, epoch: u64, out: W) -> Result<St
         }
     }
 
-    let hw = b.into_inner()?;
+    let mut hw = b.into_inner()?;
+    // `out` pode ser um BufWriter de arquivo: propaga inclusive falha tardia
+    // de flush, em vez de deixá-la para o Drop (que não consegue devolver erro).
+    hw.flush()?;
+    Ok(hex::encode(hw.hasher.finalize()))
+}
+
+/// Hash do tar canônico de uma árvore vazia. Claims `d:` de mundo B só são
+/// emitidas para diretórios vazios; calcular esta constante pelo mesmo writer
+/// evita reler do filesystem um diretório recém-instalado e elimina a janela
+/// entre a imagem selada e o manifesto.
+pub fn empty_deterministic_hash() -> Result<String> {
+    let hw = HashingWriter {
+        inner: io::sink(),
+        hasher: Sha256::new(),
+    };
+    let mut builder = Builder::new(hw);
+    builder.follow_symlinks(false);
+    write_global_version(&mut builder)?;
+    let mut hw = builder.into_inner()?;
+    hw.flush()?;
     Ok(hex::encode(hw.hasher.finalize()))
 }
 
@@ -292,6 +312,24 @@ mod tests {
         let t = Tmp::new();
         make_tree(t.path());
         assert_eq!(bytes(t.path()), bytes(t.path()));
+    }
+
+    #[test]
+    fn propaga_falha_de_flush_da_saida() {
+        struct FlushFails;
+        impl io::Write for FlushFails {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Err(io::Error::other("flush tardio"))
+            }
+        }
+
+        let t = Tmp::new();
+        fs::write(t.path().join("arquivo"), b"conteudo").unwrap();
+        let error = pack_deterministic(t.path(), EPOCH, FlushFails).unwrap_err();
+        assert!(error.to_string().contains("flush tardio"));
     }
 
     #[test]

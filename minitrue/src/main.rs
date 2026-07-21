@@ -76,7 +76,7 @@ pub fn fail<T>(code: i32, msg: impl Into<String>) -> anyhow::Result<T> {
 }
 
 const USO: &str = "\
-minitrue — o Ministério da Verdade (v0.1, Marco 0.1: mundo A)
+minitrue — o Ministério da Verdade (v0.1: mundos A e B)
 
 uso: minitrue [--root DIR] [--offline] [--tofu] [--jobs N] <comando> [args]
 
@@ -88,9 +88,12 @@ uso: minitrue [--root DIR] [--offline] [--tofu] [--jobs N] <comando> [args]
   explain   <caminho>   de quem é o arquivo e toda a sua proveniência
   why       <pacote>    por que este pacote está no sistema
   pack <dir> [saída]    tara <dir> determinístico; imprime o sha256 (SPEC-0010)
+  attest keygen <nome> <chave>  cria identidade ed25519 de builder
+  attest <pacote> <builder> <chave>  emite attestation assinada
+  corroborate <pacote>  coteja attestations confiáveis com o registro local
 
-chegam no Marco 0.2: rectify --sync, rollback, unperson, lint, mundo B
-(fonte), SIGSUMS e OpenPGP.";
+chegam no Marco 0.2: rectify --sync, rollback, unperson, lint, SIGSUMS e
+OpenPGP.";
 
 fn main() {
     match run() {

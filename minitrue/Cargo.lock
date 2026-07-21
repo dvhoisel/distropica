@@ -403,6 +403,7 @@ dependencies = [
  "fs2",
  "getrandom",
  "hex",
+ "libc",
  "minisign-verify",
  "sha2",
  "tar",

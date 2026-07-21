@@ -1,6 +1,6 @@
 # SPEC-0004 — newspeak, o formato das receitas
 
-**Status:** rascunho v0.4 · 2026-07-19
+**Status:** rascunho v0.4 · 2026-07-21
 **Depende de:** SPEC-0001 (elegibilidade), SPEC-0003 (contrato de execução).
 
 Newspeak é o vocabulário mínimo: uma receita diz **de onde vem, como se
@@ -12,6 +12,10 @@ removida do idioma.
 Uma receita é um diretório `newspeak/<nome>/` contendo um arquivo `recipe`:
 shell POSIX puro, avaliável por `busybox sh`. Opcionalmente `files/` com
 patches e auxiliares (copiados para `$WORK` antes do build).
+O nome `files/recipe` é reservado: o executor usa `$WORK/recipe` para o
+snapshot exato da receita e recusa arquivo, symlink ou hardlink com esse nome.
+O protótipo também recusa qualquer symlink dentro de `files/`: o build não pode
+seguir um alvo mutável que ficou fora do fingerprint autocontido.
 
 Sem YAML, sem TOML, sem DSL nova: a receita é executável e legível pelo
 interpretador que já existe no Estágio 0.
@@ -31,7 +35,7 @@ Obrigatórios:
 | Campo | Significado |
 |-------|-------------|
 | `NAME` | nome do pacote (= nome do diretório) |
-| `VERSION` | versão upstream, literal |
+| `VERSION` | versão upstream, literal e componente canônico (`[A-Za-z0-9][A-Za-z0-9._+~-]*`, sem `..`) |
 | `KIND` | `binary` (mundo A), `source` (mundo B) ou `meta` (meta-receita: só agrega `DEPS`, sem `SRC`/`build` — ex.: `base`, SPEC-0008 §3) |
 | `SRC` | URL(s) do(s) artefato(s), separadas por espaço; HTTPS (não se aplica a `KIND=meta`) |
 | `SHA256` | hash(es) na mesma ordem de `SRC` (não se aplica a `KIND=meta`) |
@@ -40,16 +44,16 @@ Opcionais:
 
 | Campo | Significado |
 |-------|-------------|
-| `DEPS` | dependências de runtime (nomes de receitas) |
-| `BUILD_DEPS` | dependências só de build (mundo B) |
-| `LINKS` | mundo A: comandos a expor, `nome=caminho/relativo/no/prefix`; default: todo executável em `bin/` do prefix |
+| `DEPS` | dependências de runtime (nomes canônicos de receitas) |
+| `BUILD_DEPS` | dependências só de build (mundo B; nomes canônicos) |
+| `LINKS` | mundo A: comandos a expor, `nome=caminho/relativo/no/prefix`, sem `/`, `.` ou `..` nos componentes; default: todo executável em `bin/` do prefix |
 | `REQUIRES_GLIBC` | `1` ⇒ só instala após o Estágio 2 (SPEC-0005) |
 | `ABOUT` | uma linha: o que é / justificativa de classificação |
 | `LICENSE` | identificador SPDX |
 | `SIG` | URL(s) de assinatura destacada, uma por artefato, na ordem de `SRC` (§5) |
-| `SIGSUMS` | alternativa a `SIG`: URL única de lista de checksums assinada que cobre os artefatos (§5) |
-| `SIGKEY` | chave pública pinada: uma linha base64 (minisign/signify) ou caminho `files/*.asc` (OpenPGP) |
-| `SIGKEY_FP` | OpenPGP: fingerprint da chave — este é o pino de fato; o `.asc` é só transporte |
+| `SIGSUMS` | norma do Marco 0.2: URL única de lista de checksums assinada; parser atual reconhece, executor ainda recusa (§5) |
+| `SIGKEY` | hoje: chave minisign/signify pinada em uma linha base64; caminho `files/*.asc` pertence ao OpenPGP futuro |
+| `SIGKEY_FP` | norma futura OpenPGP: fingerprint da chave — o `.asc` será só transporte |
 | `EPOCH` | `SOURCE_DATE_EPOCH` da receita (unix ts); sobrepõe o default do projeto p/ builds reprodutíveis (§3, SPEC-0010) |
 | `REPROCORR` | mundo B: sha256 do **tar normalizado** reprodutível (saída de `minitrue pack`); raiz de confiança única da corroboração de canal (SPEC-0009 §6, SPEC-0010 §4) |
 | `PROVISIONAL` | `1` ⇒ pacote-semente/scaffolding que **cede** seus caminhos ao sucessor que os reivindique, sem *doublethink* (SPEC-0003 §3). Dois usos: (a) busybox → coreutils/binutils; (b) o toolchain-semente musl do E2 (gmp/mpfr/mpc/binutils/gcc) → os rebuilds-glibc, SPEC-0005 §4 |
@@ -64,6 +68,9 @@ Funções:
 - `KIND=meta` NÃO define função nem `SRC`/`SHA256`: é só um nó de `DEPS`
   (ex.: `base`) que agrega um conjunto; instalar o meta = instalar as suas
   `DEPS`. Resolve o "conjunto mínimo" do instalador sem lógica no minipax.
+
+`KIND=meta` é a norma alvo, mas o parser v0.1 aceita apenas `binary` e `source`;
+a migração do nome `base` e o agregador chegam no Marco 0.2 (`STATUS.md`).
 
 ## 3. Contrato de execução
 
@@ -83,9 +90,15 @@ O minitrue executa a função da receita via `sh -e`, com:
 | `LC_ALL`/`LANG`/`TZ` | `C`/`C`/`UTC` — impostos p/ determinismo (SPEC-0010) |
 
 O ambiente é **determinístico** (SPEC-0010): além do acima, `umask 022` e
-caminho de build canônico. A receita herda tudo; só precisa evitar
+caminho de build canônico. A função recebe apenas o contrato; ainda precisa evitar
 não-determinismo próprio (gravar a data corrente etc.). Campo opcional
 `EPOCH=<unix ts>` sobrepõe o default.
+
+A tabela descreve o ambiente da função. A avaliação top-level que coleta os
+campos é uma execução separada, também com `env_clear` e locale/`TZ` fixos; o
+mundo A recebe `WORK`/`PREFIX`, enquanto o mundo B recebe `WORK`/`STAGE` e a
+toolchain. Em rootfs alternativo, só o `build()` mundo B ganha bwrap e rede
+isolada; o rootfs ainda é gravável (SPEC-0003 §8).
 
 Proibições (contrato; sandbox é dívida registrada em SPEC-0003 §8):
 
@@ -222,11 +235,10 @@ continua exigindo que o artefato venha de quem sempre veio.
 3. A chave pública vive **na árvore newspeak**, versionada e revisável em
    diff. Buscar chave em keyserver ou URL em tempo de instalação é
    proibido (SPEC-0001 P6).
-4. Esquemas do v0: **minisign** e **signify** (Ed25519; chave é uma linha
-   base64 em `SIGKEY`) e **OpenPGP destacado** (`.sig`/`.asc`; bloco de
-   chave em `files/*.asc`, com `SIGKEY_FP` obrigatório como pino real).
-   O esquema é detectado pelo formato de `SIGKEY`.
-5. `SIG` cobre assinatura por artefato; `SIGSUMS` cobre o padrão
+4. Implementação v0.1: **minisign/signify** por artefato (Ed25519; chave em uma
+   linha base64 de `SIGKEY`). OpenPGP destacado (`.sig`/`.asc`, chave em
+   `files/*.asc`, `SIGKEY_FP`) é norma do Marco 0.2 e hoje falha explicitamente.
+5. `SIG` cobre assinatura por artefato e está implementado; `SIGSUMS` cobrirá o padrão
    "lista de checksums assinada" (ex.: `SHASUMS256.txt.asc` do Node.js) —
    nesse modo o artefato DEVE constar na lista **e** bater com o `SHA256`
    pinado. Uma receita usa um esquema ou o outro, não ambos.
@@ -234,9 +246,10 @@ continua exigindo que o artefato venha de quem sempre veio.
 7. Rotação de chave do upstream é evento auditável: o commit que troca
    `SIGKEY`/`SIGKEY_FP` DEVE justificar no corpo (link do anúncio).
 
-Cobertura real: **todo o ftp.gnu.org publica `.sig`** (o mundo B da base
-inteiro é verificável por OpenPGP); Zig publica `.minisig` (chave acima,
-copiada da página oficial em 2026-07-18); Node assina `SHASUMS256.txt`.
+Disponibilidade upstream: **todo o ftp.gnu.org publica `.sig`**, Zig publica
+`.minisig` (chave acima, copiada da página oficial em 2026-07-18) e Node assina
+`SHASUMS256.txt`. Hoje o minitrue valida o caso Zig/minisign; a cobertura GNU e
+Node depende de OpenPGP/`SIGSUMS` no Marco 0.2.
 
 ## 6. Convenções da árvore
 
@@ -248,18 +261,17 @@ copiada da página oficial em 2026-07-18); Node assina `SHASUMS256.txt`.
 - Comentários na receita são bem-vindos quando registram uma decisão de
   classificação (por que este binário é elegível, por que este build é
   estranho).
-- A árvore DEVE passar `minitrue lint` antes de publicar (local e no CI
-  do repositório). O lint confere: `NAME` = nome do diretório; campos
+- A árvore DEVERÁ passar `minitrue lint` antes de publicar quando o comando do
+  Marco 0.2 existir (local e no CI do repositório). O lint conferirá: `NAME` = nome do diretório; campos
   obrigatórios presentes e bem-formados; `SRC` só https; um `SHA256` de
   64 hex por artefato de `SRC`; `SIGKEY_FP` presente quando `SIGKEY` é
-  bloco OpenPGP; `LINKS` só com caminhos relativos; a função exigida pelo
+  bloco OpenPGP; `VERSION`, dependências e `LINKS` canônicos; ausência do nome
+  reservado `files/recipe`; a função exigida pelo
   `KIND` definida (`install_pkg`/`build`). Receita reprovada não entra na
   árvore oficial.
 
 ## 7. Questões em aberto
 
-- Hash da árvore `files/` (patches) dentro do registro do pacote, para
-  `verify` cobrir insumos locais.
 - Receitas com variantes por arquitetura (`SRC_x86_64` / `SRC_aarch64` ou
   interpolação de `$ARCH`): decidir quando aarch64 entrar.
 - Versões "rolantes" de vendor sem URL versionada (caso Chrome §4.4):

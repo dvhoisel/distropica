@@ -97,13 +97,18 @@ publicador, e se divergir da receita, vale a receita.
 
 ## 5. Verificação — o modo `corroborado`
 
-A reprodutibilidade é *afirmável* mas precisa ser *checável*:
+A reprodutibilidade é *afirmável* mas precisa ser *checável*. No protótipo
+atual não existe um modo separado `--check-repro`: todo `rectify` de mundo B
+empacota o STAGE num `memfd` selado, grava o sha256 do tar normalizado em
+`ARTIFACT_HASH` e, quando a receita declara `REPROCORR`, compara imediatamente
+os dois. Divergência aborta com crimestop antes de aplicar o payload. Um comando
+dedicado poderá apenas expor essa mesma operação sem instalar quando os canais
+chegarem.
 
-- `minitrue rectify --check-repro <pacote>` — builda localmente, empacota
-  (o tar normalizado do `pack`), e compara **o sha256 desse tar** com o
-  `reprocorr` pinado na **receita** (autoridade; o índice traz só uma
-  cópia). Igual ⇒ a reprodutibilidade se sustenta ⇒ o binário daquele canal
-  é confiável sem confiar no publicador.
+- O cotejo compara **o sha256 do tar normalizado** com o `reprocorr` pinado na
+  **receita** (autoridade; o índice traz só uma cópia). Igual ⇒ a
+  reprodutibilidade se sustenta ⇒ o binário daquele canal pode ser confiado sem
+  confiar no publicador.
 - É esse hash reproduzido que o `TRUST=corroborado` (SPEC-0009 §6) exige
   bater; e é ele que o mantenedor pina como `reprocorr` ao publicar.
 
@@ -123,7 +128,10 @@ determinístico, na receita do binutils.
 **Hash de artefato — o laço fechado (2026-07-20).** Os dois `DESTDIR`
 independentes do m4 (byte-a-byte idênticos como árvore) empacotam, via
 `minitrue pack` (formato v1), para o **mesmo sha256**
-(`3502e68fc3eb5fecc2cc39e5e45164640bc5a02c13216ad51867e74c212e3e8f`). É a
+(`de4710b70e7acc1267cf106b285f80e4a384ce6923fb4ed2b3bf4181bb29946e`),
+hoje pinado em `newspeak/m4/recipe` e conferido no registro E2-clean. O hash
+`3502e68…` citado em notas anteriores vinha de uma iteração pré-canônica do
+empacotador e não é mais o pino do formato v1. É a
 cadeia inteira demonstrada: **build reprodutível → empacotamento
 determinístico → hash de artefato idêntico**. Esse sha256 é exatamente o
 `reprocorr` que o mantenedor pina no índice do canal (SPEC-0009 §6) e que o

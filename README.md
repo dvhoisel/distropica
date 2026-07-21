@@ -63,6 +63,7 @@ ideológica** — cada premissa existe por um fim prático, não por dogma, e a
 | [SPEC-0009](specs/SPEC-0009-canais-binarios.md) | Canais binários (oficial e samizdat) — o usuário não compila a base |
 | [SPEC-0010](specs/SPEC-0010-reprodutibilidade.md) | Builds reprodutíveis — a raiz de confiança dos canais |
 | [SPEC-0011](specs/SPEC-0011-release-rolling.md) | Modelo de release: rolling *edge* — sempre o estável mais recente |
+| [SPEC-0012](specs/SPEC-0012-ministerios.md) | Os quatro ministérios — fronteiras de responsabilidade das ferramentas |
 
 ## Estado
 
@@ -76,23 +77,64 @@ partir de nada além de binários upstream — foi **demonstrada**:
 - **Bootstrap (Estágio 2) — executado pelo `rectify`.** A partir de um mundo
   musl semeado apenas pelo binário oficial do Zig (`zig cc`), o `minitrue
   rectify gcc-pass2` construiu os 16 pacotes até um **gcc nativo** (C e C++)
-  hospedado na **glibc**, sem toolchain de outra distro. **Ressalva honesta:**
-  a prova rodou num rootfs experimental já trabalhado; o **E2-clean** — a frio,
-  em rootfs novo, com o grafo corrigido — é o próximo marco (SPEC-0005 §4).
+  hospedado na **glibc**, sem toolchain de outra distro. O **E2-clean** já foi
+  executado uma vez, a frio, num rootfs novo com o grafo corrigido; falta uma
+  segunda execução em ambiente independente para a prova forte (SPEC-0005 §4).
 - **`minitrue` — implementado** (Rust): mundo A (`/opt`) e mundo B (`/usr`),
   hash + assinatura (minisign), registros em texto com **fingerprint de build**
-  e **manifesto v1** (hash por arquivo), empacotamento determinístico (`pack`),
-  toolchain por estágio, runner hermético (bwrap), e **`explain`/`why`** (a
-  proveniência como comando). 20 testes automatizados.
+  e **manifesto v2** (conteúdo + tipo, alvo de symlink e árvore mundo A),
+  empacotamento determinístico (`pack`), imagem de STAGE selada, attestations
+  Ed25519 sem replay histórico, toolchain por estágio, journal transacional com
+  recuperação global no mundo B, runner de build em rootfs via bwrap e
+  **`explain`/`why`** (a proveniência como comando).
+  Há uma suíte local automatizada; a matriz de cobertura vive no `STATUS.md`.
+- **Bootstrap (Estágio 3) — smoke parcial.** O kernel compilado pelo gcc nativo
+  boota em QEMU com raiz 9p somente-leitura e `busybox init`. O login foi
+  observado num rootfs com `/etc/shadow` previamente provisionado; initramfs,
+  runit e o caminho UKI/EFI do sistema instalável ainda não foram fechados.
 - **Reprodutibilidade — provada.** Dois builds independentes de m4, gmp, gcc e
   glibc produzem artefato byte-a-byte idêntico (SPEC-0010).
 
 Ainda em design ou não implementados: o instalador (`minipax`), o init
-(runit), os canais binários, o `--sync` e o rollback de mundo B, um núcleo de
-instalação transacional (lock/journal/rename atômico), e o **E2-clean** (a
-prova a frio). Ver [STATUS.md](STATUS.md).
+(runit), os canais binários, o `--sync` e o rollback retido do mundo B entre
+versões ou de uma sincronização inteira. O mundo A ainda não tem transação de
+conjunto e a durabilidade do journal não cobre perda de energia (`fsync` é
+dívida). Ver [STATUS.md](STATUS.md).
 
 Alvo inicial: **x86_64**.
+
+## Segurança e validação
+
+O `minitrue` assume que a árvore sob `--root` pode conter estado hostil ou
+incompleto. Nas operações do mundo B, cada mutação é precedida por uma intenção
+em journal; um processo interrompido é recuperado antes da próxima retificação
+ou remoção. Leituras, comparações e remoções sensíveis ficam confinadas ao
+rootfs e recusam symlinks intermediários, arquivos especiais e metadados
+ambíguos. O artefato verificado também permanece selado entre o hash e a
+aplicação no sistema.
+
+Receitas transitivas participam do fingerprint de build. Attestations Ed25519
+incluem formato, versão e fingerprint da receita, portanto não podem ser
+reaplicadas silenciosamente a outro build. Hashes e assinaturas de fontes são
+revalidados mesmo quando o artefato vem do cache.
+
+Essas garantias cobrem **crash de processo**, não falta de energia: ainda não há
+uma disciplina completa de `fsync`. A transação de conjunto também é exclusiva
+do mundo B; a troca de versões do mundo A continua sendo uma dívida explícita.
+Por fim, uma attestation comprova concordância com o registro local — a
+distribuição externa desse registro ainda pertence à futura infraestrutura de
+canais. Os limites detalhados e a matriz de cobertura estão no
+[STATUS.md](STATUS.md).
+
+Os verificadores usados no desenvolvimento podem ser reproduzidos com:
+
+```sh
+cd minitrue
+cargo test --all-targets
+cargo clippy --all-targets -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+cargo fmt --check
+```
 
 ## Vocabulário
 
