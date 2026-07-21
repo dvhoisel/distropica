@@ -5,7 +5,7 @@ use fs2::FileExt;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -525,6 +525,161 @@ fn build_command(
     }
 }
 
+/// Move um caminho (arquivo ou symlink) preservando a natureza; `rename` atômico,
+/// com fallback copy+remove p/ EXDEV (backup e destino em mounts diferentes).
+fn move_path(src: &Path, dst: &Path) -> Result<()> {
+    mkparent(dst)?;
+    if fs::rename(src, dst).is_ok() {
+        return Ok(());
+    }
+    let ft = fs::symlink_metadata(src)?.file_type();
+    if ft.is_symlink() {
+        let _ = fs::remove_file(dst);
+        symlink(fs::read_link(src)?, dst)?;
+    } else {
+        fs::copy(src, dst)?;
+    }
+    fs::remove_file(src)?;
+    Ok(())
+}
+
+/// Núcleo transacional da cópia mundo-B (SPEC-0003 §4): registra cada mutação em
+/// `/` num journal PERSISTENTE **antes** de fazê-la. Erro no meio ⇒ `rollback`
+/// (desfaz na ordem inversa); sucesso ⇒ `commit` (descarta). Um journal órfão
+/// (processo morto no meio) é revertido no `begin` seguinte — crash-safety.
+///
+/// O log é gravado por `write` (syscall → page cache): sobrevive a `kill -9`
+/// (o matador de background), que é o crash real aqui; só perda de energia (sem
+/// fsync) fica de fora, aceitável no v0. Formato por linha:
+///   `N␉<dst>`        — dst era novo (rollback: remove)
+///   `B␉<dst>␉<n>`    — dst existia, movido p/ backup/<n> (rollback: restaura)
+struct Journal {
+    dir: PathBuf,
+    root: PathBuf,
+    log: fs::File,
+    next: u32,
+    touched: Vec<PathBuf>,
+}
+
+impl Journal {
+    fn begin(ctx: &Ctx, pkg: &str) -> Result<Journal> {
+        let dir = ctx.root.join("var/lib/minitrue/journal").join(pkg);
+        if dir.exists() {
+            // Journal órfão: um rectify anterior morreu no meio da cópia. Reverte
+            // antes de recomeçar, pra `/` voltar ao estado consistente pré-crash.
+            eprintln!("  journal órfão de {pkg}: revertendo cópia interrompida");
+            Self::replay_rollback(&dir, &ctx.root);
+            let _ = fs::remove_dir_all(&dir);
+        }
+        fs::create_dir_all(dir.join("backup"))?;
+        let log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("log"))?;
+        Ok(Journal {
+            dir,
+            root: ctx.root.clone(),
+            log,
+            next: 0,
+            touched: Vec::new(),
+        })
+    }
+
+    fn record(&mut self, line: &str) -> Result<()> {
+        self.log.write_all(line.as_bytes())?;
+        self.log.write_all(b"\n")?;
+        Ok(())
+    }
+
+    /// Tira o dst do caminho (move p/ backup se existir) e loga — deixando dst
+    /// AUSENTE, pronto p/ o chamador escrever o novo. Loga ANTES de mover o quê já
+    /// está seguro; a ordem garante que o rollback nunca perca o original.
+    fn stash(&mut self, dst: &Path) -> Result<()> {
+        self.touched.push(dst.to_path_buf());
+        if fs::symlink_metadata(dst).is_ok() {
+            let n = self.next;
+            self.next += 1;
+            let bak = self.dir.join("backup").join(n.to_string());
+            move_path(dst, &bak)?;
+            self.record(&format!("B\t{}\t{n}", dst.display()))?;
+        } else {
+            self.record(&format!("N\t{}", dst.display()))?;
+        }
+        Ok(())
+    }
+
+    fn place_file(&mut self, dst: &Path, src: &Path) -> Result<()> {
+        self.stash(dst)?;
+        mkparent(dst)?;
+        fs::copy(src, dst)?;
+        Ok(())
+    }
+
+    fn place_symlink(&mut self, dst: &Path, target: &Path) -> Result<()> {
+        self.stash(dst)?;
+        mkparent(dst)?;
+        symlink(target, dst)?;
+        Ok(())
+    }
+
+    /// Remove dst transacionalmente (upgrade: caminhos que sumiram do novo
+    /// manifesto). Rollback restaura.
+    fn drop_path(&mut self, dst: &Path) -> Result<()> {
+        if fs::symlink_metadata(dst).is_ok() {
+            self.stash(dst)?;
+        }
+        Ok(())
+    }
+
+    fn commit(self) -> Result<()> {
+        // Sucesso: o registro (write_record) já é a marca de commit; descarta o
+        // journal e os backups.
+        let _ = fs::remove_dir_all(&self.dir);
+        Ok(())
+    }
+
+    fn rollback(self) {
+        Self::replay_rollback(&self.dir, &self.root);
+        for p in &self.touched {
+            if let Some(par) = p.parent() {
+                prune_empty(&self.root, par);
+            }
+        }
+        let _ = fs::remove_dir_all(&self.dir);
+    }
+
+    /// Desfaz um journal (em processo ou órfão): lê o log e reverte na ordem
+    /// INVERSA. Idempotente — seguro reexecutar (crash durante o próprio rollback).
+    fn replay_rollback(dir: &Path, root: &Path) {
+        let log = fs::read_to_string(dir.join("log")).unwrap_or_default();
+        for line in log.lines().rev() {
+            let mut it = line.split('\t');
+            match it.next() {
+                Some("N") => {
+                    if let Some(dst) = it.next() {
+                        let _ = fs::remove_file(dst);
+                        let _ = fs::remove_dir(dst);
+                        if let Some(par) = Path::new(dst).parent() {
+                            prune_empty(root, par);
+                        }
+                    }
+                }
+                Some("B") => {
+                    let (Some(dst), Some(n)) = (it.next(), it.next()) else {
+                        continue;
+                    };
+                    let bak = dir.join("backup").join(n);
+                    if bak.exists() {
+                        let _ = fs::remove_file(dst);
+                        let _ = move_path(&bak, Path::new(dst));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     let rec_dir = ctx.records_dir().join(&r.name);
     let fp = recipe::build_fingerprint(ctx, &r.name)?;
@@ -637,62 +792,27 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
         }
     }
 
-    // Sincroniza staging → root, com desvio de /etc para /usr/share/factory.
-    let mut manifest: Vec<String> = Vec::new();
-    for (src, rel, ft) in &entries {
-        if let Some(sub) = rel.strip_prefix("etc/") {
-            // Nenhum pacote é dono de /etc: o default vai para a fábrica…
-            let factory = ctx.root.join("usr/share/factory/etc").join(sub);
-            mkparent(&factory)?;
-            let _ = fs::remove_file(&factory);
-            if ft.is_symlink() {
-                symlink(fs::read_link(src)?, &factory)?;
-            } else if !ft.is_dir() {
-                fs::copy(src, &factory)?;
-            } else {
-                fs::create_dir_all(&factory)?;
-            }
-            if !ft.is_dir() {
-                manifest.push(format!("/usr/share/factory/etc/{sub}"));
-                // …e é materializado em /etc só se o administrador ainda não decidiu.
-                materialize_etc(ctx, &factory, sub)?;
-            }
-        } else {
-            let dst = ctx.root.join(rel);
-            if ft.is_dir() {
-                fs::create_dir_all(&dst)?;
-            } else {
-                let virt = virt_path(rel);
-                if let Some(prov) = adopt_provisional_path(ctx, &virt, &r.name, &r.supersedes) {
-                    eprintln!("  {virt}: assume o controle de {prov} (provisório)");
-                }
-                mkparent(&dst)?;
-                let _ = fs::remove_file(&dst);
-                if ft.is_symlink() {
-                    symlink(fs::read_link(src)?, &dst)?;
-                } else {
-                    fs::copy(src, &dst)?;
-                }
-                manifest.push(virt);
-            }
+    // Sincroniza staging → root, TRANSACIONAL (Journal, SPEC-0003 §4): erro em
+    // qualquer arquivo antes do registro ⇒ rollback (/ volta ao estado anterior,
+    // sem arquivos soltos sem dono).
+    let mut jrnl = Journal::begin(ctx, &r.name)?;
+    let mut manifest = match apply_stage(ctx, &entries, r, &mut jrnl) {
+        Ok(m) => m,
+        Err(e) => {
+            jrnl.rollback();
+            let _ = fs::remove_dir_all(&work);
+            return Err(e);
         }
-    }
-
-    // Upgrade: recolhe caminhos do manifesto antigo que sumiram do novo.
-    let new_set: HashSet<&str> = manifest.iter().map(String::as_str).collect();
-    for old in read_manifest(&rec_dir) {
-        let path = manifest_path(&old);
-        if !new_set.contains(path) {
-            let p = ctx.root.join(path.trim_start_matches('/'));
-            let _ = fs::remove_file(&p);
-            if let Some(par) = p.parent() {
-                prune_empty(&ctx.root, par);
-            }
-        }
-    }
+    };
     let _ = fs::remove_dir_all(&work);
 
-    write_record(ctx, &rec_dir, r, "B", &mut manifest, Some(&reprocorr))?;
+    // O registro é a marca de commit (temp+rename, meta por último). Se ele falha,
+    // desfaz a cópia.
+    if let Err(e) = write_record(ctx, &rec_dir, r, "B", &mut manifest, Some(&reprocorr)) {
+        jrnl.rollback();
+        return Err(e);
+    }
+    jrnl.commit()?;
     if explicit {
         world_add(ctx, &r.name)?;
     }
@@ -703,12 +823,73 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
     Ok(())
 }
 
+/// Aplica o STAGE em `/` PELO Journal (transacional). Devolve o manifesto. Todo
+/// arquivo/symlink passa por `jrnl.place_*` (guarda o anterior); as remoções de
+/// upgrade por `jrnl.drop_path`. Um erro aqui é revertido pelo chamador.
+fn apply_stage(
+    ctx: &Ctx,
+    entries: &[(PathBuf, String, fs::FileType)],
+    r: &Recipe,
+    jrnl: &mut Journal,
+) -> Result<Vec<String>> {
+    let mut manifest: Vec<String> = Vec::new();
+    for (src, rel, ft) in entries {
+        if let Some(sub) = rel.strip_prefix("etc/") {
+            // Nenhum pacote é dono de /etc: o default vai para a fábrica…
+            let factory = ctx.root.join("usr/share/factory/etc").join(sub);
+            if ft.is_dir() {
+                fs::create_dir_all(&factory)?;
+            } else if ft.is_symlink() {
+                jrnl.place_symlink(&factory, &fs::read_link(src)?)?;
+            } else {
+                jrnl.place_file(&factory, src)?;
+            }
+            if !ft.is_dir() {
+                manifest.push(format!("/usr/share/factory/etc/{sub}"));
+                // …e é materializado em /etc só se o administrador ainda não decidiu.
+                materialize_etc(jrnl, ctx, &factory, sub)?;
+            }
+        } else {
+            let dst = ctx.root.join(rel);
+            if ft.is_dir() {
+                fs::create_dir_all(&dst)?;
+            } else {
+                let virt = virt_path(rel);
+                if let Some(prov) = adopt_provisional_path(ctx, &virt, &r.name, &r.supersedes) {
+                    eprintln!("  {virt}: assume o controle de {prov} (provisório)");
+                }
+                if ft.is_symlink() {
+                    jrnl.place_symlink(&dst, &fs::read_link(src)?)?;
+                } else {
+                    jrnl.place_file(&dst, src)?;
+                }
+                manifest.push(virt);
+            }
+        }
+    }
+
+    // Upgrade: recolhe caminhos do manifesto antigo que sumiram do novo.
+    let new_set: HashSet<&str> = manifest.iter().map(String::as_str).collect();
+    let rec_dir = ctx.records_dir().join(&r.name);
+    for old in read_manifest(&rec_dir) {
+        let path = manifest_path(&old);
+        if !new_set.contains(path) {
+            let p = ctx.root.join(path.trim_start_matches('/'));
+            jrnl.drop_path(&p)?;
+            if let Some(par) = p.parent() {
+                prune_empty(&ctx.root, par);
+            }
+        }
+    }
+    Ok(manifest)
+}
+
 /// Materializa um default de fábrica em /etc conforme a política do admin
 /// (Clear Linux + `.new` do Slackware): copia se ausente; se o admin já mexeu,
 /// grava `<arquivo>.new` ao lado e avisa. O /etc vivo não entra no manifesto.
 /// Trata symlinks (ex.: openssl instala /etc/ssl/misc/tsget -> tsget.pl):
 /// materializa-os COMO symlink, nunca por `fs::copy` — que seguiria o link.
-fn materialize_etc(ctx: &Ctx, factory: &Path, sub: &str) -> Result<()> {
+fn materialize_etc(jrnl: &mut Journal, ctx: &Ctx, factory: &Path, sub: &str) -> Result<()> {
     let live = ctx.root.join("etc").join(sub);
 
     // Default que É symlink: materializa como symlink. `fs::copy` seguiria o
@@ -720,8 +901,7 @@ fn materialize_etc(ctx: &Ctx, factory: &Path, sub: &str) -> Result<()> {
         match fs::symlink_metadata(&live) {
             // ausente: cria o link
             Err(_) => {
-                mkparent(&live)?;
-                symlink(&tgt, &live)?;
+                jrnl.place_symlink(&live, &tgt)?;
             }
             // já é exatamente o mesmo link: nada a fazer
             Ok(m)
@@ -733,8 +913,7 @@ fn materialize_etc(ctx: &Ctx, factory: &Path, sub: &str) -> Result<()> {
                     "{}.new",
                     live.file_name().unwrap().to_string_lossy()
                 ));
-                let _ = fs::remove_file(&new);
-                symlink(&tgt, &new)?;
+                jrnl.place_symlink(&new, &tgt)?;
                 eprintln!(
                     "  aviso: /etc/{sub} foi modificado pelo administrador; novo default (link) em {}",
                     new.display()
@@ -746,8 +925,7 @@ fn materialize_etc(ctx: &Ctx, factory: &Path, sub: &str) -> Result<()> {
 
     // Default regular: copia se ausente; se o admin já mexeu, grava `<nome>.new`.
     if !live.exists() {
-        mkparent(&live)?;
-        fs::copy(factory, &live)?;
+        jrnl.place_file(&live, factory)?;
         return Ok(());
     }
     let same = fs::read(&live).ok() == fs::read(factory).ok();
@@ -756,7 +934,7 @@ fn materialize_etc(ctx: &Ctx, factory: &Path, sub: &str) -> Result<()> {
             "{}.new",
             live.file_name().unwrap().to_string_lossy()
         ));
-        fs::copy(factory, &new)?;
+        jrnl.place_file(&new, factory)?;
         eprintln!(
             "  aviso: /etc/{sub} foi modificado pelo administrador; novo default em {}",
             new.display()
@@ -1533,11 +1711,12 @@ mod tests {
         };
         let fdir = root.join("usr/share/factory/etc/ssl/misc");
         fs::create_dir_all(&fdir).unwrap();
+        let mut jrnl = Journal::begin(&ctx, "test").unwrap();
 
         // default que é symlink, com ALVO AUSENTE na fábrica (ordem da walk)
         let link = fdir.join("tsget");
         symlink("tsget.pl", &link).unwrap();
-        materialize_etc(&ctx, &link, "ssl/misc/tsget")
+        materialize_etc(&mut jrnl, &ctx, &link, "ssl/misc/tsget")
             .expect("symlink em /etc não deve dar ENOENT");
         let live = root.join("etc/ssl/misc/tsget");
         let md = fs::symlink_metadata(&live).expect("live materializado");
@@ -1545,7 +1724,7 @@ mod tests {
         assert_eq!(fs::read_link(&live).unwrap(), PathBuf::from("tsget.pl"));
 
         // idempotente: 2ª chamada, mesmo link, sem erro e sem `.new`
-        materialize_etc(&ctx, &link, "ssl/misc/tsget").expect("idempotente");
+        materialize_etc(&mut jrnl, &ctx, &link, "ssl/misc/tsget").expect("idempotente");
         assert!(
             !root.join("etc/ssl/misc/tsget.new").exists(),
             "sem .new quando o link é igual"
@@ -1555,11 +1734,77 @@ mod tests {
         let freg = root.join("usr/share/factory/etc/ssl/openssl.cnf");
         mkparent(&freg).unwrap();
         fs::write(&freg, b"# cnf\n").unwrap();
-        materialize_etc(&ctx, &freg, "ssl/openssl.cnf").unwrap();
+        materialize_etc(&mut jrnl, &ctx, &freg, "ssl/openssl.cnf").unwrap();
         assert_eq!(
             fs::read_to_string(root.join("etc/ssl/openssl.cnf")).unwrap(),
             "# cnf\n"
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Núcleo transacional: rollback restaura o sobrescrito e remove o novo; um
+    /// journal órfão (crash no meio) é revertido no `begin` seguinte; `commit`
+    /// mantém as mudanças e descarta o journal.
+    #[test]
+    fn journal_transacional() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-jrnl-{}-{n}", std::process::id()));
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let stage = root.join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        fs::create_dir_all(root.join("usr/bin")).unwrap();
+        let mk = |name: &str, content: &[u8]| {
+            let p = stage.join(name);
+            fs::write(&p, content).unwrap();
+            p
+        };
+        let existing = root.join("usr/bin/ls");
+        fs::write(&existing, b"ORIGINAL").unwrap();
+        let novo = root.join("usr/bin/cat");
+        let jpath = root.join("var/lib/minitrue/journal/coreutils");
+
+        // 1) rollback restaura o sobrescrito e remove o novo
+        let mut j = Journal::begin(&ctx, "coreutils").unwrap();
+        j.place_file(&existing, &mk("a", b"NOVO")).unwrap();
+        j.place_file(&novo, &mk("b", b"CAT")).unwrap();
+        assert_eq!(fs::read(&existing).unwrap(), b"NOVO");
+        assert!(novo.exists());
+        j.rollback();
+        assert_eq!(
+            fs::read(&existing).unwrap(),
+            b"ORIGINAL",
+            "sobrescrito restaurado"
+        );
+        assert!(!novo.exists(), "novo removido");
+        assert!(!jpath.exists(), "journal sumiu no rollback");
+
+        // 2) recovery: um journal órfão (j sai de escopo sem commit/rollback) é
+        //    revertido no begin seguinte
+        {
+            let mut j = Journal::begin(&ctx, "coreutils").unwrap();
+            j.place_file(&existing, &mk("c", b"MEIO")).unwrap();
+            assert_eq!(fs::read(&existing).unwrap(), b"MEIO");
+        } // ← "crash": órfão
+        let j2 = Journal::begin(&ctx, "coreutils").unwrap();
+        assert_eq!(
+            fs::read(&existing).unwrap(),
+            b"ORIGINAL",
+            "recovery restaurou o órfão"
+        );
+
+        // 3) commit mantém as mudanças e descarta o journal
+        j2.commit().unwrap();
+        let mut j = Journal::begin(&ctx, "coreutils").unwrap();
+        j.place_file(&existing, &mk("d", b"FINAL")).unwrap();
+        j.commit().unwrap();
+        assert_eq!(fs::read(&existing).unwrap(), b"FINAL");
+        assert!(!jpath.exists(), "journal descartado no commit");
 
         let _ = fs::remove_dir_all(&root);
     }

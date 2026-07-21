@@ -28,7 +28,7 @@ Amor, SPEC-0012). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | Lock global por rootfs (flock) | ✅ | ✅ | rectify/memoryhole; auto-libera na saída |
 | Registro atômico (temp+rename, meta = commit) | ✅ | ✅ | meta-less = não-instalado ⇒ reinstala |
 | `RECORD_FORMAT=` | ✅ | — | versiona o esquema (hoje 1) |
-| Journal + rollback do mundo B (STAGE→/) | ⬜ | — | cópia sobre / ainda não transacional |
+| Journal + rollback do mundo B (STAGE→/) | ✅ | ✅ | cópia transacional; erro → rollback (novo removido, sobrescrito restaurado); journal órfão de crash revertido no `begin` (kill-9-safe) |
 | `SUPERSEDES=` explícito | ✅ | ✅ | declarado nas 5 receitas do E2; colisão não-declarada = doublethink |
 | Verificação OpenPGP | ⬜ | — | minisign só; stub p/ .asc |
 | `reprocorr` (raiz de confiança) | ✅ | ✅ | build de fonte grava `ARTIFACT_HASH`=`pack(STAGE)`; receita que pina `REPROCORR` exige reprodução (crimestop). SPEC-0009 §8.1 |
@@ -63,10 +63,12 @@ Amor, SPEC-0012). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
   limpo, grafo corrigido). Achou e consertou 2 bugs que o rootfs sujo mascarava
   (SUPERSEDES seed→busybox; libstdc++ lib64×lib usr-merge). Falta repetir num
   **2º ambiente independente** para "reproduzível ×2".
-- **Parcialmente transacional:** o **registro** já é atômico (temp+rename, meta
-  = marca de commit) e há **lock global** (flock). Falta: a cópia mundo-B de
-  `STAGE` para `/` ainda não é transacional (crash no meio deixa arquivos soltos
-  sem registro) — precisa de journal + rollback.
+- **Transacional (mundo B):** o **registro** é atômico (temp+rename, meta = marca
+  de commit), há **lock global** (flock), e a cópia `STAGE`→`/` passa por um
+  **journal** persistente — erro no meio faz **rollback** (novo removido,
+  sobrescrito restaurado) e um journal órfão de crash é revertido no `begin`
+  seguinte (kill-9-safe). Falta: `fsync` p/ perda-de-energia; restaurar o payload
+  do provisional cedido ao remover o sucessor (o journal já dá a base).
 - **Sandbox não isola escrita:** o rootfs é montado gravável; uma receita pode
   escrever fora de `STAGE`. Ideal: rootfs read-only + binds graváveis p/ WORK/STAGE.
 - **Confiança de canal vs P6:** sem `REPROCORR`, o hash viria do índice assinado
@@ -79,5 +81,5 @@ Amor, SPEC-0012). Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
 ## Ferramentas de CI (estado local)
 
-`cargo test` 26/26 · `cargo clippy -D warnings` ok · `cargo fmt --check` ok ·
+`cargo test` 27/27 · `cargo clippy -D warnings` ok · `cargo fmt --check` ok ·
 `sh -n` em receitas/scripts ok · ShellCheck e `cargo-audit` não instalados.
