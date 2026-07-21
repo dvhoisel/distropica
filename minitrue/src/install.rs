@@ -680,8 +680,45 @@ fn install_source(ctx: &Ctx, r: &Recipe, explicit: bool) -> Result<()> {
 /// Materializa um default de fábrica em /etc conforme a política do admin
 /// (Clear Linux + `.new` do Slackware): copia se ausente; se o admin já mexeu,
 /// grava `<arquivo>.new` ao lado e avisa. O /etc vivo não entra no manifesto.
+/// Trata symlinks (ex.: openssl instala /etc/ssl/misc/tsget -> tsget.pl):
+/// materializa-os COMO symlink, nunca por `fs::copy` — que seguiria o link.
 fn materialize_etc(ctx: &Ctx, factory: &Path, sub: &str) -> Result<()> {
     let live = ctx.root.join("etc").join(sub);
+
+    // Default que É symlink: materializa como symlink. `fs::copy` seguiria o
+    // link e (a) daria ENOENT quando o alvo ainda não foi copiado à fábrica — a
+    // walk processa em ordem alfabética, e `tsget` vem antes de `tsget.pl` — e
+    // (b) copiaria o conteúdo do alvo, perdendo a natureza de link.
+    if fs::symlink_metadata(factory)?.file_type().is_symlink() {
+        let tgt = fs::read_link(factory)?;
+        match fs::symlink_metadata(&live) {
+            // ausente: cria o link
+            Err(_) => {
+                mkparent(&live)?;
+                symlink(&tgt, &live)?;
+            }
+            // já é exatamente o mesmo link: nada a fazer
+            Ok(m)
+                if m.file_type().is_symlink()
+                    && fs::read_link(&live).ok().as_deref() == Some(tgt.as_path()) => {}
+            // admin trocou: grava o novo default como `<nome>.new` ao lado
+            Ok(_) => {
+                let new = live.with_file_name(format!(
+                    "{}.new",
+                    live.file_name().unwrap().to_string_lossy()
+                ));
+                let _ = fs::remove_file(&new);
+                symlink(&tgt, &new)?;
+                eprintln!(
+                    "  aviso: /etc/{sub} foi modificado pelo administrador; novo default (link) em {}",
+                    new.display()
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    // Default regular: copia se ausente; se o admin já mexeu, grava `<nome>.new`.
     if !live.exists() {
         mkparent(&live)?;
         fs::copy(factory, &live)?;
@@ -1004,10 +1041,7 @@ fn adopt_provisional_path(
         // Só cede de provisional que ESTA receita declarou superseder
         // (SPEC-0003 §7). Provisional não-declarado não é cedido — vira
         // doublethink no check de colisão.
-        if owner == myself
-            || !is_provisional(ctx, &owner)
-            || !supersedes.iter().any(|s| *s == owner)
-        {
+        if owner == myself || !is_provisional(ctx, &owner) || !supersedes.contains(&owner) {
             continue;
         }
         let mut m = read_manifest(&e.path());
@@ -1436,6 +1470,53 @@ mod tests {
         assert_eq!(file_hash(&dir.join("l")), "-", "symlink → -");
         assert_eq!(file_hash(&dir.join("ausente")), "-");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// materialize_etc trata symlink em /etc — regressão do openssl (instala
+    /// /etc/ssl/misc/tsget -> tsget.pl, e o alvo ainda não existe na fábrica
+    /// quando o link é materializado, pela ordem alfabética da walk). O bug era
+    /// `fs::copy` seguir o link e estourar ENOENT.
+    #[test]
+    fn materialize_etc_symlink() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-etc-{}-{n}", std::process::id()));
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let fdir = root.join("usr/share/factory/etc/ssl/misc");
+        fs::create_dir_all(&fdir).unwrap();
+
+        // default que é symlink, com ALVO AUSENTE na fábrica (ordem da walk)
+        let link = fdir.join("tsget");
+        symlink("tsget.pl", &link).unwrap();
+        materialize_etc(&ctx, &link, "ssl/misc/tsget")
+            .expect("symlink em /etc não deve dar ENOENT");
+        let live = root.join("etc/ssl/misc/tsget");
+        let md = fs::symlink_metadata(&live).expect("live materializado");
+        assert!(md.file_type().is_symlink(), "materializado COMO symlink");
+        assert_eq!(fs::read_link(&live).unwrap(), PathBuf::from("tsget.pl"));
+
+        // idempotente: 2ª chamada, mesmo link, sem erro e sem `.new`
+        materialize_etc(&ctx, &link, "ssl/misc/tsget").expect("idempotente");
+        assert!(
+            !root.join("etc/ssl/misc/tsget.new").exists(),
+            "sem .new quando o link é igual"
+        );
+
+        // default regular ainda é copiado normalmente
+        let freg = root.join("usr/share/factory/etc/ssl/openssl.cnf");
+        mkparent(&freg).unwrap();
+        fs::write(&freg, b"# cnf\n").unwrap();
+        materialize_etc(&ctx, &freg, "ssl/openssl.cnf").unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("etc/ssl/openssl.cnf")).unwrap(),
+            "# cnf\n"
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// explain/why: owner_of acha o dono (incl. desvio de /etc→fábrica) e
