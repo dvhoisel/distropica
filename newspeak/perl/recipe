@@ -1,0 +1,24 @@
+NAME=perl
+VERSION=5.42.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="gcc-pass2 binutils-glibc"
+ABOUT="Perl. Build-tool, não superfície da distro: o kernel o exige (scripts/gen_oid_registry gera lib/oid_registry_data.c — '/bin/sh: perl: not found' no fim do build), e o OID_REGISTRY é puxado por NFS/SMB/crypto (desligar seria pior que ter a ferramenta). Também é dependência do openssl (Configure é perl) e de muito userspace vindouro. Mesma categoria de flex/bison/elfutils. Edge (P7): 5.42.0 é o stable mais recente do CPAN."
+LICENSE="Artistic-1.0-Perl OR GPL-1.0-or-later"
+SRC="https://www.cpan.org/src/5.0/perl-$VERSION.tar.xz"
+SHA256=73cf6cc1ea2b2b1c110a18c14bbbc73a362073003893ffcedc26d22ebdbdd0c3
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    # Configure não-interativo: -des = usa defaults, prossegue sem parar,
+    # silencioso. -Dcc="$CC" usa o gcc NATIVO do E2 (minitrue exporta CC).
+    # ldflags -rpath-link: rede de segurança do padrão recorrente da toolchain
+    # nativa (o ld não resolve deps transitivos em /usr/lib sozinho; SPEC-0005).
+    sh Configure -des -Dprefix=/usr -Dcc="$CC" \
+        -Dldflags="-Wl,-rpath-link,/usr/lib"
+    # perl é notório por corridas com -j (miniperl vs extensões); o '|| make'
+    # serial retoma e conserta o que a corrida deixou pela metade.
+    make -j"$JOBS" || make
+    make install DESTDIR="$STAGE"
+}

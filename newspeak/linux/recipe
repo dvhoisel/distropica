@@ -1,0 +1,53 @@
+NAME=linux
+VERSION=7.1.4
+KIND=source
+TOOLCHAIN=native
+BUILD_DEPS="gcc-pass2 binutils-glibc flex bison elfutils perl"
+ABOUT="O kernel. Mundo B por necessidade: o kernel.org só publica FONTE — não há binário oficial (um kernel é sempre específico de um .config), e binários de distro são inelegíveis (SPEC-0001 §2, SPEC-0007). Edge (P7): 7.1.4 é o stable mais recente do kernel.org (não um LTS). Compilado com o gcc NATIVO do E2. HOSTLDFLAGS -rpath-link: o objtool linka a libelf (→ libz transitivo) e o ld nativo não resolve isso sozinho (mesmo padrão do mathlibs)."
+LICENSE="GPL-2.0-only"
+SRC="https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$VERSION.tar.xz"
+SHA256=1c63922a119675d38e3ae0f8f6ee07f15c41a786ab9ed66563749bb8c9a08e2e
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    # Config base x86_64 (inclui EFI_STUB e virtio — SPEC-0008). Afinar a
+    # config mínima virtio-only é passo seguinte; defconfig boota em QEMU.
+    make defconfig
+    # Sem openssl no mundo ainda. O gatilho NÃO é assinatura de módulo (o
+    # defconfig nem liga MODULE_SIG): é o CFG80211 (wireless). O defconfig faz
+    # CONFIG_CFG80211=y; o filho CFG80211_REQUIRE_SIGNED_REGDB tem 'default y' e
+    # select SYSTEM_DATA_VERIFICATION → SYSTEM_TRUSTED_KEYRING → constrói
+    # certs/extract-cert, que linka -lcrypto ('openssl/bio.h: No such file').
+    # NÃO dá p/ desligar só o filho: o prompt dele é condicional (CERTIFICATION_
+    # ONUS, off) → sem prompt, o símbolo ignora o .config e assume o default y.
+    # O keyring tem EXATAMENTE 2 selectors (grep 'select SYSTEM_TRUSTED_KEYRING'):
+    #   (a) SYSTEM_DATA_VERIFICATION ← CFG80211_REQUIRE_SIGNED_REGDB (wireless);
+    #   (b) KEXEC_BZIMAGE_VERIFY_SIG ← KEXEC_SIG (verificação de assinatura no
+    #       kexec_file_load — um kernel de VM não precisa).
+    # Desligar os selectors não basta: SYSTEM_TRUSTED_KEYRING TEM prompt próprio
+    # (bool, deps satisfeitas) e o defconfig já o gravou =y. Removidos os
+    # selectors, ele vira símbolo LIVRE — e o olddefconfig PRESERVA o =y que já
+    # está no .config. Então desligamos as duas raízes (CFG80211 +MAC80211 que
+    # dele depende; KEXEC_SIG) E o próprio keyring (agora livre, o 'not set'
+    # cola). (sed, não scripts/config: este é #!/bin/bash e só temos sh.)
+    sed -i -e 's/^CONFIG_CFG80211=y/# CONFIG_CFG80211 is not set/' \
+           -e 's/^CONFIG_MAC80211=y/# CONFIG_MAC80211 is not set/' \
+           -e 's/^CONFIG_KEXEC_SIG=y/# CONFIG_KEXEC_SIG is not set/' \
+           -e 's/^CONFIG_SYSTEM_TRUSTED_KEYRING=y/# CONFIG_SYSTEM_TRUSTED_KEYRING is not set/' .config
+    make olddefconfig
+    # Guarda: se o keyring sobreviveu (algo ainda o seleciona/força), aborta
+    # AQUI com o estado real — todos os símbolos =y de assinatura/keyring — em
+    # vez de estourar no openssl (certs/extract-cert) lá adiante.
+    if grep -q '^CONFIG_SYSTEM_TRUSTED_KEYRING=y' .config; then
+        echo "FATAL: SYSTEM_TRUSTED_KEYRING ainda ligado. Símbolos =y relacionados:"
+        grep -E '=y$' .config | grep -E 'KEYRING|KEXEC|_SIG|VERIFICATION|VERITY|PE_FILE|PKCS7|ASYMMETRIC'
+        exit 1
+    fi
+    # bzImage só (pula os módulos por ora). HOSTLDFLAGS: o objtool (host tool)
+    # linka a libelf, que puxa libz transitivo — o ld nativo precisa do
+    # -rpath-link p/ resolver (SPEC-0005, recorrente na toolchain nativa).
+    make -j"$JOBS" HOSTLDFLAGS="-Wl,-rpath-link,/usr/lib" bzImage
+    install -Dm644 arch/x86/boot/bzImage "$STAGE/boot/vmlinuz-$VERSION"
+    install -Dm644 System.map "$STAGE/boot/System.map-$VERSION"
+    install -Dm644 .config "$STAGE/boot/config-$VERSION"
+}
