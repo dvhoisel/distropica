@@ -1,5 +1,5 @@
 use crate::profile::{write_new, ResolvedProfile};
-use crate::tree::{Entry, EntryKind};
+use crate::tree::{self, Entry, EntryKind};
 use anyhow::{bail, Context, Result};
 use sha2::Digest;
 use std::fs;
@@ -14,6 +14,7 @@ pub struct InstallOptions {
     pub minitrue: Option<PathBuf>,
     pub offline: bool,
     pub from_source: bool,
+    pub only_binary: bool,
     pub resume: bool,
 }
 
@@ -51,11 +52,11 @@ fn snapshot_executable(path: &Path) -> Result<(ExecutableSnapshot, String)> {
     use rustix::io::Errno;
 
     let mut source = fs::File::open(path)
-        .with_context(|| format!("não abri minitrue para snapshot: {}", path.display()))?;
+        .with_context(|| format!("não abri executável para snapshot: {}", path.display()))?;
     let metadata = source.metadata()?;
     if !metadata.file_type().is_file() || metadata.permissions().mode() & 0o111 == 0 {
         bail!(
-            "minitrue precisa ser arquivo regular executável: {}",
+            "o snapshot exige arquivo regular executável: {}",
             path.display()
         );
     }
@@ -78,6 +79,47 @@ fn snapshot_executable(path: &Path) -> Result<(ExecutableSnapshot, String)> {
     let snapshot = ExecutableSnapshot { file };
     let hash = sha256_file(&snapshot.path())?;
     Ok((snapshot, hash))
+}
+
+fn persist_executor(snapshot: &ExecutableSnapshot, target: &Path, name: &str) -> Result<()> {
+    let destination = target.join("usr/bin").join(name);
+    let parent = destination
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("executor sem diretório pai"))?;
+    crate::ensure_real_dir(parent, "diretório de executores instalados")?;
+    match fs::symlink_metadata(&destination) {
+        Ok(metadata)
+            if metadata.file_type().is_file()
+                && metadata.nlink() == 1
+                && sha256_file(&destination)? == sha256_file(&snapshot.path())? =>
+        {
+            if metadata.permissions().mode() & 0o7777 != 0o755 {
+                fs::set_permissions(&destination, fs::Permissions::from_mode(0o755))?;
+            }
+            return Ok(());
+        }
+        Ok(_) => bail!(
+            "executor instalado diverge ou não é arquivo regular sem hardlinks: {}",
+            destination.display()
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let temporary = temporary_sibling(&destination)?;
+    if fs::symlink_metadata(&temporary).is_ok() {
+        bail!("temporário já existe: {}", temporary.display());
+    }
+    let mut source = fs::File::open(snapshot.path())?;
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o755)
+        .open(&temporary)?;
+    std::io::copy(&mut source, &mut output)?;
+    output.sync_all()?;
+    fs::set_permissions(&temporary, fs::Permissions::from_mode(0o755))?;
+    crate::publish_noreplace(&temporary, &destination)?;
+    Ok(())
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
@@ -393,8 +435,13 @@ fn run_minitrue(
     if options.offline {
         command.arg("--offline");
     }
-    if options.from_source {
-        command.arg("--no-binary");
+    if arguments.first() == Some(&"rectify") {
+        if options.from_source {
+            command.arg("--no-binary");
+        }
+        if options.only_binary {
+            command.arg("--only-binary");
+        }
     }
     command.args(arguments);
     let status = command.status().context("não consegui executar minitrue")?;
@@ -405,21 +452,37 @@ fn run_minitrue(
 }
 
 pub fn install(profile: &ResolvedProfile, options: &InstallOptions) -> Result<()> {
+    if options.from_source && options.only_binary {
+        bail!("--from-source e --only-binary são mutuamente exclusivos");
+    }
     if !profile.install_ready {
         bail!(
             "o perfil {} declara INSTALL_READY=no; faltam os canais/toolchain necessários para materializar um target vazio",
             profile.name
         );
     }
-    let target = prepare_target(options)?;
-    let minitrue_source = minitrue_path(&options.minitrue)?;
-    let (minitrue_snapshot, minitrue_hash) = snapshot_executable(&minitrue_source)?;
-    let minipax_hash = sha256_file(&std::env::current_exe()?)?;
     let artifacts = profile.artifacts()?;
     let packages = artifacts.target_world.lines().collect::<Vec<_>>();
     if packages.is_empty() {
         bail!("target.world não pode ser vazio");
     }
+    if options.offline && profile.cache_is_channel_bootstrap {
+        bail!(
+            "instalação --offline exige --cache DIR completo; channel-bootstrap/ contém apenas metadados"
+        );
+    }
+    if options.offline && artifacts.cache_entries.is_empty() {
+        bail!("instalação --offline exige --cache DIR não vazio");
+    }
+    if options.only_binary && !options.offline {
+        tree::validate_channel_bootstrap(&artifacts.cache_entries).context(
+            "instalação online --only-binary exige bootstrap de canal fechado no perfil",
+        )?;
+    }
+    let target = prepare_target(options)?;
+    let minitrue_source = minitrue_path(&options.minitrue)?;
+    let (minitrue_snapshot, minitrue_hash) = snapshot_executable(&minitrue_source)?;
+    let (minipax_snapshot, minipax_hash) = snapshot_executable(&std::env::current_exe()?)?;
     let install_class = if artifacts.class == "official-inputs"
         && profile.official_minitrue_sha256.as_deref() == Some(minitrue_hash.as_str())
     {
@@ -430,7 +493,7 @@ pub fn install(profile: &ResolvedProfile, options: &InstallOptions) -> Result<()
         "custom"
     };
     let manifest = format!(
-        "INSTALL_MANIFEST_FORMAT=1\nPROFILE_LOCK_SHA256={}\nPROFILE_NAME={}\nPROFILE_CLASS={}\nINSTALL_CLASS={}\nARCH={}\nOVERLAY_SHA256={}\nMINITRUE_SHA256={}\nMINIPAX_VERSION={}\nMINIPAX_EXECUTABLE_SHA256={}\nOFFLINE={}\nFROM_SOURCE={}\n",
+        "INSTALL_MANIFEST_FORMAT=1\nPROFILE_LOCK_SHA256={}\nPROFILE_NAME={}\nPROFILE_CLASS={}\nINSTALL_CLASS={}\nARCH={}\nOVERLAY_SHA256={}\nMINITRUE_SHA256={}\nMINITRUE_INSTALLED_PATH=/usr/bin/minitrue\nMINIPAX_VERSION={}\nMINIPAX_EXECUTABLE_SHA256={}\nMINIPAX_INSTALLED_PATH=/usr/bin/minipax\nOFFLINE={}\nFROM_SOURCE={}\nONLY_BINARY={}\n",
         artifacts.lock_hash,
         profile.name,
         artifacts.class,
@@ -442,10 +505,8 @@ pub fn install(profile: &ResolvedProfile, options: &InstallOptions) -> Result<()
         minipax_hash,
         options.offline,
         options.from_source,
+        options.only_binary,
     );
-    if options.offline && artifacts.cache_entries.is_empty() {
-        bail!("instalação --offline exige --cache DIR não vazio");
-    }
     let state = target.join("var/lib/minipax");
     let committed = state.join("profile.lock");
     let pending = state.join("profile.lock.pending");
@@ -526,6 +587,11 @@ pub fn install(profile: &ResolvedProfile, options: &InstallOptions) -> Result<()
         options,
         profile.epoch,
     )?;
+    // O sistema resultante precisa conseguir continuar a se retificar depois
+    // do primeiro reboot. Persistimos exatamente os dois snapshots medidos,
+    // sem reler executáveis mutáveis do host entre hash e cópia.
+    persist_executor(&minitrue_snapshot, &target, "minitrue")?;
+    persist_executor(&minipax_snapshot, &target, "minipax")?;
     if existing_manifest.is_none() {
         write_new(&manifest_path, manifest.as_bytes())?;
     }
@@ -547,6 +613,31 @@ mod tests {
     use super::*;
     use crate::profile::ProfileOverrides;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn persist_executor_restaura_modo_executavel_no_fast_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("executor-source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(target.join("usr/bin")).unwrap();
+        fs::write(&source, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).unwrap();
+        let (snapshot, _) = snapshot_executable(&source).unwrap();
+
+        let installed = target.join("usr/bin/minitrue");
+        fs::write(&installed, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&installed, fs::Permissions::from_mode(0o644)).unwrap();
+        persist_executor(&snapshot, &target, "minitrue").unwrap();
+
+        assert_eq!(
+            fs::symlink_metadata(installed)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o755
+        );
+    }
 
     #[test]
     fn install_invoca_mesmo_world_e_recusa_target_sujo() {
@@ -584,13 +675,69 @@ mod tests {
             },
         )
         .unwrap();
+        let sem_canal = temp.path().join("sem-canal");
+        assert!(install(
+            &profile,
+            &InstallOptions {
+                target: sem_canal.clone(),
+                minitrue: Some(fake.clone()),
+                offline: false,
+                from_source: false,
+                only_binary: true,
+                resume: false,
+            },
+        )
+        .is_err());
+        assert!(
+            !sem_canal.exists(),
+            "gate de canal precisa ocorrer antes de criar/tocar o target"
+        );
+
+        let bootstrap = profile_dir.join("channel-bootstrap");
+        fs::create_dir_all(bootstrap.join("channel-config")).unwrap();
+        fs::create_dir_all(bootstrap.join("channels/oficial")).unwrap();
+        fs::write(bootstrap.join("channel-config/oficial"), b"config\n").unwrap();
+        fs::write(bootstrap.join("channels/oficial/index"), b"index\n").unwrap();
+        fs::write(
+            bootstrap.join("channels/oficial/index.minisig"),
+            b"assinatura\n",
+        )
+        .unwrap();
+        let bootstrap_profile = ResolvedProfile::load(
+            &profile_dir,
+            ProfileOverrides {
+                newspeak: Some(temp.path().join("newspeak")),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let bootstrap_offline = temp.path().join("bootstrap-offline");
+        let error = install(
+            &bootstrap_profile,
+            &InstallOptions {
+                target: bootstrap_offline.clone(),
+                minitrue: Some(fake.clone()),
+                offline: true,
+                from_source: false,
+                only_binary: true,
+                resume: false,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("apenas metadados"));
+        assert!(
+            !bootstrap_offline.exists(),
+            "bootstrap online não pode preparar um target offline"
+        );
+
         install(
             &profile,
             &InstallOptions {
                 target: target.clone(),
-                minitrue: Some(fake),
+                minitrue: Some(fake.clone()),
                 offline: false,
                 from_source: true,
+                only_binary: false,
                 resume: false,
             },
         )
@@ -600,6 +747,11 @@ mod tests {
         assert!(calls.contains("var/lib/minitrue/newspeak|10|--root"));
         assert!(calls.contains("--no-binary rectify a z"));
         assert!(target.join("var/lib/minipax/profile.lock").is_file());
+        assert_eq!(
+            fs::read(target.join("usr/bin/minitrue")).unwrap(),
+            fs::read(&fake).unwrap()
+        );
+        assert!(target.join("usr/bin/minipax").is_file());
         assert!(target.join("sys").is_dir());
 
         fs::copy(
@@ -612,6 +764,7 @@ mod tests {
             minitrue: None,
             offline: false,
             from_source: false,
+            only_binary: false,
             resume: true,
         })
         .is_err());
@@ -624,6 +777,7 @@ mod tests {
             minitrue: None,
             offline: false,
             from_source: false,
+            only_binary: false,
             resume: false,
         };
         assert!(prepare_target(&options).is_err());
@@ -637,6 +791,7 @@ mod tests {
                 minitrue: None,
                 offline: false,
                 from_source: false,
+                only_binary: false,
                 resume: false,
             },
         )

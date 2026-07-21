@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use minipax::install::{self, InstallOptions};
 use minipax::media::{self, MediaFormat, MediaMode, MediaOptions};
+use minipax::media_install::{self, MediaInstallOptions};
 use minipax::profile::{ProfileOverrides, ResolvedProfile};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -9,6 +10,7 @@ const USAGE: &str = r#"minipax — o Ministério da Paz
 
 uso:
   minipax install --target DIR --profile DIR [opções]
+  minipax install-media --source DIR --target DIR [opções]
   minipax media build --profile DIR --mode online|offline \
       --format img|iso --boot-efi ARQ --output ARQ [opções]
   minipax lock --profile DIR [opções]
@@ -18,16 +20,18 @@ opções de perfil:
   --live-world ARQ  substitui live.world e torna o perfil custom
   --overlay DIR     substitui overlay/ e torna o perfil custom
   --newspeak DIR    árvore de receitas (ou DISTROPICA_NEWSPEAK)
-  --cache DIR       cache fechado; obrigatório no modo offline
+  --cache DIR       offline: cache fechado; online: config+índice de canal
 
 opções de instalação:
   --minitrue ARQ    binário minitrue (ou MINITRUE)
   --offline         proíbe rede durante fetch
-  --from-source     não aceita futuros binários de canal
+  --from-source     não aceita binários de canal
+  --only-binary     exige canal para todo pacote-fonte
   --resume          permite continuar apenas um target marcado pelo minipax
+  --export-boot-efi ARQ  install-media: exporta o EFI do snapshot validado
 
-`--target` nunca particiona. Escrita destrutiva em disco será um comando
-separado e exigirá confirmação explícita."#;
+`--target` nunca particiona. A escrita destrutiva em disco pertence ao
+instalador da mídia viva e exige alvo resolvido e confirmação explícita."#;
 
 #[derive(Default)]
 struct Common {
@@ -57,6 +61,7 @@ fn run() -> Result<()> {
     let command = args.remove(0);
     match command.as_str() {
         "install" => run_install(args),
+        "install-media" => run_install_media(args),
         "media" => {
             if args.first().map(String::as_str) != Some("build") {
                 bail!("media exige o subcomando build\n\n{USAGE}");
@@ -67,6 +72,55 @@ fn run() -> Result<()> {
         "lock" => run_lock(args),
         other => bail!("comando desconhecido {other:?}\n\n{USAGE}"),
     }
+}
+
+fn run_install_media(args: Vec<String>) -> Result<()> {
+    let mut source = None;
+    let mut target = None;
+    let mut minitrue = None;
+    let mut offline = false;
+    let mut from_source = false;
+    let mut only_binary = false;
+    let mut resume = false;
+    let mut export_boot_efi = None;
+    let mut seen = HashSet::new();
+    let mut index = 0;
+    while index < args.len() {
+        let option = args[index].as_str();
+        if !seen.insert(option.to_string()) {
+            bail!("opção repetida {option:?}");
+        }
+        match option {
+            "--source" => source = Some(take_value(&args, &mut index, option)?.into()),
+            "--target" => target = Some(take_value(&args, &mut index, option)?.into()),
+            "--minitrue" => minitrue = Some(take_value(&args, &mut index, option)?.into()),
+            "--offline" => offline = true,
+            "--from-source" => from_source = true,
+            "--only-binary" => only_binary = true,
+            "--resume" => resume = true,
+            "--export-boot-efi" => {
+                export_boot_efi = Some(take_value(&args, &mut index, option)?.into())
+            }
+            other => bail!("opção desconhecida {other:?}"),
+        }
+        index += 1;
+    }
+    let source = source.ok_or_else(|| anyhow::anyhow!("--source é obrigatório"))?;
+    let target = target.ok_or_else(|| anyhow::anyhow!("--target é obrigatório"))?;
+    let minitrue = minitrue.or_else(|| std::env::var_os("MINITRUE").map(PathBuf::from));
+    if from_source && only_binary {
+        bail!("--from-source e --only-binary são mutuamente exclusivos");
+    }
+    media_install::install_media(&MediaInstallOptions {
+        source,
+        target,
+        minitrue,
+        offline,
+        from_source,
+        only_binary,
+        resume,
+        export_boot_efi,
+    })
 }
 
 fn take_value(args: &[String], index: &mut usize, option: &str) -> Result<String> {
@@ -105,7 +159,10 @@ fn parse_common(args: &[String], accepted: &[&str]) -> Result<ParsedArgs> {
                 common.overrides.cache = Some(take_value(args, &mut index, option)?.into())
             }
             value if accepted.contains(&value) => {
-                if matches!(value, "--offline" | "--from-source" | "--resume") {
+                if matches!(
+                    value,
+                    "--offline" | "--from-source" | "--only-binary" | "--resume"
+                ) {
                     flags.push(value.to_string());
                 } else {
                     let argument = take_value(args, &mut index, value)?;
@@ -155,6 +212,7 @@ fn run_install(args: Vec<String>) -> Result<()> {
         "--minitrue",
         "--offline",
         "--from-source",
+        "--only-binary",
         "--resume",
     ];
     let ParsedArgs {
@@ -171,13 +229,19 @@ fn run_install(args: Vec<String>) -> Result<()> {
     };
     let target = value("--target").ok_or_else(|| anyhow::anyhow!("--target é obrigatório"))?;
     let minitrue = value("--minitrue").or_else(|| std::env::var_os("MINITRUE").map(PathBuf::from));
+    let from_source = flags.iter().any(|flag| flag == "--from-source");
+    let only_binary = flags.iter().any(|flag| flag == "--only-binary");
+    if from_source && only_binary {
+        bail!("--from-source e --only-binary são mutuamente exclusivos");
+    }
     install::install(
         &profile,
         &InstallOptions {
             target,
             minitrue,
             offline: flags.iter().any(|flag| flag == "--offline"),
-            from_source: flags.iter().any(|flag| flag == "--from-source"),
+            from_source,
+            only_binary,
             resume: flags.iter().any(|flag| flag == "--resume"),
         },
     )

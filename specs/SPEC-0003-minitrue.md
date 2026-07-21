@@ -23,8 +23,9 @@ delegados a `sh` e `tar` (busybox).
 ```
 minitrue rectify   <pacote>…      instala/atualiza; acrescenta ao world (§2)
 minitrue rectify   --sync         converge o sistema ao world inteiro (§2)
-minitrue rectify   --emit <pkg>   mantenedor: empacota o STAGE como artefato
-                                  de canal, imprime os hashes (SPEC-0009 §4)
+minitrue channel emit --output DIR <pkg>…
+                                  mantenedor: emite pool + índice de canal
+                                  não assinado (SPEC-0009 §4)
 minitrue rollback  <pacote> [<v>] mundo A: volta o current à versão retida (§5)
 minitrue unperson  <pacote>…      mundo A: some dos registros, fica em /opt (§5)
 minitrue memoryhole <pacote>…     remove do sistema e do world; --orfaos:
@@ -36,7 +37,8 @@ minitrue newspeak  <pacote>       imprime a receita efetiva e sua origem
 minitrue explain   <caminho>      de quem é o arquivo e toda a sua proveniência (§6)
 minitrue why       <pacote>       por que este pacote está no sistema (§6)
 minitrue lint      [<árvore>]     valida a árvore newspeak (SPEC-0004 §6)
-minitrue channel   <sub>          add|remove|list|refresh de canais (SPEC-0009 §7)
+minitrue channel   <sub>          add|remove|list|refresh de canais (norma futura;
+                                  a configuração atual é por arquivos, SPEC-0009 §7)
 minitrue pack      <dir> [saída]  tar normalizado determinístico + sha256 (SPEC-0010 §4)
 minitrue attest keygen <nome> <chave> gera chave ed25519 de builder (SPEC-0009 §8.1)
 minitrue attest <pkg> <builder> <chave> emite attestation assinada
@@ -45,9 +47,10 @@ minitrue corroborate <pkg>        confere attestations contra a identidade insta
 
 Esta é a interface normativa. No protótipo atual estão implementados
 `rectify <pkg>`, `memoryhole`, `archives`, `verify`, `newspeak`, `explain`,
-`why`, `pack`, `attest` e `corroborate`; `--sync`, `--emit`, rollback,
-`unperson`, `lint`, canais e as variantes de remoção/varredura acima continuam
-no Marco 0.2 (ver `STATUS.md`).
+`why`, `pack`, `attest`, `corroborate`, o consumo de canais assinados e
+`channel emit`; `--sync`, rollback, `unperson`, `lint`, a CLI de gestão
+`channel add|remove|list|refresh` e as variantes de remoção/varredura acima
+continuam no Marco 0.2 (ver `STATUS.md`).
 
 Opções globais:
 
@@ -56,9 +59,35 @@ Opções globais:
 | `--root <dir>` | opera sobre outro rootfs (Estágio 0 popula o chroot assim); env `MINITRUE_ROOT` |
 | `--jobs N` | paralelismo passado aos builds (`$JOBS`); default: nproc |
 | `--offline` | proíbe rede; só aceita artefato já presente no cache |
-| `--no-binary` / `--only-binary` | norma futura: força build de fonte / proíbe o fallback de fonte (SPEC-0009 §5); ainda não implementada |
+| `--no-binary` / `--only-binary` | força build de fonte / exige artefato aceitável de canal e proíbe fallback de fonte (SPEC-0009 §5); ambas implementadas e mutuamente exclusivas |
 | `NEWSPEAK_PATH` (env ou `conf`) | árvores de receitas separadas por `:`, em ordem de precedência — a primeira ocorrência do pacote vence (herança `KISS_PATH`); default `/var/lib/minitrue/newspeak` |
 | `--tofu` | permite receita sem `SHA256`: baixa, calcula, imprime a linha `SHA256=…` pronta para colar, instala com aviso gritante. Se a receita pina `SIGKEY`, a assinatura continua obrigatória mesmo em TOFU — é o que torna a repinagem de versão segura. NÃO DEVE existir em builds de release da ferramenta destinados a usuários finais. É a única exceção a P6, e reconciliada lá: o TOFU **cria** o pino (aid de autoria), não o dispensa — SPEC-0001 P6 |
+
+### Canais binários — contrato implementado
+
+O consumidor atual lê configurações estritas sob `/etc/minitrue/channels/` ou,
+quando esse diretório administrativo não existe, a semente em
+`/var/cache/minitrue/channel-config/`. A existência do diretório
+administrativo é autoritativa: vazio, ele desativa todos os canais sem
+reativar silenciosamente a semente. Cada configuração prende URL HTTPS, chave
+minisign, prioridade e confiança.
+
+O índice canônico **v2** assinado autentica, por linha,
+`NAME VERSION ARCH RECIPE_FINGERPRINT PATH SHA256 [REPROCORR]`. A seleção só
+aceita versão, arquitetura e fingerprint iguais à receita efetiva, verifica a
+assinatura também em cache-hit/offline, baixa o `.tar.zst` pelo hash de
+transporte e valida limites, topologia e hash do tar interno antes de qualquer
+aplicação. A escolha fica congelada num `CHANNEL_LOCK_FORMAT=2`, endereçado por
+hash sob `/var/lib/minitrue/channel-locks/`; o registro conserva caminho,
+hashes e confiança, e `verify` coteja esses campos semanticamente com o lock.
+
+`channel emit` produz artefatos, índice v2 e `emit.meta` com
+`CHANNEL_EMIT_FORMAT=2`, mas **não assina nem publica**. Para registros vindos
+de canal, reutiliza o tar autenticado do cache; para registros locais, só
+reconstrói quando consegue provar topologia, metadados e `ARTIFACT_HASH`, e
+falha fechado na ambiguidade. Um release DEVE emitir junto do build, assinar o
+índice externamente e conservar o artefato autenticado. O projeto ainda não
+publicou URL, chave, índice nem pool de um canal oficial.
 
 ### O arquivo `world` (`/etc/minitrue/world`)
 
@@ -72,7 +101,8 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
   world nem ser dependência de quem consta. Órfão NUNCA é removido
   automaticamente; `memoryhole --orfaos` remove sob ordem explícita.
 - `unperson` não altera o world: a intenção permanece, o corpo está lá.
-- Reinstalar uma máquina = `minipax --world <arquivo>` (SPEC-0008).
+- Reinstalar uma máquina = `minipax install --profile <perfil> --newspeak
+  <árvore> --world <arquivo> --target <raiz>` (SPEC-0008).
 - A dualidade que organiza a ferramenta: **o registro é o fato; o world é
   a intenção.** `verify` confere fatos; `--sync` reconcilia a intenção.
 
@@ -87,9 +117,12 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
 2. **Pré-condições**: `REQUIRES_GLIBC=1` e ausência de
    `/usr/lib/ld-linux-x86-64.so.2` ⇒ erro 5 com mensagem indicando o
    Estágio 2 (SPEC-0005).
-3. **Dependências** (`DEPS`): resolução por busca em profundidade com
-   detecção de ciclo; instala o que falta, na ordem. Sem comparação de
-   versões — a árvore newspeak em um commit é o conjunto consistente.
+3. **Dependências**: resolução por busca em profundidade com detecção de ciclo;
+   instala o que falta, na ordem. Sem comparação de versões — a árvore
+   newspeak em um commit é o conjunto consistente. Para uma receita mundo B,
+   a seleção de canal ocorre antes de expandir `BUILD_DEPS`: se um artefato é
+   escolhido, apenas as `DEPS` de runtime entram no plano; `--no-binary` ou o
+   fallback de fonte expandem também as dependências de build.
 4. **Fetch**: para cada URL de `SRC`, baixar para
    `/var/cache/minitrue/<sha256>` (nome do arquivo no cache = hash
    esperado). Se já existe com hash válido, rede não é tocada.
@@ -112,15 +145,14 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
      `PREFIX=/opt/<nome>/<versão>.tmp`; sucesso ⇒ rename atômico para
      `/opt/<nome>/<versão>`, flip do symlink `current`, criação dos links
      de comando (`LINKS`) em `/usr/bin`.
-   - **Mundo B** (`KIND=source`): na norma futura, antes de compilar consulta os
-     canais binários (SPEC-0009) por um binário pré-buildado da versão da receita;
-     havendo um aceitável, o instala **como mundo B pré-buildado** — mesmo
-     *fetch* de um tarball passivo (baixa/verifica/extrai), mas layout mundo
-     B (árvore em `/usr`, `/etc`→factory, manifesto plano, `WORLD=B`), **não**
-     em `/opt` — e o `build()` não roda (SPEC-0009 §4). Canais ainda não estão
-     implementados; o fluxo atual executa `build()` com
-     `STAGE=` (DESTDIR)
-     em diretório temporário; sucesso ⇒ checagem de colisão (§7) ⇒ cópia
+   - **Mundo B** (`KIND=source`): antes de compilar consulta os canais binários
+     (SPEC-0009) por um artefato da identidade exata da receita. Havendo um
+     aceitável, instala-o **como mundo B pré-buildado** — tarball passivo já
+     autenticado, layout em `/usr`, `/etc`→factory, manifesto plano e
+     `WORLD=B`, **não** em `/opt` — e não executa `build()`. `--only-binary`
+     torna a ausência desse artefato um erro; `--no-binary` pula a consulta.
+     Sem seleção de canal, o fluxo executa `build()` com `STAGE=` (DESTDIR) em
+     diretório temporário; sucesso ⇒ checagem de colisão (§7) ⇒ cópia
      para `/`; se já havia versão anterior, caminhos órfãos do manifesto
      antigo são removidos após a cópia (upgrade = instalar novo + varrer
      sobras). Conteúdo de `etc/` no staging **não vai para `/etc`**: é
@@ -198,7 +230,8 @@ Três papéis, persistidos em cinco folhas (`meta`, `manifest`,
   **`ORIGIN`** é de
   onde veio o artefato — `vendor` (mundo A),
   `fonte` (mundo B compilado localmente) ou `canal:<nome>` quando os canais
-  (SPEC-0009 §8) o instalam, caso em que `TRUST=` e `CHANNEL_SHA256=` também
+  (SPEC-0009 §8) o instalam, caso em que `TRUST=`, `CHANNEL_PATH=`,
+  `CHANNEL_SHA256=`, `CHANNEL_INDEX_SHA256=` e `CHANNEL_LOCK_SHA256=` também
   entram.
   O **`FINGERPRINT`** é a identidade de build (SPEC-0011 §4): sha256 do
   arquivo `recipe` inteiro + do `files/` (via o `pack` determinístico),
@@ -284,7 +317,15 @@ Toda mutação do Journal valida também ancestrais: symlink relativo do
 usr-merge é aceito se resolver dentro do rootfs; symlink que resolve para fora,
 dangling ou ancestral não-diretório falha antes da mutação. Inspeção e remoção
 destrutiva usam resolução fd-relative confinada no kernel
-  (`openat2(RESOLVE_IN_ROOT|RESOLVE_NO_MAGICLINKS)`).
+(`openat2(RESOLVE_IN_ROOT|RESOLVE_NO_MAGICLINKS)`).
+
+**Limite de concorrência hostil:** as mutações do Journal ainda voltam a operar
+por caminhos depois desse preflight. A trava `flock` abaixo coordena instâncias
+cooperativas do Minitrue, mas não impede outro processo privilegiado de trocar
+um ancestral na janela validação→uso. Portanto, o contrato atual exige controle
+administrativo exclusivo do rootfs durante a mutação e não promete defesa
+contra esse TOCTOU. Migrar criação, rename, backup, chmod e rollback por inteiro
+para descritores fd-relative confinados é gate de release.
 
 O STAGE não pode ocupar o plano de controle (`/var/lib/minitrue`,
 `/var/cache/minitrue`, `/etc/minitrue`) nem workspaces `minitrue-{build,work}-*`;

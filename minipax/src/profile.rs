@@ -42,6 +42,9 @@ pub struct ResolvedProfile {
     pub overlay_path: Option<PathBuf>,
     pub newspeak_path: PathBuf,
     pub cache_path: Option<PathBuf>,
+    /// `true` somente para o `channel-bootstrap/` autodetectado no perfil.
+    /// Ele fecha descoberta online, mas não é um cache offline completo.
+    pub cache_is_channel_bootstrap: bool,
     pub customized: bool,
 }
 
@@ -227,9 +230,11 @@ impl ResolvedProfile {
         if status == ProfileStatus::Release && !install_ready {
             bail!("STATUS=release exige INSTALL_READY=yes");
         }
+        let explicit_cache = overrides.cache.is_some();
         let customized = overrides.target_world.is_some()
             || overrides.live_world.is_some()
-            || overrides.overlay.is_some();
+            || overrides.overlay.is_some()
+            || explicit_cache;
         let target_world_path = overrides
             .target_world
             .unwrap_or_else(|| directory.join("target.world"));
@@ -246,13 +251,24 @@ impl ResolvedProfile {
             .newspeak
             .or_else(|| std::env::var_os("DISTROPICA_NEWSPEAK").map(PathBuf::from))
             .ok_or_else(|| anyhow::anyhow!("--newspeak ou DISTROPICA_NEWSPEAK é obrigatório"))?;
+        // Um perfil pode versionar apenas o bootstrap do canal. Ele usa o
+        // mesmo snapshot de cache (e portanto o mesmo CACHE_SHA256 do lock),
+        // mas mídias online o restringem estruturalmente a config+índice
+        // assinado. `--cache` continua vencendo para builds custom/offline.
+        let cache_path = overrides.cache.or_else(|| {
+            directory
+                .join("channel-bootstrap")
+                .is_dir()
+                .then(|| directory.join("channel-bootstrap"))
+        });
+        let cache_is_channel_bootstrap = cache_path.is_some() && !explicit_cache;
         crate::ensure_real_file(&target_world_path, "target.world")?;
         crate::ensure_real_file(&live_world_path, "live.world")?;
         crate::ensure_real_dir(&newspeak_path, "árvore newspeak")?;
         if let Some(path) = &overlay_path {
             crate::ensure_real_dir(path, "overlay")?;
         }
-        if let Some(path) = &overrides.cache {
+        if let Some(path) = &cache_path {
             crate::ensure_real_dir(path, "cache")?;
         }
         Ok(Self {
@@ -270,7 +286,8 @@ impl ResolvedProfile {
             live_world_path,
             overlay_path,
             newspeak_path,
-            cache_path: overrides.cache,
+            cache_path,
+            cache_is_channel_bootstrap,
             customized,
         })
     }
@@ -436,6 +453,38 @@ mod tests {
         )
         .unwrap();
         assert_eq!(profile.artifacts().unwrap().class, "custom");
+    }
+
+    #[test]
+    fn bootstrap_de_canal_versionado_entra_no_lock_do_perfil() {
+        let temp = fixture();
+        let bootstrap = temp.path().join("channel-bootstrap");
+        fs::create_dir_all(bootstrap.join("channel-config")).unwrap();
+        fs::create_dir_all(bootstrap.join("channels/oficial")).unwrap();
+        fs::write(bootstrap.join("channel-config/oficial"), b"config\n").unwrap();
+        fs::write(bootstrap.join("channels/oficial/index"), b"index-a\n").unwrap();
+        fs::write(
+            bootstrap.join("channels/oficial/index.minisig"),
+            b"assinatura\n",
+        )
+        .unwrap();
+        let load = || {
+            ResolvedProfile::load(
+                temp.path(),
+                ProfileOverrides {
+                    newspeak: Some(temp.path().join("newspeak")),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let profile = load();
+        assert_eq!(profile.cache_path.as_deref(), Some(bootstrap.as_path()));
+        let first = profile.lock().unwrap();
+        assert!(!first.contains("CACHE_SHA256=-\n"));
+
+        fs::write(bootstrap.join("channels/oficial/index"), b"index-b\n").unwrap();
+        assert_ne!(first, load().lock().unwrap());
     }
 
     #[test]

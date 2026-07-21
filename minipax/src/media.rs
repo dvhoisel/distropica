@@ -1,4 +1,5 @@
-use crate::profile::{write_new, ResolvedProfile};
+use crate::profile::{write_new, ProfileStatus, ResolvedProfile};
+use crate::tree;
 use anyhow::{bail, Context, Result};
 use crc32fast::Hasher as Crc32;
 use fatfs::{
@@ -117,7 +118,7 @@ fn payload_hash(files: &[PayloadFile]) -> String {
     hex::encode(hasher.finalize())
 }
 
-fn validate_boot_efi(bytes: &[u8]) -> Result<()> {
+pub(crate) fn validate_boot_efi(bytes: &[u8]) -> Result<()> {
     if bytes.len() < 0x40 || &bytes[..2] != b"MZ" {
         bail!("BOOTX64.EFI não possui cabeçalho PE/COFF (MZ)");
     }
@@ -185,6 +186,43 @@ fn media_meta(
     )
 }
 
+pub(crate) fn canonical_profile(profile: &ResolvedProfile) -> Vec<u8> {
+    let mut config = format!(
+        "PROFILE_FORMAT=1\nNAME={}\nARCH={}\nSOURCE_DATE_EPOCH={}\nMEDIA_SIZE_MIB={}\nINSTALL_READY={}\nSTATUS={}\n",
+        profile.name,
+        profile.arch,
+        profile.epoch,
+        profile.media_size_mib,
+        if profile.install_ready { "yes" } else { "no" },
+        match profile.status {
+            ProfileStatus::Development => "development",
+            ProfileStatus::Release => "release",
+        },
+    );
+    for (name, value) in [
+        (
+            "OFFICIAL_CONTENT_SHA256",
+            profile.official_content_sha256.as_deref(),
+        ),
+        (
+            "OFFICIAL_BOOT_EFI_SHA256",
+            profile.official_boot_efi_sha256.as_deref(),
+        ),
+        (
+            "OFFICIAL_MINITRUE_SHA256",
+            profile.official_minitrue_sha256.as_deref(),
+        ),
+    ] {
+        if let Some(value) = value {
+            config.push_str(name);
+            config.push('=');
+            config.push_str(value);
+            config.push('\n');
+        }
+    }
+    config.into_bytes()
+}
+
 fn payload(
     profile: &ResolvedProfile,
     options: &MediaOptions,
@@ -198,14 +236,25 @@ fn payload(
         bail!("BOOTX64.EFI excede o limite de 256 MiB deste marco");
     }
     validate_boot_efi(&boot)?;
+    let profile_config = canonical_profile(profile);
+    if options.mode == MediaMode::Offline && profile.cache_is_channel_bootstrap {
+        bail!(
+            "modo offline exige --cache DIR completo; channel-bootstrap/ contém apenas metadados"
+        );
+    }
     let artifacts = profile.artifacts()?;
     match (options.mode, artifacts.cache_tar.as_ref()) {
         (MediaMode::Offline, None) => bail!("modo offline exige --cache DIR"),
         (MediaMode::Offline, Some(_)) if artifacts.cache_entries.is_empty() => {
             bail!("modo offline exige --cache DIR não vazio")
         }
+        (MediaMode::Online, None) => {
+            bail!(
+                "modo online exige channel-bootstrap/ no perfil ou --cache DIR com config e índice assinado"
+            )
+        }
         (MediaMode::Online, Some(_)) => {
-            bail!("modo online não aceita --cache; remova-o ou use --mode offline")
+            tree::validate_channel_bootstrap(&artifacts.cache_entries)?;
         }
         _ => {}
     }
@@ -236,6 +285,10 @@ fn payload(
         PayloadFile {
             path: "distropica/profile.lock".into(),
             bytes: artifacts.lock.as_bytes().to_vec(),
+        },
+        PayloadFile {
+            path: "distropica/profile".into(),
+            bytes: profile_config,
         },
         PayloadFile {
             path: "distropica/live.world".into(),
@@ -915,6 +968,16 @@ mod tests {
         .unwrap();
         fs::write(profile_dir.join("target.world"), "base\n").unwrap();
         fs::write(profile_dir.join("live.world"), "busybox\n").unwrap();
+        let bootstrap = profile_dir.join("channel-bootstrap");
+        fs::create_dir_all(bootstrap.join("channel-config")).unwrap();
+        fs::create_dir_all(bootstrap.join("channels/oficial")).unwrap();
+        fs::write(bootstrap.join("channel-config/oficial"), b"config\n").unwrap();
+        fs::write(bootstrap.join("channels/oficial/index"), b"index\n").unwrap();
+        fs::write(
+            bootstrap.join("channels/oficial/index.minisig"),
+            b"assinatura\n",
+        )
+        .unwrap();
         fs::create_dir(newspeak.join("base")).unwrap();
         fs::write(newspeak.join("base/recipe"), "NAME=base\n").unwrap();
         let efi = temp.path().join("BOOTX64.EFI");
@@ -975,6 +1038,15 @@ mod tests {
         let mut bytes = Vec::new();
         boot.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, fake_efi());
+        let mut embedded_profile = filesystem
+            .root_dir()
+            .open_file("distropica/profile")
+            .unwrap();
+        let mut embedded_profile_bytes = Vec::new();
+        embedded_profile
+            .read_to_end(&mut embedded_profile_bytes)
+            .unwrap();
+        assert_eq!(embedded_profile_bytes, canonical_profile(&profile));
 
         let mut other_efi = fake_efi();
         other_efi[511] = 1;
@@ -1003,6 +1075,21 @@ mod tests {
     #[test]
     fn offline_exige_cache_e_saida_nao_e_sobrescrita() {
         let (temp, mut profile, efi) = profile_fixture();
+        let bootstrap_as_offline = temp.path().join("bootstrap-nao-e-offline.img");
+        assert!(build(
+            &profile,
+            &MediaOptions {
+                mode: MediaMode::Offline,
+                format: MediaFormat::Img,
+                boot_efi: efi.clone(),
+                output: bootstrap_as_offline.clone(),
+            },
+        )
+        .is_err());
+        assert!(!bootstrap_as_offline.exists());
+
+        profile.cache_path = None;
+        profile.cache_is_channel_bootstrap = false;
         let output = temp.path().join("x.img");
         let options = MediaOptions {
             mode: MediaMode::Offline,
@@ -1011,10 +1098,23 @@ mod tests {
             output: output.clone(),
         };
         assert!(build(&profile, &options).is_err());
+        let online_without_channel = temp.path().join("online-sem-canal.img");
+        assert!(build(
+            &profile,
+            &MediaOptions {
+                mode: MediaMode::Online,
+                format: MediaFormat::Img,
+                boot_efi: efi.clone(),
+                output: online_without_channel.clone(),
+            },
+        )
+        .is_err());
+        assert!(!online_without_channel.exists());
 
         let empty_cache = temp.path().join("empty-cache");
         fs::create_dir(&empty_cache).unwrap();
         profile.cache_path = Some(empty_cache);
+        profile.cache_is_channel_bootstrap = false;
         assert!(build(
             &profile,
             &MediaOptions {

@@ -1,6 +1,6 @@
 # SPEC-0010 — Builds, sistemas e mídias reprodutíveis
 
-**Status:** rascunho v0.1 · 2026-07-19
+**Status:** implementação parcial v0.2 · 2026-07-21
 **Depende de:** SPEC-0003 (minitrue), SPEC-0004 (newspeak), SPEC-0008
 (minipax), SPEC-0009 (canais).
 
@@ -26,7 +26,7 @@ saída posterior de reprodutível. O projeto distingue os níveis abaixo:
 | **R2 — sistema declarado** | `profile.lock`: worlds, Newspeak, overlay, cache, arquitetura, epoch, tamanho de mídia e prontidão de instalação | implementado no `minipax`; torna os insumos auditáveis e repetíveis |
 | **R2b — rootfs byte-a-byte** | árvore instalada inteira, já materializada | **não provado**; registros contêm tempo de instalação e uid/gid ainda não fazem parte do contrato |
 | **R3 — mídia** | bytes finais de `.img` ou `.iso` para o mesmo conjunto completo de insumos | provado localmente com fixtures e o mesmo binário/toolchain; reprodução entre builders ainda não foi feita (§8) |
-| **R4 — reprodução funcional** | mídia dá boot e instala um sistema equivalente em outra máquina | **não provado**; requer BOOT EFI vivo e aceite QEMU/OVMF |
+| **R4 — reprodução funcional** | mídia dá boot e instala um sistema equivalente em outra máquina | provado localmente por final-v10 em QEMU/OVMF, incluindo segundo boot sem ISO e negativo fail-before-wipe. Não provado em hardware real nem como reprodução oficial |
 
 Portanto, R3 não implica R4: uma imagem pode ser byte-reprodutível e ainda
 conter apenas um PE/COFF sintaticamente válido usado como fixture de teste.
@@ -88,8 +88,8 @@ O que o `pack` normaliza (tudo que é volátil):
 - **modo** mascarado em `07777`; nada de atime/ctime/device.
 
 Caminhos > 100 chars (o gcc tem vários) viram entradas GNU LongName, que o
-`pack` também emite deterministicamente. `rectify --emit` (SPEC-0009 §4)
-usará `pack` + compressão (zstd, a integrar) para o artefato do canal.
+`pack` também emite deterministicamente. `channel emit` (SPEC-0009 §4) usa
+`pack` e compressão zstd determinística em Rust para o artefato do canal.
 
 O formato é **versionado** (`v1`), gravado num cabeçalho PAX global no início
 do tar (`DISTROPICA.pack=1`) — muda quando a normalização mudar, e um leitor
@@ -117,8 +117,8 @@ atual não existe um modo separado `--check-repro`: todo `rectify` de mundo B
 empacota o STAGE num `memfd` selado, grava o sha256 do tar normalizado em
 `ARTIFACT_HASH` e, quando a receita declara `REPROCORR`, compara imediatamente
 os dois. Divergência aborta com crimestop antes de aplicar o payload. Um comando
-dedicado poderá apenas expor essa mesma operação sem instalar quando os canais
-chegarem.
+dedicado poderá apenas expor essa mesma operação sem instalar; o consumidor e
+o emissor de canais já reutilizam a mesma identidade de tar normalizado.
 
 - O cotejo compara **o sha256 do tar normalizado** com o `reprocorr` pinado na
   **receita** (autoridade; o índice traz só uma cópia). Igual ⇒ a
@@ -149,8 +149,9 @@ hoje pinado em `newspeak/m4/recipe` e conferido no registro E2-clean. O hash
 empacotador e não é mais o pino do formato v1. É a
 cadeia inteira demonstrada: **build reprodutível → empacotamento
 determinístico → hash de artefato idêntico**. Esse sha256 é exatamente o
-`reprocorr` que o mantenedor pina no índice do canal (SPEC-0009 §6) e que o
-`TRUST=corroborado` exige bater (§5). O empacotador foi validado à parte
+`reprocorr` que o mantenedor pina na receita e cuja cópia o índice v2 assinado
+pode declarar (SPEC-0009 §3/§6); `TRUST=corroborado` exige que bata (§5). O
+empacotador foi validado à parte
 numa árvore com caminho > 100 chars (GNU LongName), symlink e modos
 distintos: dois `pack` do mesmo diretório dão bytes idênticos, e o GNU tar
 lista o resultado sem erro (formato válido).
@@ -219,17 +220,22 @@ curta do plano. Um perfil com `STATUS=release` precisa pinar os três campos
 `OFFICIAL_CONTENT_SHA256`, `OFFICIAL_BOOT_EFI_SHA256` e
 `OFFICIAL_MINITRUE_SHA256`. Só a coincidência exata do conteúdo calculado com
 o primeiro pode produzir `PROFILE_CLASS=official-inputs`; qualquer world,
-Newspeak, overlay ou cache divergente é classificado como `custom`. Essa classe
+Newspeak, overlay ou cache divergente é classificado como `custom`, assim
+como o uso explícito de `--world`, `--live-world`, `--overlay` ou `--cache`.
+Essa classe
 atesta os insumos declarados, não uma reprodução oficial. O perfil versionado
-atual segue em `development`, declara `INSTALL_READY=no` e não pode emitir a
-classe `official-inputs` nem iniciar a materialização do target oficial.
+atual segue em `development`, declara `INSTALL_READY=yes` e pode materializar
+o target mínimo com um cache binário assinado de desenvolvimento. Ele não pode
+emitir a classe `official-inputs`: não há pinos nem canal de release publicado.
 `minipax lock --profile <dir>` expõe exatamente esse documento para auditoria
 ou o grava, sem sobrescrever, quando recebe `--output`.
 
 Uma instalação direta usa exatamente esse snapshot. O Minipax copia a árvore
-Newspeak e o cache fechados e congela também o executor: abre o Minitrue
+Newspeak e o cache fechados e congela também os executores: abre o Minitrue
 resolvido, copia seus bytes para um `memfd`, sela escrita e mudança de tamanho,
-calcula o hash desse snapshot e executa o mesmo descritor por `/proc/self/fd`.
+calcula o hash desse snapshot e executa o mesmo descritor por `/proc/self/fd`;
+mede também o próprio Minipax. Depois das verificações, persiste os dois
+snapshots medidos em `/usr/bin`.
 Cada invocação parte de ambiente limpo e recebe apenas o conjunto explícito de
 variáveis determinísticas, caminho e, quando presentes, proxies. Assim, trocar
 o arquivo original entre o hash e a execução não troca o programa executado.
@@ -238,16 +244,24 @@ O Minipax chama `minitrue --root <alvo> rectify <target.world>`, exige `verify`
 antes e depois do overlay administrativo e só então promove
 `profile.lock.pending` a `profile.lock`. O `install.manifest` prende o hash e a
 classe do perfil, `INSTALL_CLASS`, arquitetura, hash do overlay, hash do
-Minitrue efetivamente executado, versão e hash do executável Minipax e as opções `OFFLINE` e
-`FROM_SOURCE`; `--resume` exige o mesmo lock e o mesmo manifesto. A instalação
+Minitrue efetivamente executado, versão e hash do executável Minipax e as
+opções `OFFLINE`, `FROM_SOURCE` e `ONLY_BINARY`; `--resume` exige o mesmo lock
+e o mesmo manifesto. A instalação
 só recebe `INSTALL_CLASS=official-inputs` quando o perfil já tem essa classe e
 o executor reproduz `OFFICIAL_MINITRUE_SHA256`; caso contrário, é rebaixada
-para `custom` (ou permanece `development` para o perfil de desenvolvimento).
+para `custom` (ou permanece `development` para o perfil de desenvolvimento sem
+override explícito).
 
 O coletor atual limita **cada** árvore Newspeak, overlay ou cache a 128 MiB de
 arquivos regulares e 50.000 entradas. Ele mantém conteúdo e tar normalizado em
 memória; esses são limites explícitos do protótipo, não capacidade de release.
 Streaming é necessário antes de aceitar árvores reais maiores.
+
+Os modos dessas árvores também fazem parte da representação canônica: dirs
+`0755`, `root/` do overlay `0700`, `shadow`/`gshadow` e backups `0600`,
+executáveis `0755`, demais regulares `0644` e symlinks `0777`; regulares de
+cache são sempre `0644`. Assim o lock e a mídia não dependem da capacidade do
+Git de preservar apenas o bit executável.
 
 Isso fecha **R2 (sistema declarado)**: duas execuções podem demonstrar que
 partiram da mesma intenção e dos mesmos insumos. Ainda não fecha R2b. Entre os
@@ -260,12 +274,31 @@ normalizados ou explicitamente separados como estado de máquina.
 ## 8. Normalização do envelope de mídia
 
 `minipax media build` recebe o perfil resolvido, o modo `online|offline`, o
-formato `img|iso` e um `BOOTX64.EFI` externo. O hash do EFI, o lock, os worlds,
-o snapshot Newspeak, o overlay e, no modo offline, o cache entram no payload.
+formato `img|iso` e um `BOOTX64.EFI` externo. O hash do EFI, a representação
+canônica do perfil, o lock, os worlds, o snapshot Newspeak, o overlay e, no
+modo offline, o cache completo entram no payload. No modo online, o cache é
+restrito ao bootstrap de configuração + índice/assinatura do canal; seus bytes
+também participam do lock, mas artefatos de pacote são recusados.
 O builder valida cabeçalhos DOS/PE, máquina AMD64, optional header PE32+,
 subsystem de aplicação EFI, número de seções e limites das tabelas. Isso prova
 apenas a forma e a arquitetura declarada do executável: **não** prova que ele
 inicia nem que contém o ambiente vivo.
+
+O repositório agora fornece `bootstrap/live/build-efi`, que constrói um
+EFI-stub com Linux 7.1.4, initramfs, BusyBox e executores estáticos. Isso cria
+um insumo vivo conhecido, mas a validade de qualquer arquivo arbitrário ainda
+não decorre do parser PE. No consumo, `minipax install-media` reconstrói o
+perfil e exige reproduzir `profile.lock` byte a byte antes de tocar no target.
+Com `--export-boot-efi`, cria sem sobrescrever um snapshot do EFI já validado e
+o remove se a instalação falhar. O PID 1 usa essa opção ao materializar toda a
+closure em `/run` antes de escolher um disco; só depois copia e verifica o root,
+instala o snapshot EFI e publica por último o marcador completo.
+O construtor do EFI ainda não recebe o lock nem prova automaticamente que seu
+conteúdo corresponde a `live.world`. O build fixa
+`LOCALVERSION=-distropica-live`; embora mantenha `CONFIG_MODULES=y`, não
+empacota módulos e depende exclusivamente dos drivers built-in. Além de
+separar a identidade do kernel vivo, o release resultante impede que a busca
+automática consuma `/lib/modules/7.1.4` do target.
 
 Os três pinos de release fecham fronteiras diferentes. O conteúdo exato produz
 `PROFILE_CLASS=official-inputs`; a mídia só preserva
@@ -351,6 +384,12 @@ de uma única ESP/FAT contendo tudo. O caminho esperado exige coleta e escrita
 em streaming e provavelmente uma partição de dados offline separada; formato,
 integridade e montagem dessa partição ainda precisam ser especificados.
 
+Há ainda dois multiplicadores explícitos de pico: no consumo do canal, o
+`.tar.zst` selado e o tar descompactado coexistem em `memfd` (**zst + tar**); no
+instalador vivo, a closure materializada em `/run` permanece até terminar a
+cópia e a verificação do disco. Essa escolha é deliberada para garantir
+fail-before-wipe, mas não escala ao cache de release sem streaming autenticado.
+
 ## 9. Evidência atual e gates de mídia
 
 Os testes do `minipax` executam duas composições locais da mesma fixture, em
@@ -358,18 +397,52 @@ saídas separadas, e exigem o mesmo sha256 usando o mesmo binário, dependência
 e versão do compositor. Para IMG, também conferem a assinatura GPT; para ISO,
 quando `xorriso` está disponível, conferem byte-identidade e o descritor
 ISO9660 `CD001`. Há ainda testes do lock, normalização de world, confinamento
-de overlay, recusa de target sujo e orquestração do mesmo `target.world` por um
-`minitrue` falso. Ainda não houve cotejo R3 entre builders independentes.
+de overlay, recusa de target sujo e ingestão hostil de mídia. O canal assinado
+e `--only-binary` materializaram o perfil mínimo num E2E offline real. Ainda
+não houve cotejo R3 entre builders independentes. O runner
+`bootstrap/live/accept-qemu` registra hashes, parâmetros e logs das duas fases
+(instalação e segundo boot sem ISO). A execução final-v10 passou depois da
+validação da closure e do EFI em `/run` antes da escolha do disco. Uma segunda
+composição da ISO foi byte a byte idêntica; num probe negativo separado, um
+`profile.lock` incoerente com `media.meta` falhou no preflight e deixou o disco
+de teste zerado:
+
+```text
+EVIDENCIA_FINAL_V10=local-development
+ACCEPTANCE_META=target/qemu-acceptance-final-v10/acceptance.meta
+RUN_STATE=completed
+NETWORK=none
+ISO_SHA256=c48b43674ad17d9993862c8ce0fbb8dae4ec4622be35d1d07c750d6ee2e7dae8
+REPEATED_ISO_SHA256=c48b43674ad17d9993862c8ce0fbb8dae4ec4622be35d1d07c750d6ee2e7dae8
+BOOT_EFI_SHA256=c8a884845aa1568c4e51756f2a26c1b21652969367957387c5efdfb616e3204c
+INSTALL_LOG_SHA256=d94ad6d3abdb99d29674c383f11106a0a23774f91b153dc1cee1b03b64d61540
+BOOT_LOG_SHA256=f3e3a80d76bffd7bbb6a995a9186d1d66c4ae8902e645e48db2e3421ef69f133
+CORRUPT_ISO_SHA256=c13e3d42ccc6e2129e73f8fa8df629c17803fff2a6ede756519c86791786dcf8
+CORRUPT_INSTALL_LOG_SHA256=5c1004263db4ca6323ae8630cf51ceb7a313350424ad40d1886b75deadd0ebb3
+CORRUPT_DISK_SHA256=a6d72ac7690f53be6ae46ba88506bd97302a093f7108472bd9efc3cefda06484
+ZERO_256_MIB_SHA256=a6d72ac7690f53be6ae46ba88506bd97302a093f7108472bd9efc3cefda06484
+RESULT=pass
+INCONSISTENT_PROFILE_LOCK_RESULT=refused-before-wipe
+```
+
+Essas são evidências locais de desenvolvimento, não pinos oficiais nem um
+manifesto externo assinado. Uma recomposição local da mesma ISO
+byte a byte igual fortalecerá R3 no mesmo ambiente, mas não substituirá a
+comparação entre builders independentes.
 
 Essas provas exercitam localmente R2 e o compositor de R3, não fecham um
 release. Permanecem gates:
 
-- construir um BOOT EFI vivo com kernel+initramfs+minipax+minitrue e fixar os
-  três pinos de release (`CONTENT`, `BOOT_EFI` e `MINITRUE`);
-- bootar IMG e ISO em QEMU/OVMF e instalar num disco vazio;
-- remover a mídia e provar boot do sistema instalado com `minitrue verify`;
-- implementar canais e a meta-receita normativa `base`, para que o caminho
-  comum não recompile o Estágio 2;
+- repetir o aceite fail-before-wipe sobre o futuro artefato canônico pinado e
+  publicado;
+- ligar a construção do EFI ao `live.world`/lock e fixar os três pinos de
+  release (`CONTENT`, `BOOT_EFI` e `MINITRUE`);
+- publicar o canal oficial, a chave pinada e a meta-receita normativa `base`;
+- implementar `channel refresh` autenticado, explícito e com diff auditável;
+- converter o Journal path-based restante para operações fd-relative
+  confinadas contra TOCTOU de mutador concorrente;
+- definir como a atualização de `/boot/vmlinuz-*` atualiza e retém o EFI com
+  kernel/initramfs embutidos;
 - substituir os snapshots de árvores em memória por streaming e definir a
   partição de dados do modo offline;
 - definir uid/gid e os metadados hoje ausentes antes de afirmar R2b;
@@ -386,10 +459,10 @@ release. Permanecem gates:
 - ~~Builds fora do chroot (caminho não canônico)~~ — **resolvido**: os
   shims passam `-ffile-prefix-map=$WORK=.`, e o `zig cc` já não crava o
   path por padrão (§6). A reprodutibilidade não depende mais do caminho.
-- ~~**Empacotamento em Rust vs GNU tar** para o `--emit` (§4)~~ —
+- ~~**Empacotamento em Rust vs GNU tar** para o `channel emit` (§4)~~ —
   **resolvido**: Rust (`minitrue pack`), tar normalizado, sem depender do
-  GNU tar na base (§4, §6). Falta só encadear a compressão (zstd) e o
-  `rectify --emit` que grava o artefato no layout do canal.
+  GNU tar na base (§4, §6). A compressão zstd e a emissão de pool + índice
+  estão encadeadas; assinatura e publicação continuam externas.
 - **Reprodutibilidade do próprio `minitrue`** (o binário Rust estático):
   desejável (o buscador que verifica tudo deveria ser verificável); Cargo +
   `SOURCE_DATE_EPOCH` chega perto — medir.

@@ -10,6 +10,54 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static DOWNLOAD_COUNTER: AtomicU64 = AtomicU64::new(0);
+const MAX_PINNED_OBJECT_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
+/// Busca um objeto arbitrário já preso por SHA-256 (índice de canal, mundo B).
+/// Compartilha o cache content-addressed das fontes, mas nunca aceita TOFU.
+pub fn ensure_pinned_url(ctx: &Ctx, url: &str, want: &str) -> Result<PathBuf> {
+    let canonical = want.len() == 64
+        && want
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if !canonical {
+        return fail(2, format!("sha256 não canônico para {url}"));
+    }
+    let cache = ctx.cache_dir();
+    crate::install::ensure_real_directory_or_absent(&ctx.root, &cache, "cache do minitrue")?;
+    fs::create_dir_all(&cache)?;
+    crate::install::ensure_real_directory_or_absent(&ctx.root, &cache, "cache do minitrue")?;
+    let destination = cache.join(want);
+    if let Ok(metadata) = fs::symlink_metadata(&destination) {
+        if metadata.file_type().is_file()
+            && metadata.len() <= MAX_PINNED_OBJECT_BYTES
+            && sha256_file(&destination)? == want
+        {
+            return Ok(destination);
+        }
+    }
+    if ctx.offline {
+        return fail(
+            6,
+            format!("--offline e artefato ausente/inválido no cache: {url}"),
+        );
+    }
+    let (temporary, obtained) =
+        download_temp_bounded(url, &cache, "canal", 0, Some(MAX_PINNED_OBJECT_BYTES))?;
+    if obtained != want {
+        let _ = fs::remove_file(&temporary);
+        return fail(
+            3,
+            format!(
+                "crimestop: artefato de canal diverge do índice assinado\n  fonte:    {url}\n  esperado: {want}\n  obtido:   {obtained}"
+            ),
+        );
+    }
+    if let Err(error) = fs::rename(&temporary, &destination) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    Ok(destination)
+}
 
 /// Garante cada artefato de SRC no cache, verificado por hash e — quando a
 /// receita pina — por assinatura. Devolve (caminho, sha256) na ordem de SRC.
@@ -206,6 +254,16 @@ fn verify_signatures(ctx: &Ctx, r: &Recipe, artifacts: &[(PathBuf, String)]) -> 
 }
 
 fn download_temp(url: &str, cache: &Path, label: &str, index: usize) -> Result<(PathBuf, String)> {
+    download_temp_bounded(url, cache, label, index, None)
+}
+
+fn download_temp_bounded(
+    url: &str,
+    cache: &Path,
+    label: &str,
+    index: usize,
+    max_bytes: Option<u64>,
+) -> Result<(PathBuf, String)> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -242,9 +300,17 @@ fn download_temp(url: &str, cache: &Path, label: &str, index: usize) -> Result<(
             code: 6,
             msg: format!("rede falhou em {url}: {e}"),
         })?;
+        if max_bytes.is_some_and(|limit| {
+            resp.header("Content-Length")
+                .and_then(|value| value.parse::<u64>().ok())
+                .is_some_and(|declared| declared > limit)
+        }) {
+            return fail(6, format!("resposta de {url} excede o limite permitido"));
+        }
         let mut reader = resp.into_reader();
         let mut hasher = Sha256::new();
         let mut buf = [0u8; 65536];
+        let mut total = 0u64;
         loop {
             let n = reader.read(&mut buf).map_err(|e| crate::Fail {
                 code: 6,
@@ -252,6 +318,12 @@ fn download_temp(url: &str, cache: &Path, label: &str, index: usize) -> Result<(
             })?;
             if n == 0 {
                 break;
+            }
+            total = total
+                .checked_add(n as u64)
+                .ok_or_else(|| anyhow::anyhow!("download excedeu u64"))?;
+            if max_bytes.is_some_and(|limit| total > limit) {
+                return fail(6, format!("resposta de {url} excede o limite permitido"));
             }
             hasher.update(&buf[..n]);
             file.write_all(&buf[..n])?;

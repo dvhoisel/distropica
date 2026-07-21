@@ -1,33 +1,150 @@
 #!/bin/sh
 # Casca pública de desenvolvimento. O bundle de release substituirá o Cargo
-# por binários estáticos assinados; a lógica de instalação/mídia vive no minipax.
+# por binários estáticos assinados e verificados; a lógica de instalação/mídia
+# vive no minipax.
 set -eu
+umask 022
+LC_ALL=C
+export LC_ALL
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 BUILD_TARGET=${DISTROPICA_TARGET_DIR:-"$REPO/target/bootstrap"}
+RUST_TARGET=x86_64-unknown-linux-musl
+RUSTC_BIN=${RUSTC:-rustc}
+MINIPAX_BIN=${MINIPAX:-}
+MINITRUE_BIN=${MINITRUE:-}
 
-if [ -n "${MINIPAX:-}" ] && [ -n "${MINITRUE:-}" ]; then
-    [ -f "$MINIPAX" ] && [ -x "$MINIPAX" ] || {
-        echo "erro: MINIPAX não é arquivo regular executável" >&2; exit 1;
-    }
-    [ -f "$MINITRUE" ] && [ -x "$MINITRUE" ] || {
-        echo "erro: MINITRUE não é arquivo regular executável" >&2; exit 1;
-    }
-    MINIPAX=$(CDPATH= cd -- "$(dirname -- "$MINIPAX")" && pwd -P)/$(basename -- "$MINIPAX")
-    MINITRUE=$(CDPATH= cd -- "$(dirname -- "$MINITRUE")" && pwd -P)/$(basename -- "$MINITRUE")
-else
-    command -v cargo >/dev/null 2>&1 || {
-        echo "erro: cargo ausente; use o futuro bundle estático assinado ou instale Rust" >&2
+canonical_executable() {
+    name=$1
+    path=$2
+    [ -f "$path" ] && [ -x "$path" ] || {
+        echo "erro: $name não é arquivo regular executável: $path" >&2
         exit 1
     }
-    CARGO_TARGET_DIR="$BUILD_TARGET/minipax" \
-        cargo build --locked --release --quiet --manifest-path "$REPO/minipax/Cargo.toml"
-    CARGO_TARGET_DIR="$BUILD_TARGET/minitrue" \
-        cargo build --locked --release --quiet --manifest-path "$REPO/minitrue/Cargo.toml"
-    MINIPAX="$BUILD_TARGET/minipax/release/minipax"
-    MINITRUE="$BUILD_TARGET/minitrue/release/minitrue"
+    directory=$(CDPATH= cd -- "$(dirname -- "$path")" && pwd -P)
+    printf '%s/%s\n' "$directory" "$(basename -- "$path")"
+}
+
+require_rust_target() {
+    command -v cargo >/dev/null 2>&1 || {
+        echo "erro: cargo ausente; instale o toolchain Rust ou forneça MINIPAX e MINITRUE" >&2
+        exit 1
+    }
+    command -v "$RUSTC_BIN" >/dev/null 2>&1 || {
+        echo "erro: compilador Rust ausente ($RUSTC_BIN); instale o toolchain ou forneça MINIPAX e MINITRUE" >&2
+        exit 1
+    }
+
+    if ! target_libdir=$("$RUSTC_BIN" --print target-libdir --target "$RUST_TARGET" 2>/dev/null); then
+        echo "erro: o toolchain Rust ativo não consegue consultar o alvo $RUST_TARGET" >&2
+        echo "verifique o toolchain ativo ou forneça MINIPAX e MINITRUE" >&2
+        exit 1
+    fi
+    target_available=no
+    if [ -n "$target_libdir" ] && [ -d "$target_libdir" ]; then
+        for rustlib in "$target_libdir"/libstd-*.rlib; do
+            if [ -f "$rustlib" ]; then
+                target_available=yes
+                break
+            fi
+        done
+    fi
+    [ "$target_available" = yes ] || {
+        echo "erro: alvo Rust $RUST_TARGET ausente no toolchain ativo" >&2
+        echo "instale-o com 'rustup target add $RUST_TARGET' ou forneça MINIPAX e MINITRUE" >&2
+        exit 1
+    }
+}
+
+configure_musl_cc() {
+    if [ -n "${CC_x86_64_unknown_linux_musl:-}" ] || \
+       [ -n "${TARGET_CC:-}" ] || [ -n "${CC:-}" ] || \
+       [ -n "${CROSS_COMPILE:-}" ]; then
+        return
+    fi
+
+    if command -v x86_64-linux-musl-gcc >/dev/null 2>&1; then
+        CC_x86_64_unknown_linux_musl=$(command -v x86_64-linux-musl-gcc)
+    elif command -v musl-gcc >/dev/null 2>&1; then
+        CC_x86_64_unknown_linux_musl=$(command -v musl-gcc)
+    elif command -v clang >/dev/null 2>&1; then
+        CC_x86_64_unknown_linux_musl=$(command -v clang)
+    else
+        echo "erro: compilador C para $RUST_TARGET ausente; ele é necessário para construir o Minitrue" >&2
+        echo "instale um cross-compiler musl/clang, defina CC_x86_64_unknown_linux_musl ou forneça MINITRUE" >&2
+        exit 1
+    fi
+    export CC_x86_64_unknown_linux_musl
+}
+
+build_rust_binary() {
+    package=$1
+    destination=$BUILD_TARGET/$package
+    CARGO_TARGET_DIR="$destination" \
+        cargo build --locked --release --quiet --target "$RUST_TARGET" \
+        --manifest-path "$REPO/$package/Cargo.toml"
+    binary=$destination/$RUST_TARGET/release/$package
+    chmod 755 "$binary"
+    printf '%s\n' "$binary"
+}
+
+require_elf_inspector() {
+    command -v readelf >/dev/null 2>&1 || {
+        echo "erro: readelf ausente; ele é necessário para validar os builds musl" >&2
+        exit 1
+    }
+}
+
+require_no_interp() {
+    path=$1
+    elf_header=$(readelf -h "$path" 2>/dev/null) || {
+        echo "erro: build não produziu um ELF válido: $path" >&2
+        exit 1
+    }
+    printf '%s\n' "$elf_header" | grep -q 'Machine:.*X86-64' || {
+        echo "erro: build não produziu ELF x86-64: $path" >&2
+        exit 1
+    }
+    printf '%s\n' "$elf_header" | grep -Eq 'Type:[[:space:]]+(EXEC|DYN)' || {
+        echo "erro: build não produziu ELF executável/PIE: $path" >&2
+        exit 1
+    }
+    program_headers=$(readelf -l "$path" 2>/dev/null) || {
+        echo "erro: não li os program headers ELF: $path" >&2
+        exit 1
+    }
+    if printf '%s\n' "$program_headers" | grep -q 'INTERP'; then
+        echo "erro: build para $RUST_TARGET produziu binário com INTERP: $path" >&2
+        exit 1
+    fi
+}
+
+if [ -n "$MINIPAX_BIN" ]; then
+    MINIPAX_BIN=$(canonical_executable MINIPAX "$MINIPAX_BIN")
+fi
+if [ -n "$MINITRUE_BIN" ]; then
+    MINITRUE_BIN=$(canonical_executable MINITRUE "$MINITRUE_BIN")
 fi
 
+if [ -z "$MINIPAX_BIN" ] || [ -z "$MINITRUE_BIN" ]; then
+    require_rust_target
+    require_elf_inspector
+    mkdir -p "$BUILD_TARGET"
+    BUILD_TARGET=$(CDPATH= cd -- "$BUILD_TARGET" && pwd -P)
+
+    if [ -z "$MINIPAX_BIN" ]; then
+        MINIPAX_BIN=$(build_rust_binary minipax)
+        require_no_interp "$MINIPAX_BIN"
+    fi
+    if [ -z "$MINITRUE_BIN" ]; then
+        configure_musl_cc
+        MINITRUE_BIN=$(build_rust_binary minitrue)
+        require_no_interp "$MINITRUE_BIN"
+    fi
+fi
+
+MINIPAX=$MINIPAX_BIN
+MINITRUE=$MINITRUE_BIN
 export MINITRUE
 export DISTROPICA_NEWSPEAK=${DISTROPICA_NEWSPEAK:-"$REPO/newspeak"}
 exec "$MINIPAX" "$@"

@@ -1,0 +1,376 @@
+#!/bin/sh
+# PID 1 da mídia viva. Só apaga um disco quando o dispositivo veio
+# explicitamente de distropica.install= ou foi digitado no console.
+set -eu
+umask 022
+
+BB=/bin/busybox
+PATH=/bin:/usr/bin:/sbin:/usr/sbin
+export PATH HOME=/ TERM=linux
+
+say() {
+    echo "distropica-live: $*"
+}
+
+rescue() {
+    say "$*"
+    say "caindo no shell de resgate; saia para reiniciar"
+    setsid cttyhack sh || true
+    reboot -f
+}
+
+mount_early() {
+    mkdir -p /dev /proc /sys /run /tmp /media /target /newroot
+    mount -t devtmpfs dev /dev 2>/dev/null || true
+    mount -t proc proc /proc 2>/dev/null || true
+    mount -t sysfs sys /sys 2>/dev/null || true
+    mount -t tmpfs -o mode=0755 tmpfs /run 2>/dev/null || true
+    mount -t tmpfs -o mode=1777 tmpfs /tmp 2>/dev/null || true
+    mdev -s 2>/dev/null || true
+}
+
+partition_path() {
+    case "$1" in
+        *[0-9]) echo "${1}p$2" ;;
+        *) echo "${1}$2" ;;
+    esac
+}
+
+whole_disk_name() {
+    block_name=${1#/dev/}
+    if [ -f "/sys/class/block/$block_name/partition" ]; then
+        basename "$(dirname "$(readlink -f "/sys/class/block/$block_name")")"
+    else
+        echo "$block_name"
+    fi
+}
+
+find_installed_root() {
+    findfs LABEL=DISTROPICA_ROOT 2>/dev/null || true
+}
+
+boot_installed() {
+    root_device=$1
+    say "raiz instalada encontrada em $root_device"
+    mount -o rw "$root_device" /newroot || return 1
+    install_marker=/newroot/var/lib/minipax/disk-install.complete
+    if [ ! -f "$install_marker" ] || [ -L "$install_marker" ] ||
+       [ ! -f /newroot/var/lib/minipax/profile.lock ] ||
+       [ -L /newroot/var/lib/minipax/profile.lock ] ||
+       [ ! -x /newroot/sbin/init ]; then
+        umount /newroot
+        return 1
+    fi
+    marker_format=$(sed -n '1p' "$install_marker")
+    marker_lock=$(sed -n '2s/^PROFILE_LOCK_SHA256=//p' "$install_marker")
+    marker_lines=$(wc -l < "$install_marker" | tr -d ' ')
+    actual_lock=$(sha256sum /newroot/var/lib/minipax/profile.lock | awk '{print $1}')
+    if [ "$marker_format" != 'DISTROPICA_DISK_INSTALL_FORMAT=1' ] ||
+       [ "$marker_lines" != 2 ] || [ -z "$marker_lock" ] ||
+       [ "$marker_lock" != "$actual_lock" ]; then
+        umount /newroot
+        return 1
+    fi
+    mkdir -p /newroot/dev /newroot/proc /newroot/sys /newroot/run
+    for mount_path in /dev /proc /sys /run; do
+        grep -q " $mount_path " /proc/mounts || {
+            umount /newroot
+            return 1
+        }
+    done
+
+    # A função é chamada no lado esquerdo de `||`; por POSIX, `set -e` não
+    # protege os comandos internos. Registre cada movimento e reverta os já
+    # concluídos caso o próximo falhe. /dev é movido por último para manter os
+    # dispositivos disponíveis durante a recuperação.
+    moved_mounts=
+    for mount_path in /run /sys /proc /dev; do
+        if ! mount --move "$mount_path" "/newroot$mount_path"; then
+            for moved_path in $moved_mounts; do
+                mount --move "/newroot$moved_path" "$moved_path" || reboot -f
+            done
+            umount /newroot || true
+            return 1
+        fi
+        moved_mounts="$mount_path $moved_mounts"
+    done
+    exec switch_root /newroot /sbin/init
+}
+
+find_media() {
+    for device in /dev/sr* /dev/vd*[0-9] /dev/sd*[0-9] /dev/nvme*n*p*; do
+        [ -b "$device" ] || continue
+        umount /media 2>/dev/null || true
+        if mount -o ro "$device" /media 2>/dev/null &&
+           [ -f /media/distropica/media.meta ] &&
+           [ -f /media/distropica/profile.lock ]; then
+            echo "$device"
+            return 0
+        fi
+    done
+    umount /media 2>/dev/null || true
+    return 1
+}
+
+cmdline_value() {
+    key=$1
+    for token in $(cat /proc/cmdline); do
+        case "$token" in
+            "$key"=*) echo "${token#*=}"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+choose_disk() {
+    selected=$(cmdline_value distropica.install 2>/dev/null || true)
+    if [ -n "$selected" ]; then
+        echo "$selected"
+        return 0
+    fi
+    say "nenhum disco foi autorizado pelo kernel cmdline" >&2
+    fdisk -l >&2 2>/dev/null || true
+    echo "Digite o dispositivo inteiro a APAGAR (ex.: /dev/vda), ou 'shell':" >&2
+    read -r selected
+    [ "$selected" != shell ] || rescue "instalação não autorizada"
+    echo "$selected"
+}
+
+partition_disk() {
+    disk=$1
+    [ -b "$disk" ] || rescue "$disk não é dispositivo de bloco"
+    [ "$(whole_disk_name "$disk")" != "$(whole_disk_name "$media_device")" ] ||
+        rescue "recusei apagar o disco que contém a própria mídia"
+    case "$disk" in
+        /dev/*) ;;
+        *) rescue "dispositivo fora de /dev: $disk" ;;
+    esac
+    disk_name=${disk#/dev/}
+    [ ! -f "/sys/class/block/$disk_name/partition" ] ||
+        rescue "escolha o disco inteiro, não uma partição: $disk"
+    logical_sector=$(cat "/sys/class/block/$disk_name/queue/logical_block_size" 2>/dev/null || echo 0)
+    case "$logical_sector" in
+        512|1024|2048|4096) ;;
+        *) rescue "tamanho de setor lógico não suportado: $logical_sector" ;;
+    esac
+    esp_sectors=$((67108864 / logical_sector))
+    root_start=$((2048 + esp_sectors))
+
+    disk_sectors=$(cat "/sys/class/block/$disk_name/size" 2>/dev/null || echo 0)
+    prepared_kib=$(du -sk "$prepared_root" 2>/dev/null | awk '{print $1}')
+    efi_bytes=$(wc -c < "$prepared_efi" | tr -d ' ')
+    for measured_size in "$disk_sectors" "$prepared_kib" "$efi_bytes"; do
+        case "$measured_size" in
+            ""|*[!0-9]*) rescue "não determinei os tamanhos antes do particionamento" ;;
+        esac
+    done
+    disk_bytes=$((disk_sectors * 512))
+    root_capacity=$((disk_bytes - root_start * logical_sector))
+    # Reserva 64 MiB além do uso aparente para metadados do ext2, crescimento
+    # durante a cópia e blocos não refletidos por `du`.
+    required_root=$((prepared_kib * 1024 + 67108864))
+    [ "$root_capacity" -ge "$required_root" ] ||
+        rescue "disco não comporta o sistema validado e a margem de 64 MiB"
+    # A ESP tem 64 MiB; preserve pelo menos 4 MiB para FAT/metadados.
+    [ "$efi_bytes" -le 62914560 ] ||
+        rescue "BOOTX64.EFI não cabe com segurança na ESP de 64 MiB"
+
+    say "APAGANDO $disk: ESP FAT32 de 64 MiB + raiz ext2" >&2
+    # BusyBox fdisk 1.35 não cria GPT. O MBR type 0xef é reconhecido pelo
+    # firmware UEFI e o ext2 é montado pelo driver ext4 do kernel vivo.
+    printf 'o\nn\np\n1\n2048\n+64M\nt\nef\nn\np\n2\n%s\n\nw\n' "$root_start" |
+        fdisk -u "$disk" >&2 ||
+        rescue "fdisk falhou em $disk"
+    partprobe "$disk" 2>/dev/null || true
+    mdev -s 2>/dev/null || true
+
+    esp=$(partition_path "$disk" 1)
+    root=$(partition_path "$disk" 2)
+    attempts=0
+    while { [ ! -b "$esp" ] || [ ! -b "$root" ]; } && [ "$attempts" -lt 50 ]; do
+        sleep 1
+        mdev -s 2>/dev/null || true
+        attempts=$((attempts + 1))
+    done
+    [ -b "$esp" ] && [ -b "$root" ] || rescue "partições não apareceram"
+    root_name=${root#/dev/}
+    root_sectors=$(cat "/sys/class/block/$root_name/size" 2>/dev/null || echo 0)
+    # sysfs expõe `size` sempre em setores de 512 bytes, inclusive em 4Kn.
+    [ $((root_sectors * 512)) -gt 67108864 ] ||
+        rescue "partição raiz ficou menor que 64 MiB"
+
+    mkfs.vfat -n DISTROPICA_ESP "$esp" >&2 || rescue "mkfs.vfat falhou"
+    mkfs.ext2 -F -L DISTROPICA_ROOT -m 0 "$root" >&2 || rescue "mkfs.ext2 falhou"
+    echo "$esp $root"
+}
+
+set_root_password() {
+    password_root=$1
+    if grep -q 'distropica.test=1' /proc/cmdline; then
+        say "modo de teste: conta root permanece bloqueada"
+        return 0
+    fi
+    while :; do
+        printf 'Nova senha de root: ' >/dev/console
+        stty -echo </dev/console >/dev/console 2>&1 || true
+        IFS= read -r first </dev/console
+        printf '\nRepita a senha: ' >/dev/console
+        IFS= read -r second </dev/console
+        stty echo </dev/console >/dev/console 2>&1 || true
+        printf '\n' >/dev/console
+        if [ -n "$first" ] && [ "$first" = "$second" ]; then
+            printf 'root:%s\n' "$first" |
+                chpasswd -c sha512 -R "$password_root" || return 1
+            first=
+            second=
+            return 0
+        fi
+        first=
+        second=
+        say "senhas vazias ou diferentes; tente novamente"
+    done
+}
+
+configure_network() {
+    grep -q '^MODE=online$' /media/distropica/media.meta || return 0
+    say "mídia online: solicitando configuração DHCP"
+    for path in /sys/class/net/*; do
+        interface=${path##*/}
+        [ "$interface" != lo ] || continue
+        ip link set "$interface" up 2>/dev/null || continue
+        if udhcpc -n -q -t 5 -T 3 -i "$interface"; then
+            say "rede configurada em $interface"
+            return 0
+        fi
+    done
+    return 1
+}
+
+path_fingerprint() {
+    fingerprint_path=$1
+    if [ -L "$fingerprint_path" ]; then
+        fingerprint_hash=$(readlink "$fingerprint_path" | sha256sum | awk '{print $1}') ||
+            return 1
+        printf 'l:%s\n' "$fingerprint_hash"
+    elif [ -f "$fingerprint_path" ]; then
+        fingerprint_mode=$(stat -c '%a' "$fingerprint_path") || return 1
+        fingerprint_hash=$(sha256sum "$fingerprint_path" | awk '{print $1}') || return 1
+        printf 'f:%s:%s\n' "$fingerprint_mode" "$fingerprint_hash"
+    else
+        return 1
+    fi
+}
+
+require_same_prepared_path() {
+    installed_path=$1
+    expected_fingerprint=$2
+    actual_fingerprint=$(path_fingerprint "$installed_path") ||
+        rescue "cópia perdeu o caminho crítico $installed_path"
+    [ "$actual_fingerprint" = "$expected_fingerprint" ] ||
+        rescue "cópia alterou o caminho crítico $installed_path"
+}
+
+prepare_system() {
+    prepared_root=/run/distropica-prepared
+    prepared_efi=/run/distropica-prepared-BOOTX64.EFI
+    [ ! -e "$prepared_root" ] || rescue "root de pré-validação já existe"
+    [ ! -e "$prepared_efi" ] && [ ! -L "$prepared_efi" ] ||
+        rescue "snapshot EFI de pré-validação já existe"
+    mkdir -m 0700 "$prepared_root" || rescue "não criei o root de pré-validação"
+
+    say "validando integralmente o payload antes de escolher ou apagar um disco"
+    configure_network || rescue "mídia online sem rede funcional"
+    /bin/minipax install-media \
+        --source /media \
+        --target "$prepared_root" \
+        --minitrue /bin/minitrue \
+        --export-boot-efi "$prepared_efi" \
+        --only-binary || rescue "Minipax recusou a mídia antes da escrita em disco"
+    set_root_password "$prepared_root" || rescue "não configurei a senha de root"
+    [ -f "$prepared_efi" ] && [ ! -L "$prepared_efi" ] ||
+        rescue "Minipax não exportou um EFI regular do snapshot validado"
+    actual_efi_hash=$(sha256sum "$prepared_efi" | awk '{print $1}')
+    [ -f "$prepared_root/var/lib/minipax/profile.lock" ] &&
+        [ ! -L "$prepared_root/var/lib/minipax/profile.lock" ] ||
+        rescue "root preparado perdeu profile.lock regular"
+    prepared_profile_lock_hash=$(sha256sum \
+        "$prepared_root/var/lib/minipax/profile.lock" | awk '{print $1}')
+    prepared_minipax_fingerprint=$(path_fingerprint "$prepared_root/usr/bin/minipax") ||
+        rescue "root preparado não contém Minipax íntegro"
+    prepared_minitrue_fingerprint=$(path_fingerprint "$prepared_root/usr/bin/minitrue") ||
+        rescue "root preparado não contém Minitrue íntegro"
+    prepared_init_fingerprint=$(path_fingerprint "$prepared_root/sbin/init") ||
+        rescue "root preparado não contém /sbin/init íntegro"
+    say "payload e closure validados; nenhum disco foi alterado"
+}
+
+install_system() {
+    disk=$1
+    [ -d "$prepared_root" ] || rescue "root pré-validado ausente"
+    partitions=$(partition_disk "$disk")
+    esp=${partitions%% *}
+    root=${partitions#* }
+    mount "$root" /target || rescue "não montei $root"
+
+    say "copiando o sistema previamente validado para $root"
+    cp -a "$prepared_root"/. /target/ || rescue "não copiei o sistema validado"
+    /bin/minitrue --root /target verify ||
+        rescue "a cópia para o disco divergiu do sistema validado"
+    [ -f /target/var/lib/minipax/profile.lock ] &&
+        [ ! -L /target/var/lib/minipax/profile.lock ] ||
+        rescue "cópia perdeu profile.lock regular"
+    installed_profile_lock_hash=$(sha256sum \
+        /target/var/lib/minipax/profile.lock | awk '{print $1}') ||
+        rescue "não medi o profile.lock copiado"
+    [ "$installed_profile_lock_hash" = "$prepared_profile_lock_hash" ] ||
+        rescue "profile.lock copiado diverge do snapshot validado"
+    require_same_prepared_path /target/usr/bin/minipax "$prepared_minipax_fingerprint"
+    require_same_prepared_path /target/usr/bin/minitrue "$prepared_minitrue_fingerprint"
+    require_same_prepared_path /target/sbin/init "$prepared_init_fingerprint"
+
+    mkdir -p /target/boot/efi
+    mount "$esp" /target/boot/efi || rescue "não montei a ESP"
+    mkdir -p /target/boot/efi/EFI/BOOT
+    cp "$prepared_efi" /target/boot/efi/EFI/BOOT/BOOTX64.EFI ||
+        rescue "não instalei BOOTX64.EFI"
+    installed_efi_hash=$(sha256sum \
+        /target/boot/efi/EFI/BOOT/BOOTX64.EFI | awk '{print $1}') ||
+        rescue "não medi BOOTX64.EFI instalado"
+    [ "$installed_efi_hash" = "$actual_efi_hash" ] ||
+        rescue "BOOTX64.EFI instalado diverge do snapshot validado"
+    sync || rescue "sync falhou antes de publicar a instalação"
+    marker=/target/var/lib/minipax/disk-install.complete
+    marker_tmp=/target/var/lib/minipax/.disk-install.complete.tmp
+    [ ! -e "$marker" ] && [ ! -L "$marker" ] &&
+        [ ! -e "$marker_tmp" ] && [ ! -L "$marker_tmp" ] ||
+        rescue "marcador de instalação já existe"
+    (set -C; printf '%s\nPROFILE_LOCK_SHA256=%s\n' \
+        'DISTROPICA_DISK_INSTALL_FORMAT=1' "$prepared_profile_lock_hash" > "$marker_tmp") ||
+        rescue "não criei o marcador temporário da instalação"
+    chmod 644 "$marker_tmp"
+    ln "$marker_tmp" "$marker" || rescue "não publiquei o marcador da instalação"
+    rm -f -- "$marker_tmp"
+    sync || rescue "sync falhou depois de publicar a instalação"
+    umount /target/boot/efi || rescue "não desmontei a ESP com segurança"
+    umount /target || rescue "não desmontei a raiz com segurança"
+    rm -rf -- "$prepared_root"
+    rm -f -- "$prepared_efi"
+    say "INSTALLATION COMPLETE em $disk; reiniciando"
+    reboot -f
+}
+
+mount_early
+say "kernel vivo iniciado"
+
+installed_root=$(find_installed_root)
+if [ -n "$installed_root" ]; then
+    boot_installed "$installed_root" ||
+        say "raiz sem marcador completo; procurando mídia para reinstalação"
+fi
+
+media_device=$(find_media) || rescue "payload da mídia não encontrado"
+say "payload encontrado em $media_device"
+prepare_system
+install_disk=$(choose_disk)
+install_system "$install_disk"
+rescue "o instalador retornou inesperadamente"

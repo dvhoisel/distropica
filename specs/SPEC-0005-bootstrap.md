@@ -66,9 +66,9 @@ três entradas públicas:
 
 | Entrada | Contrato | Saída |
 |---------|----------|-------|
-| **Mídia oficial mínima** | iniciar a ISO/IMG publicada e executar o `minipax` contido nela | sistema instalado; os demais programas continuam sendo instalados pelo `minitrue` |
-| **Instalação direta num host Linux** | `distropica-bootstrap install --target /mnt --profile profiles/official` | interface implementada; o perfil oficial atual declara `INSTALL_READY=no` e recusa cedo até canais/toolchain fecharem a base vazia |
-| **Construção de mídia** | `distropica-bootstrap media build --profile profiles/official --mode online --format iso --boot-efi BOOTX64.EFI --output distropica.iso` | ISO ou imagem de disco gerada localmente a partir do mesmo perfil |
+| **Mídia oficial mínima** | iniciar a futura ISO/IMG publicada e executar o `minipax` contido nela | sistema instalado; os demais programas continuam sendo instalados pelo `minitrue` |
+| **Instalação direta num host Linux** | `./bootstrap/distropica-bootstrap install --profile profiles/official --target /mnt --offline --cache CACHE --only-binary` | interface implementada; materializa a raiz já montada quando recebe um cache assinado que feche o world |
+| **Construção de mídia** | `./bootstrap/distropica-bootstrap media build --profile profiles/official --mode offline --cache CACHE --format iso --boot-efi BOOTX64.EFI --output distropica.iso` | ISO ou imagem de disco gerada localmente a partir do mesmo perfil |
 
 `install --target` **não particiona** e nunca interpreta `/mnt` como nome
 mágico: o operador precisa preparar e montar o destino. A escrita destrutiva
@@ -82,6 +82,12 @@ define a tentativa de reproduzir a mídia oficial byte a byte. Trocar `world`,
 como **custom**, muda seu lock e seus hashes e não lhe concede a assinatura nem
 o nome de artefato oficial do projeto.
 
+No estado atual, `profiles/official` declara `INSTALL_READY=yes` e
+`STATUS=development`. A prontidão afirma que o world mínimo pode ser instalado
+num target vazio com o cache/canal correto; **não** afirma que já exista canal,
+bundle ou mídia oficial publicada, nem muda a classe de desenvolvimento para
+release.
+
 ### 1.3 Usuário normal e reprodutor
 
 As três entradas acima admitem duas políticas de obtenção, sem criar dois
@@ -89,18 +95,20 @@ instaladores:
 
 - o **usuário normal** consome, sob um snapshot/lock imutável, os binários
   assinados dos canais para o mundo B e os binários upstream elegíveis para o
-  mundo A. Ele monta a distribuição localmente, mas não recompila glibc e GCC;
+  mundo A. O consumidor de canal, `--only-binary` e o
+  `CHANNEL_LOCK_FORMAT=2` estão implementados: ele monta a distribuição
+  localmente, mas não recompila glibc e GCC;
 - o **reprodutor** pede `--from-source`: o mesmo grafo recusa binários de canal,
   reconstrói o mundo B a partir das fontes pinadas e compara os artefatos com
   `REPROCORR`/attestations (SPEC-0009/0010). É a prova deliberadamente cara,
   não o caminho obrigatório de instalação.
 
 `install --from-source` já é a forma da interface de desenvolvimento. O mesmo
-modificador para `media build` é **contrato futuro**, dependente da resolução
-de canais: primeiro constrói-se localmente o conteúdo fechado pelo lock, depois
-empacota-se a mídia pelo pipeline normal. Sem a opção, reproduzir a ISO oficial
-significa reproduzir sua composição a partir dos artefatos canônicos, e não
-necessariamente recompilar cada um deles.
+modificador para `media build` permanece **contrato futuro**, embora a
+resolução de canais já exista: falta encadear a construção local de todo o
+conteúdo fechado pelo lock antes de empacotar a mídia. Sem a opção, reproduzir
+a ISO oficial significa reproduzir sua composição a partir dos artefatos
+canônicos, e não necessariamente recompilar cada um deles.
 
 ### 1.4 Entrada estática e estado de implementação
 
@@ -112,21 +120,36 @@ Rust, GCC nem bibliotecas da distribuição hospedeira.
 
 **Estado em 2026-07-21:** existe a casca `bootstrap/distropica-bootstrap` e o
 envelope Rust do `minipax` para perfil, lock, instalação em raiz alternativa e
-montagem determinística de ISO/IMG. Em desenvolvimento, a casca ainda compila
-`minipax` e `minitrue` com Cargo quando não recebe binários prontos. O bundle
-estático assinado de release, a produção completa do `BOOTX64.EFI` (hoje ele é
-uma entrada fornecida ao comando), o fluxo destrutivo de instalação em disco e
-os canais binários ainda não estão fechados. Portanto, os comandos acima são o
-contrato público em construção, não a promessa de uma release instalável já
-publicada.
+montagem determinística de ISO/IMG. O consumidor de canal assinado, o lock v2,
+`--only-binary` e `channel emit` existem. `bootstrap/live/build-efi` produz o
+`BOOTX64.EFI` EFI-stub (que continua sendo a entrada explícita do compositor de
+mídia), e o initramfs vivo implementa a instalação destrutiva num disco
+explicitamente autorizado. Em desenvolvimento, a casca compila por padrão
+`minipax` e `minitrue` com Cargo para `x86_64-unknown-linux-musl`, confere que
+os resultados não contêm segmento `INTERP` e também aceita executáveis
+fornecidos por `MINIPAX`/`MINITRUE`. Estes últimos continuam sendo insumos do
+usuário: a casca não lhes atribui linkagem estática, assinatura ou proveniência.
+
+Uma ISO offline de desenvolvimento instalou em QEMU/OVMF um disco raw vazio e
+o reiniciou sem a ISO até `rcS`/getty. O aceite final-v10 cobre a ordem atual:
+closure e EFI são materializados e validados em `/run` antes da escolha do
+disco, e um `profile.lock` incoerente com `media.meta` foi recusado antes do
+wipe. Ainda faltam o bundle estático assinado de release, endpoint/chave/pool de
+canal oficial, `channel refresh` auditável, pinos e manifesto externo de
+release, uma ISO/IMG oficial publicada, reprodução oficial por builders
+independentes e testes em hardware real. Portanto, os comandos acima são o
+contrato público em construção e uma implementação funcional de
+desenvolvimento, não a promessa de uma release já publicada.
 
 ## 2. Estágio 0 — do host ao chroot (musl-estático)
 
 **Entregável:** rootfs FHS mínimo, habitável via chroot sem privilégio.
 
 Requisitos do host na entrada de desenvolvimento: `sh`, `tar`, `sha256sum`,
-`curl` ou `wget`, ~300 MB livres, cargo/rustup para construir o minitrue (a
-entrada de release usará o bundle estático de §1.4 — SPEC-0003 §10) e
+`curl` ou `wget`, ~300 MB livres, Cargo/Rust com o alvo
+`x86_64-unknown-linux-musl`, um compilador C compatível (`clang` ou gcc musl) e
+`readelf` para construir e validar os executores (a entrada de release usará o
+bundle estático de §1.4 — SPEC-0003 §10) e
 **bubblewrap (`bwrap`) para a entrada rootless** — na falta dele, `sudo
 chroot` clássico.
 
@@ -625,17 +648,36 @@ com SHA256 real pinado.
 
 **Entregável:** Distrópica dá boot em QEMU até login.
 
-- Kernel da fonte (gcc do E2), configuração mínima virtio;
-- initramfs de busybox (script `init` de uma tela — legível inteiro,
-  premissa P4);
-- runit como PID1 + mdev (SPEC-0006);
-- **Sem bootloader no v0:** QEMU com `-kernel bzImage -initrd …` direto.
-  Hardware real também dispensa bootloader: kernel com EFI stub, decidido
-  na SPEC-0008 (instalador). O initramfs localiza a raiz por
-  `LABEL=distropica-root`, então nenhuma cmdline é necessária.
+- Kernel da fonte, configuração mínima virtio e drivers indispensáveis ao
+  instalador embutidos;
+- kernel **EFI-stub** com initramfs BusyBox e o `init` vivo legível, gerado por
+  `bootstrap/live/build-efi` como `BOOTX64.EFI`;
+- **sem bootloader separado no v0:** OVMF/UEFI carrega o mesmo EFI-stub da
+  mídia e da ESP instalada. Sem mídia, o initramfs localiza a raiz por
+  `LABEL=DISTROPICA_ROOT` e faz `switch_root`;
+- na mídia, o PID 1 chama primeiro
+  `minipax install-media --only-binary --export-boot-efi`, materializa closure
+  e EFI em `/run` e os verifica sem ter pedido disco algum. Só então exige que
+  o disco inteiro seja autorizado explicitamente, protege o dispositivo da
+  própria mídia, cria ESP FAT32 + raiz ext2, copia e verifica o root preparado,
+  instala o snapshot EFI, publica o marcador completo por último e reinicia;
+- runit como PID 1 + mdev permanece o contrato do sistema final (SPEC-0006).
+  O target mínimo de desenvolvimento aceito hoje usa o `/sbin/init` disponível
+  e chegou a `rcS`/getty.
 
-**Critério de aceite:** `qemu-system-x86_64 -kernel … -initrd …` chega a
-getty; login root; `minitrue verify` limpo.
+**Estado de implementação (2026-07-21):** o aceite final-v10 de
+`bootstrap/live/accept-qemu` passou offline, sem NIC, em duas fases: ISO →
+disco raw vazio e depois disco instalado → boot sem ISO em QEMU/OVMF. Uma
+segunda composição local da ISO foi byte a byte idêntica. O fluxo faz o
+preflight integral em `/run` antes da autorização destrutiva; uma execução
+negativa com `profile.lock` incoerente com `media.meta` deixou o disco zerado
+intacto. Isso não comprova hardware real, reprodução entre builders
+independentes nem uma ISO oficial publicada.
+
+**Critério normativo de aceite do estágio completo:** boot UEFI chega a getty;
+login root; `minitrue verify` limpo. O teste automatizado atual prova instalação
+e chegada a `rcS`/getty, mas não automatiza o login interativo nem fecha as
+dívidas de runit e hardware real.
 
 ## 6. Estágio 4 — userland vendor
 
@@ -656,7 +698,7 @@ futura própria.
 | E0 | chroot musl-estático habitável | baixo |
 | E1 | `./configure && make` funciona | atrito zig-cc×autotools |
 | E2 ✅ | ABI glibc + gcc nativo (pass-2) — **E2-clean: reproduzido a frio** de um rootfs novo (16 pacotes, libs finais selecionadas) 2026-07-20 | GCC hospedado por clang; matriz glibc↔GCC; toolchain-semente musl→glibc |
-| E3 | boot QEMU até login | config de kernel |
+| E3 🟡 | EFI-stub + instalação offline, segundo boot até `rcS`/getty e negativo fail-before-wipe comprovados no aceite final-v10 em QEMU/OVMF; login/runit seguem abertos | hardware real e política final de init |
 | E4a | userland vendor console | baixo |
 | E4b | GUI + Firefox | volume brutal de fonte (mesa/GTK) |
 

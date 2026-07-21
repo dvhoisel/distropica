@@ -1,0 +1,202 @@
+#!/bin/sh
+# Exportador de DESENVOLVIMENTO para registros históricos que não retiveram o
+# STAGE selado. Canais oficiais devem emitir o artefato no próprio build.
+set -eu
+umask 022
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+ROOTFS=
+OUTPUT=
+REPOSITORY=
+SECRET_KEY=
+PUBLIC_KEY=
+CHANNEL=development
+CHANNEL_URL=https://invalid.distropica.example/development/
+MINITRUE_BIN=${MINITRUE:-}
+PACKAGES="base linux"
+EPOCH=${SOURCE_DATE_EPOCH:-1704067200}
+BUSYBOX_SHA256=6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348
+
+usage() {
+    cat <<'EOF'
+uso: bootstrap/channel-from-rootfs --root ROOTFS --output CACHE \
+     --secret-key minisign.key --public-key minisign.pub [opções]
+
+  --minitrue ARQ     empacotador Minitrue (ou $MINITRUE)
+  --repository DIR   também produz a árvore HTTPS publicável (index + pool/)
+  --channel NOME     default: development
+  --url HTTPS/       URL-base registrada no canal
+  --packages "..."  default: "base linux"
+
+Produz um cache fechado consumível por `minipax --offline`: configuração,
+índice assinado e objetos content-addressed. Só aceita registros legados
+íntegros e marca o canal TRUST=builder; não transforma esses outputs em release.
+Requer `zstd` e `minisign`.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --root) ROOTFS=${2:?}; shift 2 ;;
+        --output) OUTPUT=${2:?}; shift 2 ;;
+        --repository) REPOSITORY=${2:?}; shift 2 ;;
+        --secret-key) SECRET_KEY=${2:?}; shift 2 ;;
+        --public-key) PUBLIC_KEY=${2:?}; shift 2 ;;
+        --minitrue) MINITRUE_BIN=${2:?}; shift 2 ;;
+        --channel) CHANNEL=${2:?}; shift 2 ;;
+        --url) CHANNEL_URL=${2:?}; shift 2 ;;
+        --packages) PACKAGES=${2:?}; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "erro: opção desconhecida: $1" >&2; usage >&2; exit 1 ;;
+    esac
+done
+
+[ -d "$ROOTFS" ] || { echo "erro: --root inválido" >&2; exit 1; }
+[ -n "$OUTPUT" ] || { echo "erro: --output é obrigatório" >&2; exit 1; }
+[ ! -e "$OUTPUT" ] || { echo "erro: saída já existe: $OUTPUT" >&2; exit 1; }
+if [ -n "$REPOSITORY" ] && [ -e "$REPOSITORY" ]; then
+    echo "erro: repositório de saída já existe: $REPOSITORY" >&2; exit 1
+fi
+[ -f "$SECRET_KEY" ] && [ -f "$PUBLIC_KEY" ] || {
+    echo "erro: as duas chaves minisign são obrigatórias" >&2; exit 1;
+}
+case "$CHANNEL" in *[!a-z0-9._+-]*|"") echo "erro: nome de canal inválido" >&2; exit 1 ;; esac
+case "$CHANNEL_URL" in https://*/) ;; *) echo "erro: --url precisa ser HTTPS e terminar em /" >&2; exit 1 ;; esac
+command -v zstd >/dev/null 2>&1 || { echo "erro: zstd ausente" >&2; exit 1; }
+command -v minisign >/dev/null 2>&1 || { echo "erro: minisign ausente" >&2; exit 1; }
+
+if [ -z "$MINITRUE_BIN" ]; then
+    CARGO_TARGET_DIR=${DISTROPICA_TARGET_DIR:-"$REPO/target/channel-export"} \
+        cargo build --locked --release --quiet --manifest-path "$REPO/minitrue/Cargo.toml"
+    MINITRUE_BIN=${DISTROPICA_TARGET_DIR:-"$REPO/target/channel-export"}/release/minitrue
+fi
+[ -x "$MINITRUE_BIN" ] || { echo "erro: Minitrue inválido" >&2; exit 1; }
+
+ROOTFS=$(CDPATH= cd -- "$ROOTFS" && pwd -P)
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/distropica-channel.XXXXXXXX")
+trap 'rm -rf -- "$WORK"' EXIT HUP INT TERM
+mkdir -p "$WORK/cache/channel-config" "$WORK/cache/channels/$CHANNEL" "$WORK/pool"
+INDEX=$WORK/cache/channels/$CHANNEL/index
+: > "$INDEX"
+
+# A closure runtime do perfil mínimo ainda contém o BusyBox do mundo A. Ele
+# continua sendo o binário original do upstream; apenas copiamos o objeto já
+# verificado do cache E2 para que o primeiro boot não dependa de rede.
+busybox_object=$ROOTFS/var/cache/minitrue/$BUSYBOX_SHA256
+[ -f "$busybox_object" ] && [ ! -L "$busybox_object" ] || {
+    echo "erro: cache do BusyBox upstream ausente" >&2; exit 1;
+}
+[ "$(sha256sum "$busybox_object" | awk '{print $1}')" = "$BUSYBOX_SHA256" ] || {
+    echo "erro: cache do BusyBox upstream foi alterado" >&2; exit 1;
+}
+cp "$busybox_object" "$WORK/cache/$BUSYBOX_SHA256"
+
+field() {
+    key=$1
+    file=$2
+    sed -n "s/^${key}=//p" "$file" | head -n 1
+}
+
+for package in $PACKAGES; do
+    case "$package" in
+        ""|.|..|[!a-z0-9]*|*[!a-z0-9+._-]*)
+            echo "erro: nome de pacote inválido: $package" >&2; exit 1 ;;
+    esac
+    record=$ROOTFS/var/lib/minitrue/records/$package
+    meta=$record/meta
+    manifest=$record/manifest
+    [ -f "$meta" ] && [ -f "$manifest" ] || {
+        echo "erro: registro ausente: $package" >&2; exit 1;
+    }
+    version=$(field VERSION "$meta")
+    kind=$(field KIND "$meta")
+    format=$(field RECORD_FORMAT "$meta")
+    fingerprint=$(field FINGERPRINT "$meta")
+    [ "$kind" = source ] && [ "$format" = 1 ] && [ -n "$version" ] || {
+        echo "erro: $package não é registro fonte versionado" >&2; exit 1;
+    }
+    if [ "${#fingerprint}" -ne 64 ]; then
+        echo "erro: fingerprint de receita inválido em $package" >&2; exit 1
+    fi
+    case "$fingerprint" in
+        *[!0-9a-f]*)
+            echo "erro: fingerprint de receita inválido em $package" >&2; exit 1 ;;
+    esac
+    case "$version" in
+        *[!A-Za-z0-9+._~-]*|.|..|*..*|"")
+            echo "erro: versão insegura em $package: $version" >&2; exit 1 ;;
+    esac
+    stage=$WORK/stage-$package
+    mkdir -p "$stage"
+    while IFS='  ' read -r expected installed; do
+        case "$expected" in
+            [0-9a-f][0-9a-f]*) ;;
+            *) echo "erro: manifesto não legado em $package" >&2; exit 1 ;;
+        esac
+        case "$installed" in /*) ;; *) echo "erro: claim não absoluta em $package" >&2; exit 1 ;; esac
+        case "$installed" in
+            *'/../'*|*/..|*'//'*) echo "erro: claim não canônica: $installed" >&2; exit 1 ;;
+        esac
+        source=$ROOTFS$installed
+        [ -f "$source" ] && [ ! -L "$source" ] || {
+            echo "erro: claim ausente/não regular: $installed" >&2; exit 1;
+        }
+        source_real=$(readlink -f -- "$source")
+        case "$source_real" in
+            "$ROOTFS"/*) ;;
+            *) echo "erro: claim escapa do rootfs: $installed" >&2; exit 1 ;;
+        esac
+        obtained=$(sha256sum "$source_real" | awk '{print $1}')
+        [ "$obtained" = "$expected" ] || {
+            echo "erro: claim alterada: $installed" >&2; exit 1;
+        }
+        relative=${installed#/}
+        case "$relative" in
+            usr/share/factory/etc/*) relative=etc/${relative#usr/share/factory/etc/} ;;
+        esac
+        destination=$stage/$relative
+        mkdir -p "$(dirname -- "$destination")"
+        cp -p "$source_real" "$destination"
+    done < "$manifest"
+
+    tar_path=$WORK/$package-$version-x86_64.tar
+    pack_output=$(SOURCE_DATE_EPOCH=$EPOCH "$MINITRUE_BIN" pack "$stage" "$tar_path")
+    reprocorr=${pack_output%% *}
+    artifact=$WORK/pool/$package-$version-x86_64.tar.zst
+    zstd --quiet --threads=1 -19 "$tar_path" -o "$artifact"
+    transport=$(sha256sum "$artifact" | awk '{print $1}')
+    cp "$artifact" "$WORK/cache/$transport"
+    printf '%s %s x86_64 %s pool/%s-%s-x86_64.tar.zst %s %s\n' \
+        "$package" "$version" "$fingerprint" "$package" "$version" \
+        "$transport" "$reprocorr" >> "$INDEX"
+done
+
+LC_ALL=C sort -o "$INDEX" "$INDEX"
+minisign -S -q -s "$SECRET_KEY" -m "$INDEX" \
+    -c "Distropica development channel" -t "timestamp:$EPOCH file:index" \
+    -x "$WORK/cache/channels/$CHANNEL/index.minisig"
+minisign -V -q -p "$PUBLIC_KEY" -m "$INDEX" \
+    -x "$WORK/cache/channels/$CHANNEL/index.minisig" || {
+        echo "erro: chave pública não valida a assinatura recém-criada" >&2; exit 1;
+    }
+public=$(sed -n '2p' "$PUBLIC_KEY")
+[ -n "$public" ] || { echo "erro: chave pública minisign inválida" >&2; exit 1; }
+cat > "$WORK/cache/channel-config/$CHANNEL" <<EOF
+URL=$CHANNEL_URL
+KEY=$public
+PRIORITY=10
+TRUST=builder
+EOF
+
+if [ -n "$REPOSITORY" ]; then
+    mkdir -p "$REPOSITORY/pool"
+    cp "$INDEX" "$REPOSITORY/index"
+    cp "$WORK/cache/channels/$CHANNEL/index.minisig" "$REPOSITORY/index.minisig"
+    cp "$WORK"/pool/*.tar.zst "$REPOSITORY/pool/"
+fi
+
+mv "$WORK/cache" "$OUTPUT"
+echo "cache fechado de desenvolvimento: $OUTPUT"
+if [ -n "$REPOSITORY" ]; then echo "árvore HTTPS publicável: $REPOSITORY"; fi
+echo "índice:"
+cat "$OUTPUT/channels/$CHANNEL/index"

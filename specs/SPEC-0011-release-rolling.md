@@ -165,12 +165,16 @@ projeto é o stable novo.
 | `rectify --sync` | speced, *stubbed* (SPEC-0003) |
 | Fingerprint de build | **implementado, transitivo** (§4) |
 | Rollback de mundo B | **lacuna** (§5.1) |
-| Canal republicando no roll | speced (SPEC-0009), não implementado |
+| Canal binário: consumo, lock v2 e emissão | **implementação inicial pronta** (SPEC-0009) |
+| `channel refresh` autenticado + diff auditável | **não implementado; gate de release** |
+| Republicação automática a cada roll | especificada, não implementada |
 
-Com o fingerprint feito, restam três peças: **árvore-como-pacote** (o motor)
-e **rollback de mundo B** (a rede) — exclusivamente-rolling — e o **canal**
-republicando (compartilhada com reprodutibilidade). O fingerprint v1 →
-transitivo é refinamento, não bloqueio.
+Com o fingerprint transitivo e o protocolo binário inicial feitos, restam três
+peças: **árvore-como-pacote** (o motor), **rollback de mundo B** (a rede) —
+exclusivamente rolling — e a automação que recompõe, assina e publica o canal
+a cada roll. Também falta o `channel refresh` que valida o índice, apresenta a
+mudança e só então avança explicitamente o snapshot local. A publicação de um
+canal oficial continua ausente.
 
 ## 8. Questões em aberto
 

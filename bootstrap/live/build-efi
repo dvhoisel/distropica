@@ -1,0 +1,360 @@
+#!/bin/sh
+# Compõe um bzImage EFI-stub com initramfs vivo incorporado.
+set -eu
+umask 022
+LC_ALL=C
+export LC_ALL
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+LINUX_VERSION=7.1.4
+LINUX_SHA256=1c63922a119675d38e3ae0f8f6ee07f15c41a786ab9ed66563749bb8c9a08e2e
+LINUX_URL=https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${LINUX_VERSION}.tar.xz
+BUSYBOX_SHA256=6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348
+BUSYBOX_URL=https://www.busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox
+RUST_TARGET=x86_64-unknown-linux-musl
+EPOCH=${SOURCE_DATE_EPOCH:-1704067200}
+JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)}
+OUTPUT=
+WORK=
+KEEP_WORK=no
+INSTALL_DEVICE=
+REMOVE_WORK=no
+PUBLISH_TMP=
+LINUX_TAR=${DISTROPICA_LINUX_TAR:-}
+BUSYBOX=${DISTROPICA_BUSYBOX:-}
+MINIPAX_BIN=${MINIPAX:-}
+MINITRUE_BIN=${MINITRUE:-}
+
+usage() {
+    cat <<'EOF'
+uso: bootstrap/live/build-efi --output BOOTX64.EFI [opções]
+
+  --work DIR          workspace novo ou já marcado pelo script (default: temporário)
+  --keep-work         preserva o diretório temporário
+  --linux-tar ARQ     linux-7.1.4.tar.xz já baixado
+  --busybox ARQ       BusyBox x86_64-musl estático já baixado
+  --minipax ARQ       Minipax x86_64-musl estático já compilado
+  --minitrue ARQ      Minitrue x86_64-musl estático já compilado
+  --install-device D  autoriza instalação automática nesse disco no boot
+  --jobs N            paralelismo do kernel
+
+Sem os arquivos opcionais, baixa Linux/BusyBox com hashes pinados e compila
+Minipax/Minitrue para x86_64-unknown-linux-musl. A saída não é sobrescrita.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --output) OUTPUT=${2:?}; shift 2 ;;
+        --work) WORK=${2:?}; shift 2 ;;
+        --keep-work) KEEP_WORK=yes; shift ;;
+        --linux-tar) LINUX_TAR=${2:?}; shift 2 ;;
+        --busybox) BUSYBOX=${2:?}; shift 2 ;;
+        --minipax) MINIPAX_BIN=${2:?}; shift 2 ;;
+        --minitrue) MINITRUE_BIN=${2:?}; shift 2 ;;
+        --install-device) INSTALL_DEVICE=${2:?}; shift 2 ;;
+        --jobs) JOBS=${2:?}; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "erro: opção desconhecida: $1" >&2; usage >&2; exit 1 ;;
+    esac
+done
+
+[ -n "$OUTPUT" ] || { echo "erro: --output é obrigatório" >&2; exit 1; }
+[ ! -e "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || {
+    echo "erro: saída já existe: $OUTPUT" >&2; exit 1;
+}
+case "$INSTALL_DEVICE" in
+    ""|/dev/*) ;;
+    *) echo "erro: --install-device precisa estar sob /dev" >&2; exit 1 ;;
+esac
+case "$JOBS" in *[!0-9]*|"") echo "erro: --jobs inválido" >&2; exit 1 ;; esac
+[ "$JOBS" -ge 1 ] || { echo "erro: --jobs precisa ser pelo menos 1" >&2; exit 1; }
+
+if [ -z "$WORK" ]; then
+    WORK=$(mktemp -d "${TMPDIR:-/tmp}/distropica-live.XXXXXXXX")
+    [ "$KEEP_WORK" = yes ] || REMOVE_WORK=yes
+else
+    work_was_new=no
+    if [ ! -e "$WORK" ] && [ ! -L "$WORK" ]; then
+        mkdir -- "$WORK"
+        work_was_new=yes
+    fi
+    [ -d "$WORK" ] && [ ! -L "$WORK" ] || {
+        echo "erro: --work precisa ser diretório real: $WORK" >&2; exit 1;
+    }
+    WORK=$(CDPATH= cd -- "$WORK" && pwd -P)
+    WORK_MARKER=$WORK/.distropica-live-work
+    if [ "$work_was_new" = yes ]; then
+        (set -C; printf '%s\n' 'DISTROPICA_LIVE_WORK_FORMAT=1' > "$WORK_MARKER") || {
+            echo "erro: não criei o marcador do --work: $WORK_MARKER" >&2; exit 1;
+        }
+    fi
+    [ -f "$WORK_MARKER" ] && [ ! -L "$WORK_MARKER" ] &&
+        [ "$(cat "$WORK_MARKER")" = 'DISTROPICA_LIVE_WORK_FORMAT=1' ] || {
+        echo "erro: recusei --work existente sem marcador da Distrópica: $WORK" >&2
+        exit 1
+    }
+fi
+
+cleanup() {
+    if [ -n "$PUBLISH_TMP" ]; then
+        rm -f -- "$PUBLISH_TMP"
+    fi
+    if [ "$REMOVE_WORK" = yes ]; then
+        rm -rf -- "$WORK"
+    fi
+}
+trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
+
+fetch() {
+    url=$1
+    destination=$2
+    if command -v curl >/dev/null 2>&1; then
+        curl --fail --location --proto '=https' --tlsv1.2 --output "$destination" "$url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget --https-only -O "$destination" "$url"
+    else
+        echo "erro: curl ou wget é necessário" >&2
+        exit 1
+    fi
+}
+
+check_hash() {
+    expected=$1
+    path=$2
+    actual=$(sha256sum "$path" | awk '{print $1}')
+    [ "$actual" = "$expected" ] || {
+        echo "erro: sha256 divergente em $path" >&2
+        echo "esperado: $expected" >&2
+        echo "obtido:  $actual" >&2
+        exit 1
+    }
+}
+
+require_static() {
+    path=$1
+    [ -f "$path" ] && [ -x "$path" ] || {
+        echo "erro: binário ausente/não executável: $path" >&2; exit 1;
+    }
+    elf_header=$(readelf -h "$path" 2>/dev/null) || {
+        echo "erro: o initramfs exige ELF válido: $path" >&2
+        exit 1
+    }
+    printf '%s\n' "$elf_header" | grep -q 'Machine:.*X86-64' || {
+        echo "erro: o initramfs exige ELF x86-64: $path" >&2
+        exit 1
+    }
+    printf '%s\n' "$elf_header" | grep -Eq 'Type:[[:space:]]+(EXEC|DYN)' || {
+        echo "erro: o initramfs exige ELF executável/PIE, não objeto relocável: $path" >&2
+        exit 1
+    }
+    program_headers=$(readelf -l "$path" 2>/dev/null) || {
+        echo "erro: não li os program headers ELF de $path" >&2
+        exit 1
+    }
+    if printf '%s\n' "$program_headers" | grep -q 'INTERP'; then
+        echo "erro: o initramfs exige binário estático: $path" >&2
+        exit 1
+    fi
+}
+
+if [ -z "$LINUX_TAR" ]; then
+    LINUX_TAR=$WORK/linux-${LINUX_VERSION}.tar.xz
+    [ -f "$LINUX_TAR" ] || fetch "$LINUX_URL" "$LINUX_TAR"
+fi
+check_hash "$LINUX_SHA256" "$LINUX_TAR"
+
+if [ -z "$BUSYBOX" ]; then
+    BUSYBOX=$WORK/busybox
+    [ -f "$BUSYBOX" ] || fetch "$BUSYBOX_URL" "$BUSYBOX"
+    chmod 755 "$BUSYBOX"
+fi
+check_hash "$BUSYBOX_SHA256" "$BUSYBOX"
+require_static "$BUSYBOX"
+
+build_rust_binary() {
+    package=$1
+    manifest=$REPO/$package/Cargo.toml
+    destination=$WORK/cargo-$package
+    CARGO_TARGET_DIR=$destination cargo build --locked --release \
+        --target "$RUST_TARGET" --manifest-path "$manifest"
+    echo "$destination/$RUST_TARGET/release/$package"
+}
+
+configure_musl_cc() {
+    if [ -n "${CC_x86_64_unknown_linux_musl:-}" ] ||
+       [ -n "${TARGET_CC:-}" ] || [ -n "${CC:-}" ] ||
+       [ -n "${CROSS_COMPILE:-}" ]; then
+        return 0
+    fi
+    if command -v x86_64-linux-musl-gcc >/dev/null 2>&1; then
+        CC_x86_64_unknown_linux_musl=$(command -v x86_64-linux-musl-gcc)
+    elif command -v musl-gcc >/dev/null 2>&1; then
+        CC_x86_64_unknown_linux_musl=$(command -v musl-gcc)
+    elif command -v clang >/dev/null 2>&1; then
+        CC_x86_64_unknown_linux_musl=$(command -v clang)
+    else
+        echo "erro: compilador C para $RUST_TARGET ausente" >&2
+        echo "defina CC_x86_64_unknown_linux_musl ou forneça --minitrue" >&2
+        exit 1
+    fi
+    export CC_x86_64_unknown_linux_musl
+}
+
+command -v readelf >/dev/null 2>&1 || { echo "erro: readelf ausente" >&2; exit 1; }
+if [ -z "$MINIPAX_BIN" ]; then MINIPAX_BIN=$(build_rust_binary minipax); fi
+if [ -z "$MINITRUE_BIN" ]; then
+    configure_musl_cc
+    MINITRUE_BIN=$(build_rust_binary minitrue)
+fi
+require_static "$MINIPAX_BIN"
+require_static "$MINITRUE_BIN"
+
+INITROOT=$WORK/initramfs
+rm -rf -- "$INITROOT"
+mkdir -p "$INITROOT/bin" "$INITROOT/dev" "$INITROOT/etc" "$INITROOT/proc" \
+    "$INITROOT/sys" "$INITROOT/run" "$INITROOT/tmp" "$INITROOT/usr/bin" \
+    "$INITROOT/sbin" "$INITROOT/media" "$INITROOT/target" "$INITROOT/newroot"
+cp "$BUSYBOX" "$INITROOT/bin/busybox"
+cp "$MINIPAX_BIN" "$INITROOT/bin/minipax"
+cp "$MINITRUE_BIN" "$INITROOT/bin/minitrue"
+cp "$REPO/bootstrap/live/init" "$INITROOT/init"
+mkdir -p "$INITROOT/usr/share/udhcpc"
+cp "$REPO/bootstrap/live/udhcpc.script" \
+    "$INITROOT/usr/share/udhcpc/default.script"
+chmod 755 "$INITROOT/init" "$INITROOT/bin/busybox" \
+    "$INITROOT/bin/minipax" "$INITROOT/bin/minitrue" \
+    "$INITROOT/usr/share/udhcpc/default.script"
+for applet in $("$BUSYBOX" --list); do
+    case "$applet" in */*) continue ;; esac
+    [ -e "$INITROOT/bin/$applet" ] || ln -s busybox "$INITROOT/bin/$applet"
+done
+ln -s ../bin/busybox "$INITROOT/sbin/init"
+printf 'root:x:0:0:root:/root:/bin/sh\n' > "$INITROOT/etc/passwd"
+printf 'root:x:0:\n' > "$INITROOT/etc/group"
+printf 'nameserver 1.1.1.1\n' > "$INITROOT/etc/resolv.conf"
+
+# Na mídia interativa, tty0 precisa continuar sendo /dev/console para que os
+# prompts apareçam no monitor. O artefato automatizado inverte a prioridade:
+# assim toda a prova do instalador chega ao log serial do QEMU.
+CMDLINE='console=ttyS0,115200 console=tty0 panic=-1 rdinit=/init'
+if [ -n "$INSTALL_DEVICE" ]; then
+    CMDLINE="console=tty0 console=ttyS0,115200 panic=-1 rdinit=/init"
+    CMDLINE="$CMDLINE distropica.install=$INSTALL_DEVICE distropica.test=1"
+fi
+
+SOURCE=$WORK/linux-source
+rm -rf -- "$SOURCE"
+mkdir -p "$SOURCE"
+tar -xJf "$LINUX_TAR" -C "$SOURCE" --strip-components=1
+cp -a "$INITROOT" "$SOURCE/distropica-initramfs"
+printf '%s\n' \
+    'nod /dev/console 0600 0 0 c 5 1' \
+    'nod /dev/null 0666 0 0 c 1 3' \
+    > "$SOURCE/distropica-devices.list"
+find "$SOURCE/distropica-initramfs" -exec touch -h -d "@$EPOCH" {} +
+touch -d "@$EPOCH" "$SOURCE/distropica-devices.list"
+
+command -v make >/dev/null 2>&1 || { echo "erro: make ausente" >&2; exit 1; }
+command -v gcc >/dev/null 2>&1 || { echo "erro: gcc ausente" >&2; exit 1; }
+command -v flex >/dev/null 2>&1 || { echo "erro: flex ausente" >&2; exit 1; }
+command -v bison >/dev/null 2>&1 || { echo "erro: bison ausente" >&2; exit 1; }
+command -v pkg-config >/dev/null 2>&1 || { echo "erro: pkg-config ausente" >&2; exit 1; }
+pkg-config --exists libelf || {
+    echo "erro: headers/biblioteca libelf ausentes (pkg-config libelf)" >&2; exit 1;
+}
+
+make -C "$SOURCE" defconfig
+CONFIG=$SOURCE/scripts/config
+set_config() {
+    "$CONFIG" --file "$SOURCE/.config" "$@"
+}
+set_config --enable MODULES
+set_config --disable MODULE_SIG
+set_config --disable DEBUG_INFO_BTF
+set_config --disable LOCALVERSION_AUTO
+set_config --set-str LOCALVERSION "-distropica-live"
+set_config --disable IKCONFIG
+for symbol in SOUND NETWORK_FILESYSTEMS NFS_FS NETFILTER SECURITY_SELINUX \
+    IO_URING HIBERNATION SUSPEND KEXEC KEXEC_FILE CRASH_DUMP CGROUPS \
+    PERF_EVENTS FTRACE BPF_SYSCALL NUMA CPU_FREQ CPU_IDLE WIRELESS; do
+    set_config --disable "$symbol"
+done
+set_config --set-str SYSTEM_TRUSTED_KEYS ""
+set_config --set-str SYSTEM_REVOCATION_KEYS ""
+set_config --set-str INITRAMFS_SOURCE \
+    "distropica-initramfs distropica-devices.list"
+set_config --set-val INITRAMFS_ROOT_UID "$(id -u)"
+set_config --set-val INITRAMFS_ROOT_GID "$(id -g)"
+set_config --enable CMDLINE_BOOL
+set_config --set-str CMDLINE "$CMDLINE"
+for symbol in EFI EFI_STUB BLK_DEV_INITRD DEVTMPFS DEVTMPFS_MOUNT TMPFS \
+    PROC_FS SYSFS UNIX INET PACKET PCI VIRTIO VIRTIO_PCI VIRTIO_BLK \
+    VIRTIO_NET SCSI BLK_DEV_SD BLK_DEV_SR ATA SATA_AHCI ATA_PIIX \
+    MSDOS_PARTITION EFI_PARTITION EXT4_FS EXT4_USE_FOR_EXT2 FAT_FS \
+    MSDOS_FS VFAT_FS NLS_CODEPAGE_437 NLS_ISO8859_1 ISO9660_FS \
+    SERIAL_8250 SERIAL_8250_CONSOLE; do
+    set_config --enable "$symbol"
+done
+make -C "$SOURCE" olddefconfig
+grep -q '^CONFIG_CMDLINE_BOOL=y$' "$SOURCE/.config" || {
+    echo "erro: kernel descartou CONFIG_CMDLINE_BOOL=y" >&2; exit 1;
+}
+grep -q '^CONFIG_MODULES=y$' "$SOURCE/.config" || {
+    echo "erro: kernel descartou CONFIG_MODULES=y" >&2; exit 1;
+}
+grep -q '^CONFIG_LOCALVERSION="-distropica-live"$' "$SOURCE/.config" || {
+    echo "erro: kernel descartou o release isolado da mídia" >&2; exit 1;
+}
+grep -q "^CONFIG_INITRAMFS_ROOT_UID=$(id -u)$" "$SOURCE/.config" || {
+    echo "erro: UID do initramfs não foi normalizado para root" >&2; exit 1;
+}
+grep -q "^CONFIG_INITRAMFS_ROOT_GID=$(id -g)$" "$SOURCE/.config" || {
+    echo "erro: GID do initramfs não foi normalizado para root" >&2; exit 1;
+}
+grep -Fqx "CONFIG_CMDLINE=\"$CMDLINE\"" "$SOURCE/.config" || {
+    echo "erro: kernel descartou a cmdline viva" >&2; exit 1;
+}
+for symbol in EFI_STUB BLK_DEV_INITRD VIRTIO_BLK VIRTIO_NET BLK_DEV_SR \
+    SATA_AHCI EXT4_FS EXT4_USE_FOR_EXT2 VFAT_FS NLS_CODEPAGE_437 \
+    NLS_ISO8859_1 ISO9660_FS SERIAL_8250_CONSOLE; do
+    grep -q "^CONFIG_${symbol}=y$" "$SOURCE/.config" || {
+        echo "erro: kernel não fixou CONFIG_${symbol}=y" >&2; exit 1;
+    }
+done
+
+BUILD_TIMESTAMP=$(date -u -d "@$EPOCH" '+%a %b %e %T UTC %Y')
+make -C "$SOURCE" -j"$JOBS" \
+    SOURCE_DATE_EPOCH="$EPOCH" \
+    KBUILD_BUILD_TIMESTAMP="$BUILD_TIMESTAMP" \
+    KBUILD_BUILD_USER=distropica KBUILD_BUILD_HOST=builder \
+    KBUILD_BUILD_VERSION=1 \
+    KCFLAGS="-fdebug-prefix-map=$SOURCE=/usr/src/linux" \
+    HOSTCFLAGS="-fdebug-prefix-map=$SOURCE=/usr/src/linux" bzImage
+
+BUILT=$SOURCE/arch/x86/boot/bzImage
+file "$BUILT" | grep -q 'Linux kernel x86 boot executable' || {
+    echo "erro: saída do kernel inválida" >&2; exit 1;
+}
+output_parent=$(dirname -- "$OUTPUT")
+output_name=$(basename -- "$OUTPUT")
+case "$output_name" in ""|.|..) echo "erro: nome de saída inválido" >&2; exit 1 ;; esac
+mkdir -p "$output_parent"
+output_parent=$(CDPATH= cd -- "$output_parent" && pwd -P)
+OUTPUT=$output_parent/$output_name
+[ ! -e "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || {
+    echo "erro: saída apareceu durante o build: $OUTPUT" >&2; exit 1;
+}
+PUBLISH_TMP=$(mktemp "$output_parent/.${output_name}.tmp.XXXXXXXX")
+cp "$BUILT" "$PUBLISH_TMP"
+chmod 644 "$PUBLISH_TMP"
+if ! ln "$PUBLISH_TMP" "$OUTPUT"; then
+    echo "erro: saída apareceu durante a publicação: $OUTPUT" >&2
+    exit 1
+fi
+rm -f -- "$PUBLISH_TMP"
+PUBLISH_TMP=
+echo "BOOTX64.EFI vivo: $OUTPUT"
+sha256sum "$OUTPUT"
+if [ "$KEEP_WORK" = yes ]; then echo "work preservado: $WORK"; fi

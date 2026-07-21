@@ -1,4 +1,5 @@
 mod attest;
+mod channel;
 mod fetch;
 mod install;
 mod pack;
@@ -91,6 +92,8 @@ uso: minitrue [--root DIR] [--offline] [--tofu] [--no-binary|--only-binary] [--j
   attest keygen <nome> <chave>  cria identidade ed25519 de builder
   attest <pacote> <builder> <chave>  emite attestation assinada
   corroborate <pacote>  coteja attestations confiáveis com o registro local
+  channel emit --output DIR <pacote>...
+                        emite tar.zst + índice v2 a partir de registros B íntegros
 
 chegam no Marco 0.2: rectify --sync, rollback, unperson, lint, SIGSUMS e
 OpenPGP.";
@@ -114,6 +117,7 @@ fn run() -> anyhow::Result<()> {
     let mut sync = false;
     let mut no_binary = false;
     let mut only_binary = false;
+    let mut output: Option<PathBuf> = None;
     let mut jobs = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
@@ -130,9 +134,8 @@ fn run() -> anyhow::Result<()> {
             }
             "--offline" => offline = true,
             "--tofu" => tofu = true,
-            // O executor atual já compila KIND=source localmente. A flag torna
-            // esse contrato explícito para o minipax e continuará proibindo
-            // canais quando eles chegarem, sem mudar o resultado hoje.
+            // Força a compilação local de KIND=source e proíbe qualquer
+            // seleção nos canais binários configurados.
             "--no-binary" => no_binary = true,
             "--only-binary" => only_binary = true,
             "--sync" => sync = true,
@@ -144,6 +147,12 @@ fn run() -> anyhow::Result<()> {
                         code: 1,
                         msg: "--jobs exige número".into(),
                     })?
+            }
+            "--output" => {
+                output = Some(PathBuf::from(args.next().ok_or_else(|| Fail {
+                    code: 1,
+                    msg: "--output exige diretório".into(),
+                })?));
             }
             "-h" | "--help" => {
                 println!("{USO}");
@@ -167,22 +176,26 @@ fn run() -> anyhow::Result<()> {
     if (no_binary || only_binary) && cmd.as_deref() != Some("rectify") {
         return fail(1, "--no-binary/--only-binary só se aplicam a rectify");
     }
+    if output.is_some() && cmd.as_deref() != Some("channel") {
+        return fail(1, "--output só se aplica a channel emit");
+    }
 
     match cmd.as_deref() {
         Some("rectify") => {
-            if only_binary {
-                return fail(
-                    1,
-                    "--only-binary exige canais binários, ainda não implementados (SPEC-0009)",
-                );
-            }
             if sync {
                 return fail(1, "rectify --sync chega no Marco 0.2");
             }
             if names.is_empty() {
                 return fail(1, "rectify: diga o que retificar");
             }
-            install::rectify(&ctx, &names)
+            let policy = if no_binary {
+                install::BinaryPolicy::SourceOnly
+            } else if only_binary {
+                install::BinaryPolicy::BinaryOnly
+            } else {
+                install::BinaryPolicy::PreferBinary
+            };
+            install::rectify(&ctx, &names, policy)
         }
         Some("memoryhole") => {
             if names.is_empty() {
@@ -224,6 +237,18 @@ fn run() -> anyhow::Result<()> {
         Some("corroborate") => match names.first() {
             Some(p) => attest::corroborate(&ctx, p),
             None => fail(1, "corroborate: diga o pacote"),
+        },
+        Some("channel") => match names.first().map(String::as_str) {
+            Some("emit") if names.len() >= 2 => {
+                let output = output.ok_or_else(|| Fail {
+                    code: 1,
+                    msg: "channel emit exige --output DIR".into(),
+                })?;
+                install::channel_emit(&ctx, &output, &names[1..])
+            }
+            Some("emit") => fail(1, "channel emit: diga ao menos um pacote"),
+            Some(other) => fail(1, format!("channel: subcomando desconhecido {other}")),
+            None => fail(1, "channel: diga o subcomando (emit)"),
         },
         Some("pack") => {
             let dir = match names.first() {

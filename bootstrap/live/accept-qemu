@@ -1,0 +1,356 @@
+#!/bin/sh
+# Aceite funcional da mídia instalável sob QEMU/OVMF.
+#
+# O ISO precisa ter sido composto com um BOOTX64.EFI de teste criado por:
+#   bootstrap/live/build-efi --install-device /dev/vda ...
+#
+# O script nunca reutiliza nem trunca um disco/log existente. Em caso de
+# falha, preserva disco, variável store e logs para diagnóstico.
+set -eu
+umask 022
+
+ISO=
+DISK=
+LOG_DIR=
+OVMF_CODE=${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE_4M.fd}
+OVMF_VARS_TEMPLATE=${OVMF_VARS_TEMPLATE:-/usr/share/OVMF/OVMF_VARS_4M.fd}
+QEMU=${QEMU_SYSTEM_X86_64:-}
+DISK_SIZE_MIB=2048
+MEMORY_MIB=2048
+INSTALL_TIMEOUT=600
+BOOT_TIMEOUT=180
+ACCEL=tcg
+ACTIVE_QEMU_PID=
+TERMINATION_PENDING=
+
+usage() {
+    cat <<'EOF'
+uso: bootstrap/live/accept-qemu --iso ARQ --disk NOVO.raw \
+       --log-dir NOVO-DIR [opções]
+
+Obrigatórios:
+  --iso ARQ              ISO offline instalável já construído
+  --disk NOVO.raw        disco raw que será criado; precisa não existir
+  --log-dir NOVO-DIR     diretório novo para logs, OVMF_VARS e metadados
+
+Opções:
+  --ovmf-code ARQ        default: /usr/share/OVMF/OVMF_CODE_4M.fd
+  --ovmf-vars ARQ        template default: /usr/share/OVMF/OVMF_VARS_4M.fd
+  --qemu ARQ             default: qemu-system-x86_64 do PATH
+  --disk-size-mib N      default: 2048 (mínimo: 256)
+  --memory-mib N         default: 2048 (mínimo: 512)
+  --install-timeout N    segundos para instalar e reiniciar (default: 600)
+  --boot-timeout N       segundos para alcançar o getty (default: 180)
+  --accel tcg|kvm        default: tcg; kvm exige /dev/kvm acessível
+
+O primeiro boot usa CD-ROM + /dev/vda e -no-reboot: o reboot emitido pelo
+instalador precisa encerrar o QEMU. O segundo boot não conecta o ISO e só
+passa quando o serial contém a mensagem de rcS e `distropica login:`.
+Nenhuma rede é apresentada à VM, provando o caminho offline.
+EOF
+}
+
+fail() {
+    echo "accept-qemu: erro: $*" >&2
+    exit 1
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --iso) ISO=${2:?}; shift 2 ;;
+        --disk) DISK=${2:?}; shift 2 ;;
+        --log-dir) LOG_DIR=${2:?}; shift 2 ;;
+        --ovmf-code) OVMF_CODE=${2:?}; shift 2 ;;
+        --ovmf-vars) OVMF_VARS_TEMPLATE=${2:?}; shift 2 ;;
+        --qemu) QEMU=${2:?}; shift 2 ;;
+        --disk-size-mib) DISK_SIZE_MIB=${2:?}; shift 2 ;;
+        --memory-mib) MEMORY_MIB=${2:?}; shift 2 ;;
+        --install-timeout) INSTALL_TIMEOUT=${2:?}; shift 2 ;;
+        --boot-timeout) BOOT_TIMEOUT=${2:?}; shift 2 ;;
+        --accel) ACCEL=${2:?}; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) fail "opção desconhecida: $1" ;;
+    esac
+done
+
+[ -n "$ISO" ] || fail "--iso é obrigatório"
+[ -n "$DISK" ] || fail "--disk é obrigatório"
+[ -n "$LOG_DIR" ] || fail "--log-dir é obrigatório"
+
+positive_decimal() {
+    case "$2" in
+        0|[1-9]|[1-9][0-9]*) ;;
+        *) fail "$1 precisa ser inteiro decimal não negativo" ;;
+    esac
+}
+
+positive_decimal --disk-size-mib "$DISK_SIZE_MIB"
+positive_decimal --memory-mib "$MEMORY_MIB"
+positive_decimal --install-timeout "$INSTALL_TIMEOUT"
+positive_decimal --boot-timeout "$BOOT_TIMEOUT"
+[ "$DISK_SIZE_MIB" -ge 256 ] && [ "$DISK_SIZE_MIB" -le 1048576 ] ||
+    fail "--disk-size-mib precisa estar entre 256 e 1048576"
+[ "$MEMORY_MIB" -ge 512 ] && [ "$MEMORY_MIB" -le 131072 ] ||
+    fail "--memory-mib precisa estar entre 512 e 131072"
+[ "$INSTALL_TIMEOUT" -ge 1 ] && [ "$INSTALL_TIMEOUT" -le 86400 ] ||
+    fail "--install-timeout precisa estar entre 1 e 86400"
+[ "$BOOT_TIMEOUT" -ge 1 ] && [ "$BOOT_TIMEOUT" -le 86400 ] ||
+    fail "--boot-timeout precisa estar entre 1 e 86400"
+case "$ACCEL" in
+    tcg) ;;
+    kvm)
+        [ -r /dev/kvm ] && [ -w /dev/kvm ] ||
+            fail "--accel kvm exige /dev/kvm legível e gravável"
+        ;;
+    *) fail "--accel aceita apenas tcg ou kvm" ;;
+esac
+
+for command in truncate sha256sum grep date sleep readlink dirname basename cp chmod mkdir mv wc awk sed tr; do
+    command -v "$command" >/dev/null 2>&1 || fail "dependência ausente: $command"
+done
+[ -r "/proc/$$/stat" ] || fail "procfs precisa estar montado para controlar os prazos do QEMU"
+if [ -z "$QEMU" ]; then
+    QEMU=$(command -v qemu-system-x86_64 2>/dev/null || true)
+fi
+[ -n "$QEMU" ] || fail "qemu-system-x86_64 ausente (use --qemu)"
+
+canonical_existing_file() {
+    input=$1
+    label=$2
+    [ -f "$input" ] || fail "$label ausente/não regular: $input"
+    resolved=$(readlink -f -- "$input")
+    [ -n "$resolved" ] && [ -f "$resolved" ] || fail "$label não pôde ser resolvido: $input"
+    case "$resolved" in
+        *,*) fail "$label contém vírgula, não representável com segurança no argumento QEMU: $resolved" ;;
+    esac
+    echo "$resolved"
+}
+
+canonical_new_path() {
+    input=$1
+    label=$2
+    parent=$(dirname -- "$input")
+    leaf=$(basename -- "$input")
+    case "$leaf" in ""|.|..) fail "$label não tem nome final seguro: $input" ;; esac
+    [ -d "$parent" ] || fail "diretório pai de $label não existe: $parent"
+    parent=$(CDPATH= cd -- "$parent" && pwd -P)
+    resolved=$parent/$leaf
+    case "$resolved" in
+        *,*) fail "$label contém vírgula, não representável com segurança no argumento QEMU: $resolved" ;;
+    esac
+    [ ! -e "$resolved" ] && [ ! -L "$resolved" ] ||
+        fail "$label já existe; nada será sobrescrito: $resolved"
+    echo "$resolved"
+}
+
+ISO=$(canonical_existing_file "$ISO" ISO)
+OVMF_CODE=$(canonical_existing_file "$OVMF_CODE" OVMF_CODE)
+OVMF_VARS_TEMPLATE=$(canonical_existing_file "$OVMF_VARS_TEMPLATE" OVMF_VARS)
+QEMU=$(canonical_existing_file "$QEMU" QEMU)
+[ -x "$QEMU" ] || fail "QEMU não é executável: $QEMU"
+DISK=$(canonical_new_path "$DISK" disco)
+LOG_DIR=$(canonical_new_path "$LOG_DIR" diretório-de-logs)
+[ "$DISK" != "$ISO" ] || fail "disco e ISO não podem ser o mesmo arquivo"
+
+code_size=$(wc -c < "$OVMF_CODE" | tr -d ' ')
+vars_size=$(wc -c < "$OVMF_VARS_TEMPLATE" | tr -d ' ')
+firmware_size=$((code_size + vars_size))
+[ "$code_size" -gt 0 ] && [ "$vars_size" -gt 0 ] &&
+    [ $((firmware_size % 1048576)) -eq 0 ] ||
+    fail "OVMF_CODE + OVMF_VARS não formam uma imagem de MiBs inteiros ($firmware_size bytes)"
+
+mkdir -- "$LOG_DIR"
+chmod 755 "$LOG_DIR"
+OVMF_VARS=$LOG_DIR/OVMF_VARS.fd
+INSTALL_LOG=$LOG_DIR/install.log
+BOOT_LOG=$LOG_DIR/boot.log
+META=$LOG_DIR/acceptance.meta
+cp -- "$OVMF_VARS_TEMPLATE" "$OVMF_VARS"
+chmod 600 "$OVMF_VARS"
+# Reserva o nome sem seguir um arquivo/symlink criado numa corrida após o
+# preflight. Só então o `truncate` aumenta o arquivo que acabamos de criar.
+(set -C; : > "$DISK") 2>/dev/null ||
+    fail "disco apareceu durante a criação; nada será sobrescrito: $DISK"
+truncate -s "${DISK_SIZE_MIB}M" -- "$DISK"
+chmod 600 "$DISK"
+
+iso_sha=$(sha256sum "$ISO" | awk '{print $1}')
+code_sha=$(sha256sum "$OVMF_CODE" | awk '{print $1}')
+vars_template_sha=$(sha256sum "$OVMF_VARS_TEMPLATE" | awk '{print $1}')
+qemu_sha=$(sha256sum "$QEMU" | awk '{print $1}')
+qemu_version=$("$QEMU" --version | sed -n '1p')
+cat > "$META" <<EOF
+ACCEPTANCE_FORMAT=1
+RUN_STATE=started
+ISO=$ISO
+ISO_SHA256=$iso_sha
+DISK=$DISK
+DISK_SIZE_MIB=$DISK_SIZE_MIB
+LOG_DIR=$LOG_DIR
+OVMF_CODE=$OVMF_CODE
+OVMF_CODE_SHA256=$code_sha
+OVMF_CODE_SIZE=$code_size
+OVMF_VARS_TEMPLATE=$OVMF_VARS_TEMPLATE
+OVMF_VARS_TEMPLATE_SHA256=$vars_template_sha
+OVMF_VARS_TEMPLATE_SIZE=$vars_size
+QEMU=$QEMU
+QEMU_SHA256=$qemu_sha
+QEMU_VERSION=$qemu_version
+ACCEL=$ACCEL
+MEMORY_MIB=$MEMORY_MIB
+INSTALL_TIMEOUT=$INSTALL_TIMEOUT
+BOOT_TIMEOUT=$BOOT_TIMEOUT
+GUEST_DISK=/dev/vda
+NETWORK=none
+EOF
+
+process_running() {
+    [ -r "/proc/$1/stat" ] || return 1
+    IFS= read -r process_stat < "/proc/$1/stat" || return 1
+    # O comm vem entre parênteses e pode conter espaços. A expansão `##`
+    # remove até o último ") "; o campo seguinte é exatamente o estado.
+    process_tail=${process_stat##*) }
+    process_state=${process_tail%% *}
+    case "$process_state" in
+        ""|Z*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+cleanup_qemu() {
+    # Um segundo sinal não pode interromper o reap e tornar o primeiro cleanup
+    # ineficaz. Não limpe ACTIVE_QEMU_PID antes de kill+wait terminarem.
+    trap '' HUP INT TERM
+    if [ -z "$ACTIVE_QEMU_PID" ]; then
+        trap 'exit 130' HUP INT TERM
+        return 0
+    fi
+    qemu_pid=$ACTIVE_QEMU_PID
+    if process_running "$qemu_pid"; then
+        kill -TERM "$qemu_pid" 2>/dev/null || true
+    fi
+    cleanup_deadline=$(($(date +%s) + 5))
+    while process_running "$qemu_pid" &&
+          [ "$(date +%s)" -lt "$cleanup_deadline" ]; do
+        sleep 1
+    done
+    if process_running "$qemu_pid"; then
+        kill -KILL "$qemu_pid" 2>/dev/null || true
+    fi
+    wait "$qemu_pid" 2>/dev/null || true
+    ACTIVE_QEMU_PID=
+    trap 'exit 130' HUP INT TERM
+}
+
+defer_termination() {
+    TERMINATION_PENDING=
+    trap 'TERMINATION_PENDING=yes' HUP INT TERM
+}
+
+enable_termination() {
+    trap 'exit 130' HUP INT TERM
+    if [ "$TERMINATION_PENDING" = yes ]; then
+        TERMINATION_PENDING=
+        exit 130
+    fi
+}
+
+trap 'cleanup_qemu' EXIT
+trap 'exit 130' HUP INT TERM
+
+echo "accept-qemu: fase 1/2: ISO -> disco raw vazio"
+set -- "$QEMU" \
+    -machine "pc,accel=$ACCEL" -cpu qemu64 -smp 2 -m "$MEMORY_MIB" \
+    -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE" \
+    -drive "if=pflash,format=raw,file=$OVMF_VARS" \
+    -drive "if=none,id=target,format=raw,cache=writeback,file=$DISK" \
+    -device virtio-blk-pci,drive=target,bootindex=2 \
+    -drive "if=none,id=install_iso,format=raw,media=cdrom,readonly=on,file=$ISO" \
+    -device ide-cd,drive=install_iso,bootindex=1 \
+    -boot order=d,menu=off,strict=on \
+    -nic none -display none -monitor none -serial stdio \
+    -rtc base=2024-01-01T00:00:00,clock=vm \
+    -no-reboot
+defer_termination
+"$@" >"$INSTALL_LOG" 2>&1 &
+ACTIVE_QEMU_PID=$!
+enable_termination
+install_qemu_pid=$ACTIVE_QEMU_PID
+install_deadline=$(($(date +%s) + INSTALL_TIMEOUT))
+install_timed_out=no
+while process_running "$install_qemu_pid"; do
+    if [ "$(date +%s)" -ge "$install_deadline" ]; then
+        install_timed_out=yes
+        cleanup_qemu
+        break
+    fi
+    sleep 1
+done
+if [ "$install_timed_out" = yes ]; then
+    fail "primeiro QEMU excedeu ${INSTALL_TIMEOUT}s (log: $INSTALL_LOG)"
+fi
+set +e
+wait "$install_qemu_pid"
+install_status=$?
+set -e
+ACTIVE_QEMU_PID=
+if [ "$install_status" -ne 0 ]; then
+    if grep -Fq 'nenhum disco foi autorizado' "$INSTALL_LOG"; then
+        fail "ISO não autoriza /dev/vda; reconstrua BOOTX64.EFI com --install-device /dev/vda (log: $INSTALL_LOG)"
+    fi
+    fail "primeiro QEMU não encerrou pelo reboot do instalador (status $install_status; log: $INSTALL_LOG)"
+fi
+grep -Fq 'INSTALLATION COMPLETE' "$INSTALL_LOG" ||
+    fail "QEMU encerrou sem confirmar a instalação (log: $INSTALL_LOG)"
+
+echo "accept-qemu: fase 2/2: disco instalado sem ISO -> rcS/getty"
+set -- "$QEMU" \
+    -machine "pc,accel=$ACCEL" -cpu qemu64 -smp 2 -m "$MEMORY_MIB" \
+    -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE" \
+    -drive "if=pflash,format=raw,file=$OVMF_VARS" \
+    -drive "if=none,id=target,format=raw,cache=writeback,file=$DISK" \
+    -device virtio-blk-pci,drive=target,bootindex=1 \
+    -boot order=c,menu=off,strict=on \
+    -nic none -display none -monitor none -serial stdio \
+    -rtc base=2024-01-01T00:00:00,clock=vm \
+    -no-reboot
+: > "$BOOT_LOG"
+defer_termination
+"$@" >"$BOOT_LOG" 2>&1 &
+ACTIVE_QEMU_PID=$!
+enable_termination
+boot_deadline=$(($(date +%s) + BOOT_TIMEOUT))
+while process_running "$ACTIVE_QEMU_PID"; do
+    if grep -Fq 'distropica login:' "$BOOT_LOG"; then
+        break
+    fi
+    [ "$(date +%s)" -lt "$boot_deadline" ] || {
+        cleanup_qemu
+        fail "segundo boot não alcançou o getty em ${BOOT_TIMEOUT}s (log: $BOOT_LOG)"
+    }
+    sleep 1
+done
+if ! grep -Fq 'distropica login:' "$BOOT_LOG"; then
+    cleanup_qemu
+    fail "segundo QEMU encerrou antes do getty (log: $BOOT_LOG)"
+fi
+cleanup_qemu
+grep -Fq 'distropica: rcS ok (mounts, mdev, hostname)' "$BOOT_LOG" ||
+    fail "getty apareceu sem a prova esperada do rcS (log: $BOOT_LOG)"
+
+install_log_sha=$(sha256sum "$INSTALL_LOG" | awk '{print $1}')
+boot_log_sha=$(sha256sum "$BOOT_LOG" | awk '{print $1}')
+META_COMPLETE=$LOG_DIR/acceptance.meta.complete
+sed 's/^RUN_STATE=started$/RUN_STATE=completed/' "$META" > "$META_COMPLETE"
+cat >> "$META_COMPLETE" <<EOF
+INSTALL_LOG_SHA256=$install_log_sha
+BOOT_LOG_SHA256=$boot_log_sha
+RESULT=pass
+EOF
+mv -- "$META_COMPLETE" "$META"
+
+echo "accept-qemu: PASS"
+echo "  disco: $DISK"
+echo "  instalação: $INSTALL_LOG"
+echo "  segundo boot: $BOOT_LOG"
+echo "  metadados: $META"
