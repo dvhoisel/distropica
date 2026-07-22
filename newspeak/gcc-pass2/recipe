@@ -80,7 +80,9 @@ SHIM
     find "$STAGE" -type f -links +1 -exec sh -ec '
         for path do
             copy=$path.minitrue-copy
-            [ ! -e "$copy" ] && [ ! -L "$copy" ]
+            if [ -e "$copy" ] || [ -L "$copy" ]; then
+                exit 1
+            fi
             cp -p "$path" "$copy"
             mv -f "$copy" "$path"
         done

@@ -31,15 +31,25 @@ build() {
     # Distrópica, /sbin já é /usr/bin; manter as duas grafias dentro do mesmo
     # STAGE criaria claims sobrepostas. A lista explícita faz uma mudança
     # upstream falhar fechado em vez de mesclar silenciosamente outro arquivo.
-    [ -d "$STAGE/sbin" ] && [ ! -L "$STAGE/sbin" ]
-    [ -d "$STAGE/usr" ] && [ ! -L "$STAGE/usr" ]
+    if [ ! -d "$STAGE/sbin" ] || [ -L "$STAGE/sbin" ]; then
+        return 1
+    fi
+    if [ ! -d "$STAGE/usr" ] || [ -L "$STAGE/usr" ]; then
+        return 1
+    fi
     mkdir -p "$STAGE/usr/bin"
-    [ -d "$STAGE/usr/bin" ] && [ ! -L "$STAGE/usr/bin" ]
+    if [ ! -d "$STAGE/usr/bin" ] || [ -L "$STAGE/usr/bin" ]; then
+        return 1
+    fi
     for name in ldconfig sln; do
         source=$STAGE/sbin/$name
         destination=$STAGE/usr/bin/$name
-        [ -f "$source" ] && [ ! -L "$source" ]
-        [ ! -e "$destination" ] && [ ! -L "$destination" ]
+        if [ ! -f "$source" ] || [ -L "$source" ]; then
+            return 1
+        fi
+        if [ -e "$destination" ] || [ -L "$destination" ]; then
+            return 1
+        fi
         mv "$source" "$destination"
     done
     rmdir "$STAGE/sbin"
@@ -50,7 +60,9 @@ build() {
     find "$STAGE" -type f -links +1 -exec sh -ec '
         for path do
             copy=$path.minitrue-copy
-            [ ! -e "$copy" ] && [ ! -L "$copy" ]
+            if [ -e "$copy" ] || [ -L "$copy" ]; then
+                exit 1
+            fi
             cp -p "$path" "$copy"
             mv -f "$copy" "$path"
         done
