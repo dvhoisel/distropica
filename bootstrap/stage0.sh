@@ -2,6 +2,7 @@
 # stage0: monta o rootfs E0 da Distrópica (SPEC-0005 §2) usando o minitrue.
 # Uso: bootstrap/stage0.sh [dir-do-rootfs]   (padrão: ./rootfs na raiz do repo)
 set -eu
+umask 022
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ROOTFS=${1:-"$REPO/rootfs"}
@@ -27,6 +28,12 @@ mkdir -p "$ROOTFS/usr/bin" "$ROOTFS/usr/lib" "$ROOTFS/usr/share" \
     "$ROOTFS/etc/minitrue" "$ROOTFS/opt" "$ROOTFS/proc" "$ROOTFS/dev" \
     "$ROOTFS/tmp" "$ROOTFS/run" "$ROOTFS/root" "$ROOTFS/home" "$ROOTFS/srv" "$ROOTFS/boot" \
     "$ROOTFS/var/cache/minitrue" "$ROOTFS/var/lib/minitrue" "$ROOTFS/var/log/room101"
+chmod 0755 "$ROOTFS/usr" "$ROOTFS/usr/bin" "$ROOTFS/usr/lib" "$ROOTFS/usr/share" \
+    "$ROOTFS/etc" "$ROOTFS/etc/minitrue" "$ROOTFS/opt" "$ROOTFS/proc" \
+    "$ROOTFS/dev" "$ROOTFS/run" "$ROOTFS/root" "$ROOTFS/home" "$ROOTFS/srv" \
+    "$ROOTFS/boot" "$ROOTFS/var" "$ROOTFS/var/cache" \
+    "$ROOTFS/var/cache/minitrue" "$ROOTFS/var/lib" "$ROOTFS/var/lib/minitrue" \
+    "$ROOTFS/var/log" "$ROOTFS/var/log/room101"
 chmod 1777 "$ROOTFS/tmp"
 [ -e "$ROOTFS/bin" ]   || ln -s usr/bin "$ROOTFS/bin"
 [ -e "$ROOTFS/sbin" ]  || ln -s usr/bin "$ROOTFS/sbin"
