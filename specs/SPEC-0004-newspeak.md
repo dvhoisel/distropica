@@ -58,7 +58,7 @@ Opcionais:
 | `REPROCORR` | mundo B: sha256 do **tar normalizado** reprodutível (saída de `minitrue pack`); raiz de confiança única da corroboração de canal (SPEC-0009 §6, SPEC-0010 §4) |
 | `PROVISIONAL` | `1` ⇒ pacote-semente/scaffolding que **cede** seus caminhos ao sucessor que os reivindique, sem *doublethink* (SPEC-0003 §3). Dois usos: (a) busybox → coreutils/binutils; (b) o toolchain-semente musl do E2 (gmp/mpfr/mpc/binutils/gcc) → os rebuilds-glibc, SPEC-0005 §4 |
 | `SUPERSEDES` | lista de pacotes `PROVISIONAL` cujos caminhos esta receita tem **licença** de tomar (SPEC-0003 §7). A supersessão é **declarativa**: colidir com um provisional NÃO listado aqui é *doublethink*, não cessão. Ex.: `mathlibs-glibc` pina `SUPERSEDES="gmp mpfr mpc"` |
-| `TOOLCHAIN` | perfil de toolchain do build (SPEC-0005): `seed` (zig cc -target musl; **default**), `cross` (`x86_64-distropica-linux-gnu-*`: gcc passada 1 + binutils-cross), `native` (gcc nativo, pós-E2) |
+| `TOOLCHAIN` | perfil de toolchain do build (SPEC-0005): `none` (receita de montagem, sem compilador), `seed` (zig cc -target musl; **default**), `cross` (`x86_64-distropica-linux-gnu-*`: gcc passada 1 + binutils-cross), `native` (gcc nativo, pós-E2) |
 | `RETRIES` | nº de reexecuções que a função `retry` do build tolera (§3), para o ICE flaky do gcc-passada-1 (SPEC-0005/0010). Default `0` |
 
 Funções:
@@ -83,7 +83,7 @@ O minitrue executa a função da receita via `sh -e`, com:
 | `PREFIX` | mundo A: staging de `/opt/<nome>/<versão>` |
 | `STAGE` | mundo B: DESTDIR de staging |
 | `JOBS` | paralelismo |
-| `CC`, `CXX`, `AR`, `RANLIB`, `NM`, `LD` | toolchain do perfil `TOOLCHAIN` (§2, SPEC-0005): `seed` ⇒ shims `zig cc -target x86_64-linux-musl` (o `-target` é obrigatório — sem ele o zig mira o host, glibc); `cross` ⇒ `x86_64-distropica-linux-gnu-*` (com os shims seed ainda no PATH, p/ `BUILD_CC`); `native` ⇒ `gcc`/`g++` |
+| `CC`, `CXX`, `AR`, `RANLIB`, `NM`, `LD` | toolchain do perfil `TOOLCHAIN` (§2, SPEC-0005): `none` ⇒ `false` (uso acidental falha); `seed` ⇒ shims `zig cc -target x86_64-linux-musl` (o `-target` é obrigatório — sem ele o zig mira o host, glibc); `cross` ⇒ `x86_64-distropica-linux-gnu-*` (com os shims seed ainda no PATH, p/ `BUILD_CC`); `native` ⇒ `gcc`/`g++` |
 | `retry <cmd>` | função shell injetada: reexecuta `<cmd>` até `RETRIES` vezes (§2). Envolve o comando sujeito ao ICE flaky do gcc-passada-1 (ex.: `retry make -j"$JOBS"`); o `make` incremental resume a cada tentativa (SPEC-0005/0010) |
 | `ROOT` | raiz alvo (para casos raros e legítimos de leitura) |
 | `SOURCE_DATE_EPOCH` | timestamp fixo p/ builds reprodutíveis (SPEC-0010); do campo `EPOCH` da receita ou o default do projeto |
@@ -146,7 +146,7 @@ VERSION=15.2.0
 KIND=binary
 ABOUT="grep moderno; upstream publica musl estático — roda desde o E0"
 SRC="https://github.com/BurntSushi/ripgrep/releases/download/$VERSION/ripgrep-$VERSION-x86_64-unknown-linux-musl.tar.gz"
-SHA256=@PINAR@
+SHA256=33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c
 LINKS="rg=rg"
 
 install_pkg() {

@@ -16,6 +16,10 @@ pub enum Kind {
 /// como fluxo, em vez de tudo cair no zig/musl.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Toolchain {
+    /// Receita de montagem: não recebe uma toolchain pelo contrato de build.
+    /// As variáveis de compilação apontam para `false`; shell e utilitários do
+    /// PATH continuam disponíveis, portanto isto não é uma fronteira de segurança.
+    None,
     /// `zig cc -target x86_64-linux-musl` — a semente. Default (pré-E2).
     #[default]
     Seed,
@@ -474,13 +478,14 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         }
     }
     let toolchain = match field("TOOLCHAIN").as_str() {
+        "none" => Toolchain::None,
         "" | "seed" => Toolchain::Seed,
         "cross" => Toolchain::Cross,
         "native" => Toolchain::Native,
         other => {
             return fail(
                 2,
-                format!("{name}: TOOLCHAIN '{other}' inválido (seed|cross|native)"),
+                format!("{name}: TOOLCHAIN '{other}' inválido (none|seed|cross|native)"),
             )
         }
     };
@@ -1059,6 +1064,14 @@ mod tests {
         let r = load_body("").unwrap();
         assert_eq!(r.toolchain, Toolchain::Seed);
         assert_eq!(r.retries, 0);
+    }
+
+    #[test]
+    fn toolchain_none() {
+        assert_eq!(
+            load_body("TOOLCHAIN=none").unwrap().toolchain,
+            Toolchain::None
+        );
     }
 
     #[test]

@@ -1,0 +1,70 @@
+#!/bin/sh
+# Configura somente os campos IPv4 que o udhcpc entregou e que este script
+# validou. O mesmo arquivo é instalado no sistema e incorporado na mídia viva.
+set -f
+
+valid_interface() {
+    case "${1:-}" in
+        ""|-*|.|..|*/*|*[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-]*)
+            return 1
+            ;;
+        *) return 0 ;;
+    esac
+}
+
+valid_ipv4() (
+    candidate=${1:-}
+    case "$candidate" in
+        ""|*[!0123456789.]*|.*|*.|*..*) return 1 ;;
+    esac
+    IFS=.
+    set -- $candidate
+    [ "$#" -eq 4 ] || return 1
+    for octet do
+        case "$octet" in ""|*[!0123456789]*) return 1 ;; esac
+        [ "$octet" -le 255 ] 2>/dev/null || return 1
+    done
+)
+
+valid_interface "${interface:-}" || exit 1
+
+case "${1:-}" in
+    deconfig)
+        ifconfig "$interface" 0.0.0.0
+        ;;
+    bound|renew)
+        valid_ipv4 "${ip:-}" || exit 1
+        if [ -n "${subnet:-}" ]; then
+            valid_ipv4 "$subnet" || exit 1
+            ifconfig "$interface" "$ip" netmask "$subnet" || exit 1
+        else
+            ifconfig "$interface" "$ip" || exit 1
+        fi
+
+        route del default dev "$interface" 2>/dev/null || true
+        for gateway in ${router:-}; do
+            valid_ipv4 "$gateway" || continue
+            route add default gw "$gateway" dev "$interface" 2>/dev/null && break
+        done
+
+        resolv_tmp=
+        for server in ${dns:-}; do
+            valid_ipv4 "$server" || continue
+            if [ -z "$resolv_tmp" ]; then
+                # Mesmo diretório do destino: o rename final é atômico e não
+                # degrada para cópia quando /run e /etc são filesystems distintos.
+                resolv_tmp=$(mktemp /etc/.resolv.conf.udhcpc.XXXXXX) || exit 1
+                trap 'rm -f "$resolv_tmp"' 0 HUP INT TERM
+            fi
+            printf 'nameserver %s\n' "$server" >> "$resolv_tmp" || exit 1
+        done
+        if [ -n "$resolv_tmp" ]; then
+            chmod 0644 "$resolv_tmp" || exit 1
+            mv -f "$resolv_tmp" /etc/resolv.conf || exit 1
+            resolv_tmp=
+            trap - 0 HUP INT TERM
+        fi
+        ;;
+esac
+
+exit 0

@@ -1,13 +1,15 @@
 NAME=base
-VERSION=0.1
+VERSION=0.2
 KIND=source
-TOOLCHAIN=native
+TOOLCHAIN=none
 DEPS="busybox"
-ABOUT="Config de boot da Fase B (SPEC-0006): /etc/inittab (busybox init → getty → login), rc.d/rcS (monta proc/sys/devtmpfs/tmpfs, mdev, hostname), rc.d/rcK, hostname, os-release. Receita de MONTAGEM: sem SRC (não baixa nada), o build() gera os arquivos inline — legíveis, como o SPEC-0006 promete ('cat /etc/inittab responde o que roda no boot'). Instala como default de fábrica (/usr/share/factory/etc → materializa em /etc). NÃO gerencia contas: passwd/shadow são estado do admin (um futuro base-files/adduser + doas cuida disso; SPEC-0006 §5)."
+ABOUT="Config de boot da Fase B (SPEC-0006): /etc/inittab (busybox init → getty → login), rc.d/rcS (monta proc/sys/devtmpfs/tmpfs, mdev, hostname e DHCP IPv4), rc.d/rcK, hostname, motd e os-release. Receita de MONTAGEM: sem SRC (não baixa nada), o build() gera arquivos legíveis e instala o script DHCP que faz parte do mesmo snapshot da receita. Instala defaults de /etc via fábrica (/usr/share/factory/etc → materializa em /etc). NÃO gerencia contas: passwd/shadow são estado do admin (um futuro base-files/adduser + doas cuida disso; SPEC-0006 §5)."
 LICENSE="MIT-0"
 
 build() {
-    mkdir -p "$STAGE/etc/rc.d"
+    mkdir -p "$STAGE/etc/rc.d" "$STAGE/etc/udhcpc"
+    install -m 0755 "$WORK/udhcpc.script" \
+        "$STAGE/etc/udhcpc/default.script"
 
     cat > "$STAGE/etc/inittab" <<'INITTAB'
 # /etc/inittab — busybox init (SPEC-0006 Fase B). Legivel de cabo a rabo:
@@ -22,7 +24,8 @@ INITTAB
 
     cat > "$STAGE/etc/rc.d/rcS" <<'RCS'
 #!/bin/sh
-# rcS — inicializacao unica (SPEC-0006 §3): monta o basico, popula /dev, hostname.
+# rcS — inicializacao unica (SPEC-0006 §3): monta o basico, popula /dev,
+# configura hostname e tenta DHCP IPv4 sem tornar a rede requisito do login.
 BB=/bin/busybox
 $BB mount -t proc     proc /proc 2>/dev/null
 $BB mount -t sysfs    sys  /sys  2>/dev/null
@@ -32,6 +35,21 @@ $BB mount -t tmpfs    run  /run  2>/dev/null
 $BB mdev -s 2>/dev/null
 [ -f /etc/hostname ] && $BB hostname -F /etc/hostname 2>/dev/null
 $BB ip link set lo up 2>/dev/null
+for network_path in /sys/class/net/*; do
+    [ -e "$network_path" ] || continue
+    interface=${network_path##*/}
+    [ "$interface" != lo ] || continue
+    if ! $BB ip link set "$interface" up 2>/dev/null; then
+        echo "distropica: rede indisponivel em $interface (nao subi a interface)"
+        continue
+    fi
+    if $BB udhcpc -n -q -t 2 -T 2 -i "$interface" \
+        -s /etc/udhcpc/default.script >/dev/null 2>&1; then
+        echo "distropica: rede configurada em $interface"
+    else
+        echo "distropica: DHCP indisponivel em $interface; seguindo sem rede"
+    fi
+done
 echo "distropica: rcS ok (mounts, mdev, hostname)"
 RCS
     chmod 755 "$STAGE/etc/rc.d/rcS"
@@ -56,4 +74,11 @@ VERSION="rolling"
 ANSI_COLOR="1;30"
 HOME_URL="https://github.com/dvhoisel/distropica"
 OSREL
+
+    cat > "$STAGE/etc/motd" <<'MOTD'
+Distrópica development
+  minitrue archives             lista os registros instalados
+  minitrue verify               confere a integridade do sistema
+  minitrue rectify <pacote>     instala ou atualiza um pacote
+MOTD
 }

@@ -4,6 +4,9 @@
 # Cria um registro VirtualBox isolado, um VDI novo e uma VM efêmera. A senha
 # usada no ensaio só existe em memória. A ISO é ejetada antes da autorização
 # de /dev/sda, de modo que o reboot do instalador já prove o boot pelo VDI.
+# A instalação e o segundo boot ocorrem com o cabo virtual desconectado. Só
+# depois do aceite offline a VM faz um terceiro boot com NAT para provar a
+# configuração de rede da base instalada sem depender da Internet.
 set -eu
 umask 022
 LC_ALL=C
@@ -17,12 +20,16 @@ MEMORY_MIB=2048
 PREPARE_TIMEOUT=600
 INSTALL_TIMEOUT=600
 BOOT_TIMEOUT=180
+NETWORK_TIMEOUT=120
+RECTIFY_TIMEOUT=300
+VERIFY_TIMEOUT=300
 VM_CREATED=no
 DISK_REGISTERED=no
 VM_UUID=
 VM_NAME=
 META=
 SERIAL=
+ONLINE_SERIAL=
 VBOX_LOG=
 SCREEN_INDEX=0
 
@@ -41,11 +48,19 @@ Opções:
   --prepare-timeout N    segundos até validar a closure (default: 600)
   --install-timeout N    segundos para instalar/reiniciar (default: 600)
   --boot-timeout N       segundos até o login pelo VDI (default: 180)
+  --network-timeout N    segundos até DHCP/rota no terceiro boot (default: 120)
+  --rectify-timeout N    segundos para instalar o EXTRA ripgrep (default: 300)
+  --verify-timeout N     segundos para `minitrue verify` (default: 300)
 
 O script recusa preventivamente uma ISO que contenha `distropica.install=` ou
 `distropica.test=1`: essas opções pertencem somente ao aceite automatizado e
-destrutivo do QEMU. A VM usa EFI64, VMSVGA, teclado PS/2, SATA/AHCI e nenhuma
-rede. O VDI aparece como /dev/sda. A senha efêmera não é salva nos artefatos.
+destrutivo do QEMU. A VM usa EFI64, VMSVGA, teclado PS/2, SATA/AHCI e uma NIC
+VirtIO NAT inicialmente sem cabo. O VDI aparece como /dev/sda. Depois da
+instalação offline e do segundo boot, o runner liga o cabo e faz um terceiro
+boot para provar DHCP, DNS local via NAT, rota, gateway e `minitrue verify`.
+Depois dessas provas, desconecta novamente o cabo e exige que o EXTRA ripgrep,
+ausente do sistema inicial, seja instalável por `minitrue --offline`. A senha
+efêmera não é salva nos artefatos.
 EOF
 }
 
@@ -64,6 +79,9 @@ while [ "$#" -gt 0 ]; do
         --prepare-timeout) PREPARE_TIMEOUT=${2:?}; shift 2 ;;
         --install-timeout) INSTALL_TIMEOUT=${2:?}; shift 2 ;;
         --boot-timeout) BOOT_TIMEOUT=${2:?}; shift 2 ;;
+        --network-timeout) NETWORK_TIMEOUT=${2:?}; shift 2 ;;
+        --rectify-timeout) RECTIFY_TIMEOUT=${2:?}; shift 2 ;;
+        --verify-timeout) VERIFY_TIMEOUT=${2:?}; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) fail "opção desconhecida: $1" ;;
     esac
@@ -87,14 +105,18 @@ for pair in \
     "--memory-mib:$MEMORY_MIB" \
     "--prepare-timeout:$PREPARE_TIMEOUT" \
     "--install-timeout:$INSTALL_TIMEOUT" \
-    "--boot-timeout:$BOOT_TIMEOUT"; do
+    "--boot-timeout:$BOOT_TIMEOUT" \
+    "--network-timeout:$NETWORK_TIMEOUT" \
+    "--rectify-timeout:$RECTIFY_TIMEOUT" \
+    "--verify-timeout:$VERIFY_TIMEOUT"; do
     decimal "${pair%%:*}" "${pair#*:}"
 done
 [ "$DISK_SIZE_MIB" -ge 256 ] && [ "$DISK_SIZE_MIB" -le 1048576 ] ||
     fail "--disk-size-mib precisa estar entre 256 e 1048576"
 [ "$MEMORY_MIB" -ge 512 ] && [ "$MEMORY_MIB" -le 131072 ] ||
     fail "--memory-mib precisa estar entre 512 e 131072"
-for timeout_value in "$PREPARE_TIMEOUT" "$INSTALL_TIMEOUT" "$BOOT_TIMEOUT"; do
+for timeout_value in "$PREPARE_TIMEOUT" "$INSTALL_TIMEOUT" "$BOOT_TIMEOUT" \
+    "$NETWORK_TIMEOUT" "$RECTIFY_TIMEOUT" "$VERIFY_TIMEOUT"; do
     [ "$timeout_value" -ge 1 ] && [ "$timeout_value" -le 86400 ] ||
         fail "timeouts precisam estar entre 1 e 86400"
 done
@@ -160,6 +182,7 @@ chmod 700 "$RUN_DIR/vbox-home"
 export VBOX_USER_HOME=$RUN_DIR/vbox-home
 META=$RUN_DIR/evidence/acceptance.meta
 SERIAL=$RUN_DIR/evidence/console.serial
+ONLINE_SERIAL=$RUN_DIR/evidence/console-online.serial
 VBOX_LOG=$RUN_DIR/evidence/vboxmanage.log
 EFI=$RUN_DIR/evidence/BOOTX64.EFI
 DISK=$RUN_DIR/disk.vdi
@@ -194,11 +217,17 @@ printf '%s\n' \
     "DISK=$DISK" \
     "DISK_SIZE_MIB=$DISK_SIZE_MIB" \
     "MEMORY_MIB=$MEMORY_MIB" \
+    "NETWORK_TIMEOUT=$NETWORK_TIMEOUT" \
+    "RECTIFY_TIMEOUT=$RECTIFY_TIMEOUT" \
+    "VERIFY_TIMEOUT=$VERIFY_TIMEOUT" \
     'FIRMWARE=efi64' \
     'GRAPHICS=vmsvga' \
     'STORAGE=IntelAhci' \
     'GUEST_DISK=/dev/sda' \
-    'NETWORK=none' \
+    'NIC_TYPE=virtio' \
+    'INSTALL_NETWORK=nat-cable-disconnected' \
+    'THIRD_BOOT_NETWORK=nat-cable-connected' \
+    'DNS_PROBE=localhost-via-vbox-nat-host-resolver' \
     'SECURE_BOOT=off' > "$META"
 
 xorriso -osirrox on -indev "$ISO" \
@@ -302,7 +331,7 @@ cleanup() {
 trap cleanup 0
 trap 'exit 130' HUP INT TERM
 
-echo "accept-virtualbox: fase 1/4: criando VM EFI/SATA isolada"
+echo "accept-virtualbox: fase 1/5: criando VM EFI/SATA isolada"
 vbox createvm --name="$VM_NAME" --platform-architecture=x86 \
     --ostype=Linux_64 --basefolder="$RUN_DIR/machines" \
     --uuid="$VM_UUID" --register
@@ -312,7 +341,8 @@ vbox modifyvm "$VM_UUID" --memory="$MEMORY_MIB" --cpus=2 \
     --firmware=efi64 --tpm-type=none --chipset=piix3 --ioapic=on \
     --x86-long-mode=on --graphicscontroller=vmsvga --vram=32 \
     --accelerate-3d=off --boot1=dvd --boot2=disk --boot3=none --boot4=none \
-    --nic1=none --audio-enabled=off --clipboard-mode=disabled \
+    --nic1=nat --nic-type1=virtio --cable-connected1=off \
+    --nat-dns-host-resolver1=on --audio-enabled=off --clipboard-mode=disabled \
     --drag-and-drop=disabled --usb-ohci=off --usb-ehci=off --usb-xhci=off \
     --mouse=ps2 --keyboard=ps2 --uart1 0x3f8 4 --uart-type1 16550A \
     --uart-mode1 file "$SERIAL"
@@ -326,6 +356,12 @@ vbox storageattach "$VM_UUID" --storagectl=SATA --port=0 --device=0 \
 vbox storageattach "$VM_UUID" --storagectl=SATA --port=1 --device=0 \
     --type=dvddrive --medium="$ISO" --mtype=readonly
 vm_info > "$RUN_DIR/evidence/initial-vm-info.txt"
+grep -Fq 'nic1="nat"' "$RUN_DIR/evidence/initial-vm-info.txt" ||
+    fail "VirtualBox não confirmou a NIC NAT"
+grep -Fq 'nictype1="virtio"' "$RUN_DIR/evidence/initial-vm-info.txt" ||
+    fail "VirtualBox não confirmou a NIC VirtIO"
+grep -Fq 'cableconnected1="off"' "$RUN_DIR/evidence/initial-vm-info.txt" ||
+    fail "VirtualBox não confirmou o cabo desconectado durante a instalação"
 
 wait_for_log() {
     needle=$1
@@ -342,6 +378,25 @@ wait_for_log() {
         case "$state" in running|starting) ;; *) fail "VM ficou em estado $state esperando: $needle" ;; esac
         [ "$(date +%s)" -lt "$deadline" ] ||
             fail "timeout esperando no serial: $needle"
+        sleep 1
+    done
+}
+
+wait_for_log_or_fail() {
+    success_needle=$1
+    failure_needle=$2
+    timeout_seconds=$3
+    deadline=$(($(date +%s) + timeout_seconds))
+    while :; do
+        if [ -f "$SERIAL" ]; then
+            grep -Fq -- "$failure_needle" "$SERIAL" 2>/dev/null &&
+                fail "guest reportou falha: $failure_needle"
+            grep -Fq -- "$success_needle" "$SERIAL" 2>/dev/null && return 0
+        fi
+        state=$(vm_state 2>/dev/null || true)
+        case "$state" in running|starting) ;; *) fail "VM ficou em estado $state esperando: $success_needle" ;; esac
+        [ "$(date +%s)" -lt "$deadline" ] ||
+            fail "timeout esperando no serial: $success_needle"
         sleep 1
     done
 }
@@ -398,7 +453,26 @@ press_enter() {
     "$VBOX" controlvm "$VM_UUID" keyboardputscancode 1c 9c >/dev/null 2>>"$VBOX_LOG"
 }
 
-echo "accept-virtualbox: fase 2/4: exercitando prompts gráficos"
+guest_command_and_wait() {
+    guest_line=$1
+    guest_token=$2
+    guest_timeout=$3
+    type_text "$guest_line"
+    press_enter
+    wait_for_log "$guest_token" 1 "$guest_timeout"
+}
+
+guest_command_and_wait_or_fail() {
+    guest_line=$1
+    guest_success_token=$2
+    guest_failure_token=$3
+    guest_timeout=$4
+    type_text "$guest_line"
+    press_enter
+    wait_for_log_or_fail "$guest_success_token" "$guest_failure_token" "$guest_timeout"
+}
+
+echo "accept-virtualbox: fase 2/5: exercitando prompts gráficos offline"
 vbox startvm "$VM_UUID" --type=headless
 wait_for_log 'distropica-live: solicitando senha de root no console gráfico' 1 "$PREPARE_TIMEOUT"
 sleep 2
@@ -425,7 +499,7 @@ type_text /dev/sda
 press_enter
 wait_for_log 'distropica-live: APAGANDO /dev/sda:' 1 120
 
-echo "accept-virtualbox: fase 3/4: reboot real pelo VDI sem ISO"
+echo "accept-virtualbox: fase 3/5: reboot real pelo VDI sem ISO e sem link"
 wait_for_log 'distropica-live: INSTALLATION COMPLETE em /dev/sda; reiniciando' 1 "$INSTALL_TIMEOUT"
 wait_for_log 'distropica-live: kernel vivo iniciado' 2 "$BOOT_TIMEOUT"
 wait_for_log 'distropica-live: raiz instalada encontrada em /dev/sda2' 1 "$BOOT_TIMEOUT"
@@ -433,7 +507,7 @@ wait_for_log 'distropica login:' 1 "$BOOT_TIMEOUT"
 sleep 3
 require_screen_text 'distropica login' login-sem-iso 30
 
-echo "accept-virtualbox: fase 4/4: login root e prova pelo UART"
+echo "accept-virtualbox: fase 4/5: login root offline e prova pelo UART"
 type_text root
 press_enter
 sleep 2
@@ -451,9 +525,102 @@ type_text 'sync; echo VBOX_SYNC_OK >/dev/ttyS0'
 press_enter
 wait_for_log 'VBOX_SYNC_OK' 1 30
 
+vm_info > "$RUN_DIR/evidence/offline-running-passed-vm-info.txt"
+grep -Fq 'cableconnected1="off"' \
+    "$RUN_DIR/evidence/offline-running-passed-vm-info.txt" ||
+    fail "o cabo virtual foi conectado antes de terminar o aceite offline"
+type_text 'sync; echo VBOX_OFFLINE_POWEROFF_OK >/dev/ttyS0; /bin/busybox poweroff -f'
+press_enter
+wait_for_log 'VBOX_OFFLINE_POWEROFF_OK' 1 30
+wait_for_state poweroff 60
+vm_info > "$RUN_DIR/evidence/offline-powered-off-vm-info.txt"
+
+echo "accept-virtualbox: fase 5/5: terceiro boot com NAT, DHCP/DNS e verify"
+vbox modifyvm "$VM_UUID" --cable-connected1=on \
+    --uart-mode1 file "$ONLINE_SERIAL"
+SERIAL=$ONLINE_SERIAL
+vm_info > "$RUN_DIR/evidence/after-cable-connected-vm-info.txt"
+grep -Fq 'nic1="nat"' "$RUN_DIR/evidence/after-cable-connected-vm-info.txt" ||
+    fail "VirtualBox perdeu a NIC NAT antes do terceiro boot"
+grep -Fq 'nictype1="virtio"' "$RUN_DIR/evidence/after-cable-connected-vm-info.txt" ||
+    fail "VirtualBox perdeu a NIC VirtIO antes do terceiro boot"
+grep -Fq 'cableconnected1="on"' "$RUN_DIR/evidence/after-cable-connected-vm-info.txt" ||
+    fail "VirtualBox não confirmou o cabo conectado no terceiro boot"
+grep -Fq '"SATA-1-0"="emptydrive"' \
+    "$RUN_DIR/evidence/after-cable-connected-vm-info.txt" ||
+    fail "a ISO reapareceu antes do terceiro boot"
+
+vbox startvm "$VM_UUID" --type=headless
+wait_for_log 'distropica-live: kernel vivo iniciado' 1 "$BOOT_TIMEOUT"
+wait_for_log 'distropica-live: raiz instalada encontrada em /dev/sda2' 1 "$BOOT_TIMEOUT"
+wait_for_log 'distropica login:' 1 "$BOOT_TIMEOUT"
+sleep 3
+require_screen_text 'distropica login' terceiro-boot-login 30
+
+type_text root
+press_enter
+sleep 2
+type_text "$ephemeral_password"
+press_enter
+sleep 3
+guest_command_and_wait \
+    'echo VBOX_THIRD_BOOT_ROOT_UID_$(id -u) >/dev/ttyS0' \
+    'VBOX_THIRD_BOOT_ROOT_UID_0' 30
+
+guest_command_and_wait_or_fail \
+    'if command -v rg >/dev/null 2>&1 || [ -e /usr/bin/rg ] || [ -L /usr/bin/rg ] || [ -e /var/lib/minitrue/records/ripgrep ] || grep -Fqx ripgrep /etc/minitrue/world 2>/dev/null; then echo VBOX_RIPGREP_INITIAL_UNEXPECTED >/dev/ttyS0; else echo VBOX_RIPGREP_INITIAL_ABSENT_OK >/dev/ttyS0; fi' \
+    'VBOX_RIPGREP_INITIAL_ABSENT_OK' 'VBOX_RIPGREP_INITIAL_UNEXPECTED' 30
+
+# A base 0.2 deve executar udhcpc no rcS e materializar rota e resolv.conf.
+# O runner não chama udhcpc: observar esses fatos depois do getty prova a
+# política de boot instalada, não uma configuração feita pelo próprio teste.
+type_text "network_timeout=$NETWORK_TIMEOUT"
+press_enter
+guest_command_and_wait \
+    'network_attempt=0; while [ "$network_attempt" -lt "$network_timeout" ]; do network_route=$(ip -4 route show default 2>/dev/null | head -n 1); network_gateway=$(printf "%s\n" "$network_route" | sed -n "s/^default via \([^ ]*\) .*/\1/p"); network_iface=$(printf "%s\n" "$network_route" | sed -n "s/^default.* dev \([^ ]*\).*/\1/p"); network_address=$([ -n "$network_iface" ] && ip -4 addr show dev "$network_iface" 2>/dev/null | sed -n "s/.*inet \([0-9.]*\/[0-9]*\).*/\1/p" | head -n 1 || true); [ -n "$network_gateway" ] && [ -n "$network_iface" ] && [ -n "$network_address" ] && break; network_attempt=$((network_attempt + 1)); sleep 1; done; case "$network_address" in */*) ;; *) false ;; esac && case "$network_gateway" in *.*.*.*) ;; *) false ;; esac && printf "VBOX_DHCP_IPV4_OK iface=%s address=%s\n" "$network_iface" "$network_address" >/dev/ttyS0 && printf "VBOX_DEFAULT_ROUTE_OK gateway=%s\n" "$network_gateway" >/dev/ttyS0' \
+    'VBOX_DHCP_IPV4_OK' "$((NETWORK_TIMEOUT + 15))"
+wait_for_log 'VBOX_DEFAULT_ROUTE_OK' 1 15
+
+guest_command_and_wait \
+    'network_dns=$(sed -n "s/^nameserver[[:space:]][[:space:]]*\([0-9.]*\).*$/\1/p" /etc/resolv.conf 2>/dev/null | head -n 1); case "$network_dns" in *.*.*.*) ;; *) false ;; esac && printf "VBOX_RESOLV_CONF_OK nameserver=%s\n" "$network_dns" >/dev/ttyS0 && nslookup localhost "$network_dns" >/tmp/vbox-nslookup 2>&1 && grep -Eq "Address.*127\\.0\\.0\\.1|^127\\.0\\.0\\.1" /tmp/vbox-nslookup && echo VBOX_DNS_LOCALHOST_OK >/dev/ttyS0' \
+    'VBOX_RESOLV_CONF_OK' "$NETWORK_TIMEOUT"
+wait_for_log 'VBOX_DNS_LOCALHOST_OK' 1 "$NETWORK_TIMEOUT"
+
+guest_command_and_wait \
+    'ping -c 1 -W 5 "$network_gateway" >/dev/ttyS0 2>&1 && echo VBOX_NAT_GATEWAY_PING_OK >/dev/ttyS0' \
+    'VBOX_NAT_GATEWAY_PING_OK' 30
+
+# A conectividade serviu somente para aceitar DHCP/DNS da base. O EXTRA deve
+# continuar instalável quando nem sequer há link: --offline precisa consumir o
+# snapshot/objeto já trazido pelo cache da ISO, sem tentar a Internet.
+vbox controlvm "$VM_UUID" setlinkstate1 off
+sleep 1
+vm_info > "$RUN_DIR/evidence/before-offline-rectify-vm-info.txt"
+grep -Fq 'cableconnected1="off"' \
+    "$RUN_DIR/evidence/before-offline-rectify-vm-info.txt" ||
+    fail "VirtualBox não confirmou o cabo desconectado antes do rectify offline"
+
+guest_command_and_wait_or_fail \
+    'if /usr/bin/minitrue --offline rectify ripgrep >/dev/ttyS0 2>&1; then if [ -d /var/lib/minitrue/records/ripgrep ] && grep -Fqx ripgrep /etc/minitrue/world 2>/dev/null; then echo VBOX_RIPGREP_OFFLINE_RECTIFY_OK >/dev/ttyS0; else echo VBOX_RIPGREP_OFFLINE_RECTIFY_FAILED_STATE >/dev/ttyS0; fi; else rectify_status=$?; printf "VBOX_RIPGREP_OFFLINE_RECTIFY_FAILED status=%s\n" "$rectify_status" >/dev/ttyS0; fi' \
+    'VBOX_RIPGREP_OFFLINE_RECTIFY_OK' 'VBOX_RIPGREP_OFFLINE_RECTIFY_FAILED' \
+    "$RECTIFY_TIMEOUT"
+guest_command_and_wait_or_fail \
+    'if rg --version >/tmp/vbox-rg-version 2>&1 && grep -Eq "^ripgrep 15\\.2\\.0([[:space:]]|$)" /tmp/vbox-rg-version; then cat /tmp/vbox-rg-version >/dev/ttyS0; echo VBOX_RIPGREP_VERSION_OK >/dev/ttyS0; else echo VBOX_RIPGREP_VERSION_FAILED >/dev/ttyS0; fi' \
+    'VBOX_RIPGREP_VERSION_OK' 'VBOX_RIPGREP_VERSION_FAILED' 30
+guest_command_and_wait_or_fail \
+    'if /usr/bin/minitrue verify >/dev/ttyS0 2>&1; then echo VBOX_POST_RECTIFY_MINITRUE_VERIFY_OK >/dev/ttyS0; echo VBOX_MINITRUE_VERIFY_OK >/dev/ttyS0; else echo VBOX_POST_RECTIFY_MINITRUE_VERIFY_FAILED >/dev/ttyS0; fi' \
+    'VBOX_POST_RECTIFY_MINITRUE_VERIFY_OK' \
+    'VBOX_POST_RECTIFY_MINITRUE_VERIFY_FAILED' "$VERIFY_TIMEOUT"
+
+type_text 'clear; echo VBOX_THIRD_BOOT_SCREEN_OK; id; rg --version; ip -4 addr; ip -4 route; cat /etc/resolv.conf'
+press_enter
+sleep 3
+require_screen_text 'THIRD_BOOT_SCREEN_OK' terceiro-boot-root 30
 vm_info > "$RUN_DIR/evidence/running-passed-vm-info.txt"
-vbox controlvm "$VM_UUID" poweroff
-wait_for_state poweroff 30
+type_text 'sync; echo VBOX_THIRD_BOOT_SYNC_OK >/dev/ttyS0; /bin/busybox poweroff -f'
+press_enter
+wait_for_log 'VBOX_THIRD_BOOT_SYNC_OK' 1 30
+wait_for_state poweroff 60
 vm_info > "$RUN_DIR/evidence/powered-off-vm-info.txt"
 vbox storageattach "$VM_UUID" --storagectl=SATA --port=0 --device=0 \
     --type=hdd --medium=none
@@ -465,12 +632,27 @@ disk_sha=$(sha256sum "$DISK" | awk '{print $1}')
 printf '%s\n' \
     'RUN_STATE=passed' \
     'ISO_EJECTED_BEFORE_WIPE=yes' \
+    'INSTALL_AND_SECOND_BOOT_OFFLINE=yes' \
     'SECOND_BOOT_WITHOUT_ISO=yes' \
     'ROOT_LOGIN=yes' \
+    'THIRD_BOOT_WITH_NAT=yes' \
+    'THIRD_BOOT_GETTY=yes' \
+    'THIRD_BOOT_ROOT_LOGIN=yes' \
+    'DHCP_IPV4=yes' \
+    'DEFAULT_ROUTE=yes' \
+    'RESOLV_CONF_IPV4_NAMESERVER=yes' \
+    'DNS_LOCALHOST=yes' \
+    'NAT_GATEWAY_PING=yes' \
+    'NETWORK_DISCONNECTED_BEFORE_OFFLINE_RECTIFY=yes' \
+    'RIPGREP_INITIAL_ABSENT=yes' \
+    'RIPGREP_EXTRA_OFFLINE_RECTIFY=yes' \
+    'RIPGREP_VERSION=15.2.0' \
+    'MINITRUE_VERIFY_AFTER_RIPGREP=yes' \
+    'MINITRUE_VERIFY=yes' \
     "DISK_SHA256=$disk_sha" >> "$META"
 (
     cd "$RUN_DIR/evidence"
-    for artifact in *.png *.txt console.serial; do
+    for artifact in *.png *.txt console*.serial; do
         [ -f "$artifact" ] || continue
         sha256sum "$artifact"
     done

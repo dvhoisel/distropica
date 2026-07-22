@@ -25,6 +25,23 @@ publicados pelo projeto. Passá-lo por `--cache` é um override explícito e
 classifica esse build como `custom`; um futuro `channel-bootstrap/` versionado
 preservará `development` até o perfil ser promovido com os pinos de release.
 
+O cache offline completo pode ser um superconjunto estrito da closure de
+`target.world`. Objetos adicionais continuam presos por `CACHE_SHA256` e são
+semeados em `/var/cache/minitrue`, mas não expressam intenção de instalação e
+não acrescentam pacotes ao world por conta própria. `ripgrep` exemplifica essa
+separação: ele não consta em `target.world` e, portanto, começa ausente; quando
+seu tarball pinado está no cache da mídia, a pessoa pode instalá-lo depois, sem
+rede, com:
+
+```sh
+minitrue --offline rectify ripgrep
+```
+
+Só essa ordem explícita instala `/usr/bin/rg`, cria o registro e acrescenta
+`ripgrep` ao world. Levar o objeto extra no cache não transforma o ripgrep em
+parte do sistema mínimo nem altera a classe `custom` causada pelo override
+`--cache`.
+
 O overlay fornece o estado mínimo de contas e boot: conta root inicialmente
 bloqueada, `fstab`, `securetty`, `passwd` e `group`. A mídia viva pede uma senha
 de root antes do primeiro boot; o modo automatizado de teste conserva a conta
@@ -61,28 +78,46 @@ bootstrap/live/accept-virtualbox \
   --run-dir target/acceptance-virtualbox
 ```
 
-O runner cria uma VM efêmera sem rede, com UEFI64, VMSVGA e SATA/AHCI. O VDI é
-`/dev/sda` no guest. Com o payload já validado em RAM, a ISO é ejetada antes da
-autorização do wipe; o próprio instalador reinicia pelo VDI, e o runner verifica
-o segundo boot sem ISO e o login de root. Esse fluxo passou em 2026-07-21 no
-VirtualBox `7.2.6_Ubuntur172322`; duas composições a partir dos mesmos insumos
-produziram ISO byte a byte idêntica:
+O runner cria uma VM efêmera UEFI64/VMSVGA/SATA com uma NIC VirtIO NAT. O cabo
+permanece desligado durante a instalação e o segundo boot; o VDI é `/dev/sda`
+no guest. Com o payload já validado em RAM, a ISO é ejetada antes da autorização
+do wipe. Depois de provar o reboot sem ISO e o login de root offline, um terceiro
+boot liga o cabo e comprova DHCP IPv4, rota, DNS local e gateway. Por fim, o
+cabo é desligado outra vez e o ripgrep inicialmente ausente é instalado do
+cache com `minitrue --offline rectify ripgrep`, seguido de `verify`. Esse fluxo
+passou em 2026-07-21 no VirtualBox `7.2.6_Ubuntur172322`; duas composições a
+partir dos mesmos insumos produziram ISO byte a byte idêntica:
 
 ```text
-EVIDENCIA_VIRTUALBOX_INTERATIVA=local-development
-ACCEPTANCE_META=target/vbox-acceptance-interactive-v4/evidence/acceptance.meta
+EVIDENCIA_VIRTUALBOX_INTERATIVA=local-custom
+ACCEPTANCE_META=target/vbox-acceptance-network-v1/evidence/acceptance.meta
 VBOX_VERSION=7.2.6_Ubuntur172322
 FIRMWARE=efi64
 GRAPHICS=vmsvga
 STORAGE=IntelAhci
 GUEST_DISK=/dev/sda
-ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
-REPEATED_ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
-BOOT_EFI_SHA256=a07b369e6d666e4ff9bb7bb6bba3eda763852a43d31e14971e77908280ebfa3b
+NIC_TYPE=virtio
+INSTALL_NETWORK=nat-cable-disconnected
+THIRD_BOOT_NETWORK=nat-cable-connected
+ISO_SHA256=3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d
+REPEATED_ISO_SHA256=3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d
+BOOT_EFI_SHA256=71b8977c55a3d0e25785c0299af32515e3dc71759e89f1f08d57d525f800fc88
 RUN_STATE=passed
 ISO_EJECTED_BEFORE_WIPE=yes
+INSTALL_AND_SECOND_BOOT_OFFLINE=yes
 SECOND_BOOT_WITHOUT_ISO=yes
 ROOT_LOGIN=yes
+THIRD_BOOT_WITH_NAT=yes
+DHCP_IPV4=yes
+DEFAULT_ROUTE=yes
+RESOLV_CONF_IPV4_NAMESERVER=yes
+DNS_LOCALHOST=yes
+NAT_GATEWAY_PING=yes
+NETWORK_DISCONNECTED_BEFORE_OFFLINE_RECTIFY=yes
+RIPGREP_INITIAL_ABSENT=yes
+RIPGREP_EXTRA_OFFLINE_RECTIFY=yes
+RIPGREP_VERSION=15.2.0
+MINITRUE_VERIFY_AFTER_RIPGREP=yes
 FINAL_RESULT=passed
 ```
 

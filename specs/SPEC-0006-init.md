@@ -1,6 +1,6 @@
 # SPEC-0006 — Init e serviços (sem systemd)
 
-**Status:** rascunho v0.1 · 2026-07-18
+**Status:** rascunho v0.2 · 2026-07-21
 **Premissa-mãe:** P4 — devolver a simplicidade ao usuário (SPEC-0001).
 
 ## 1. Princípio
@@ -23,18 +23,40 @@ Sem init. O chroot é habitado por `sh` interativo. Nenhum serviço.
 
 ```
 ::sysinit:/etc/rc.d/rcS
+ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100
 tty1::respawn:/sbin/getty 38400 tty1
-tty2::respawn:/sbin/getty 38400 tty2
 ::ctrlaltdel:/sbin/reboot
 ::shutdown:/etc/rc.d/rcK
 ```
 
-`/etc/rc.d/rcS` (shell, ~20 linhas, sem abstrações):
+`/etc/rc.d/rcS` permanece um shell curto, sem abstrações:
 
-- `mount -a` (`proc`, `sysfs`, `devtmpfs`, `tmpfs /run`, `tmpfs /tmp`);
+- monta explicitamente `proc`, `sysfs`, `devtmpfs`, `tmpfs /run` e
+  `tmpfs /tmp`;
 - `mdev -s` (dispositivos; busybox);
 - hostname, loopback up;
-- rede simples: `udhcpc` (busybox) quando configurado.
+- para cada interface diferente de `lo`, tenta subir o link e obter uma
+  configuração IPv4 com `udhcpc` (busybox);
+- falha de link ou DHCP é registrada, mas NÃO impede a continuação do boot nem
+  a chegada ao getty.
+
+O script chamado pelo `udhcpc` valida a interface e todos os valores IPv4 antes
+de aplicá-los. Um lease aceito configura o endereço e, quando fornecida, a
+máscara; substitui a rota default por um gateway válido, quando fornecido, e só
+publica servidores DNS que também sejam IPv4 válidos. O novo `/etc/resolv.conf`
+é preparado no próprio diretório `/etc` e promovido por `rename`, evitando uma
+cópia parcial entre filesystems distintos.
+
+A base 0.2 instala esse script em `/etc/udhcpc/default.script`. O instalador
+vivo precisa da mesma política antes de existir um sistema-alvo e o incorpora
+em `/usr/share/udhcpc/default.script`. Ambos vêm da única fonte versionada
+`newspeak/base/files/udhcpc.script`; corrigir a política de lease não deve criar
+duas implementações divergentes.
+
+A mesma receita fornece `/etc/motd` com a identidade de desenvolvimento e uma
+referência curta aos comandos `minitrue archives`, `minitrue verify` e
+`minitrue rectify <pacote>`. O MOTD é orientação local, não um serviço nem uma
+fonte de estado do sistema.
 
 ## 4. Fase C — alvo: runit como PID1
 
@@ -73,8 +95,10 @@ rotacionado pelo próprio svlogd. Sem journal binário.
 ## 6. O que a Distrópica promete ao usuário
 
 1. `cat /etc/inittab` (ou `ls /etc/sv`) responde "o que roda no boot?".
-2. Nenhum serviço nasce habilitado sem symlink explícito em `enabled/`.
-3. Desabilitar = remover um symlink. Sempre.
+2. Na Fase C, nenhum serviço supervisionado nasce habilitado sem symlink
+   explícito em `enabled/`; as ações únicas da Fase B permanecem visíveis em
+   `/etc/rc.d/rcS`.
+3. Desabilitar um serviço supervisionado = remover um symlink. Sempre.
 4. Nenhum log exige ferramenta especial para ser lido.
 5. O boot inteiro — do kernel ao getty — é auditável em uma sessão de
    leitura.

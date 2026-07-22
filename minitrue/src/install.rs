@@ -869,6 +869,18 @@ fn seed_shims(ctx: &Ctx, work: &Path) -> Result<PathBuf> {
 
 fn setup_toolchain(ctx: &Ctx, work: &Path, r: &Recipe) -> Result<BuildEnv> {
     match r.toolchain {
+        Toolchain::None => Ok(BuildEnv {
+            // Uma receita de montagem não recebe compilador pelo contrato.
+            // Expor uma falha deliberada faz o uso acidental de CC/CXX/etc.
+            // falhar; o PATH normal continua disponível para o userland.
+            cc: "false".into(),
+            cxx: "false".into(),
+            ar: "false".into(),
+            ranlib: "false".into(),
+            ld: "false".into(),
+            nm: "false".into(),
+            path_prefix: Vec::new(),
+        }),
         Toolchain::Seed => {
             let tc = seed_shims(ctx, work)?;
             Ok(BuildEnv {
@@ -5810,6 +5822,77 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static CNT: AtomicU32 = AtomicU32::new(0);
+
+    #[test]
+    fn objeto_extra_da_midia_fica_disponivel_para_rectify_offline_posterior() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-media-extra-{}-{n}", std::process::id()));
+        let recipes = root.join("var/lib/minitrue/newspeak");
+        let cache = root.join("var/cache/minitrue");
+        fs::create_dir_all(&recipes).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+
+        // O Minipax materializa o cache completo antes do primeiro rectify.
+        // Os dois objetos estão na mídia, mas apenas `base` pertence ao
+        // target.world inicial; `extra` não aparece em índice de canal algum.
+        let seed_binary = |name: &str, payload: &[u8]| {
+            let hash = sha256_bytes(payload);
+            fs::write(cache.join(&hash), payload).unwrap();
+            let recipe_dir = recipes.join(name);
+            fs::create_dir(&recipe_dir).unwrap();
+            fs::write(
+                recipe_dir.join("recipe"),
+                format!(
+                    "NAME={name}\nVERSION=1\nKIND=binary\nSRC=https://media.invalid/{name}\nSHA256={hash}\nLINKS=\"{name}=bin/{name}\"\ninstall_pkg() {{\n  mkdir -p \"$PREFIX/bin\"\n  cp \"$DL\" \"$PREFIX/bin/{name}\"\n  chmod 755 \"$PREFIX/bin/{name}\"\n}}\n"
+                ),
+            )
+            .unwrap();
+            hash
+        };
+        let base_payload = b"#!/bin/sh\nprintf 'base\\n'\n";
+        let extra_payload = b"#!/bin/sh\nprintf 'extra\\n'\n";
+        seed_binary("base", base_payload);
+        let extra_hash = seed_binary("extra", extra_payload);
+
+        let context = Ctx {
+            root: root.clone(),
+            offline: true,
+            tofu: false,
+            jobs: 1,
+        };
+        let target_world = vec!["base".to_string()];
+        rectify(&context, &target_world, BinaryPolicy::PreferBinary).unwrap();
+
+        assert_eq!(fs::read_to_string(context.world_path()).unwrap(), "base\n");
+        assert!(!context.records_dir().join("extra").exists());
+        assert!(!root.join("usr/bin/extra").exists());
+        assert_eq!(fs::read(cache.join(&extra_hash)).unwrap(), extra_payload);
+        assert!(!cache.join("channel-config").exists());
+        assert!(!cache.join("channels").exists());
+
+        rectify(&context, &["extra".to_string()], BinaryPolicy::PreferBinary).unwrap();
+
+        assert_eq!(
+            fs::read(root.join("opt/extra/1/bin/extra")).unwrap(),
+            extra_payload
+        );
+        assert_eq!(
+            fs::read_to_string(context.world_path()).unwrap(),
+            "base\nextra\n"
+        );
+        let meta = read_meta_strict(&context.records_dir().join("extra"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(meta.get("WORLD").map(String::as_str), Some("A"));
+        assert_eq!(meta.get("ORIGIN").map(String::as_str), Some("vendor"));
+        assert_eq!(meta.get("SHA256"), Some(&extra_hash));
+        assert!(!meta.contains_key("CHANNEL_SHA256"));
+        assert!(!cache.join("channel-config").exists());
+        assert!(!cache.join("channels").exists());
+        verify(&context).unwrap();
+
+        let _ = fs::remove_dir_all(&root);
+    }
 
     /// Assinatura minisign pré-hasheada determinística para fixtures de
     /// canal. Exercita o mesmo decoder/verificador usado em produção.

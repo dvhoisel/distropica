@@ -26,7 +26,7 @@ saída posterior de reprodutível. O projeto distingue os níveis abaixo:
 | **R2 — sistema declarado** | `profile.lock`: worlds, Newspeak, overlay, cache, arquitetura, epoch, tamanho de mídia e prontidão de instalação | implementado no `minipax`; torna os insumos auditáveis e repetíveis |
 | **R2b — rootfs byte-a-byte** | árvore instalada inteira, já materializada | **não provado**; registros contêm tempo de instalação e uid/gid ainda não fazem parte do contrato |
 | **R3 — mídia** | bytes finais de `.img` ou `.iso` para o mesmo conjunto completo de insumos | provado localmente com fixtures e, para a ISO humana aceita no VirtualBox, por duas composições idênticas no mesmo ambiente; reprodução entre builders ainda não foi feita (§8) |
-| **R4 — reprodução funcional** | mídia dá boot e instala um sistema equivalente em outra máquina | provado localmente por dois caminhos separados: final-v10 automatizado em QEMU/OVMF, incluindo fail-before-wipe, e ISO humana em VirtualBox, incluindo prompts, reboot sem ISO e login root. Não provado em hardware real nem como reprodução oficial |
+| **R4 — reprodução funcional** | mídia dá boot e instala um sistema equivalente em outra máquina | provado localmente por dois caminhos separados: final-v10 automatizado em QEMU/OVMF, incluindo fail-before-wipe, e ISO humana em VirtualBox, incluindo prompts, reboot sem ISO, login root, DHCP/DNS e instalação offline posterior de um pacote adicional. Não provado em hardware real nem como reprodução oficial |
 
 Portanto, R3 não implica R4: uma imagem pode ser byte-reprodutível e ainda
 conter apenas um PE/COFF sintaticamente válido usado como fixture de teste.
@@ -437,22 +437,40 @@ O aceite interativo real, em VirtualBox 7.2.6/EFI64/VMSVGA/SATA, usou um EFI
 sem `--install-device`. Ele confirmou os dois prompts de senha e o prompt de
 disco no framebuffer, ejetou a ISO depois do preflight e antes de autorizar o
 wipe de `/dev/sda`, acompanhou o reboot pelo VDI sem ISO e autenticou `root`
-como uid 0. A ISO foi composta duas vezes com bytes idênticos no mesmo
-ambiente:
+como uid 0. Instalação e segundo boot ocorreram com o cabo da NIC VirtIO NAT
+desligado. No terceiro boot, o runner ligou o cabo e comprovou DHCP IPv4, rota,
+DNS local e gateway; depois desligou o cabo novamente e instalou o ripgrep
+15.2.0, ausente do world inicial, com `minitrue --offline rectify`. O
+`minitrue verify` posterior permaneceu limpo. A ISO foi composta duas vezes
+com bytes idênticos no mesmo ambiente:
 
 ```text
-EVIDENCIA_VIRTUALBOX_INTERATIVO_V1=local-development
-ACCEPTANCE_META=target/vbox-acceptance-interactive-v4/evidence/acceptance.meta
+EVIDENCIA_VIRTUALBOX_INTERATIVO_V1=local-custom
+ACCEPTANCE_META=target/vbox-acceptance-network-v1/evidence/acceptance.meta
 VBOX_VERSION=7.2.6_Ubuntur172322
 GUEST_DISK=/dev/sda
-NETWORK=none
+NIC_TYPE=virtio
+INSTALL_NETWORK=nat-cable-disconnected
+THIRD_BOOT_NETWORK=nat-cable-connected
 CMDLINE=console=ttyS0,115200 console=tty0 panic=-1 rdinit=/init
-ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
-REPEATED_ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
-BOOT_EFI_SHA256=a07b369e6d666e4ff9bb7bb6bba3eda763852a43d31e14971e77908280ebfa3b
+ISO_SHA256=3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d
+REPEATED_ISO_SHA256=3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d
+BOOT_EFI_SHA256=71b8977c55a3d0e25785c0299af32515e3dc71759e89f1f08d57d525f800fc88
 ISO_EJECTED_BEFORE_WIPE=yes
+INSTALL_AND_SECOND_BOOT_OFFLINE=yes
 SECOND_BOOT_WITHOUT_ISO=yes
 ROOT_LOGIN=yes
+THIRD_BOOT_WITH_NAT=yes
+DHCP_IPV4=yes
+DEFAULT_ROUTE=yes
+RESOLV_CONF_IPV4_NAMESERVER=yes
+DNS_LOCALHOST=yes
+NAT_GATEWAY_PING=yes
+NETWORK_DISCONNECTED_BEFORE_OFFLINE_RECTIFY=yes
+RIPGREP_INITIAL_ABSENT=yes
+RIPGREP_EXTRA_OFFLINE_RECTIFY=yes
+RIPGREP_VERSION=15.2.0
+MINITRUE_VERIFY_AFTER_RIPGREP=yes
 RUN_STATE=passed
 FINAL_RESULT=passed
 ```

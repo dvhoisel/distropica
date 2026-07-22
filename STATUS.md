@@ -3,26 +3,27 @@
 Fonte única da verdade sobre a maturidade. As `specs/` descrevem a **norma**;
 este arquivo descreve o **estado**. Atualizado à mão (2026-07-21, após o canal
 binário assinado, a instalação offline do perfil mínimo, o aceite automatizado
-final-v10 em QEMU/OVMF e o aceite interativo em VirtualBox/EFI, ambos com
-instalação e segundo boot sem ISO; o final-v10 também inclui a recusa antes do
-wipe de um `profile.lock` incoerente com `media.meta`).
+final-v10 em QEMU/OVMF e o aceite network-v1 em VirtualBox/EFI, ambos com
+instalação e segundo boot sem ISO; o VirtualBox também cobriu rede VirtIO no
+terceiro boot e `rectify` mundo A offline, e o final-v10 inclui a recusa antes
+do wipe de um `profile.lock` incoerente com `media.meta`).
 Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
 ## minitrue (a ferramenta)
 
 | Recurso | Estado | Testado | Nota |
 |---|---|---|---|
-| `rectify` mundo A (vendor → /opt) | ✅ | 🟡 unit | fluxo real pouco coberto |
+| `rectify` mundo A (vendor → /opt) | ✅ | ✅ unit + E2E VBox offline | `ripgrep` 15.2.0 ausente no primeiro login, instalado explicitamente do objeto extra do cache com o cabo desligado e conferido por `verify` |
 | `rectify` mundo B (fonte → /usr) | ✅ | 🟡 unit | exercido no E2 e numa execução E2-clean a frio |
-| Perfis de toolchain (seed/cross/native) | ✅ | ✅ | parsing + seleção testados |
-| Receitas de montagem (sem SRC) | ✅ | ✅ | `build()` gera o pacote (config, esqueleto de /etc) — nada a baixar; usada pela receita `base`, dogfooda a fábrica /etc |
+| Perfis de toolchain (`none`/`seed`/`cross`/`native`) | ✅ | ✅ | parsing + seleção testados; `none` permite receitas de montagem sem compilador, como `base` |
+| Receitas de montagem (sem SRC) | ✅ | ✅ | `build()` gera o pacote (config, esqueleto de `/etc`) — nada a baixar; usada por `base` 0.2, com snapshot autocontido em `files/` e fábrica `/etc` |
 | Runner mundo B em rootfs (bwrap, --unshare-net, --clearenv) | ✅ | ✅ | isola rede/ambiente do `build()`, mas o **rootfs fica gravável**; avaliação top-level da receita e mundo A ainda rodam no host |
 | `retry` de ICE | ✅ | — | usado no E2 |
 | `fingerprint` de build | ✅ | ✅ | **transitivo**; snapshot de `recipe`+`files/`, e o mesmo `files/` autocontido é materializado no `WORK` (symlinks auxiliares são recusados) |
 | Supersessão provisional (`PROVISIONAL` + `SUPERSEDES=`) | ✅ | ✅ | declarativa; no mundo B a cessão volta se a instalação falha. `SUPERSEDES` fica no registro e prova cadeias provisional→provisional; mundo A e restauração ao remover sucessor ainda faltam |
 | `pack` determinístico (v1) | ✅ | ✅ | a parte mais madura; falta xattr/ACL/cap/sparse |
 | Manifesto v2 (conteúdo + tipo) | ✅ | ✅ | `f:` prende modo+conteúdo do regular, `l:` prende alvo, `d:` prende modo do diretório-raiz+árvore (payload A e vazios B); leitura v0/v1 mantida |
-| `verify` (presença + integridade por claim) | ✅ | 🟡 | inspeção confinada ao rootfs; confere conteúdo/tipo/alvo/árvore e denuncia journal pendente/formato futuro; não varre regulares órfãos em /usr nem fecha o grafo de deps |
+| `verify` (presença + integridade por claim) | ✅ | 🟡 unit + E2E VBox | inspeção confinada ao rootfs; passou após o `rectify` offline de `ripgrep`; confere conteúdo/tipo/alvo/árvore e denuncia journal pendente/formato futuro, mas não varre regulares órfãos em /usr nem fecha o grafo de deps |
 | `memoryhole` (+ preserva modificado) | ✅ | 🟡 | sem `--tudo`; sem rollback do payload |
 | `explain` / `why` (proveniência) | ✅ | ✅ | ORIGIN/hash-arq; ABOUT/REPROCORR congelados no meta, com fallback literal legado sem executar receita histórica; corroboração e reprocorr |
 | `--sync` (convergir ao world) | ⬜ | — | stub; SPEC-0011 |
@@ -59,18 +60,20 @@ Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | Classes de insumos de release | ✅ | 🟡 unit | `PROFILE_CLASS`, `MEDIA_CLASS` e `INSTALL_CLASS` podem ser `official-inputs` após os respectivos pinos; isso não declara reprodução oficial |
 | Modos canônicos das árvores | ✅ | ✅ unit | dirs `0755`, `root/` do overlay `0700`, `shadow`/`gshadow` e backups `0600`, executáveis `0755`, demais regulares `0644`; não depende dos modos que o Git preserva |
 | Limites das árvores | ✅ | 🟡 unit | 128 MiB e 50.000 entradas por árvore Newspeak/overlay/cache; conteúdo e tar ficam em memória. No canal, `.tar.zst` selado e tar descompactado coexistem, somando o pico de RAM; streaming é gate de release |
-| Modo offline/cache | ✅ | ✅ unit + E2E dev | cache assinado fecha o perfil mínimo sem rede; ainda limitado a 128 MiB/50 mil entradas e materializado em memória |
+| Modo offline/cache | ✅ | ✅ unit + E2E dev + VBox | o cache assinado foi testado como superset: fecha o perfil mínimo e carrega um objeto `ripgrep` extra e pinado, inerte na instalação inicial e consumido depois por `rectify` sem rede; ainda limitado a 128 MiB/50 mil entradas e materializado em memória |
 | Modo online/bootstrap de canal | ✅ | ✅ unit | Minipax exige config + índice/assinatura pareados, rejeita objetos e semeia antes de `rectify`; Minitrue valida minisign no uso. Não há endpoint oficial para E2E |
-| BOOT EFI vivo (kernel+initramfs+Minipax+Minitrue) | ✅ | ✅ E2E QEMU + VirtualBox | fixa Linux 7.1.4, BusyBox e executores musl `static-pie`. `CONFIG_MODULES=y`, nenhum `.ko` na mídia e release `7.1.4-distropica-live`; o EFI interativo acrescenta `simpledrm`+`fbcon` built-in e não fixa disco nem ativa o modo de teste automatizado |
+| BOOT EFI vivo (kernel+initramfs+Minipax+Minitrue) | ✅ | ✅ E2E QEMU + VirtualBox | fixa Linux 7.1.4, BusyBox e executores musl `static-pie`. `CONFIG_MODULES=y`, nenhum `.ko` na mídia e release `7.1.4-distropica-live`; o EFI do VirtualBox inclui `simpledrm`+`fbcon` e VirtIO de rede built-in, sem fixar o disco |
 | Instalação por ISO em QEMU/OVMF | ✅ | ✅ E2E final-v10 | aceite histórico e automatizado: antes de escolher disco, materializa closure em `/run` e exporta snapshot EFI validado; depois particiona, copia, verifica, instala EFI e publica o marcador completo por último. Segundo boot ocorreu sem ISO |
-| Instalação interativa por ISO no VirtualBox | ✅ | ✅ E2E local 7.2.6 | EFI64 + VMSVGA, console gráfico por `simpledrm`/`fbcon`, teclado PS/2 e armazenamento Intel AHCI. Pediu senha de root, confirmação e o disco inteiro `/dev/sda`; a ISO foi ejetada antes da autorização/wipe e o segundo boot pelo VDI ocorreu sem ISO, com login de root (`uid=0`) |
+| Instalação por ISO no VirtualBox | ✅ | ✅ E2E local 7.2.6 network-v1 | EFI64 + VMSVGA, console por `simpledrm`/`fbcon`, teclado PS/2, Intel AHCI e `/dev/sda`. Instalação e segundo boot ocorreram com o cabo virtual desligado; a ISO foi ejetada antes do wipe, e o VDI iniciou sem ela. No terceiro boot, VirtIO/NAT obteve DHCP IPv4, rota, DNS local e acesso ao gateway; depois o cabo foi desligado para instalar `ripgrep` offline e rodar `verify` |
 | Boot da IMG em QEMU/OVMF | 🟡 | — | compositor IMG existe e reproduziu localmente; o aceite funcional final-v10 exercitou somente a ISO |
-| Particionamento/escrita destrutiva em disco | ✅ | ✅ QEMU final-v10 + VirtualBox interativo | PID 1 só recebe/autoriza o disco depois do preflight em `/run`: `/dev/vda` no aceite automatizado e `/dev/sda` no interativo. O negativo final-v10 deixou um disco zerado intacto; o VirtualBox prosseguiu após ejeção pré-wipe porque a closure já estava materializada. Cria MBR com ESP FAT32 de 64 MiB + raiz ext2; não é ainda um particionador geral |
+| Particionamento/escrita destrutiva em disco | ✅ | ✅ QEMU final-v10 + VirtualBox network-v1 | PID 1 só recebe/autoriza o disco depois do preflight em `/run`: `/dev/vda` no aceite automatizado e `/dev/sda` no VirtualBox. O negativo final-v10 deixou um disco zerado intacto; o VirtualBox prosseguiu após ejeção pré-wipe porque a closure já estava materializada. Cria MBR com ESP FAT32 de 64 MiB + raiz ext2; não é ainda um particionador geral |
 
 O perfil `profiles/official` continua com `STATUS=development`, mas agora
 declara `INSTALL_READY=yes`: há uma closure mínima materializável com o cache
-assinado de desenvolvimento. Como ele é passado por `--cache`, o E2E recebe
-classe `custom`; isso não publica o cache nem cria um canal oficial. Mesmo uma
+assinado de desenvolvimento. O superset usado no aceite do VirtualBox também
+contém `ripgrep` pinado, sem incluí-lo no world inicial. Como o cache é passado
+por `--cache`, o E2E recebe classe `custom`; isso não o publica nem cria um
+canal oficial. Mesmo uma
 futura classe `official-inputs` não será, por si,
 reprodução oficial: isso dependerá do sha256 final pinado num manifesto
 oficial externo assinado.
@@ -100,37 +103,54 @@ RESULT=pass
 INCONSISTENT_PROFILE_LOCK_RESULT=refused-before-wipe
 ```
 
-Separadamente, o aceite interativo iniciou a ISO numa VM VirtualBox EFI64 sem
-rede, exibiu no console gráfico os prompts de nova senha, repetição e autorização
-do disco `/dev/sda`, ejetou a ISO **antes** de enviar o disco a apagar e concluiu
-a partir da closure pré-validada em RAM. O reboot emitido pelo instalador
-iniciou o mesmo VDI sem mídia óptica; o login de `root` abriu um shell e `id`
-informou `uid=0`. As duas composições locais dessa ISO foram byte a byte idênticas. É um
-segundo hipervisor no mesmo host, não hardware real nem builder independente:
+Separadamente, o aceite network-v1 iniciou a ISO numa VM VirtualBox EFI64 com
+adaptador VirtIO/NAT e o cabo virtual desligado. Instalou em `/dev/sda`, ejetou
+a ISO **antes** do wipe e concluiu a partir da closure pré-validada em RAM. O
+segundo boot iniciou o mesmo VDI sem mídia óptica e ainda sem rede, chegando ao
+login de `root`. No terceiro boot, com o cabo ligado, obteve DHCP IPv4, rota
+padrão, `resolv.conf` com nameserver IPv4, resolução de `localhost` pelo host
+resolver do NAT e resposta do gateway. O cabo foi então desligado: `ripgrep`,
+ausente no sistema inicial, foi instalado explicitamente na versão 15.2.0 a
+partir do objeto extra do cache, e `minitrue verify` passou. Esse probe de DNS é
+local e não prova acesso à Internet. As duas composições locais dessa ISO foram
+byte a byte idênticas. É um segundo hipervisor no mesmo host, não hardware real
+nem builder independente:
 
 ```text
-EVIDENCIA_VIRTUALBOX_INTERATIVA=local-development
-ACCEPTANCE_META=target/vbox-acceptance-interactive-v4/evidence/acceptance.meta
+EVIDENCIA_VIRTUALBOX_NETWORK_V1=local-custom
+ACCEPTANCE_META=target/vbox-acceptance-network-v1/evidence/acceptance.meta
 VBOX_VERSION=7.2.6_Ubuntur172322
 VBOXMANAGE_BINARY_SHA256=3d019f23c6d755ed1f6a3bb05f4481fd56015719bf51e4299dca0267fbcc021a
-NETWORK=none
 FIRMWARE=efi64
 GRAPHICS=vmsvga
-GUEST_GRAPHICS_CONSOLE=simpledrm-fbcon
-EVIDENCE_INPUT=ps2-keyboard
 STORAGE=IntelAhci
 GUEST_DISK=/dev/sda
-ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
-REPEATED_ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
-BOOT_EFI_SHA256=a07b369e6d666e4ff9bb7bb6bba3eda763852a43d31e14971e77908280ebfa3b
-DISK_SHA256=c93c4d8dcb44dd8b7587c7fded8b8a7d87f5434053fa843573534131c641be30
-SERIAL_LOG_SHA256=0f1b04c7bc3bbb82fe50016b8e83e4ee25c26da950a0defc7225ce72f645b8ea
-NEW_PASSWORD_SCREENSHOT_SHA256=926c91d7271fbd3defed7902cdf82454f141f3647f436cc4c93ee20d964ec989
-LOGIN_WITHOUT_ISO_SCREENSHOT_SHA256=b1ea90f806e1a96a937f004c42eec8479e081ee65a35b2c9d38694bc2a72b070
-ROOT_UID0_SCREENSHOT_SHA256=cd9f5164ef4fc73d98c78677447d334b37c1e47dd66957c36fc1af33c692e57d
+NIC_TYPE=virtio
+INSTALL_NETWORK=nat-cable-disconnected
+THIRD_BOOT_NETWORK=nat-cable-connected
+DNS_PROBE=localhost-via-vbox-nat-host-resolver
+ISO_SHA256=3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d
+REPEATED_ISO_SHA256=3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d
+BOOT_EFI_SHA256=71b8977c55a3d0e25785c0299af32515e3dc71759e89f1f08d57d525f800fc88
+OFFLINE_SERIAL_LOG_SHA256=d31045696f9996e269f25e1e97c8dfa69ea2821ca78804c850503bacac01ba3d
+ONLINE_SERIAL_LOG_SHA256=f4691c6db2c4885bf93e58718d3cdfc57883ae1be185a0f4346e5aa92ac866b4
 ISO_EJECTED_BEFORE_WIPE=yes
+INSTALL_AND_SECOND_BOOT_OFFLINE=yes
 SECOND_BOOT_WITHOUT_ISO=yes
-ROOT_LOGIN_UID=0
+ROOT_LOGIN=yes
+THIRD_BOOT_WITH_NAT=yes
+THIRD_BOOT_ROOT_LOGIN=yes
+DHCP_IPV4=yes
+DEFAULT_ROUTE=yes
+RESOLV_CONF_IPV4_NAMESERVER=yes
+DNS_LOCALHOST=yes
+NAT_GATEWAY_PING=yes
+NETWORK_DISCONNECTED_BEFORE_OFFLINE_RECTIFY=yes
+RIPGREP_INITIAL_ABSENT=yes
+RIPGREP_EXTRA_OFFLINE_RECTIFY=yes
+RIPGREP_VERSION=15.2.0
+MINITRUE_VERIFY_AFTER_RIPGREP=yes
+MINITRUE_VERIFY=yes
 RUN_STATE=passed
 FINAL_RESULT=passed
 ```
@@ -146,9 +166,9 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
 | E0 — chroot musl-estático | ✅ | |
 | E1 — `./configure && make` | ✅ | |
 | E2 — glibc + gcc nativo | ✅ | **E2-clean: reproduzido a frio** (rootfs novo, seed limpo, 16 pacotes, gcc nativo compila C/C++, libs finais em /usr/lib). Falta só repetir num 2º ambiente independente |
-| E3 — kernel + boot | 🟡 | O smoke anterior bootou Linux 7.1.4 do E2 com raiz 9p e exercitou módulos assinados. Separadamente, o EFI-stub live passou em ISO→disco→boot sem mídia tanto no aceite automatizado QEMU/OVMF quanto no interativo VirtualBox/EFI; este último cobriu `simpledrm`/`fbcon`, PS/2, AHCI e `/dev/sda`. E3 segue parcial por faltar runit, `.config` de hardware geral e gestão completa de contas |
+| E3 — kernel + boot | 🟡 | O smoke anterior bootou Linux 7.1.4 do E2 com raiz 9p e exercitou módulos assinados. Separadamente, o EFI-stub live passou em ISO→disco→boot sem mídia tanto no aceite automatizado QEMU/OVMF quanto no VirtualBox/EFI; o network-v1 deste último cobriu `simpledrm`/`fbcon`, PS/2, AHCI, `/dev/sda`, VirtIO/NAT e `minitrue verify` pós-login. A dívida desse `verify` foi fechada; E3 segue parcial por faltar runit, `.config` de hardware geral e gestão completa de contas |
 | — openssl 4.0.1 (base de confiança do kernel) | ✅ | mundo B, compilado pela toolchain nativa (libcrypto/libssl, `-DZLIB`); SHA conferido no download. Habilita geração/uso da chave de módulos; **attestation usa ed25519-dalek e independe de OpenSSL**. O materializador de `/etc` agora trata symlinks, com regressão coberta |
-| — base 0.1 (config Fase B) | ✅ | — | receita de montagem: `/etc/inittab`+`rc.d/rcS`+`rcK`+`os-release`+`hostname` via fábrica; não cria `/etc/shadow`, portanto sozinha não fecha login autenticado |
+| — base 0.2 (config Fase B) | ✅ | receita de montagem com `TOOLCHAIN=none`: além de `/etc/inittab`, `rcS`, `rcK`, `os-release` e `hostname`, sobe interfaces e tenta DHCP IPv4 sem tornar a falha fatal. O script compartilhado com o live configura endereço, rota padrão e DNS em `/etc/udhcpc/default.script`; o MOTD mostra `archives`, `verify` e `rectify`. Não cria `/etc/shadow`, portanto sozinha não fecha login autenticado |
 | E4 — userland vendor / GUI | ⬜ | |
 
 ## Reprodutibilidade (SPEC-0010)
@@ -165,10 +185,10 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
 | Executor da instalação medido = executado | ✅ local (`memfd` selado, ambiente fechado e hash no `install.manifest`) |
 | Rootfs instalado byte-a-byte idêntico | ⬜ (`INSTALLED_AT`, uid/gid e demais metadados ainda impedem o claim) |
 | IMG byte-idêntica em duas composições | ✅ local (fixture, mesmo binário/toolchain; GPT/FAT normalizados) |
-| ISO byte-idêntica em duas composições | ✅ local para fixture, ISO final-v10 e ISO interativa do VirtualBox (mesmos insumos, binário e `xorriso`, cujo executável é medido) |
+| ISO byte-idêntica em duas composições | ✅ local para fixture, ISO final-v10 e ISO network-v1 do VirtualBox (mesmos insumos, binário e `xorriso`, cujo executável é medido) |
 | IMG/ISO byte-idênticas entre builders independentes | ⬜ |
 | Reprodução reconhecida contra manifesto oficial externo assinado | ⬜ (sidecars locais não são autoridade) |
-| R4 — reprodução funcional da mídia de desenvolvimento | ✅ local em QEMU/OVMF (final-v10 automatizado, segundo boot e negativo fail-before-wipe) e VirtualBox/EFI (fluxo interativo, ejeção pré-wipe, segundo boot sem ISO e root `uid=0`); não prova hardware real, builders independentes nem release oficial |
+| R4 — reprodução funcional da mídia de desenvolvimento | ✅ local em QEMU/OVMF (final-v10 automatizado, segundo boot e negativo fail-before-wipe) e VirtualBox/EFI (network-v1, instalação e segundo boot sem rede, terceiro boot VirtIO/NAT, depois `rectify` mundo A e `verify` offline); não prova Internet, hardware real, builders independentes nem release oficial |
 
 ## Limitações conhecidas (do parecer externo)
 
@@ -187,16 +207,21 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   `disk-install.complete`. O teste negativo confirmou a recusa de um
   `profile.lock` incoerente com `media.meta` antes de qualquer wipe. Isso ainda
   não prova boot da IMG, hardware real, reprodução entre builders ou release
-  oficial. O aceite interativo separado repetiu o caminho positivo no
-  VirtualBox 7.2.6: console gráfico, teclado PS/2, AHCI `/dev/sda`, prompts de
-  senha e disco, ejeção da ISO antes da autorização/wipe, segundo boot sem ISO
-  e shell de root com `uid=0`.
+  oficial. O aceite network-v1 separado repetiu o caminho positivo no
+  VirtualBox 7.2.6: console, teclado PS/2, AHCI `/dev/sda`, ejeção da ISO antes
+  do wipe, instalação e segundo boot com o cabo virtual desligado e login de
+  root. No terceiro boot, VirtIO/NAT exerceu o DHCP IPv4 não fatal de `base`
+  0.2, rota padrão, nameserver IPv4, resolução local e gateway. Depois de
+  desligar novamente o cabo, instalou `ripgrep` 15.2.0 do cache e passou em
+  `minitrue verify`. Isso não foi um probe da Internet.
 - **Gates do perfil oficial:** o canal e `--only-binary` estão implementados,
-  e o perfil marca `INSTALL_READY=yes`, mas o cache usado no E2E é uma migração
-  de desenvolvimento com `TRUST=builder`. Ainda não há endpoint, chave de
-  release, índice ou artefatos oficiais publicados. A verdadeira meta-receita
-  `base`, runit e a política uid/gid continuam abertos; `base` ainda é
-  `base-config` de fato. `profiles/official` permanece
+  e o perfil marca `INSTALL_READY=yes`, mas o cache usado no E2E é de
+  desenvolvimento com `TRUST=builder`. Seu superset — a closure do target mais
+  o objeto pinado de `ripgrep` — foi testado: o extra ficou inerte na instalação
+  inicial e foi consumido explicitamente offline após o boot. Ainda não há
+  endpoint, chave de release, índice ou artefatos oficiais publicados. A
+  verdadeira meta-receita `base`, runit e a política uid/gid continuam abertos;
+  `base` 0.2 ainda é `base-config` de fato. `profiles/official` permanece
   `STATUS=development`, portanto nenhuma saída recebe a classe de insumos
   oficiais. `STATUS=release` já exige três pinos separados:
   `OFFICIAL_CONTENT_SHA256`, `OFFICIAL_BOOT_EFI_SHA256` e
@@ -206,8 +231,10 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
 - **Cobertura do kernel vivo:** o `.config` cobre UEFI x86_64, virtio,
   CD/SCSI, AHCI/PIIX, teclado PS/2, ISO9660, ext2/ext4, FAT e o framebuffer EFI
   pelo caminho `simpledrm`/`fbcon`. Isso fechou o console, a entrada e o disco
-  SATA do VirtualBox usado no aceite, além do alvo QEMU; não permite afirmar
-  suporte genérico a controladores NVMe, USB, rede, GPUs ou armazenamento
+  SATA do VirtualBox usado no aceite, além do alvo QEMU. O network-v1 também
+  fechou o caminho local do adaptador VirtIO, DHCP IPv4, rota, DNS e gateway
+  NAT nessa VM; não permite afirmar acesso à Internet nem suporte genérico a
+  controladores NVMe, USB, outras placas de rede, GPUs ou armazenamento
   encontrados em hardware real. O kernel mantém
   `CONFIG_MODULES=y`, mas o initramfs não leva módulos; tudo que a instalação
   precisa deve estar built-in. `LOCALVERSION=-distropica-live` produz o

@@ -53,7 +53,10 @@ memorização e à coesão; onde ele brigar com a clareza, a clareza vence.
   `media.meta`. Separadamente, a variante humana, sem `--install-device`,
   passou no VirtualBox com simpledrm/fbcon, prompts gráficos de senha e disco,
   SATA `/dev/sda`, ejeção da ISO depois do preflight e antes do wipe, reboot
-  pelo VDI sem ISO e login root (SPEC-0010 §9).
+  pelo VDI sem ISO e login root. Instalação e segundo boot ficaram sem link;
+  um terceiro boot comprovou DHCP/DNS por VirtIO NAT e, depois de desligar o
+  link outra vez, instalou ripgrep 15.2.0 do cache com `--offline` e terminou
+  com `minitrue verify` limpo (SPEC-0010 §9).
   Um perfil de release precisa pinar `OFFICIAL_CONTENT_SHA256`,
   `OFFICIAL_BOOT_EFI_SHA256` e `OFFICIAL_MINITRUE_SHA256`. A coincidência em
   cada fronteira permite apenas a classe autoatribuída `official-inputs` para
@@ -107,8 +110,8 @@ oficial publicados; tampouco bundle estático assinado, ISO/IMG oficial,
 manifesto externo de release, aceite em hardware real ou reprodução oficial
 por builders independentes. Os aceites QEMU/OVMF e VirtualBox e a igualdade
 entre duas composições locais da ISO humana (SHA-256
-`183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426`, EFI
-`a07b369e6d666e4ff9bb7bb6bba3eda763852a43d31e14971e77908280ebfa3b`)
+`3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d`, EFI
+`71b8977c55a3d0e25785c0299af32515e3dc71759e89f1f08d57d525f800fc88`)
 são evidências locais de desenvolvimento, não autoridade de release. Também
 são gates a operação administrativa `channel refresh`, a
 conversão integral do Journal path-based para operações fd-relative contra

@@ -656,6 +656,11 @@ mod tests {
         .unwrap();
         fs::write(profile_dir.join("target.world"), "z\na\n").unwrap();
         fs::write(profile_dir.join("live.world"), "busybox\n").unwrap();
+        let cache = temp.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+        let extra_payload = b"objeto extra que nao pertence ao target.world";
+        let extra_hash = hex::encode(sha2::Sha256::digest(extra_payload));
+        fs::write(cache.join(&extra_hash), extra_payload).unwrap();
         let fake = temp.path().join("minitrue");
         fs::write(
             &fake,
@@ -671,6 +676,7 @@ mod tests {
             &profile_dir,
             ProfileOverrides {
                 newspeak: Some(newspeak),
+                cache: Some(cache),
                 ..Default::default()
             },
         )
@@ -742,10 +748,28 @@ mod tests {
             },
         )
         .unwrap();
+        let offline_target = temp.path().join("offline-target");
+        install(
+            &profile,
+            &InstallOptions {
+                target: offline_target.clone(),
+                minitrue: Some(fake.clone()),
+                offline: true,
+                from_source: true,
+                only_binary: false,
+                resume: false,
+            },
+        )
+        .unwrap();
         let calls = fs::read_to_string(calls).unwrap();
         std::env::remove_var("NEWSPEAK_PATH");
+        assert!(calls.contains("--offline --no-binary rectify a z"));
         assert!(calls.contains("var/lib/minitrue/newspeak|10|--root"));
         assert!(calls.contains("--no-binary rectify a z"));
+        assert_eq!(
+            fs::read(offline_target.join("var/cache/minitrue").join(&extra_hash)).unwrap(),
+            extra_payload
+        );
         assert!(target.join("var/lib/minipax/profile.lock").is_file());
         assert_eq!(
             fs::read(target.join("usr/bin/minitrue")).unwrap(),

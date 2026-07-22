@@ -268,17 +268,26 @@ mesmo payload lógico.
 | `offline` | obrigatório | incorpora o snapshot indicado por `--cache`; a instalação roda com rede proibida |
 
 O builder vincula o cache no lock, mas não prova por si só que ele fecha todo
-o grafo de `target.world`. O cache de desenvolvimento usado neste marco fechou
-o perfil mínimo num teste end-to-end offline. A capacidade online existe no
-consumidor, porém o projeto ainda não publicou endpoint, chave e índice de um
-canal oficial. O perfil oficial não inventa esses valores: sem um diretório
+o grafo de `target.world`. Um cache offline pode ser um superconjunto estrito
+desse grafo: todos os seus bytes entram em `CACHE_SHA256` e são materializados
+em `/var/cache/minitrue`, mas somente `target.world` expressa a intenção da
+instalação inicial. Um objeto extra não cria registro, link nem entrada no
+world; uma ordem posterior como `minitrue --offline rectify ripgrep` é que o
+consome e acrescenta explicitamente o pacote à intenção local.
+
+O cache de desenvolvimento usado neste marco fechou o perfil mínimo num teste
+end-to-end offline e também carregou o objeto pinado de `ripgrep` sem
+acrescentá-lo a `target.world`. A capacidade online existe no consumidor,
+porém o projeto ainda não publicou endpoint, chave e índice de um canal
+oficial. O perfil oficial não inventa esses valores: sem um diretório
 `channel-bootstrap/` real ou um `--cache DIR` com esse layout estrito, a
-composição online é recusada antes de publicar a mídia. No target, o bootstrap
-vai para `/var/cache/minitrue`; a existência de `/etc/minitrue/channels`
-continua vencendo por inteiro, inclusive quando o diretório está vazio para
-desativar explicitamente a seed. O Minipax valida aqui o layout e o vínculo
-pelo hash do perfil; a assinatura minisign é validada pelo Minitrue contra a
-chave da configuração antes de selecionar qualquer pacote.
+composição online é recusada
+antes de publicar a mídia. No target, o bootstrap vai para
+`/var/cache/minitrue`; a existência de `/etc/minitrue/channels` continua
+vencendo por inteiro, inclusive quando o diretório está vazio para desativar
+explicitamente a seed. O Minipax valida aqui o layout e o vínculo pelo hash do
+perfil; a assinatura minisign é validada pelo Minitrue contra a chave da
+configuração antes de selecionar qualquer pacote.
 
 ### 4.3 Limites de escala deste marco
 
@@ -500,33 +509,68 @@ O caminho humano foi exercitado separadamente por
 `bootstrap/live/accept-virtualbox`. O runner recusou preventivamente as flags
 automatizadas, confirmou prompts pelo framebuffer, injetou a senha pelo
 teclado PS/2, esperou o preflight, ejetou a ISO antes de autorizar `/dev/sda` e
-depois comprovou o reboot pelo VDI e o login `root` como uid 0:
+depois comprovou o reboot pelo VDI e o login `root` como uid 0. A instalação e
+o segundo boot ocorreram com uma NIC VirtIO/NAT presente, mas com o cabo
+desconectado. Num terceiro boot, o cabo foi conectado e o `rcS` da base obteve
+DHCP IPv4, rota default e servidor DNS; o runner resolveu apenas `localhost`
+pelo resolvedor da NAT e alcançou o gateway, sem depender da Internet.
+
+O cache da ISO era um superconjunto do world inicial: `ripgrep` não constava em
+`target.world`, e o runner comprovou que comando, registro e intenção estavam
+ausentes. Depois da prova de rede, desligou novamente o cabo e executou
+`minitrue --offline rectify ripgrep`. O objeto já presente no cache instalou
+`ripgrep` 15.2.0, criou seu registro e o acrescentou ao world; um `minitrue
+verify` posterior terminou sem divergências:
 
 ```text
-EVIDENCIA_VIRTUALBOX_INTERATIVO_V1=local-development
-ACCEPTANCE_META=target/vbox-acceptance-interactive-v4/evidence/acceptance.meta
+EVIDENCIA_VIRTUALBOX_NETWORK_V1=local-custom
+ACCEPTANCE_META=target/vbox-acceptance-network-v1/evidence/acceptance.meta
+ACCEPTANCE_FORMAT=1
 VBOX_VERSION=7.2.6_Ubuntur172322
+VBOXMANAGE_BINARY_SHA256=3d019f23c6d755ed1f6a3bb05f4481fd56015719bf51e4299dca0267fbcc021a
 FIRMWARE=efi64
 GRAPHICS=vmsvga
 STORAGE=IntelAhci
 GUEST_DISK=/dev/sda
-NETWORK=none
+NIC_TYPE=virtio
+INSTALL_NETWORK=nat-cable-disconnected
+THIRD_BOOT_NETWORK=nat-cable-connected
+DNS_PROBE=localhost-via-vbox-nat-host-resolver
+SECURE_BOOT=off
 CMDLINE=console=ttyS0,115200 console=tty0 panic=-1 rdinit=/init
-ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
-REPEATED_ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
-BOOT_EFI_SHA256=a07b369e6d666e4ff9bb7bb6bba3eda763852a43d31e14971e77908280ebfa3b
+ISO_SHA256=3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d
+REPEATED_ISO_SHA256=3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d
+BOOT_EFI_SHA256=71b8977c55a3d0e25785c0299af32515e3dc71759e89f1f08d57d525f800fc88
+DISK_SHA256=1dc7d872dae51a99ebf3063bd55d1e20234f58ddfa41af2212cad63ccdf41165
+RUN_STATE=passed
 ISO_EJECTED_BEFORE_WIPE=yes
+INSTALL_AND_SECOND_BOOT_OFFLINE=yes
 SECOND_BOOT_WITHOUT_ISO=yes
 ROOT_LOGIN=yes
-RUN_STATE=passed
+THIRD_BOOT_WITH_NAT=yes
+THIRD_BOOT_GETTY=yes
+THIRD_BOOT_ROOT_LOGIN=yes
+DHCP_IPV4=yes
+DEFAULT_ROUTE=yes
+RESOLV_CONF_IPV4_NAMESERVER=yes
+DNS_LOCALHOST=yes
+NAT_GATEWAY_PING=yes
+NETWORK_DISCONNECTED_BEFORE_OFFLINE_RECTIFY=yes
+RIPGREP_INITIAL_ABSENT=yes
+RIPGREP_EXTRA_OFFLINE_RECTIFY=yes
+RIPGREP_VERSION=15.2.0
+MINITRUE_VERIFY_AFTER_RIPGREP=yes
+MINITRUE_VERIFY=yes
 FINAL_RESULT=passed
 ```
 
 O aceite VirtualBox não substitui o final-v10 de QEMU: o primeiro prova a
-experiência humana e o console gráfico com SATA `/dev/sda`; o segundo preserva
-a automação em `/dev/vda` e o probe negativo que demonstra
-fail-before-wipe. Ambos são execuções locais de desenvolvimento, não testes
-em hardware real nem reprodução entre builders independentes.
+experiência humana, o console gráfico com SATA `/dev/sda`, a configuração
+automática no VirtIO/NAT e o consumo offline de um objeto extra; o segundo
+preserva a automação em `/dev/vda` e o probe negativo que demonstra
+fail-before-wipe. Ambos são execuções locais `custom` de desenvolvimento, não
+testes em hardware real, prova de acesso à Internet, reprodução entre builders
+independentes nem publicação oficial.
 
 O MBR/ext2/64 MiB é uma escolha de bootstrap compatível com os applets do
 BusyBox, não o desenho final GPT/ext4/ESP maior. Dual boot, seleção de
@@ -543,7 +587,8 @@ de reprodução oficial. Antes de mudar para `release`, são obrigatórios:
 - ampliar e testar os drivers do kernel vivo em hardware UEFI real;
 - ligar a construção do EFI ao `live.world`/lock e implementar atualização,
   retenção e rotação atômica do EFI instalado;
-- runit, configuração final de contas e caminho de rede fechados;
+- runit, configuração final de contas e a política de rede além do DHCP IPv4
+  simples validado em VirtIO/NAT;
 - publicar canal binário oficial, chave pinada e bundle estático assinado;
 - implementar `channel refresh` explícito, autenticado e com diff auditável;
 - converter as mutações do Journal ainda baseadas em caminhos para operações
@@ -569,8 +614,9 @@ perfil mínimo por canal. O EFI e o fluxo de disco estão implementados; o
 aceite final-v10 em QEMU comprovou instalação automatizada, segundo boot sem
 mídia até `rcS`/getty e recusa antes do wipe; o aceite VirtualBox comprovou a
 variante humana, seus prompts gráficos, instalação SATA, reboot pelo VDI sem
-ISO e login root. Isso não prova boot da IMG, hardware real, reprodução
-independente ou publicação oficial.
+ISO, login root, DHCP/DNS/gateway no VirtIO/NAT, instalação de `ripgrep` 15.2.0
+com o link desligado e `verify` posterior limpo. Isso não prova boot da IMG,
+Internet, hardware real, reprodução independente ou publicação oficial.
 
 ## 10. Questões em aberto
 

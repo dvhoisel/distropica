@@ -221,7 +221,7 @@ cp "$MINIPAX_BIN" "$INITROOT/bin/minipax"
 cp "$MINITRUE_BIN" "$INITROOT/bin/minitrue"
 cp "$REPO/bootstrap/live/init" "$INITROOT/init"
 mkdir -p "$INITROOT/usr/share/udhcpc"
-cp "$REPO/bootstrap/live/udhcpc.script" \
+cp "$REPO/newspeak/base/files/udhcpc.script" \
     "$INITROOT/usr/share/udhcpc/default.script"
 chmod 755 "$INITROOT/init" "$INITROOT/bin/busybox" \
     "$INITROOT/bin/minipax" "$INITROOT/bin/minitrue" \

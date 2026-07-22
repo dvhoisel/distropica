@@ -139,8 +139,13 @@ recusa fail-before-wipe de um `profile.lock` incoerente com `media.meta`.
 A variante humana, construída sem `--install-device`, também passou num aceite
 local real sob VirtualBox 7.2.6: exibiu no framebuffer os prompts de senha e de
 disco, recebeu `/dev/sda`, teve a ISO ejetada depois do preflight integral em
-`/run` e antes do wipe, reiniciou pelo VDI sem ISO e aceitou login de `root`.
-Seu console usa simpledrm/fbcon e a cmdline
+`/run` e antes do wipe, instalou e reiniciou pelo VDI sem ISO com o cabo da NIC
+desconectado e aceitou login de `root`. Num terceiro boot, o cabo VirtIO/NAT foi
+conectado e a base configurou automaticamente DHCP IPv4, rota default e DNS; o
+runner validou somente o resolvedor local e o gateway da NAT, sem depender da
+Internet. Em seguida, o cabo foi desconectado outra vez: `ripgrep` 15.2.0,
+inicialmente ausente, foi instalado por `minitrue --offline rectify ripgrep`, e
+o `verify` posterior terminou limpo. Seu console usa simpledrm/fbcon e a cmdline
 `console=ttyS0,115200 console=tty0 panic=-1 rdinit=/init`, com `tty0` por
 último para ser o console interativo primário. Ainda faltam o bundle estático
 assinado de release, endpoint/chave/pool de canal oficial, `channel refresh`
@@ -686,18 +691,25 @@ sem ISO até `rcS`/getty e probe negativo fail-before-wipe. A variante humana,
 sem `--install-device`, passou em `bootstrap/live/accept-virtualbox` com
 EFI64/VMSVGA/SATA: prompts gráficos de senha e disco, alvo `/dev/sda`, ejeção
 da ISO depois do preflight e antes do wipe, reboot pelo VDI sem ISO, getty e
-login `root` comprovado como uid 0. Duas composições locais dessa ISO humana
-foram byte a byte idênticas, com
-SHA-256 `183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426`;
-o EFI medido foi
-`a07b369e6d666e4ff9bb7bb6bba3eda763852a43d31e14971e77908280ebfa3b`.
-Isso não comprova hardware real, reprodução entre builders independentes nem
-uma ISO oficial publicada.
+login `root` comprovado como uid 0. Instalação e segundo boot ocorreram com o
+cabo NAT desconectado. Um terceiro boot, agora com o cabo conectado, comprovou
+DHCP IPv4 automático, rota, DNS local via resolvedor da NAT e acesso ao gateway;
+depois de desligar novamente o link, instalou `ripgrep` 15.2.0 do objeto extra
+do cache com `--offline` e terminou com `minitrue verify` limpo. A evidência está
+em `target/vbox-acceptance-network-v1/evidence/acceptance.meta`. Duas composições
+locais dessa ISO humana foram byte a byte idênticas, com SHA-256
+`3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d`; o EFI
+medido foi
+`71b8977c55a3d0e25785c0299af32515e3dc71759e89f1f08d57d525f800fc88`.
+O cache continua sendo um override `custom`, e o ensaio não comprova Internet,
+hardware real, reprodução entre builders independentes nem uma ISO oficial
+publicada.
 
 **Critério normativo de aceite do estágio completo:** boot UEFI chega a getty;
-login root; `minitrue verify` limpo. O aceite VirtualBox fecha a instalação e o
-login interativos em hipervisor; continuam abertos o `verify` executado depois
-do login, as dívidas de runit e o aceite em hardware real.
+login root; `minitrue verify` limpo. O aceite VirtualBox fecha os três pontos em
+hipervisor, inclusive o `verify` executado depois do login e da instalação
+offline de um pacote adicional. Continuam abertas as dívidas de runit e o
+aceite em hardware real.
 
 ## 6. Estágio 4 — userland vendor
 
@@ -718,7 +730,7 @@ futura própria.
 | E0 | chroot musl-estático habitável | baixo |
 | E1 | `./configure && make` funciona | atrito zig-cc×autotools |
 | E2 ✅ | ABI glibc + gcc nativo (pass-2) — **E2-clean: reproduzido a frio** de um rootfs novo (16 pacotes, libs finais selecionadas) 2026-07-20 | GCC hospedado por clang; matriz glibc↔GCC; toolchain-semente musl→glibc |
-| E3 🟡 | EFI-stub + instalação offline; QEMU automatizado cobre segundo boot e fail-before-wipe, e VirtualBox interativo cobre prompts, `/dev/sda`, reboot sem ISO e login root; runit/verify pós-login seguem abertos | hardware real e política final de init |
+| E3 🟡 | EFI-stub + instalação offline; QEMU automatizado cobre segundo boot e fail-before-wipe, e VirtualBox interativo cobre prompts, `/dev/sda`, reboot sem ISO, login root, DHCP/DNS/gateway VirtIO NAT, instalação posterior de ripgrep com link desligado e `verify` limpo; runit segue aberto | hardware real e política final de init |
 | E4a | userland vendor console | baixo |
 | E4b | GUI + Firefox | volume brutal de fonte (mesa/GTK) |
 

@@ -116,8 +116,11 @@ partir de nada além de binários upstream — foi **demonstrada**:
   também recusou um `profile.lock` incoerente com `media.meta` antes de
   qualquer escrita no disco, cobrindo essa ordem *fail-before-wipe*. Uma ISO
   interativa separada passou no VirtualBox 7.2.6: exibiu os prompts no
-  framebuffer, instalou em SATA (`/dev/sda`), reiniciou sem a ISO e aceitou o
-  login de root. O kernel mantém
+  framebuffer, instalou em SATA (`/dev/sda`) e completou o segundo boot sem ISO
+  e com o cabo de rede desligado. Num terceiro boot com VirtIO NAT, obteve DHCP,
+  rota e DNS local; depois desligou novamente o cabo, instalou o `ripgrep 15.2.0`
+  somente do cache com `minitrue --offline rectify` e terminou com `verify`
+  limpo. O kernel mantém
   `CONFIG_MODULES=y`, mas a mídia não distribui módulos:
   os drivers indispensáveis são built-in e o release
   `7.1.4-distropica-live` evita procurar acidentalmente os módulos `7.1.4` do
@@ -191,10 +194,21 @@ bootstrap/live/build-efi --output target/BOOTX64.EFI
 ```
 
 A ISO interativa pode ser exercitada de ponta a ponta no VirtualBox. O runner
-cria uma VM efêmera sem rede, com UEFI64, VMSVGA e SATA/AHCI; o VDI aparece no
-guest como `/dev/sda`. Depois que a closure já está validada em RAM, ele ejeta a
-ISO **antes** de enviar a autorização de wipe, instala no VDI, observa o reboot
-sem mídia e comprova o login de root. O diretório de execução precisa ser novo:
+cria uma VM efêmera com UEFI64, VMSVGA, SATA/AHCI e uma interface VirtIO NAT
+inicialmente com o cabo desligado; o VDI aparece no guest como `/dev/sda`.
+Depois que a closure já está validada em RAM, ele ejeta a ISO **antes** de enviar
+a autorização de wipe, instala no VDI e comprova o segundo boot e o login de
+root ainda sem rede. Num terceiro boot, conecta o cabo e prova DHCP IPv4, rota
+padrão, `resolv.conf`, resolução de `localhost` pelo resolvedor NAT e alcance do
+gateway do VirtualBox. Em seguida desliga o cabo novamente e instala
+`ripgrep 15.2.0` com `minitrue --offline rectify ripgrep`, terminando com
+`minitrue verify` limpo.
+
+O cache desse ensaio é deliberadamente um **superset** do `target.world`: contém
+o artefato de `ripgrep`, mas o pacote não faz parte do sistema-alvo mínimo e é
+comprovadamente ausente na instalação inicial. Assim, o último passo exercita
+uma retificação adicional offline, não uma instalação implícita pelo Minipax.
+O diretório de execução precisa ser novo:
 
 ```sh
 bootstrap/live/accept-virtualbox \
@@ -207,26 +221,46 @@ Esse aceite passou em 2026-07-21 com VirtualBox
 foram byte a byte idênticas:
 
 ```text
-EVIDENCIA_VIRTUALBOX_INTERATIVA=local-development
-ACCEPTANCE_META=target/vbox-acceptance-interactive-v4/evidence/acceptance.meta
+EVIDENCIA_VIRTUALBOX_INTERATIVA=local-custom
+ACCEPTANCE_META=target/vbox-acceptance-network-v1/evidence/acceptance.meta
 VBOX_VERSION=7.2.6_Ubuntur172322
 FIRMWARE=efi64
 GRAPHICS=vmsvga
 STORAGE=IntelAhci
 GUEST_DISK=/dev/sda
-NETWORK=none
-ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
-REPEATED_ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
-BOOT_EFI_SHA256=a07b369e6d666e4ff9bb7bb6bba3eda763852a43d31e14971e77908280ebfa3b
+NIC_TYPE=virtio
+INSTALL_NETWORK=nat-cable-disconnected
+THIRD_BOOT_NETWORK=nat-cable-connected
+DNS_PROBE=localhost-via-vbox-nat-host-resolver
+ISO_SHA256=3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d
+REPEATED_ISO_SHA256=3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d
+BOOT_EFI_SHA256=71b8977c55a3d0e25785c0299af32515e3dc71759e89f1f08d57d525f800fc88
 RUN_STATE=passed
 ISO_EJECTED_BEFORE_WIPE=yes
+INSTALL_AND_SECOND_BOOT_OFFLINE=yes
 SECOND_BOOT_WITHOUT_ISO=yes
 ROOT_LOGIN=yes
+THIRD_BOOT_WITH_NAT=yes
+THIRD_BOOT_GETTY=yes
+THIRD_BOOT_ROOT_LOGIN=yes
+DHCP_IPV4=yes
+DEFAULT_ROUTE=yes
+RESOLV_CONF_IPV4_NAMESERVER=yes
+DNS_LOCALHOST=yes
+NAT_GATEWAY_PING=yes
+NETWORK_DISCONNECTED_BEFORE_OFFLINE_RECTIFY=yes
+RIPGREP_INITIAL_ABSENT=yes
+RIPGREP_EXTRA_OFFLINE_RECTIFY=yes
+RIPGREP_VERSION=15.2.0
+MINITRUE_VERIFY_AFTER_RIPGREP=yes
 FINAL_RESULT=passed
 ```
 
 Essa igualdade é uma prova local de composição determinística, não uma
-reprodução independente nem um pino de release.
+reprodução independente nem um pino de release. A prova de rede limita-se ao
+DHCP, resolvedor de `localhost` e gateway fornecidos pelo NAT do VirtualBox: ela
+não afirma acesso à Internet. O cache continua sendo um insumo local `custom`;
+o ensaio também não cobre hardware real nem reprodução em outro ambiente.
 
 ### ISO automatizada destrutiva — somente aceite QEMU
 
@@ -301,7 +335,7 @@ O outro caminho também foi exercitado com os executores musl estáticos: a
 instalação direta `--offline --only-binary` materializou `base` + `linux` a
 partir do canal assinado de desenvolvimento e terminou com `minitrue verify`
 sem divergências. O lock instalado teve SHA-256
-`1aad51d8d2803710964f5aaf78aab9b45cfb99873e883e89f4420d0e2071fcb0`;
+`e08ef8c874478a6333f3af53ce4e2dd144ee6f3b144db9746d4cc57d12b0a534`;
 isso é evidência local do fluxo, não um pino oficial.
 
 `bootstrap/channel-from-rootfs` existe somente para migrar registros históricos
@@ -422,7 +456,7 @@ Os verificadores usados no desenvolvimento podem ser reproduzidos com:
 sh -n bootstrap/distropica-bootstrap
 sh -n bootstrap/channel-from-rootfs bootstrap/live/build-efi \
   bootstrap/live/accept-qemu bootstrap/live/accept-virtualbox \
-  bootstrap/live/init bootstrap/live/udhcpc.script
+  bootstrap/live/init newspeak/base/files/udhcpc.script
 ```
 
 ## Vocabulário
