@@ -24,4 +24,17 @@ build() {
         --disable-dependency-tracking
     make -j"$JOBS" MAKEINFO=true
     make install MAKEINFO=true DESTDIR="$STAGE"
+
+    # O install do binutils cria aliases de ld como hardlinks. O manifesto
+    # mundo-B autentica conteúdo e tipo, mas ainda não representa grupos de
+    # hardlinks; normalize-os para arquivos regulares independentes antes de
+    # selar o STAGE, que é também a topologia produzida pelo aplicador atual.
+    find "$STAGE" -type f -links +1 -exec sh -c '
+        for path do
+            copy=$path.minitrue-copy
+            [ ! -e "$copy" ]
+            cp -p "$path" "$copy"
+            mv -f "$copy" "$path"
+        done
+    ' sh {} +
 }

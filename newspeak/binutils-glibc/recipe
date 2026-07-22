@@ -32,4 +32,16 @@ SHIM
     # Evita transportar centenas de MiB de DWARF na ISO mínima. As ferramentas
     # completas permanecem; somente os símbolos de debug saem do payload final.
     make install-strip MAKEINFO=true DESTDIR="$STAGE"
+
+    # Veja newspeak/binutils: o aplicador mundo-B ainda não preserva grupos de
+    # hardlinks, portanto o payload precisa selar cada alias como arquivo
+    # regular independente.
+    find "$STAGE" -type f -links +1 -exec sh -c '
+        for path do
+            copy=$path.minitrue-copy
+            [ ! -e "$copy" ]
+            cp -p "$path" "$copy"
+            mv -f "$copy" "$path"
+        done
+    ' sh {} +
 }
