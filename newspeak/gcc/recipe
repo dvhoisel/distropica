@@ -71,6 +71,11 @@ build() {
     retry make -j"$JOBS" all-gcc all-target-libgcc LDFLAGS=-static SELFTEST_TARGETS=
     make install-gcc install-target-libgcc DESTDIR="$STAGE" SELFTEST_TARGETS=
 
+    # `installdirs` cria scaffolding vazio em diretórios compartilhados como
+    # /usr/include e /usr/share/info. Não são payload do pass-1 e reivindicá-los
+    # sobre os headers/docs de outro pacote seria doublethink topológico.
+    find "$STAGE" -mindepth 1 -depth -type d -empty -delete
+
     # O GCC instala alguns nomes do driver como hardlinks. O manifesto
     # mundo-B ainda não representa grupos de hardlinks; sele cada alias como
     # arquivo regular independente, exatamente como o aplicador o materializa.

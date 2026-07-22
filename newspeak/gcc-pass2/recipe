@@ -70,6 +70,10 @@ SHIM
     # exigir que cada projeto conheça a escolha concreta do compilador C.
     ln -s gcc "$STAGE/usr/bin/cc"
 
+    # Como no pass-1, descarte apenas o scaffolding vazio criado por
+    # `installdirs`; diretórios que contêm payload permanecem no STAGE.
+    find "$STAGE" -mindepth 1 -depth -type d -empty -delete
+
     # O GCC instala os nomes nativo, prefixado e versionado do driver como
     # hardlinks. O manifesto mundo-B ainda não representa esses grupos; sele
     # cada alias como arquivo regular independente antes de empacotar.
