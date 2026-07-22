@@ -26,4 +26,16 @@ build() {
     # do make incremental resume de onde parou até fechar (SPEC-0005/0010).
     retry make -j"$JOBS"
     make install DESTDIR="$STAGE"
+
+    # getconf e seus nomes de ABI são instalados como hardlinks. O manifesto
+    # mundo-B ainda não representa esses grupos; normalize-os para arquivos
+    # regulares independentes antes de selar o payload.
+    find "$STAGE" -type f -links +1 -exec sh -ec '
+        for path do
+            copy=$path.minitrue-copy
+            [ ! -e "$copy" ] && [ ! -L "$copy" ]
+            cp -p "$path" "$copy"
+            mv -f "$copy" "$path"
+        done
+    ' sh {} +
 }

@@ -70,4 +70,16 @@ build() {
     # A flakiness é só crash — o .o produzido é determinístico (SPEC-0010 §6).
     retry make -j"$JOBS" all-gcc all-target-libgcc LDFLAGS=-static SELFTEST_TARGETS=
     make install-gcc install-target-libgcc DESTDIR="$STAGE" SELFTEST_TARGETS=
+
+    # O GCC instala alguns nomes do driver como hardlinks. O manifesto
+    # mundo-B ainda não representa grupos de hardlinks; sele cada alias como
+    # arquivo regular independente, exatamente como o aplicador o materializa.
+    find "$STAGE" -type f -links +1 -exec sh -ec '
+        for path do
+            copy=$path.minitrue-copy
+            [ ! -e "$copy" ] && [ ! -L "$copy" ]
+            cp -p "$path" "$copy"
+            mv -f "$copy" "$path"
+        done
+    ' sh {} +
 }

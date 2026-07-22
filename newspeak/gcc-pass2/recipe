@@ -69,4 +69,16 @@ SHIM
     # instala gcc/g++/c++, mas não esse alias; o buildbase deve funcionar sem
     # exigir que cada projeto conheça a escolha concreta do compilador C.
     ln -s gcc "$STAGE/usr/bin/cc"
+
+    # O GCC instala os nomes nativo, prefixado e versionado do driver como
+    # hardlinks. O manifesto mundo-B ainda não representa esses grupos; sele
+    # cada alias como arquivo regular independente antes de empacotar.
+    find "$STAGE" -type f -links +1 -exec sh -ec '
+        for path do
+            copy=$path.minitrue-copy
+            [ ! -e "$copy" ] && [ ! -L "$copy" ]
+            cp -p "$path" "$copy"
+            mv -f "$copy" "$path"
+        done
+    ' sh {} +
 }
