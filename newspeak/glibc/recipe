@@ -27,6 +27,23 @@ build() {
     retry make -j"$JOBS"
     make install DESTDIR="$STAGE"
 
+    # O upstream instala estas ferramentas no /sbin legado. No usr-merge da
+    # Distrópica, /sbin já é /usr/bin; manter as duas grafias dentro do mesmo
+    # STAGE criaria claims sobrepostas. A lista explícita faz uma mudança
+    # upstream falhar fechado em vez de mesclar silenciosamente outro arquivo.
+    [ -d "$STAGE/sbin" ] && [ ! -L "$STAGE/sbin" ]
+    [ -d "$STAGE/usr" ] && [ ! -L "$STAGE/usr" ]
+    mkdir -p "$STAGE/usr/bin"
+    [ -d "$STAGE/usr/bin" ] && [ ! -L "$STAGE/usr/bin" ]
+    for name in ldconfig sln; do
+        source=$STAGE/sbin/$name
+        destination=$STAGE/usr/bin/$name
+        [ -f "$source" ] && [ ! -L "$source" ]
+        [ ! -e "$destination" ] && [ ! -L "$destination" ]
+        mv "$source" "$destination"
+    done
+    rmdir "$STAGE/sbin"
+
     # getconf e seus nomes de ABI são instalados como hardlinks. O manifesto
     # mundo-B ainda não representa esses grupos; normalize-os para arquivos
     # regulares independentes antes de selar o payload.
