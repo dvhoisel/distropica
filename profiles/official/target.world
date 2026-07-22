@@ -1,5 +1,7 @@
-# Perfil-alvo mínimo. base e linux vêm de canal; BusyBox e ripgrep usam os
-# binários oficiais dos respectivos upstreams.
+# Perfil-alvo mínimo instalável e pronto para compilar. Os componentes do
+# toolchain entram como dependências de miniplenty-buildbase, não como desejos
+# top-level separados.
 base
 linux
 ripgrep
+miniplenty-buildbase

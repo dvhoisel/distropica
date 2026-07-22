@@ -1,0 +1,5 @@
+NAME=miniplenty-buildbase
+VERSION=1
+KIND=meta
+DEPS="base make gcc-pass2"
+ABOUT="O conjunto-base de produção da Distrópica: shell e utilitários essenciais, GNU Make, headers Linux, binutils nativo e GCC final para C e C++. O nome remete ao Ministry of Plenty de 1984; por ser meta, não instala payload próprio."

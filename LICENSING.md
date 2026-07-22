@@ -58,6 +58,13 @@ dessa composição não for gerado, sua receita declara `LICENSE=NOASSERTION` em
 vez de atribuir incorretamente MIT ao bundle inteiro. Os textos upstream
 continuam dentro do tar/payload; `NOASSERTION` não autoriza omiti-los.
 
+O mesmo critério conservador vale para `gcc-pass2`: seu payload final combina o
+compilador, bibliotecas cobertas pela GCC Runtime Library Exception, manuais
+GFDL e componentes auxiliares sob outras licenças. Até o SBOM arquivo a arquivo
+ser produzido a partir do novo artefato, a receita declara
+`LICENSE=NOASSERTION`; isso não altera nenhuma licença upstream nem reduz as
+obrigações de fornecer fontes, exceções e avisos correspondentes.
+
 Quem apenas constrói ou modifica a Distrópica para uso privado não é obrigado
 por esta política a publicar sua cópia. Quem redistribui binários deve cumprir
 as licenças aplicáveis componente a componente.

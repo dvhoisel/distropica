@@ -200,11 +200,14 @@ opinativa, não um default entre iguais; P8 generaliza a postura para o conjunto
 base.
 
 **Opinativa não é trancada (P0, controle do usuário).** A curadoria decide o
-que vem **por default** (a meta-receita `base`, SPEC-0008 §3), não o que é
-**permitido**. Alternativas que valham a pena vivem na árvore e o usuário as
-instala com um `rectify`; elas só não são a resposta default. A liberdade que
-importa — trocar a ferramenta — fica; a que se remove — ter de escolher tudo
-antes de começar — é atrito, não liberdade.
+que vem **por default** em `target.world` — hoje `base`, `linux`, `ripgrep` e o
+metapacote `miniplenty-buildbase` (SPEC-0008 §2 e §4.2) —, não o que é
+**permitido**. `base` não é meta: é uma receita `KIND=source` de montagem que
+materializa configuração real; `miniplenty-buildbase` é que agrega Make e a
+toolchain final sem payload próprio. Alternativas que valham a pena vivem na
+árvore e o usuário as instala com um `rectify`; elas só não são a resposta
+default. A liberdade que importa — trocar a ferramenta — fica; a que se remove
+— ter de escolher tudo antes de começar — é atrito, não liberdade.
 
 Critério da escolha: coerência com as premissas (binário upstream elegível, P2;
 explicável e inspecionável, P4; sem arrastar dependências que firam P1) e, entre
@@ -261,8 +264,10 @@ acabamento, nunca substituto de informação.
   estruturadas para acomodar aarch64 depois, sem compromisso de prazo.
 - Reprodutibilidade bit-a-bit: começou como aspiração, mas virou
   **mecanismo de segurança** dos canais binários (SPEC-0010): é o que faz
-  o binário de canal ser verificável por reprodução (SPEC-0009 §6). Já vale
-  para os pacotes menores da base (m4, gmp verificados); gcc/glibc a testar.
+  o binário de canal ser verificável por reprodução (SPEC-0009 §6). Há provas
+  históricas para m4, gmp, gcc e glibc nos artefatos então medidos; a receita
+  atual de `gcc-pass2` com `install-strip` e a closure completa ainda precisam
+  de nova reprodução.
 - Multilib/i686: fora.
 - Sandbox forte de builds: desejado, mas não bloqueia o v0 (SPEC-0003 §8).
 - Secure boot, instalador gráfico, suporte a hardware exótico: fora.

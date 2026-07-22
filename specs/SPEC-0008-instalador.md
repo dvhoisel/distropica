@@ -1,6 +1,6 @@
 # SPEC-0008 — minipax, instalação e mídia
 
-**Status:** implementação inicial v0.6 · 2026-07-22
+**Status:** implementação inicial v0.7 · 2026-07-22
 
 **Depende de:** SPEC-0003 (minitrue `--root`), SPEC-0005 (estágios),
 SPEC-0006 (init), SPEC-0009 (canais) e SPEC-0010 (reprodutibilidade).
@@ -56,7 +56,11 @@ perfil/
 O arquivo `profile` declara `PROFILE_FORMAT=1`, `NAME`, `ARCH`,
 `SOURCE_DATE_EPOCH`, `STATUS=development|release` e, opcionalmente,
 `MEDIA_SIZE_MIB` e `INSTALL_READY=yes|no` (default `yes`). O marco atual aceita
-somente `x86_64`; um perfil de release exige `INSTALL_READY=yes`.
+somente `x86_64`; um perfil de release exige `INSTALL_READY=yes`. O perfil
+`official` de desenvolvimento fixa atualmente `MEDIA_SIZE_MIB=512` para
+dimensionar a saída IMG e registrar esse parâmetro no lock. O campo não
+dimensiona o disco de instalação e não fixa o tamanho da ISO, que acompanha o
+payload.
 
 `STATUS=release` também exige três pinos SHA-256, em hexadecimal minúsculo:
 
@@ -172,13 +176,22 @@ qualquer entrada de `cache.world` interrompe a instalação antes de
 `target.world`.
 
 O perfil de desenvolvimento oficial declara `INSTALL_READY=yes`: o target
-atual pede `base`, `linux` e `ripgrep`, e `cache.world` exige a disponibilidade
-offline da fonte do GNU Make e do Zig sem instalá-los no target. O caminho
-anterior foi exercitado de ponta a ponta numa raiz vazia com
-`--offline --only-binary`, antes dessas duas mudanças do perfil. O cache veio
-de registros históricos e usa
+atual pede `base`, `linux`, `ripgrep` e `miniplenty-buildbase`. O último é
+`KIND=meta`, não possui payload e agrega `base`, GNU Make e `gcc-pass2`; sua
+closure entrega headers Linux, glibc, mathlibs-glibc, binutils nativo e GCC/G++
+final. Na instalação normal `--only-binary`, Make e toda essa toolchain vêm do
+canal. Make e Zig constam em `cache.world`: a fonte de Make permanece congelada
+e verificável para rebuild/oferta offline, apesar de seu binário ser instalado
+por depender do meta; Zig garante a semente de uma reconstrução local futura
+sem ser instalado no target binário. O caminho anterior
+foi exercitado de ponta a ponta numa raiz vazia com `--offline --only-binary`,
+antes desse contrato do perfil. O cache veio de registros históricos e usa
 `TRUST=builder`; não é um canal oficial publicado nem autoriza mudar
 `STATUS=development` para `release`.
+
+Nos registros v2, `minitrue verify` também exige a presença factual de todas as
+`DEPS` de execução declaradas. Assim, um registro íntegro de `gcc-pass2` não
+mascara a ausência posterior de headers, runtimes ou binutils da sua closure.
 
 O caminho original do executável não volta a ser aberto entre `rectify` e os
 dois `verify`: substituí-lo durante a operação não troca o programa que está
@@ -295,13 +308,31 @@ baixar nem instalar. Um cache pode continuar sendo superconjunto estrito das
 duas listas: bytes extras também ficam presos por `CACHE_SHA256`, mas não criam
 registro, link ou intenção.
 
-Somente `target.world` expressa a instalação inicial. No perfil atual,
-`ripgrep` está nessa lista e deve existir desde o primeiro boot; GNU Make e Zig
-estão apenas em `cache.world`, garantindo que a prova de compilação posterior
-possa ocorrer sem rede. Receitas fonte `TOOLCHAIN=seed|cross` instalam Zig automaticamente apenas
-quando o Minitrue escolhe o build local; canal/binário e `none|native` não o
-instalam. Por ser dependência de build implícita, Zig permanece fora do
-`world`.
+Somente `target.world` expressa a instalação inicial. No perfil atual, `base`,
+`linux`, `ripgrep` e `miniplenty-buildbase` são desejos top-level e devem
+existir desde o primeiro boot. O meta é registrado com `WORLD=M`, `ORIGIN=meta`
+e manifesto canônico sem entradas; ele mantém suas dependências instaladas sem
+possuir arquivos. Entre os componentes da toolchain, apenas o meta é desejo
+top-level: Make, headers Linux, glibc, mathlibs-glibc, binutils-glibc e
+gcc-pass2 são componentes instalados da closure.
+
+Make e Zig estão em `cache.world`. A entrada de Make conserva sua fonte
+verificada para rebuild/oferta offline; ela não é a razão de o binário estar no
+target — isso decorre da dependência do meta. Receitas fonte
+`TOOLCHAIN=seed|cross` materializam Zig automaticamente apenas quando o
+Minitrue escolhe build local; canal/binário e `none|native` não o instalam.
+Assim, no caminho `--only-binary`, Zig fica disponível no cache, mas sem
+comando, registro ou entrada no `world`.
+
+Para que essa closure represente o sistema final, `gcc-pass2` declara como
+`DEPS` de execução `linux-headers`, glibc, mathlibs-glibc e binutils-glibc; gcc
+passada 1, binutils-cross e o libstdcxx intermediário são `BUILD_DEPS`. O GCC
+final supersede esse intermediário e fornece a libstdc++ definitiva. As
+receitas de binutils-glibc e gcc-pass2 passaram a solicitar
+`make install-strip` para reduzir o footprint esperado, motivadas pelo peso do
+payload anterior sem strip. Os novos payloads ainda não foram reconstruídos:
+o efeito exato, a preservação funcional e a identidade entre builds repetidos
+precisam ser medidos antes de atribuir essa redução à mídia atual.
 
 Historicamente, o cache de desenvolvimento network-v1 fechou o perfil mínimo e
 carregou o objeto pinado de `ripgrep` sem acrescentá-lo ao antigo
@@ -320,11 +351,13 @@ configuração antes de selecionar qualquer pacote.
 
 ### 4.3 Limites de escala deste marco
 
-Cada árvore de Newspeak, overlay ou cache é coletada na memória e limitada,
-separadamente, a **128 MiB de conteúdo em arquivos regulares** e **50 mil
-entradas**. Arquivos de perfil/world têm ainda o limite de 1 MiB. Esses são
-limites explícitos de desenvolvimento, não o tamanho pretendido de uma mídia
-offline final.
+Cada árvore é coletada na memória. Newspeak e overlay são limitadas,
+separadamente, a **128 MiB de conteúdo em arquivos regulares**; o cache, a
+**384 MiB**. Cada árvore admite **50 mil entradas**. O arquivo de entrada
+`cache.tar` possui ainda o teto de aceitação de **416 MiB**; arquivos de
+perfil/world têm o limite de 1 MiB. Esses são limites explícitos de
+desenvolvimento, não o tamanho pretendido de uma mídia offline final nem uma
+prova de que o perfil atual caiba neles.
 
 Ao consumir um artefato de canal, o transporte `.tar.zst` é selado antes do
 uso e permanece vivo enquanto o tar descompactado é escrito noutro `memfd`
@@ -495,6 +528,13 @@ antes de qualquer autorização destrutiva. Não se promete ainda operar caches
 grandes nesse desenho; streaming com uma área de dados autenticada continua
 gate de release.
 
+Os runners QEMU e VirtualBox reservam atualmente discos vazios de 4096 MiB por
+padrão, para comportar a closure de produção. Esse valor é independente de
+`MEDIA_SIZE_MIB=512`, que dimensiona somente a saída IMG; a ISO segue o tamanho
+do payload. A instalação continua obrigada a medir os snapshots e recusar um
+destino pequeno antes do wipe. O MBR com ESP FAT32 de 64 MiB descrito acima
+também não muda: 512 MiB não é o tamanho da ESP do target.
+
 `bootstrap/live/build-efi --install-device /dev/...` embute também
 `distropica.test=1`, suprime a interação e deixa root bloqueado. Essa opção é
 para aceite automatizado e é destrutiva; não é o caminho de usuário. Sem
@@ -595,13 +635,24 @@ FINAL_RESULT=passed
 ```
 
 O runner atual expressa um aceite diferente, ainda não executado sobre uma
-mídia recomposta. Ele deve encontrar ripgrep 15.2.0 já instalado e no `world`,
-com Zig e GNU Make ausentes; depois de desligar novamente o cabo, executa
-`minitrue --offline --no-binary rectify make`. O aceite só passa se GNU Make
-4.4.1 for compilado e entrar no `world`, Zig 0.16.0 for instalado
-automaticamente como dependência de build mas permanecer fora do `world`, e
-`minitrue verify` terminar limpo. Até essa execução existir, os hashes e
-resultados network-v1 acima não sustentam o novo fluxo.
+mídia recomposta. Com o cabo desligado no segundo boot, ele deve encontrar
+ripgrep 15.2.0 e o meta `miniplenty-buildbase` instalados. `base`, `linux`,
+`ripgrep` e o meta são explícitos no `world`; entre os componentes da
+toolchain, apenas o meta é top-level. Os registros de Make 4.4.1,
+linux-headers, glibc, mathlibs-glibc,
+binutils-glibc 2.45 e gcc-pass2 15.3.0 devem declarar origem de canal. Zig deve
+continuar apenas no cache e, junto das sementes `gcc`, `binutils`,
+`binutils-cross`, `libstdcxx`, `gmp`, `mpfr` e `mpc`, não pode possuir registro
+no target final.
+
+Ainda sem link, o runner compila e executa C com headers Linux/glibc; compila e
+executa C++17 com STL, strings, vetores, `unique_ptr`, exceções e dependência em
+`libstdc++.so.6`; cria, indexa e linka um arquivo estático com `ar`/`ranlib`; e
+executa um Makefile que chama GCC. Exige então `minitrue verify` limpo. Só no
+terceiro boot liga a NAT para as provas separadas de DHCP, DNS e gateway. Até
+essa execução sobre a nova mídia recomposta existir, os hashes e resultados
+network-v1 acima continuam históricos e não sustentam o novo fluxo;
+`MEDIA_SIZE_MIB=512` dimensionará a IMG, não a ISO usada no aceite.
 
 O aceite VirtualBox histórico não substitui o final-v10 de QEMU: o primeiro prova a
 experiência humana, o console gráfico com SATA `/dev/sda`, a configuração
@@ -655,7 +706,8 @@ mídia até `rcS`/getty e recusa antes do wipe; o aceite VirtualBox comprovou a
 variante humana, seus prompts gráficos, instalação SATA, reboot pelo VDI sem
 ISO, login root, DHCP/DNS/gateway no VirtIO/NAT, instalação de `ripgrep` 15.2.0
 com o link desligado e `verify` posterior limpo — tudo na revisão histórica
-network-v1. O aceite atual de ripgrep por padrão e build offline Make/Zig ainda
+network-v1. O aceite atual do meta `miniplenty-buildbase`, toolchain final do
+canal, sementes ausentes e compilação offline de C/C++/STL/archive/Make ainda
 está pendente. Isso não prova boot da IMG,
 Internet, hardware real, reprodução independente ou publicação oficial.
 

@@ -1,6 +1,6 @@
 # SPEC-0012 — Os Quatro Ministérios
 
-**Status:** rascunho v0.4 · 2026-07-22
+**Status:** rascunho v0.5 · 2026-07-22
 **Palavras-chave normativas:** DEVE / NÃO DEVE / DEVERIA / PODE (interpretação análoga à RFC 2119).
 
 ## 1. Propósito
@@ -31,7 +31,11 @@ memorização e à coesão; onde ele brigar com a clareza, a clareza vence.
   `cache verify`. É o que o usuário roda. Nada que só o mantenedor
   precise entra aqui. O consumidor atual valida índice canônico v2 assinado,
   exige a identidade exata da receita, oferece `--no-binary`/`--only-binary` e
-  persiste a escolha em `CHANNEL_LOCK_FORMAT=2`.
+  persiste a escolha em `CHANNEL_LOCK_FORMAT=2`. Ele também entende
+  `KIND=meta`: um conjunto declarativo recebe `WORLD=M`/`ORIGIN=meta`, não
+  possui payload e sustenta suas dependências sem transformá-las em desejos
+  top-level separados. Nos registros v2, `verify` exige ainda que todas as
+  `DEPS` de execução continuem factualmente presentes.
 - **Miniplenty** é o Ministério da Fartura: **produz**. Build controlado,
   `pack` determinístico, emissão de attestations, `channel emit`, assinatura e
   publicação de índices, reprodução cruzada. `pack`, `attest` e `channel emit`
@@ -40,7 +44,13 @@ memorização e à coesão; onde ele brigar com a clareza, a clareza vence.
   de produção/publicação estabilizar. `channel emit` gera pool + índice v2
   **não assinado**; assinatura e publicação continuam operações externas. A
   separação em binário próprio permanece futura e NÃO muda a identidade dos
-  formatos já emitidos.
+  formatos já emitidos. `miniplenty-buildbase` é a meta-receita do conjunto de
+  produção, não esse futuro binário: agrega `base`, Make e `gcc-pass2`. Seus
+  pacotes finais são transportados pelo canal. As receitas de
+  `binutils-glibc` e `gcc-pass2` passaram a solicitar `install-strip` para
+  reduzir o footprint esperado, mas os novos payloads ainda não foram
+  reconstruídos: redução efetiva, funcionalidade preservada e identidade entre
+  builds repetidos continuam pendentes.
 - **Minipax** carrega o que Miniplenty produziu até a máquina do usuário. Ele
   resolve e congela perfis (`target.world`, `live.world`, `cache.world`,
   Newspeak, overlay e cache), registra `INSTALL_READY`, prepara a raiz, delega
@@ -59,9 +69,26 @@ memorização e à coesão; onde ele brigar com a clareza, a clareza vence.
   um terceiro boot comprovou DHCP/DNS por VirtIO NAT e, depois de desligar o
   link outra vez, instalou ripgrep 15.2.0 do cache com `--offline` e terminou
   com `minitrue verify` limpo (SPEC-0010 §9). Essa é evidência histórica
-  network-v1. O runner atual exige ripgrep por padrão e um build offline de GNU
-  Make que materialize Zig como dependência fora do `world`; a nova execução
-  ainda está pendente.
+  network-v1.
+
+  No perfil atual, `target.world` pede ripgrep e `miniplenty-buildbase`; quando
+  a nova mídia for recomposta, Make, headers Linux, glibc, mathlibs-glibc,
+  binutils nativo e GCC/G++ final deverão vir do canal. Make e Zig constam em
+  `cache.world`: a fonte de Make fica congelada para rebuild/oferta offline,
+  embora o binário seja instalado por depender do meta; Zig fica somente no
+  cache. `MEDIA_SIZE_MIB=512` dimensiona a variante IMG, enquanto a ISO cresce
+  conforme o payload. O `gcc-pass2` mantém como dependências de execução
+  `linux-headers`, glibc,
+  mathlibs-glibc e binutils-glibc; gcc passada 1, binutils-cross e libstdcxx
+  intermediário são apenas scaffolding de build e não devem aparecer no target
+  binário final.
+
+  Com um VDI de 4096 MiB por padrão e o cabo desligado, o runner VirtualBox
+  atual exige as sementes ausentes e prova C, C++17/STL/exceções, libstdc++,
+  arquivo estático com `ar`/`ranlib`, Make invocando GCC e `minitrue verify`.
+  Só depois liga a NAT para DHCP/DNS/gateway. A nova mídia ainda não foi
+  recomposta nem executada; os hashes e resultados network-v1 permanecem
+  históricos.
   Um perfil de release precisa pinar `OFFICIAL_CONTENT_SHA256`,
   `OFFICIAL_BOOT_EFI_SHA256` e `OFFICIAL_MINITRUE_SHA256`. A coincidência em
   cada fronteira permite apenas a classe autoatribuída `official-inputs` para

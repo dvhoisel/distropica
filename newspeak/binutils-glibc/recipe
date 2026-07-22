@@ -3,11 +3,11 @@ VERSION=2.45
 KIND=source
 TOOLCHAIN=cross
 RETRIES=20
-SUPERSEDES="binutils binutils-cross"
+SUPERSEDES="busybox binutils binutils-cross"
 DEPS="glibc"
 BUILD_DEPS="gcc binutils-cross"
 ABOUT="binutils 2.45 reconstruído como GLIBC (dinâmico), não musl-estático. Passo do E2 descoberto na passada 2 (SPEC-0005 §4): o ld/ar da semente são estáticos musl e NÃO fazem dlopen do liblto_plugin.so ('dynamic loading not supported'), travando o link das target-libs do pass-2 — nem --disable-lto resolve, pois o ar é configurado com --plugin. Reconstruído glibc (interpreter /lib64/ld-linux-x86-64.so.2), o ld/ar passam a carregar plugins. SUPERSEDE o binutils-semente nos mesmos /usr/bin (as/ld/ar/nm) — colisão = dívida de 'fingerprint de build' (§4). --enable-plugins liga o suporte a plugin; -std=gnu17 p/ o código pré-C23."
-LICENSE=GPL-3.0-or-later
+LICENSE="GPL-2.0-or-later AND GPL-3.0-or-later AND GFDL-1.3-invariants-or-later AND GFDL-1.3-no-invariants-or-later"
 SRC="https://ftp.gnu.org/gnu/binutils/binutils-2.45.tar.xz"
 SHA256=c50c0e7f9cb188980e2cc97e4537626b1672441815587f1eab69d2a1bfbef5d2
 
@@ -29,5 +29,7 @@ SHIM
         --enable-default-hash-style=gnu --enable-deterministic-archives \
         --enable-plugins --disable-dependency-tracking
     retry make -j"$JOBS" MAKEINFO=true
-    make install MAKEINFO=true DESTDIR="$STAGE"
+    # Evita transportar centenas de MiB de DWARF na ISO mínima. As ferramentas
+    # completas permanecem; somente os símbolos de debug saem do payload final.
+    make install-strip MAKEINFO=true DESTDIR="$STAGE"
 }

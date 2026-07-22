@@ -1,4 +1,5 @@
-# Prova de bootstrap e sua semente, obrigatórias na mídia offline. Permanecem
-# no cache; Make só é compilado quando pedido e Zig entra sob demanda no build.
+# Fontes de reconstrução obrigatórias na mídia offline. O Make final é
+# instalado pelo canal por meio de miniplenty-buildbase, mas seu tar permanece
+# disponível; Zig continua apenas como semente sob demanda de builds locais.
 make
 zig

@@ -399,9 +399,13 @@ Um artefato aceito de canal é o "binário disponível" para o mundo B: uma vez
 que existe para o snapshot escolhido, P2 manda preferi-lo à fonte no modo
 normal. Não fere P1 (não é gerenciador de pacotes externo; é o próprio
 `minitrue` consumindo um tarball assinado) nem
-P6 (tudo pinado). A meta-receita `base` do instalador (SPEC-0008 §7) DEVE
-resolver-se por binários de canal — é o que garante que o usuário **não
-compila a base** ao instalar.
+P6 (tudo pinado). O metapacote `miniplenty-buildbase` (SPEC-0008 §4.2) é
+resolvido localmente: por ser `KIND=meta`, não tem payload nem artefato de
+canal. Sob `--only-binary`, porém, cada dependência `KIND=source` de sua closure
+de runtime DEVE ser satisfeita por um artefato aceitável do canal. É isso que
+impede compilar localmente `base`, Make ou a toolchain durante a instalação;
+`base` continua sendo uma receita de montagem com payload de configuração, não
+um meta.
 
 Ordem de preferência de um artefato, do mais ao menos preferido:
 1. binário oficial do **upstream** (mundo A: firefox, zig…);
@@ -414,9 +418,11 @@ Ordem de preferência de um artefato, do mais ao menos preferido:
 - Protocolo de repositório sofisticado (deltas, resolução de versões
   múltiplas): fora — o índice é uma lista assinada, e a árvore newspeak num
   commit é o conjunto consistente (SPEC-0001 P1).
-- **Reprodutibilidade completa da base:** m4, gmp, gcc e glibc já reproduziram
-  entre dois builds, mas a closure inteira e o kernel ainda não possuem a
-  prova independente necessária para um canal oficial corroborado.
+- **Reprodutibilidade completa da base:** m4, gmp, gcc e glibc reproduziram
+  entre dois builds nas receitas e artefatos históricos então medidos. A
+  receita atual de `gcc-pass2` com `install-strip`, a closure inteira e o kernel
+  ainda não possuem a nova prova independente necessária para um canal oficial
+  corroborado.
 - Mirrors do canal oficial (mesma chave, URLs alternativas): trivial de
   acomodar (vários arquivos de canal com a mesma `KEY`); formalizar.
 - Assinatura do índice: minisign no v0; OpenPGP quando a verificação PGP

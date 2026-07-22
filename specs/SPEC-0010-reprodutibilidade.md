@@ -1,6 +1,6 @@
 # SPEC-0010 — Builds, sistemas e mídias reprodutíveis
 
-**Status:** implementação parcial v0.4 · 2026-07-22
+**Status:** implementação parcial v0.5 · 2026-07-22
 **Depende de:** SPEC-0003 (minitrue), SPEC-0004 (newspeak), SPEC-0008
 (minipax), SPEC-0009 (canais).
 
@@ -22,11 +22,11 @@ saída posterior de reprodutível. O projeto distingue os níveis abaixo:
 
 | Nível | Identidade comparada | Situação atual |
 |-------|----------------------|----------------|
-| **R1 — pacote** | tar normalizado do `STAGE` (`reprocorr`) | provado para m4, gmp, gcc e glibc |
-| **R2 — sistema declarado** | `profile.lock`: `target.world`, `live.world`, `cache.world`, Newspeak, overlay, cache, arquitetura, epoch, tamanho de mídia e prontidão de instalação | implementado no `minipax`; torna intenção e disponibilidade offline auditáveis sem confundi-las |
+| **R1 — pacote** | tar normalizado do `STAGE` (`reprocorr`) | provado historicamente para os artefatos então medidos de m4, gmp, gcc e glibc; o `gcc-pass2` atual com `install-strip` e o novo `binutils-glibc` ainda precisam de rebuild ×2 |
+| **R2 — sistema declarado** | `profile.lock`: `target.world`, `live.world`, `cache.world`, Newspeak, overlay, cache, arquitetura, epoch, orçamento da IMG e prontidão de instalação | implementado no `minipax`; torna intenção e disponibilidade offline auditáveis sem confundi-las |
 | **R2b — rootfs byte-a-byte** | árvore instalada inteira, já materializada | **não provado**; registros contêm tempo de instalação e uid/gid ainda não fazem parte do contrato |
 | **R3 — mídia** | bytes finais de `.img` ou `.iso` para o mesmo conjunto completo de insumos | provado localmente com fixtures e, na revisão histórica da ISO humana aceita no VirtualBox, por duas composições idênticas no mesmo ambiente; a mídia do perfil atual e a reprodução entre builders ainda não foram feitas (§8) |
-| **R4 — reprodução funcional** | mídia dá boot e instala um sistema equivalente em outra máquina | provado localmente pelas revisões históricas final-v10 em QEMU/OVMF e network-v1 em VirtualBox. O fluxo atual ripgrep-default + Make/Zig está pendente; hardware real e reprodução oficial também não foram provados |
+| **R4 — reprodução funcional** | mídia dá boot e instala um sistema equivalente em outra máquina | provado localmente pelas revisões históricas final-v10 em QEMU/OVMF e network-v1 em VirtualBox. O fluxo atual com `miniplenty-buildbase`, toolchain final de canal e provas offline de compilação ainda está pendente; hardware real e reprodução oficial também não foram provados |
 
 Portanto, R3 não implica R4: uma imagem pode ser byte-reprodutível e ainda
 conter apenas um PE/COFF sintaticamente válido usado como fixture de teste.
@@ -127,7 +127,7 @@ o emissor de canais já reutilizam a mesma identidade de tar normalizado.
 - É esse hash reproduzido que o `TRUST=corroborado` (SPEC-0009 §6) exige
   bater; e é ele que o mantenedor pina como `reprocorr` ao publicar.
 
-## 6. Estado atual (verificado 2026-07-19)
+## 6. Evidência histórica (verificada em 2026-07-19/20)
 
 Com o ambiente determinístico + `ar` determinístico, dois builds
 independentes do mesmo pacote deram **`STAGE` byte-a-byte idêntico**:
@@ -184,9 +184,18 @@ empacotam para um hash de artefato idêntico:
 
 Importa porque a glibc tem `configure`s que rodam durante o `make` e podiam
 cravar algo volátil (data, host, ordem) — não cravaram, sob o ambiente
-determinístico. Com gcc **e** glibc reprodutíveis, os dois pacotes que
-justificavam todo o Estágio 2 estão prontos para virar binário de canal
-`corroborado` (§5) — a base distribuível sem "confie em quem buildou".
+determinístico. Isso demonstrou, para aquelas receitas e aqueles artefatos, que
+gcc e glibc podiam sustentar um canal `corroborado` (§5). Os hashes continuam
+como evidência histórica; não certificam automaticamente a closure atual.
+
+As receitas atuais de `binutils-glibc` e `gcc-pass2` passaram a solicitar
+`make install-strip`, motivadas pelo footprint do payload anterior sem strip.
+Os novos payloads ainda não foram reconstruídos nem reemitidos: é necessário
+medir a redução real, executar probes de compiladores, headers, bibliotecas e
+ferramentas e repetir o build para demonstrar identidade byte a byte. Portanto,
+R1 e a corroboração desses novos artefatos continuam pendentes; também não se
+afirma ainda que exatamente ou somente símbolos DWARF serão retirados. Símbolos
+de depuração poderão formar pacotes `-dbg` separados.
 
 **Codegen determinístico (o achado que destrava gcc/glibc).** O gcc da
 passada 1 é *flaky* (ICE segfault aleatório, corrupção de memória do
@@ -232,6 +241,27 @@ emitir a classe `official-inputs`: não há pinos nem canal de release publicado
 `minipax lock --profile <dir>` expõe exatamente esse documento para auditoria
 ou o grava, sem sobrescrever, quando recebe `--output`.
 
+O target atual declara `base`, `linux`, `ripgrep` e
+`miniplenty-buildbase`. O último é um conjunto `KIND=meta`, sem payload: sua
+identidade explícita no `world` (`WORLD=M`, `ORIGIN=meta`) agrega `base`, Make e
+`gcc-pass2`, enquanto os componentes permanecem dependências. Na política
+`--only-binary`, Make, linux-headers, glibc, mathlibs-glibc,
+binutils-glibc e gcc-pass2 são materializados pelo canal. Make e Zig integram
+`cache.world`; essa disponibilidade entra em R2 pelo lock, mas não cria registro
+ou intenção no target binário. A fonte de Make fica congelada para rebuild e
+oferta offline, embora seu binário seja instalado por depender do meta; Zig
+permanece semente sob demanda.
+
+A closure de execução de `gcc-pass2` é deliberadamente
+`linux-headers + glibc + mathlibs-glibc + binutils-glibc`. `gcc` passada 1,
+`binutils-cross` e `libstdcxx` intermediário são somente dependências de build;
+o GCC final supersede o último e instala a libstdc++ definitiva. Essa fronteira
+faz a identidade declarada do sistema apto a compilar incluir headers e
+binutils nativos, mas excluir as sementes `gcc`, `binutils`, `binutils-cross`,
+`libstdcxx`, `gmp`, `mpfr`, `mpc` e Zig no caminho atendido pelo canal. O
+`minitrue verify` confere a presença factual das `DEPS` de execução de cada
+registro v2, além da integridade de seus próprios arquivos.
+
 Uma instalação direta usa exatamente esse snapshot. O Minipax copia a árvore
 Newspeak e o cache fechados e congela também os executores: abre o Minitrue
 resolvido, copia seus bytes para um `memfd`, sela escrita e mudança de tamanho,
@@ -257,10 +287,12 @@ o executor reproduz `OFFICIAL_MINITRUE_SHA256`; caso contrário, é rebaixada
 para `custom` (ou permanece `development` para o perfil de desenvolvimento sem
 override explícito).
 
-O coletor atual limita **cada** árvore Newspeak, overlay ou cache a 128 MiB de
-arquivos regulares e 50.000 entradas. Ele mantém conteúdo e tar normalizado em
-memória; esses são limites explícitos do protótipo, não capacidade de release.
-Streaming é necessário antes de aceitar árvores reais maiores.
+O coletor atual limita Newspeak e overlay a 128 MiB de arquivos regulares cada
+e o cache a 384 MiB; cada árvore admite 50.000 entradas. Na ingestão, o arquivo
+`cache.tar` é aceito até 416 MiB. Ele mantém conteúdo e tar normalizado em
+memória; esses são limites explícitos do protótipo, não capacidade de release
+nem prova de que o perfil atual caiba neles. Streaming é necessário antes de
+aceitar árvores reais maiores.
 
 Os modos dessas árvores também fazem parte da representação canônica: dirs
 `0755`, `root/` do overlay `0700`, `shadow`/`gshadow` e backups `0600`,
@@ -289,6 +321,14 @@ O builder valida cabeçalhos DOS/PE, máquina AMD64, optional header PE32+,
 subsystem de aplicação EFI, número de seções e limites das tabelas. Isso prova
 apenas a forma e a arquitetura declarada do executável: **não** prova que ele
 inicia nem que contém o ambiente vivo.
+
+O perfil atual fixa `MEDIA_SIZE_MIB=512`. Esse valor dimensiona somente a saída
+IMG e participa do lock; a ISO cresce conforme o payload e não é limitada nem
+preenchida até esse tamanho. O campo também não dimensiona o disco em que o
+sistema será instalado. Os runners atuais criam destinos de 4096 MiB por padrão
+e ainda precisam executar a nova mídia. Os discos e hashes de 256 MiB citados
+nas evidências históricas abaixo continuam exatamente os fatos daqueles
+ensaios.
 
 O repositório agora fornece `bootstrap/live/build-efi`, que constrói um
 EFI-stub com Linux 7.1.4, initramfs, BusyBox e executores estáticos. Isso cria
@@ -392,11 +432,13 @@ continuam pertencendo ao pipeline futuro de release.
 ### 8.4 Escala do modo offline
 
 O cache offline entra hoje no mesmo payload e está sujeito, como árvore, aos
-limites de desenvolvimento de 128 MiB e 50.000 entradas (§7). Um cache de
-release real tende a superar tanto essa estratégia em memória quanto o desenho
-de uma única ESP/FAT contendo tudo. O caminho esperado exige coleta e escrita
-em streaming e provavelmente uma partição de dados offline separada; formato,
-integridade e montagem dessa partição ainda precisam ser especificados.
+limites de desenvolvimento de 384 MiB e 50.000 entradas (§7); seu arquivo de
+entrada `cache.tar` é aceito até 416 MiB. A nova closure ainda precisa ser
+composta e medida para demonstrar cabimento. Um cache de release real tende a
+superar tanto essa estratégia em memória quanto o desenho de uma única ESP/FAT
+contendo tudo. O caminho esperado exige coleta e escrita em streaming e
+provavelmente uma partição de dados offline separada; formato, integridade e
+montagem dessa partição ainda precisam ser especificados.
 
 Há ainda dois multiplicadores explícitos de pico: no consumo do canal, o
 `.tar.zst` selado e o tar descompactado coexistem em `memfd` (**zst + tar**); no
@@ -489,13 +531,22 @@ entre builders independentes. Do mesmo modo, o VirtualBox fecha o caminho
 humano, enquanto o QEMU automatizado continua sendo a evidência específica do
 negativo fail-before-wipe.
 
-O runner atual deve provar uma identidade funcional diferente: ripgrep 15.2.0
-já presente no target, Zig e GNU Make inicialmente ausentes e uma retificação
-`--offline --no-binary` de GNU Make 4.4.1 que instala Zig 0.16.0 apenas como
-dependência de build. `make` deve entrar no `world`, Zig deve permanecer fora e
-o `verify` final precisa ser limpo. Como essa mídia ainda não foi recomposta e
-executada, a evidência network-v1 não pode ser reutilizada como prova de R4
-para o perfil atual.
+O runner atual deve provar uma identidade funcional diferente. No segundo boot
+sem cabo, ripgrep 15.2.0 e o registro sem payload de
+`miniplenty-buildbase` devem existir; apenas o meta representa a toolchain no
+`world`. Make 4.4.1, linux-headers, glibc, mathlibs-glibc, binutils-glibc 2.45 e
+GCC/G++ 15.3.0 devem ter origem de canal. Make também consta em `cache.world`
+como fonte congelada; Zig continua somente no cache, e os registros de Zig,
+`gcc`, `binutils`, `binutils-cross`, `libstdcxx`, `gmp`,
+`mpfr` e `mpc` precisam estar ausentes.
+
+Sem conectar a rede, o runner deve compilar e executar C com headers Linux e
+glibc, C++17 com STL/exceções e `libstdc++.so.6`, uma biblioteca estática com
+`ar`/`ranlib`, e um Makefile que invoque GCC; depois exige `minitrue verify`
+limpo. A NAT só é ligada no terceiro boot para DHCP, DNS e gateway. Como a nova
+mídia ainda não foi recomposta nem executada com os discos padrão de 4096 MiB,
+a evidência network-v1 não pode ser reutilizada como prova de R4 para o perfil
+atual. `MEDIA_SIZE_MIB=512` dimensiona a variante IMG, não a ISO desse aceite.
 
 Essas provas exercitam localmente R2 e o compositor de R3, não fecham um
 release. Permanecem gates:
@@ -504,7 +555,8 @@ release. Permanecem gates:
   publicado;
 - ligar a construção do EFI ao `live.world`/lock e fixar os três pinos de
   release (`CONTENT`, `BOOT_EFI` e `MINITRUE`);
-- publicar o canal oficial, a chave pinada e a meta-receita normativa `base`;
+- publicar o canal oficial, a chave pinada e o metapacote normativo
+  `miniplenty-buildbase`; `base` permanece receita de montagem com payload;
 - implementar `channel refresh` autenticado, explícito e com diff auditável;
 - converter o Journal path-based restante para operações fd-relative
   confinadas contra TOCTOU de mutador concorrente;

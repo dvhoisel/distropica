@@ -5,10 +5,11 @@ use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Binary,
     Source,
+    Meta,
 }
 
 /// Toolchain de build por estágio (SPEC-0005). O executor injeta `CC`/`AR`/…
@@ -406,10 +407,11 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
     let kind = match field("KIND").as_str() {
         "binary" => Kind::Binary,
         "source" => Kind::Source,
+        "meta" => Kind::Meta,
         other => {
             return fail(
                 2,
-                format!("{name}: KIND '{other}' inválido (binary|source)"),
+                format!("{name}: KIND '{other}' inválido (binary|source|meta)"),
             )
         }
     };
@@ -491,8 +493,10 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
             );
         }
     }
-    let toolchain = match field("TOOLCHAIN").as_str() {
+    let toolchain_field = field("TOOLCHAIN");
+    let toolchain = match toolchain_field.as_str() {
         "none" => Toolchain::None,
+        "" if kind == Kind::Meta => Toolchain::None,
         "" | "seed" => Toolchain::Seed,
         "cross" => Toolchain::Cross,
         "native" => Toolchain::Native,
@@ -539,6 +543,86 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
     }
     if kind == Kind::Source && !get.contains_key("HAS_BUILD") {
         return fail(2, format!("{name}: KIND=source exige build()"));
+    }
+    if kind == Kind::Meta {
+        if deps.is_empty() {
+            return fail(2, format!("{name}: KIND=meta exige ao menos uma DEPS"));
+        }
+        let canonical_deps = deps.join(" ");
+        for (key, expected) in [
+            ("NAME", rname.as_str()),
+            ("VERSION", version.as_str()),
+            ("KIND", "meta"),
+            ("DEPS", canonical_deps.as_str()),
+        ] {
+            if literal_assignment_bytes(&recipe_bytes, key).as_deref() != Some(expected) {
+                return fail(
+                    2,
+                    format!("{name}: KIND=meta exige {key} como atribuição literal canônica"),
+                );
+            }
+        }
+        let mut forbidden = Vec::new();
+        if !srcs.is_empty() {
+            forbidden.push("SRC");
+        }
+        if !sha256.is_empty() {
+            forbidden.push("SHA256");
+        }
+        if !build_deps.is_empty() {
+            forbidden.push("BUILD_DEPS");
+        }
+        if !links.is_empty() {
+            forbidden.push("LINKS");
+        }
+        if !sig.is_empty() {
+            forbidden.push("SIG");
+        }
+        if sigsums.is_some() {
+            forbidden.push("SIGSUMS");
+        }
+        if sigkey.is_some() {
+            forbidden.push("SIGKEY");
+        }
+        if reprocorr.is_some() {
+            forbidden.push("REPROCORR");
+        }
+        if requires_glibc {
+            forbidden.push("REQUIRES_GLIBC");
+        }
+        if provisional {
+            forbidden.push("PROVISIONAL");
+        }
+        if epoch.is_some() {
+            forbidden.push("EPOCH");
+        }
+        if retries != 0 {
+            forbidden.push("RETRIES");
+        }
+        if !supersedes.is_empty() {
+            forbidden.push("SUPERSEDES");
+        }
+        if !matches!(toolchain_field.as_str(), "" | "none") {
+            forbidden.push("TOOLCHAIN");
+        }
+        if get.contains_key("HAS_BUILD") {
+            forbidden.push("build()");
+        }
+        if get.contains_key("HAS_INSTALL") {
+            forbidden.push("install_pkg()");
+        }
+        if files_archive.is_some() {
+            forbidden.push("files/");
+        }
+        if !forbidden.is_empty() {
+            return fail(
+                2,
+                format!(
+                    "{name}: KIND=meta só pode agregar DEPS; remova {}",
+                    forbidden.join(", ")
+                ),
+            );
+        }
     }
 
     Ok(Recipe {
@@ -852,6 +936,74 @@ mod tests {
             load(&ctx, "base").is_err(),
             "source sem build() deve falhar"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn metapacote_agrega_somente_deps() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-meta-{}-{n}", std::process::id()));
+        let dir = root.join("var/lib/minitrue/newspeak/group");
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: true,
+            tofu: false,
+            jobs: 1,
+        };
+        let write = |extra: &str| {
+            std::fs::write(
+                dir.join("recipe"),
+                format!("NAME=group\nVERSION=1\nKIND=meta\nDEPS=compiler\n{extra}\n"),
+            )
+            .unwrap();
+        };
+
+        write("");
+        let meta = load(&ctx, "group").expect("meta mínimo deve parsear");
+        assert_eq!(meta.kind, Kind::Meta);
+        assert_eq!(meta.toolchain, Toolchain::None);
+        assert_eq!(meta.deps, ["compiler"]);
+        assert!(meta.srcs.is_empty() && meta.build_deps.is_empty());
+
+        for forbidden in [
+            "SRC=https://e/payload\nSHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "BUILD_DEPS=tool",
+            "LINKS=x=bin/x",
+            "REQUIRES_GLIBC=1",
+            "PROVISIONAL=1",
+            "SUPERSEDES=old",
+            "EPOCH=1",
+            "RETRIES=1",
+            "TOOLCHAIN=seed",
+            "REPROCORR=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "build(){ :; }",
+            "install_pkg(){ :; }",
+        ] {
+            write(forbidden);
+            assert!(
+                load(&ctx, "group").is_err(),
+                "meta aceitou campo/função proibido: {forbidden}"
+            );
+        }
+        for recipe in [
+            "NAME=group\nVERSION=1\nKIND=meta\nDEPS='compiler  linker'\n",
+            "NAME=group\nVERSION=1\nKIND=meta\ncompiler=compiler\nDEPS=\"$compiler\"\n",
+        ] {
+            std::fs::write(dir.join("recipe"), recipe).unwrap();
+            assert!(
+                load(&ctx, "group").is_err(),
+                "meta aceitou DEPS não literal/canônica"
+            );
+        }
+        std::fs::write(dir.join("recipe"), "NAME=group\nVERSION=1\nKIND=meta\n").unwrap();
+        assert!(load(&ctx, "group").is_err(), "meta sem DEPS deve falhar");
+
+        write("");
+        std::fs::create_dir_all(dir.join("files")).unwrap();
+        std::fs::write(dir.join("files/marker"), b"nao pertence a meta\n").unwrap();
+        assert!(load(&ctx, "group").is_err(), "meta não pode ter files/");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1247,6 +1399,19 @@ mod tests {
         for name in names {
             load(&ctx, &name).unwrap_or_else(|error| panic!("{name}: {error}"));
         }
+        let group = load(&ctx, "miniplenty-buildbase").unwrap();
+        assert_eq!(group.kind, Kind::Meta);
+        assert_eq!(group.deps, ["base", "make", "gcc-pass2"]);
+
+        let gcc = load(&ctx, "gcc-pass2").unwrap();
+        assert_eq!(
+            gcc.deps,
+            ["linux-headers", "glibc", "mathlibs-glibc", "binutils-glibc"]
+        );
+        assert_eq!(gcc.build_deps, ["gcc", "binutils-cross", "libstdcxx"]);
+
+        let binutils = load(&ctx, "binutils-glibc").unwrap();
+        assert!(binutils.supersedes.iter().any(|name| name == "busybox"));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

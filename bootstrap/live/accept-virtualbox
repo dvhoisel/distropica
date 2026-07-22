@@ -5,9 +5,9 @@
 # usada no ensaio só existe em memória. A ISO é ejetada antes da autorização
 # de /dev/sda, de modo que o reboot do instalador já prove o boot pelo VDI.
 # A instalação e o segundo boot ocorrem com o cabo virtual desconectado. Só
-# depois do aceite offline a VM faz um terceiro boot com NAT para provar a
-# configuração de rede da base instalada. Em seguida desliga o link e compila
-# GNU Make do cache para provar a continuação offline do sistema.
+# depois do aceite offline — que compila e executa programas C/C++ com a
+# toolchain nativa — a VM faz um terceiro boot com NAT para provar a
+# configuração de rede da base instalada.
 set -eu
 umask 022
 LC_ALL=C
@@ -16,13 +16,13 @@ export LC_ALL
 ISO=
 RUN_DIR=
 VBOX=${VBOXMANAGE:-}
-DISK_SIZE_MIB=2048
+DISK_SIZE_MIB=4096
 MEMORY_MIB=2048
 PREPARE_TIMEOUT=600
 INSTALL_TIMEOUT=600
 BOOT_TIMEOUT=180
 NETWORK_TIMEOUT=120
-SOURCE_BUILD_TIMEOUT=900
+TOOLCHAIN_TIMEOUT=180
 VERIFY_TIMEOUT=300
 VM_CREATED=no
 DISK_REGISTERED=no
@@ -44,14 +44,13 @@ Obrigatórios:
 
 Opções:
   --vboxmanage ARQ       default: VBoxManage do PATH
-  --disk-size-mib N      default: 2048 (mínimo: 256)
-  --memory-mib N         default: 2048 (mínimo: 512)
+  --disk-size-mib N      default: 4096 (mínimo: 2048)
+  --memory-mib N         default: 2048 (mínimo: 2048)
   --prepare-timeout N    segundos até validar a closure (default: 600)
   --install-timeout N    segundos para instalar/reiniciar (default: 600)
   --boot-timeout N       segundos até o login pelo VDI (default: 180)
   --network-timeout N    segundos até DHCP/rota no terceiro boot (default: 120)
-  --source-build-timeout N
-                         segundos para compilar GNU Make offline (default: 900)
+  --toolchain-timeout N  segundos para provar GCC/Make offline (default: 180)
   --verify-timeout N     segundos para `minitrue verify` (default: 300)
 
 O script recusa preventivamente uma ISO que contenha `distropica.install=` ou
@@ -60,11 +59,10 @@ destrutivo do QEMU. A VM usa EFI64, VMSVGA, teclado PS/2, SATA/AHCI e uma NIC
 VirtIO NAT inicialmente sem cabo. O VDI aparece como /dev/sda. Depois da
 instalação offline e do segundo boot, o runner liga o cabo e faz um terceiro
 boot para provar DHCP, DNS local via NAT, rota e gateway.
-O segundo boot já exige ripgrep 15.2.0 e prova que Zig e GNU Make ainda estão
-ausentes. Depois das provas de rede, o runner desconecta novamente o cabo,
-compila GNU Make 4.4.1 por `minitrue --offline --no-binary` e exige que o Zig
-0.16.0 seja materializado automaticamente apenas como dependência de build. A
-senha efêmera não é salva nos artefatos.
+O segundo boot exige ripgrep, `miniplenty-buildbase`, GNU Make, binutils e GCC
+nativos já instalados; com o cabo desligado, compila, linka e executa C, C++,
+arquivo estático e Makefile. Zig continua apenas disponível no cache, sem
+registro nem entrada no `world`. A senha efêmera não é salva nos artefatos.
 EOF
 }
 
@@ -84,7 +82,7 @@ while [ "$#" -gt 0 ]; do
         --install-timeout) INSTALL_TIMEOUT=${2:?}; shift 2 ;;
         --boot-timeout) BOOT_TIMEOUT=${2:?}; shift 2 ;;
         --network-timeout) NETWORK_TIMEOUT=${2:?}; shift 2 ;;
-        --source-build-timeout) SOURCE_BUILD_TIMEOUT=${2:?}; shift 2 ;;
+        --toolchain-timeout|--source-build-timeout) TOOLCHAIN_TIMEOUT=${2:?}; shift 2 ;;
         --verify-timeout) VERIFY_TIMEOUT=${2:?}; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) fail "opção desconhecida: $1" ;;
@@ -111,16 +109,16 @@ for pair in \
     "--install-timeout:$INSTALL_TIMEOUT" \
     "--boot-timeout:$BOOT_TIMEOUT" \
     "--network-timeout:$NETWORK_TIMEOUT" \
-    "--source-build-timeout:$SOURCE_BUILD_TIMEOUT" \
+    "--toolchain-timeout:$TOOLCHAIN_TIMEOUT" \
     "--verify-timeout:$VERIFY_TIMEOUT"; do
     decimal "${pair%%:*}" "${pair#*:}"
 done
-[ "$DISK_SIZE_MIB" -ge 256 ] && [ "$DISK_SIZE_MIB" -le 1048576 ] ||
-    fail "--disk-size-mib precisa estar entre 256 e 1048576"
-[ "$MEMORY_MIB" -ge 512 ] && [ "$MEMORY_MIB" -le 131072 ] ||
-    fail "--memory-mib precisa estar entre 512 e 131072"
+[ "$DISK_SIZE_MIB" -ge 2048 ] && [ "$DISK_SIZE_MIB" -le 1048576 ] ||
+    fail "--disk-size-mib precisa estar entre 2048 e 1048576"
+[ "$MEMORY_MIB" -ge 2048 ] && [ "$MEMORY_MIB" -le 131072 ] ||
+    fail "--memory-mib precisa estar entre 2048 e 131072"
 for timeout_value in "$PREPARE_TIMEOUT" "$INSTALL_TIMEOUT" "$BOOT_TIMEOUT" \
-    "$NETWORK_TIMEOUT" "$SOURCE_BUILD_TIMEOUT" "$VERIFY_TIMEOUT"; do
+    "$NETWORK_TIMEOUT" "$TOOLCHAIN_TIMEOUT" "$VERIFY_TIMEOUT"; do
     [ "$timeout_value" -ge 1 ] && [ "$timeout_value" -le 86400 ] ||
         fail "timeouts precisam estar entre 1 e 86400"
 done
@@ -208,7 +206,7 @@ fi
 vbox_binary_sha=$(sha256sum "$vbox_binary" | awk '{print $1}')
 vbox_version=$("$VBOX" --version)
 printf '%s\n' \
-    'ACCEPTANCE_FORMAT=2' \
+    'ACCEPTANCE_FORMAT=3' \
     'RUN_STARTED=preflight' \
     "ISO=$ISO" \
     "ISO_SHA256=$iso_sha" \
@@ -222,7 +220,7 @@ printf '%s\n' \
     "DISK_SIZE_MIB=$DISK_SIZE_MIB" \
     "MEMORY_MIB=$MEMORY_MIB" \
     "NETWORK_TIMEOUT=$NETWORK_TIMEOUT" \
-    "SOURCE_BUILD_TIMEOUT=$SOURCE_BUILD_TIMEOUT" \
+    "TOOLCHAIN_TIMEOUT=$TOOLCHAIN_TIMEOUT" \
     "VERIFY_TIMEOUT=$VERIFY_TIMEOUT" \
     'FIRMWARE=efi64' \
     'GRAPHICS=vmsvga' \
@@ -528,16 +526,47 @@ guest_command_and_wait_or_fail \
     'if command -v rg >/dev/null 2>&1 && [ -d /var/lib/minitrue/records/ripgrep ] && grep -Fqx ripgrep /etc/minitrue/world 2>/dev/null && rg --version >/tmp/vbox-rg-version 2>&1 && grep -Eq "^ripgrep 15[.]2[.]0([[:space:]]|$)" /tmp/vbox-rg-version; then cat /tmp/vbox-rg-version >/dev/ttyS0; echo VBOX_RIPGREP_DEFAULT_PRESENT_OK >/dev/ttyS0; else echo VBOX_RIPGREP_DEFAULT_PRESENT_FAILED >/dev/ttyS0; fi' \
     'VBOX_RIPGREP_DEFAULT_PRESENT_OK' 'VBOX_RIPGREP_DEFAULT_PRESENT_FAILED' 30
 
-# Zig é cache/toolchain de build, e GNU Make é a próxima intenção explícita.
-# Nenhum dos dois pode ter vazado para a instalação mínima antes da prova.
+# O conjunto de produção é intenção top-level; seus componentes são
+# dependências vindas do canal. As sementes do bootstrap não devem vazar para
+# a raiz final atendida por artefatos.
 guest_command_and_wait_or_fail \
     'if command -v zig >/dev/null 2>&1 || [ -e /usr/bin/zig ] || [ -L /usr/bin/zig ] || [ -e /opt/zig/current ] || [ -L /opt/zig/current ] || [ -e /var/lib/minitrue/records/zig ] || grep -Fqx zig /etc/minitrue/world 2>/dev/null; then echo VBOX_ZIG_INITIAL_UNEXPECTED >/dev/ttyS0; else echo VBOX_ZIG_INITIAL_ABSENT_OK >/dev/ttyS0; fi' \
     'VBOX_ZIG_INITIAL_ABSENT_OK' 'VBOX_ZIG_INITIAL_UNEXPECTED' 30
 guest_command_and_wait_or_fail \
-    'if command -v make >/dev/null 2>&1 || [ -e /usr/bin/make ] || [ -L /usr/bin/make ] || [ -e /var/lib/minitrue/records/make ] || grep -Fqx make /etc/minitrue/world 2>/dev/null; then echo VBOX_MAKE_INITIAL_UNEXPECTED >/dev/ttyS0; else echo VBOX_MAKE_INITIAL_ABSENT_OK >/dev/ttyS0; fi' \
-    'VBOX_MAKE_INITIAL_ABSENT_OK' 'VBOX_MAKE_INITIAL_UNEXPECTED' 30
+    'manifest=/var/lib/minitrue/records/miniplenty-buildbase/manifest; if [ -d /var/lib/minitrue/records/miniplenty-buildbase ] && grep -Fqx KIND=meta /var/lib/minitrue/records/miniplenty-buildbase/meta && grep -Fqx WORLD=M /var/lib/minitrue/records/miniplenty-buildbase/meta && grep -Fqx ORIGIN=meta /var/lib/minitrue/records/miniplenty-buildbase/meta && [ "$(wc -c < "$manifest")" -eq 1 ] && [ "$(cat "$manifest")" = "" ] && grep -Fqx miniplenty-buildbase /etc/minitrue/world; then echo VBOX_MINIPLENTY_BUILDBASE_META_OK >/dev/ttyS0; else echo VBOX_MINIPLENTY_BUILDBASE_META_FAILED >/dev/ttyS0; fi' \
+    'VBOX_MINIPLENTY_BUILDBASE_META_OK' 'VBOX_MINIPLENTY_BUILDBASE_META_FAILED' 30
+guest_command_and_wait_or_fail \
+    'state_ok=true; for package in make linux-headers glibc mathlibs-glibc binutils-glibc gcc-pass2; do [ -d "/var/lib/minitrue/records/$package" ] && grep -Eq "^ORIGIN=canal:" "/var/lib/minitrue/records/$package/meta" || state_ok=false; done; for seed in zig gcc binutils binutils-cross libstdcxx gmp mpfr mpc; do [ ! -e "/var/lib/minitrue/records/$seed" ] || state_ok=false; done; if "$state_ok"; then echo VBOX_FINAL_TOOLCHAIN_GRAPH_OK >/dev/ttyS0; else echo VBOX_FINAL_TOOLCHAIN_GRAPH_FAILED >/dev/ttyS0; fi' \
+    'VBOX_FINAL_TOOLCHAIN_GRAPH_OK' 'VBOX_FINAL_TOOLCHAIN_GRAPH_FAILED' 30
+guest_command_and_wait_or_fail \
+    'world_ok=true; for package in make linux-headers glibc mathlibs-glibc binutils-glibc gcc-pass2 zig; do grep -Fqx "$package" /etc/minitrue/world 2>/dev/null && world_ok=false; done; if "$world_ok" && grep -Fqx miniplenty-buildbase /etc/minitrue/world; then echo VBOX_TOOLCHAIN_WORLD_POLICY_OK >/dev/ttyS0; else echo VBOX_TOOLCHAIN_WORLD_POLICY_FAILED >/dev/ttyS0; fi' \
+    'VBOX_TOOLCHAIN_WORLD_POLICY_OK' 'VBOX_TOOLCHAIN_WORLD_POLICY_FAILED' 30
+guest_command_and_wait_or_fail \
+    'if command -v cc >/dev/null 2>&1 && command -v gcc >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1 && command -v as >/dev/null 2>&1 && command -v ld >/dev/null 2>&1 && command -v ar >/dev/null 2>&1 && command -v ranlib >/dev/null 2>&1 && command -v make >/dev/null 2>&1 && [ "$(readlink /usr/bin/cc)" = gcc ] && grep -Eq "  /usr/bin/cc$" /var/lib/minitrue/records/gcc-pass2/manifest && [ "$(cc -dumpfullversion)" = 15.3.0 ] && [ "$(gcc -dumpfullversion)" = 15.3.0 ] && [ "$(g++ -dumpfullversion)" = 15.3.0 ] && ld --version 2>/dev/null | head -n 1 | grep -Eq "2[.]45([[:space:]]|$)" && make --version 2>/dev/null | head -n 1 | grep -Eq "GNU Make 4[.]4[.]1([[:space:]]|$)"; then echo VBOX_NATIVE_TOOLCHAIN_VERSIONS_OK >/dev/ttyS0; else echo VBOX_NATIVE_TOOLCHAIN_VERSIONS_FAILED >/dev/ttyS0; fi' \
+    'VBOX_NATIVE_TOOLCHAIN_VERSIONS_OK' 'VBOX_NATIVE_TOOLCHAIN_VERSIONS_FAILED' 30
 
-type_text 'clear; echo VBOX_ROOT_SCREEN_OK; id; cat /etc/os-release; rg --version; findfs LABEL=DISTROPICA_ROOT'
+# Com o cabo ainda desligado, prova o que "build-ready" significa: headers do
+# kernel/glibc, runtime C++, exceções, binutils, arquivo estático e Makefile.
+guest_command_and_wait_or_fail \
+    'work=/tmp/vbox-toolchain; rm -rf "$work"; mkdir -p "$work"; printf "%s\n" "#include <errno.h>" "#include <linux/limits.h>" "#include <stdio.h>" "int main(void) { errno = 0; printf(\"C_OK %d %d\\n\", errno, PATH_MAX > 0); return 0; }" > "$work/hello.c"; if gcc -Wall -Wextra -Werror "$work/hello.c" -o "$work/hello-c" && [ "$("$work/hello-c")" = "C_OK 0 1" ]; then echo VBOX_NATIVE_C_COMPILE_RUN_OK >/dev/ttyS0; else echo VBOX_NATIVE_C_COMPILE_RUN_FAILED >/dev/ttyS0; fi' \
+    'VBOX_NATIVE_C_COMPILE_RUN_OK' 'VBOX_NATIVE_C_COMPILE_RUN_FAILED' "$TOOLCHAIN_TIMEOUT"
+guest_command_and_wait_or_fail \
+    'work=/tmp/vbox-toolchain; printf "%s\n" "#include <iostream>" "#include <memory>" "#include <stdexcept>" "#include <string>" "#include <vector>" "int main() { auto p = std::make_unique<std::string>(\"CXX_OK\"); std::vector<int> v{1,2,3}; try { throw v.size(); } catch (std::size_t n) { std::cout << *p << \" \" << n << std::endl; } }" > "$work/hello.cc"; if g++ -std=c++17 -Wall -Wextra -Werror "$work/hello.cc" -o "$work/hello-cxx" && [ "$("$work/hello-cxx")" = "CXX_OK 3" ] && readelf -d "$work/hello-cxx" | grep -Fq libstdc++.so.6; then echo VBOX_NATIVE_CXX_COMPILE_RUN_OK >/dev/ttyS0; else echo VBOX_NATIVE_CXX_COMPILE_RUN_FAILED >/dev/ttyS0; fi' \
+    'VBOX_NATIVE_CXX_COMPILE_RUN_OK' 'VBOX_NATIVE_CXX_COMPILE_RUN_FAILED' "$TOOLCHAIN_TIMEOUT"
+guest_command_and_wait_or_fail \
+    'work=/tmp/vbox-toolchain; printf "%s\n" "int answer(void) { return 42; }" > "$work/answer.c"; printf "%s\n" "int answer(void);" "int main(void) { return answer() == 42 ? 0 : 1; }" > "$work/archive-main.c"; if gcc -c "$work/answer.c" -o "$work/answer.o" && ar rcs "$work/libanswer.a" "$work/answer.o" && ranlib "$work/libanswer.a" && gcc "$work/archive-main.c" "$work/libanswer.a" -o "$work/archive-test" && "$work/archive-test"; then echo VBOX_NATIVE_ARCHIVE_LINK_OK >/dev/ttyS0; else echo VBOX_NATIVE_ARCHIVE_LINK_FAILED >/dev/ttyS0; fi' \
+    'VBOX_NATIVE_ARCHIVE_LINK_OK' 'VBOX_NATIVE_ARCHIVE_LINK_FAILED' "$TOOLCHAIN_TIMEOUT"
+guest_command_and_wait_or_fail \
+    'work=/tmp/vbox-toolchain; printf "%s\n" "#include <stdio.h>" "int main(void) { puts(\"MAKE_OK\"); return 0; }" > "$work/make.c"; printf "all:\n\tcc -Wall -Werror make.c -o make-built\n" > "$work/Makefile"; if make -C "$work" >/dev/ttyS0 2>&1 && [ "$("$work/make-built")" = MAKE_OK ]; then echo VBOX_NATIVE_MAKE_BUILD_OK >/dev/ttyS0; else echo VBOX_NATIVE_MAKE_BUILD_FAILED >/dev/ttyS0; fi' \
+    'VBOX_NATIVE_MAKE_BUILD_OK' 'VBOX_NATIVE_MAKE_BUILD_FAILED' "$TOOLCHAIN_TIMEOUT"
+guest_command_and_wait_or_fail \
+    'if /usr/bin/minitrue verify >/dev/ttyS0 2>&1; then echo VBOX_MINITRUE_VERIFY_OK >/dev/ttyS0; else echo VBOX_MINITRUE_VERIFY_FAILED >/dev/ttyS0; fi' \
+    'VBOX_MINITRUE_VERIFY_OK' 'VBOX_MINITRUE_VERIFY_FAILED' "$VERIFY_TIMEOUT"
+guest_command_and_wait_or_fail \
+    'if /usr/bin/minitrue --offline cache verify make zig >/dev/ttyS0 2>&1; then echo VBOX_SOURCE_CACHE_PERSISTED_OK >/dev/ttyS0; else echo VBOX_SOURCE_CACHE_PERSISTED_FAILED >/dev/ttyS0; fi' \
+    'VBOX_SOURCE_CACHE_PERSISTED_OK' 'VBOX_SOURCE_CACHE_PERSISTED_FAILED' "$VERIFY_TIMEOUT"
+
+type_text 'clear; echo VBOX_ROOT_SCREEN_OK; id; cat /etc/os-release; rg --version; gcc --version | head -n 1; make --version | head -n 1; findfs LABEL=DISTROPICA_ROOT'
 press_enter
 sleep 3
 require_screen_text 'ROOT_SCREEN_OK' root-shell 30
@@ -555,7 +584,7 @@ wait_for_log 'VBOX_OFFLINE_POWEROFF_OK' 1 30
 wait_for_state poweroff 60
 vm_info > "$RUN_DIR/evidence/offline-powered-off-vm-info.txt"
 
-echo "accept-virtualbox: fase 5/5: rede, build-fonte offline e verify"
+echo "accept-virtualbox: fase 5/5: rede no terceiro boot"
 vbox modifyvm "$VM_UUID" --cable-connected1=on \
     --uart-mode1 file "$ONLINE_SERIAL"
 SERIAL=$ONLINE_SERIAL
@@ -606,35 +635,7 @@ guest_command_and_wait \
     'ping -c 1 -W 5 "$network_gateway" >/dev/ttyS0 2>&1 && echo VBOX_NAT_GATEWAY_PING_OK >/dev/ttyS0' \
     'VBOX_NAT_GATEWAY_PING_OK' 30
 
-# A conectividade serviu somente para aceitar DHCP/DNS da base. O build deve
-# ocorrer sem sequer haver link: --offline precisa consumir o tar do Make, o
-# Zig e sua assinatura já trazidos pelo cache da ISO, sem tentar a Internet.
-vbox controlvm "$VM_UUID" setlinkstate1 off
-sleep 1
-vm_info > "$RUN_DIR/evidence/before-offline-source-build-vm-info.txt"
-grep -Fq 'cableconnected1="off"' \
-    "$RUN_DIR/evidence/before-offline-source-build-vm-info.txt" ||
-    fail "VirtualBox não confirmou o cabo desconectado antes do build offline"
-
-guest_command_and_wait_or_fail \
-    'if /usr/bin/minitrue --offline --no-binary rectify make >/dev/ttyS0 2>&1; then if command -v make >/dev/null 2>&1 && command -v zig >/dev/null 2>&1 && [ -d /var/lib/minitrue/records/make ] && [ -d /var/lib/minitrue/records/zig ] && grep -Fqx VERSION=4.4.1 /var/lib/minitrue/records/make/meta && grep -Fqx ORIGIN=fonte /var/lib/minitrue/records/make/meta && grep -Fqx VERSION=0.16.0 /var/lib/minitrue/records/zig/meta && grep -Fqx ORIGIN=vendor /var/lib/minitrue/records/zig/meta; then echo VBOX_MAKE_SOURCE_OFFLINE_RECTIFY_OK >/dev/ttyS0; else echo VBOX_MAKE_SOURCE_OFFLINE_RECTIFY_FAILED_STATE >/dev/ttyS0; fi; else rectify_status=$?; printf "VBOX_MAKE_SOURCE_OFFLINE_RECTIFY_FAILED status=%s\n" "$rectify_status" >/dev/ttyS0; fi' \
-    'VBOX_MAKE_SOURCE_OFFLINE_RECTIFY_OK' \
-    'VBOX_MAKE_SOURCE_OFFLINE_RECTIFY_FAILED' "$SOURCE_BUILD_TIMEOUT"
-guest_command_and_wait_or_fail \
-    'if grep -Fqx make /etc/minitrue/world 2>/dev/null && ! grep -Fqx zig /etc/minitrue/world 2>/dev/null; then echo VBOX_BUILD_DEP_WORLD_POLICY_OK >/dev/ttyS0; else echo VBOX_BUILD_DEP_WORLD_POLICY_FAILED >/dev/ttyS0; fi' \
-    'VBOX_BUILD_DEP_WORLD_POLICY_OK' 'VBOX_BUILD_DEP_WORLD_POLICY_FAILED' 30
-guest_command_and_wait_or_fail \
-    'if make --version >/tmp/vbox-make-version 2>&1 && grep -Eq "^GNU Make 4[.]4[.]1([[:space:]]|$)" /tmp/vbox-make-version; then cat /tmp/vbox-make-version >/dev/ttyS0; echo VBOX_MAKE_VERSION_OK >/dev/ttyS0; else echo VBOX_MAKE_VERSION_FAILED >/dev/ttyS0; fi' \
-    'VBOX_MAKE_VERSION_OK' 'VBOX_MAKE_VERSION_FAILED' 30
-guest_command_and_wait_or_fail \
-    'if zig version >/tmp/vbox-zig-version 2>&1 && grep -Fqx "0.16.0" /tmp/vbox-zig-version; then cat /tmp/vbox-zig-version >/dev/ttyS0; echo VBOX_ZIG_VERSION_OK >/dev/ttyS0; else echo VBOX_ZIG_VERSION_FAILED >/dev/ttyS0; fi' \
-    'VBOX_ZIG_VERSION_OK' 'VBOX_ZIG_VERSION_FAILED' 30
-guest_command_and_wait_or_fail \
-    'if /usr/bin/minitrue verify >/dev/ttyS0 2>&1; then echo VBOX_POST_SOURCE_BUILD_MINITRUE_VERIFY_OK >/dev/ttyS0; echo VBOX_MINITRUE_VERIFY_OK >/dev/ttyS0; else echo VBOX_POST_SOURCE_BUILD_MINITRUE_VERIFY_FAILED >/dev/ttyS0; fi' \
-    'VBOX_POST_SOURCE_BUILD_MINITRUE_VERIFY_OK' \
-    'VBOX_POST_SOURCE_BUILD_MINITRUE_VERIFY_FAILED' "$VERIFY_TIMEOUT"
-
-type_text 'clear; id; rg --version | head -n 1; make --version | head -n 1; zig version; ip -4 addr; ip -4 route; cat /etc/resolv.conf; echo VBOX_THIRD_BOOT_SCREEN_OK'
+type_text 'clear; id; rg --version | head -n 1; gcc --version | head -n 1; make --version | head -n 1; ip -4 addr; ip -4 route; cat /etc/resolv.conf; echo VBOX_THIRD_BOOT_SCREEN_OK'
 press_enter
 sleep 3
 require_screen_text 'THIRD_BOOT_SCREEN_OK' terceiro-boot-root 30
@@ -668,15 +669,21 @@ printf '%s\n' \
     'RIPGREP_DEFAULT_PRESENT=yes' \
     'RIPGREP_VERSION=15.2.0' \
     'ZIG_INITIAL_ABSENT=yes' \
-    'MAKE_INITIAL_ABSENT=yes' \
-    'NETWORK_DISCONNECTED_BEFORE_OFFLINE_SOURCE_BUILD=yes' \
-    'MAKE_SOURCE_OFFLINE_RECTIFY=yes' \
+    'MINIPLENTY_BUILDBASE_PRESENT=yes' \
+    'MINIPLENTY_BUILDBASE_WORLD=M' \
+    'FINAL_TOOLCHAIN_FROM_CHANNEL=yes' \
+    'BOOTSTRAP_TOOLCHAIN_RECORDS_ABSENT=yes' \
+    'GCC_VERSION=15.3.0' \
+    'CC_ALIAS=yes' \
     'MAKE_VERSION=4.4.1' \
-    'ZIG_AUTO_INSTALLED_FOR_SOURCE_BUILD=yes' \
-    'ZIG_VERSION=0.16.0' \
-    'MAKE_EXPLICIT_IN_WORLD=yes' \
+    'NATIVE_C_COMPILE_RUN_OFFLINE=yes' \
+    'NATIVE_CXX_COMPILE_RUN_OFFLINE=yes' \
+    'NATIVE_ARCHIVE_LINK_OFFLINE=yes' \
+    'NATIVE_MAKE_BUILD_OFFLINE=yes' \
+    'MINIPLENTY_BUILDBASE_EXPLICIT_IN_WORLD=yes' \
+    'TOOLCHAIN_COMPONENTS_NOT_EXPLICIT_IN_WORLD=yes' \
     'ZIG_NOT_EXPLICIT_IN_WORLD=yes' \
-    'MINITRUE_VERIFY_AFTER_SOURCE_BUILD=yes' \
+    'SOURCE_CACHE_MAKE_ZIG_PERSISTED=yes' \
     'MINITRUE_VERIFY=yes' \
     "DISK_SHA256=$disk_sha" >> "$META"
 (

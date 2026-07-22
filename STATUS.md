@@ -1,11 +1,13 @@
 # STATUS — o que está feito, testado e futuro
 
 Fonte única da verdade sobre a maturidade. As `specs/` descrevem a **norma**;
-este arquivo descreve o **estado**. Atualizado à mão (2026-07-22, após tornar
-ripgrep parte do target oficial, declarar Make e Zig em `cache.world`, autenticar
-essa lista no lock v2 e automatizar sua verificação offline. Os aceites final-v10 em
-QEMU/OVMF e network-v1 em VirtualBox/EFI permanecem evidências históricas da
-revisão anterior; o novo fluxo VirtualBox Make/Zig ainda precisa ser executado).
+este arquivo descreve o **estado**. Atualizado à mão (2026-07-22, após incluir
+`miniplenty-buildbase` no target, implementar `KIND=meta`/`WORLD=M` sem payload,
+declarar Make e a toolchain GCC final por padrão e ampliar o orçamento da IMG e
+os discos de aceite. Os aceites final-v10 em QEMU/OVMF e network-v1 em VirtualBox/EFI, assim
+como a prova fonte Make/Zig, permanecem evidências históricas; a nova
+closure, mídia e prova VirtualBox C/C++ ainda precisam ser construídas e
+executadas).
 Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
 ## Licenciamento e publicação
@@ -14,7 +16,7 @@ Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 |---|---|---|
 | Código e documentação próprios | ✅ | `GPL-3.0-or-later`; texto integral, escopo e regra de contribuição versionados |
 | Licença na base e no ambiente vivo | ✅ código | `base` instala a GPL e o aviso de escopo em `/usr/share/licenses/distropica/`, e `build-efi` os incorpora no initramfs; a mídia precisa ser recomposta para produzir nova evidência |
-| Inventário completo de terceiros | ⬜ gate de release | gerar por artefato, a partir dos insumos efetivamente distribuídos; o bundle Zig usa `NOASSERTION` até o SBOM conclusivo, sem perder os avisos upstream |
+| Inventário completo de terceiros | ⬜ gate de release | gerar por artefato, a partir dos insumos efetivamente distribuídos; os payloads compostos de Zig e `gcc-pass2` usam `NOASSERTION` até o SBOM conclusivo, sem perder licenças nem avisos upstream |
 | Bundle de fontes correspondentes | ⬜ gate de release | publicar junto de toda futura ISO/EFI/cache/canal: fontes exatas, configs, patches, crates vendorizadas, scripts, licenças e hashes de associação |
 
 Os hashes QEMU final-v10 e VirtualBox network-v1 abaixo são evidência histórica
@@ -29,20 +31,21 @@ Não são pinos de uma mídia recomposta a partir da árvore licenciada atual.
 | `rectify` mundo B (fonte → /usr) | ✅ | ✅ unit + E2/E2-clean + E2E local offline | `rectify make --no-binary --offline` compilou GNU Make 4.4.1 numa cópia isolada do target |
 | Perfis de toolchain (`none`/`seed`/`cross`/`native`) | ✅ | ✅ unit + E2E local offline | `seed`/`cross` em receita fonte implicam Zig no fingerprint e no plano de compilação local; a prova Make instalou Zig antes do build e o manteve fora do `world`. Canal/binário e `none`/`native` não o instalam |
 | Receitas de montagem (sem SRC) | ✅ | ✅ | `build()` gera o pacote (config, esqueleto de `/etc`) — nada a baixar; usada por `base` 0.2, com snapshot autocontido em `files/` e fábrica `/etc` |
+| Metapacotes (`KIND=meta`, mundo M) | ✅ código | 🟡 nova mídia pendente | agregam somente `DEPS`, não têm SRC, funções de build, payload nem artefato de canal; registro v2 usa `KIND=meta`, `WORLD=M`, `ORIGIN=meta` e manifesto vazio. `miniplenty-buildbase` é o primeiro consumidor |
 | Runner mundo B em rootfs (bwrap, --unshare-net, --clearenv) | ✅ | ✅ | isola rede/ambiente do `build()`, mas o **rootfs fica gravável**; avaliação top-level da receita e mundo A ainda rodam no host |
 | `retry` de ICE | ✅ | — | usado no E2 |
 | `fingerprint` de build | ✅ | ✅ | **transitivo**; inclui `DEPS`, `BUILD_DEPS` e Zig implícito para fonte `seed`/`cross`. Snapshot de `recipe`+`files/`, e o mesmo `files/` autocontido é materializado no `WORK` (symlinks auxiliares são recusados) |
 | Supersessão provisional (`PROVISIONAL` + `SUPERSEDES=`) | ✅ | ✅ | declarativa; no mundo B a cessão volta se a instalação falha. `SUPERSEDES` fica no registro e prova cadeias provisional→provisional; mundo A e restauração ao remover sucessor ainda faltam |
 | `pack` determinístico (v1) | ✅ | ✅ | a parte mais madura; falta xattr/ACL/cap/sparse |
 | Manifesto v2 (conteúdo + tipo) | ✅ | ✅ | `f:` prende modo+conteúdo do regular, `l:` prende alvo, `d:` prende modo do diretório-raiz+árvore (payload A e vazios B); leitura v0/v1 mantida |
-| `verify` (presença + integridade por claim) | ✅ | 🟡 unit + E2E VBox | inspeção confinada ao rootfs; passou após o `rectify` offline de `ripgrep`; confere conteúdo/tipo/alvo/árvore e denuncia journal pendente/formato futuro, mas não varre regulares órfãos em /usr nem fecha o grafo de deps |
+| `verify` (presença + integridade por claim) | ✅ | 🟡 unit + E2E VBox histórico | inspeção confinada ao rootfs; confere conteúdo/tipo/alvo/árvore, denuncia journal pendente/formato futuro e exige que toda `DEPS` de registro v2 tenha registro factual válido. Não verifica `BUILD_DEPS` nem varre regulares órfãos em /usr; a nova closure de mídia ainda não foi aceita |
 | `cache verify` (disponibilidade sem instalação) | ✅ | ✅ unit + E2E local | força offline/sem TOFU, confere hashes e assinaturas dos artefatos já no cache e não cria registro, link ou entrada no `world`; conferiu os insumos reais de Zig e Make |
 | `memoryhole` (+ preserva modificado) | ✅ | 🟡 | sem `--tudo`; sem rollback do payload |
 | `explain` / `why` (proveniência) | ✅ | ✅ | ORIGIN/hash-arq; ABOUT/REPROCORR congelados no meta, com fallback literal legado sem executar receita histórica; corroboração e reprocorr |
 | `--sync` (convergir ao world) | ⬜ | — | stub; SPEC-0011 |
 | `rollback` / `unperson` / `lint` | ⬜ | — | stub |
 | Canal binário assinado | ✅ | ✅ unit + E2E offline | config HTTPS/chave minisign pinada, índice canônico v2 assinado com `RECIPE_FINGERPRINT`, cache endereçado por conteúdo, `.tar.zst` com limites e conferência do tar interno; seleção exige que a identidade autenticada coincida com a receita efetiva. `/etc/minitrue/channels/` existente é autoritativo e, vazio, desativa a seed |
-| Resolução `--no-binary` / `--only-binary` | ✅ | ✅ unit + E2E offline | binário de canal preserva mundo B; `--only-binary` falha sem artefato e não expande `BUILD_DEPS` nem Zig implícito |
+| Resolução `--no-binary` / `--only-binary` | ✅ | ✅ unit + E2E offline histórico | binário de canal preserva mundo B; `--only-binary` resolve metapacotes locais sem artefato, mas exige artefato para cada dependência fonte e não expande `BUILD_DEPS` nem Zig implícito |
 | Lock de canal | ✅ | ✅ unit + E2E offline | `CHANNEL_LOCK_FORMAT=2`; seleção, chave, índice, pacote, fingerprint autenticado, caminho, hash de transporte, `reprocorr` e trust; persistido por hash em `/var/lib/minitrue/channel-locks/` e cotejado semanticamente por `verify` |
 | `channel emit` | ✅ | ✅ unit | `CHANNEL_EMIT_FORMAT=2`; reutiliza o tar autenticado do cache para registros vindos de canal e só reconstrói registros locais quando topologia, metadados e `ARTIFACT_HASH` podem ser provados; emite pool + índice sem assinatura. Release deve emitir no próprio build |
 | Gestão de canais (`add/remove/list/refresh`) | ⬜ | — | hoje a configuração é administrada por arquivos estritos; em especial, não há `channel refresh` auditável. A CLI administrativa da SPEC-0009 é gate de release |
@@ -62,8 +65,8 @@ Não são pinos de uma mídia recomposta a partir da árvore licenciada atual.
 | Recurso | Estado | Testado | Nota |
 |---|---|---|---|
 | CLI única (`install`, `media build`, `lock`) | ✅ | ✅ unit | binário Rust separado; `bootstrap/distropica-bootstrap` apenas o localiza/compila e delega |
-| Perfil estrito + `profile.lock` | ✅ | ✅ unit | `PROFILE_LOCK_FORMAT=2`/`PROFILE_CONTENT_FORMAT=2`; normaliza os três worlds e prende `cache.world` em `CACHE_WORLD_SHA256`, além de Newspeak/overlay/cache, arch, epoch, `MEDIA_SIZE_MIB`, `INSTALL_READY` e pinos oficiais |
-| Instalação em rootfs (`--target`) | ✅ | ✅ unit + E2E dev histórico | prepara FHS/usr-merge, congela Newspeak/cache e, offline, executa `cache verify` antes de `rectify` + `verify`; aplica overlay e promove pending→lock. O E2E anterior fechou `base`+`linux`; o target atual acrescenta ripgrep e ainda requer nova prova integrada |
+| Perfil estrito + `profile.lock` | ✅ | ✅ unit | `PROFILE_LOCK_FORMAT=2`/`PROFILE_CONTENT_FORMAT=2`; normaliza os três worlds e prende `cache.world` em `CACHE_WORLD_SHA256`, além de Newspeak/overlay/cache, arch, epoch, `MEDIA_SIZE_MIB=512`, `INSTALL_READY` e pinos oficiais. `MEDIA_SIZE_MIB` dimensiona a IMG, não fixa a ISO |
+| Instalação em rootfs (`--target`) | ✅ | ✅ unit + E2E dev histórico | prepara FHS/usr-merge, congela Newspeak/cache e, offline, executa `cache verify` antes de `rectify` + `verify`; aplica overlay e promove pending→lock. O E2E anterior fechou `base`+`linux`; o target atual é `base`+`linux`+`ripgrep`+`miniplenty-buildbase`, com Make/GCC transitivos, e requer nova prova integrada |
 | Ingestão de mídia (`install-media`) | ✅ | ✅ unit | valida controles sem seguir symlinks, hashes de lock/EFI, coerência modo/cache e reconstitui o perfil byte a byte antes de tocar no target; `--export-boot-efi` cria sem sobrescrever o snapshot EFI validado e o remove se a instalação falhar |
 | Executor e `install.manifest` | ✅ | 🟡 unit + E2E dev | copia Minitrue para `memfd` selado, mede o Minipax, persiste ambos em `/usr/bin`; manifesto prende hashes, classe e opções `OFFLINE`/`FROM_SOURCE`/`ONLY_BINARY`. O target mínimo exige executores estáticos para usá-los após o boot |
 | Retomada e proteção do target | ✅ | ✅ unit | recusa `/`, target sujo e perfil divergente; `--resume` exige marca anterior do Minipax |
@@ -72,25 +75,40 @@ Não são pinos de uma mídia recomposta a partir da árvore licenciada atual.
 | Sidecars (`.sha256`, `.media.lock`, `.manifest`) | ✅ | ✅ unit | temporários publicados sem sobrescrever antes da imagem; não há transação multi-arquivo, logo corrida/falha pode deixar sidecars sem imagem |
 | Classes de insumos de release | ✅ | 🟡 unit | `PROFILE_CLASS`, `MEDIA_CLASS` e `INSTALL_CLASS` podem ser `official-inputs` após os respectivos pinos; isso não declara reprodução oficial |
 | Modos canônicos das árvores | ✅ | ✅ unit | dirs `0755`, `root/` do overlay `0700`, `shadow`/`gshadow` e backups `0600`, executáveis `0755`, demais regulares `0644`; não depende dos modos que o Git preserva |
-| Limites das árvores | ✅ | 🟡 unit | 128 MiB e 50.000 entradas por árvore Newspeak/overlay/cache; conteúdo e tar ficam em memória. No canal, `.tar.zst` selado e tar descompactado coexistem, somando o pico de RAM; streaming é gate de release |
-| Modo offline/cache | ✅ | ✅ unit + E2E histórico | `cache.world` declara disponibilidade verificável sem instalação; no perfil atual exige Make e Zig. O superset network-v1 com ripgrep extra é evidência histórica. Limite atual: 128 MiB/50 mil entradas, materializado em memória |
+| Limites das árvores | ✅ | 🟡 unit | Newspeak e overlay: 128 MiB de conteúdo regular cada; cache: 384 MiB; 50.000 entradas por árvore; entrada `cache.tar`: até 416 MiB. Conteúdo e tar ficam em memória. No canal, `.tar.zst` selado e tar descompactado coexistem, somando o pico de RAM; streaming é gate de release |
+| Modo offline/cache | ✅ | ✅ unit + E2E histórico | `cache.world` declara disponibilidade verificável sem instalar por si; no perfil atual exige Make e Zig. Make também é instalado por depender de `miniplenty-buildbase`; Zig fica somente no cache/sob demanda. O superset network-v1 com ripgrep extra é evidência histórica. Limite atual da árvore de cache: 384 MiB/50 mil entradas, com `cache.tar` aceito até 416 MiB e materialização em memória |
 | Modo online/bootstrap de canal | ✅ | ✅ unit | Minipax exige config + índice/assinatura pareados, rejeita objetos e semeia antes de `rectify`; Minitrue valida minisign no uso. Não há endpoint oficial para E2E |
-| BOOT EFI vivo (kernel+initramfs+Minipax+Minitrue) | ✅ | ✅ E2E QEMU + VirtualBox | fixa Linux 7.1.4, BusyBox e executores musl `static-pie`. `CONFIG_MODULES=y`, nenhum `.ko` na mídia e release `7.1.4-distropica-live`; o EFI do VirtualBox inclui `simpledrm`+`fbcon` e VirtIO de rede built-in, sem fixar o disco |
+| BOOT EFI vivo (kernel+initramfs+Minipax+Minitrue) | ✅ | ✅ E2E histórico QEMU + VirtualBox | fixa Linux 7.1.4, BusyBox e executores musl `static-pie`. `CONFIG_MODULES=y`, nenhum `.ko` na mídia e release `7.1.4-distropica-live`; o EFI do VirtualBox inclui `simpledrm`+`fbcon` e VirtIO de rede built-in, sem fixar o disco. A mídia da closure atual não foi recomposta |
 | Instalação por ISO em QEMU/OVMF | ✅ | ✅ E2E final-v10 | aceite histórico e automatizado: antes de escolher disco, materializa closure em `/run` e exporta snapshot EFI validado; depois particiona, copia, verifica, instala EFI e publica o marcador completo por último. Segundo boot ocorreu sem ISO |
-| Instalação por ISO no VirtualBox | ✅ | ✅ E2E local histórico; 🟡 fluxo atual pendente | network-v1 provou EFI64/VMSVGA/SATA, reboot sem ISO e rede VirtIO/NAT, então instalou ripgrep offline. O runner atual exige ripgrep já presente e compila Make 4.4.1 offline, auto-instalando Zig 0.16.0 fora do `world`; falta executá-lo sobre mídia recomposta |
+| Instalação por ISO no VirtualBox | ✅ | ✅ E2E local histórico; 🟡 fluxo atual pendente | network-v1 provou EFI64/VMSVGA/SATA, reboot sem ISO e rede VirtIO/NAT, então instalou ripgrep offline. O runner atual exige ripgrep, metapacote M, Make, binutils e GCC já presentes e prova C, C++, arquivo estático e Makefile ainda offline; Zig deve seguir ausente. Falta executá-lo sobre mídia recomposta |
 | Boot da IMG em QEMU/OVMF | 🟡 | — | compositor IMG existe e reproduziu localmente; o aceite funcional final-v10 exercitou somente a ISO |
-| Particionamento/escrita destrutiva em disco | ✅ | ✅ QEMU final-v10 + VirtualBox network-v1 | PID 1 só recebe/autoriza o disco depois do preflight em `/run`: `/dev/vda` no aceite automatizado e `/dev/sda` no VirtualBox. O negativo final-v10 deixou um disco zerado intacto; o VirtualBox prosseguiu após ejeção pré-wipe porque a closure já estava materializada. Cria MBR com ESP FAT32 de 64 MiB + raiz ext2; não é ainda um particionador geral |
+| Particionamento/escrita destrutiva em disco | ✅ | ✅ QEMU final-v10 + VirtualBox network-v1 | PID 1 só recebe/autoriza o disco depois do preflight em `/run`: `/dev/vda` no aceite automatizado e `/dev/sda` no VirtualBox. O negativo final-v10 deixou um disco histórico de 256 MiB intacto; os runners atuais reservam 4096 MiB por padrão para a closure maior. Cria MBR com ESP FAT32 de 64 MiB + raiz ext2; não é ainda um particionador geral |
 
 O perfil `profiles/official` continua com `STATUS=development`, mas agora
-declara `INSTALL_READY=yes`. Seu `target.world` contém `base`, `linux` e
-`ripgrep`; seu `cache.world` contém Make e Zig, que precisam estar verificáveis
-numa instalação offline, mas não são instalados por essa declaração. O lock v2 separa
-essas intenções com `TARGET_WORLD_SHA256` e `CACHE_WORLD_SHA256`. Como o cache
-de desenvolvimento é passado por `--cache`, o E2E recebe classe `custom`; isso
-não o publica nem cria um canal oficial. Mesmo uma
-futura classe `official-inputs` não será, por si,
+declara `INSTALL_READY=yes`. Seu `target.world` contém `base`, `linux`,
+`ripgrep` e `miniplenty-buildbase`. A receita meta tem
+`DEPS="base make gcc-pass2"`, registro `KIND=meta`/`WORLD=M` e nenhum payload;
+o fecho final de GCC traz `linux-headers`, glibc, `mathlibs-glibc` e
+`binutils-glibc`. Make, GCC/G++, assembler e linker ficam instalados desde o
+primeiro boot, mas apenas `miniplenty-buildbase` é desejo top-level da
+toolchain. Seu `cache.world` contém Make e Zig: essa declaração só exige
+disponibilidade offline; Make é instalado por causa do metapacote e Zig fica no
+cache/sob demanda. O lock v2 separa essas intenções com `TARGET_WORLD_SHA256` e
+`CACHE_WORLD_SHA256`. O perfil fixa `MEDIA_SIZE_MIB=512` para dimensionar a
+IMG; a ISO segue o tamanho do payload. Os runners atuais usam discos de
+4096 MiB.
+
+Como o cache de desenvolvimento é passado por `--cache`, o E2E recebe classe
+`custom`; isso não o publica nem cria um canal oficial. Mesmo uma futura classe
+`official-inputs` não será, por si,
 reprodução oficial: isso dependerá do sha256 final pinado num manifesto
 oficial externo assinado.
+
+Essa closure ainda não possui nova evidência de mídia. As receitas de
+`gcc-pass2` e `binutils-glibc` passaram a solicitar `make install-strip`, e o
+grafo final mudou; a redução e a funcionalidade precisam ser medidas, os
+pacotes reconstruídos, comparados em builds repetidos e reemitidos, o índice
+assinado e o cache/lock/EFI/ISO recompostos antes dos aceites QEMU e VirtualBox.
 
 O aceite final-v10 executou ISO → disco vazio → segundo boot sem ISO, com rede
 ausente e TCG. Duas composições locais da ISO foram byte a byte idênticas. Uma
@@ -169,12 +187,14 @@ RUN_STATE=passed
 FINAL_RESULT=passed
 ```
 
-O runner atual já descreve a próxima prova: ripgrep 15.2.0 presente desde o
-primeiro boot; Zig e GNU Make inicialmente ausentes; link desligado antes de
-`minitrue --offline --no-binary rectify make`; GNU Make 4.4.1 no `world`; Zig
-0.16.0 instalado automaticamente, mas fora do `world`; e `verify` limpo. A
-mídia recomposta ainda não foi executada no VirtualBox, portanto não há hashes
-ou resultado `passed` para esse cenário.
+O runner atual já descreve a próxima prova: ripgrep 15.2.0,
+`miniplenty-buildbase`, GNU Make 4.4.1, binutils 2.45 e GCC/G++ 15.3.0 presentes
+desde o primeiro boot; metapacote registrado no mundo M sem payload; componentes
+da toolchain vindos do canal e fora do world explícito; Zig ausente; e, ainda
+sem link, compilação/execução C e C++, criação e link de arquivo estático,
+construção por Makefile e `verify` limpo. A mídia recomposta ainda não foi
+executada no VirtualBox, portanto não há hashes ou resultado `passed` para esse
+cenário.
 
 Mesmo quando preenchidos, esses hashes identificarão uma execução do workspace
 de desenvolvimento; não serão pinos de release nem substituirão manifesto
@@ -186,8 +206,8 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
 |---|---|---|
 | E0 — chroot musl-estático | ✅ | |
 | E1 — `./configure && make` | ✅ | |
-| E2 — glibc + gcc nativo | ✅ | **E2-clean: reproduzido a frio** (rootfs novo, seed limpo, 16 pacotes, gcc nativo compila C/C++, libs finais em /usr/lib). Falta só repetir num 2º ambiente independente |
-| E3 — kernel + boot | 🟡 | O smoke anterior bootou Linux 7.1.4 do E2 com raiz 9p e exercitou módulos assinados. Separadamente, o EFI-stub live passou em ISO→disco→boot sem mídia tanto no aceite automatizado QEMU/OVMF quanto no VirtualBox/EFI histórico; network-v1 cobriu `simpledrm`/`fbcon`, PS/2, AHCI, `/dev/sda`, VirtIO/NAT e `verify`. O novo fluxo Make/Zig está pendente; faltam ainda runit, `.config` de hardware geral e gestão completa de contas |
+| E2 — glibc + gcc nativo | ✅ | **Evidência histórica E2-clean:** um rootfs novo, com seed limpo, construiu 16 pacotes; o GCC nativo compilou C/C++ e usou as libs finais em `/usr/lib`. As receitas atuais com `install-strip` ainda precisam de rebuild e, depois, comparação em dois ambientes limpos |
+| E3 — kernel + boot | 🟡 | O smoke anterior bootou Linux 7.1.4 do E2 com raiz 9p e exercitou módulos assinados. Separadamente, o EFI-stub live passou em ISO→disco→boot sem mídia tanto no aceite automatizado QEMU/OVMF quanto no VirtualBox/EFI histórico; network-v1 cobriu `simpledrm`/`fbcon`, PS/2, AHCI, `/dev/sda`, VirtIO/NAT e `verify`. O novo fluxo com Make/GCC instalados e provas C/C++ offline está pendente; faltam ainda runit, `.config` de hardware geral e gestão completa de contas |
 | — openssl 4.0.1 (base de confiança do kernel) | ✅ | mundo B, compilado pela toolchain nativa (libcrypto/libssl, `-DZLIB`); SHA conferido no download. Habilita geração/uso da chave de módulos; **attestation usa ed25519-dalek e independe de OpenSSL**. O materializador de `/etc` agora trata symlinks, com regressão coberta |
 | — base 0.2 (config Fase B) | ✅ código | receita de montagem `GPL-3.0-or-later` com `TOOLCHAIN=none`: além de `/etc/inittab`, `rcS`, `rcK`, `os-release`, `hostname` e a cópia da GPL, sobe interfaces e tenta DHCP IPv4 sem tornar a falha fatal. O script compartilhado com o live configura endereço, rota padrão e DNS em `/etc/udhcpc/default.script`; o MOTD mostra `archives`, `verify` e `rectify`. O novo fingerprint ainda precisa de canal/cache e aceite recompostos. Não cria `/etc/shadow`, portanto sozinha não fecha login autenticado |
 | E4 — userland vendor / GUI | ⬜ | |
@@ -198,8 +218,8 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
 |---|---|
 | Ambiente determinístico (epoch/LC/TZ/umask) | ✅ |
 | `ar` determinístico | ✅ |
-| m4, gmp, **gcc**, **glibc** byte-idênticos (2 builds) | ✅ |
-| Hash de artefato via `pack` = `reprocorr` | ✅ (m4/gcc/glibc) |
+| m4, gmp, **gcc**, **glibc** byte-idênticos (2 builds) | ✅ histórico para as receitas e os artefatos então medidos; o `gcc-pass2` atual com `install-strip` ainda não foi reconstruído ×2 |
+| Hash de artefato via `pack` = `reprocorr` | ✅ histórico (m4/gcc/glibc); novos payloads de GCC/binutils pendentes |
 | `REPROCORR` pinado + verificado no build | ✅ (`m4` pina; build de fonte grava `ARTIFACT_HASH` e exige reproduzir o pinado — crimestop se divergir) |
 | Cotejo do artefato completo produzido pelo E2-clean | ⬜ (passo posterior à primeira execução a frio) |
 | Identidade declarativa do sistema (`profile.lock`) | ✅ (`PROFILE_LOCK_FORMAT=2`/`PROFILE_CONTENT_FORMAT=2`; inclui `CACHE_WORLD_SHA256`, tamanho, prontidão, hash calculado e os três pinos oficiais) |
@@ -209,15 +229,16 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
 | ISO byte-idêntica em duas composições | ✅ local para fixture, ISO final-v10 e ISO network-v1 do VirtualBox (mesmos insumos, binário e `xorriso`, cujo executável é medido) |
 | IMG/ISO byte-idênticas entre builders independentes | ⬜ |
 | Reprodução reconhecida contra manifesto oficial externo assinado | ⬜ (sidecars locais não são autoridade) |
-| R4 — reprodução funcional da mídia de desenvolvimento | ✅ local para as revisões históricas QEMU final-v10 e VirtualBox network-v1; 🟡 para o perfil atual, cujo runner Make/Zig ainda não foi executado. Não prova Internet, hardware real, builders independentes nem release oficial |
+| R4 — reprodução funcional da mídia de desenvolvimento | ✅ local para as revisões históricas QEMU final-v10 e VirtualBox network-v1; 🟡 para o perfil atual, cuja closure precisa ser reconstruída/reemitida e cujo runner C/C++ ainda não foi executado. Não prova Internet, hardware real, builders independentes nem release oficial |
 
 ## Limitações conhecidas (do parecer externo)
 
-- **E2-clean feito (uma vez):** reproduzido a frio de um rootfs novo (seed
-  limpo, grafo corrigido). Achou e consertou 2 bugs que o rootfs sujo mascarava
-  (SUPERSEDES seed→busybox; libstdc++ lib64×lib usr-merge). Falta repetir num
-  **2º ambiente independente** para "reproduzível ×2" e mover scripts, hashes
-  e logs de prova hoje transitórios para um diretório versionado `proofs/e2/`.
+- **E2-clean histórico (uma vez):** um rootfs novo reproduziu a frio o fluxo
+  com seed limpo e grafo corrigido. Achou e consertou 2 bugs que o rootfs sujo
+  mascarava (SUPERSEDES seed→busybox; libstdc++ lib64×lib usr-merge). As
+  receitas atuais com `install-strip` precisam primeiro de rebuild; então faltam
+  dois ambientes limpos para a nova prova "reproduzível ×2" e mover scripts,
+  hashes e logs hoje transitórios para um diretório versionado `proofs/e2/`.
 - **Mídia instalável histórica validada em QEMU/OVMF e VirtualBox/EFI:** o aceite
   automatizado final-v10 cobriu a ordem
   atual. O PID 1 primeiro materializa e verifica toda a closure em
@@ -235,18 +256,23 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   0.2, rota padrão, nameserver IPv4, resolução local e gateway. Depois de
   desligar novamente o cabo, instalou `ripgrep` 15.2.0 do cache e passou em
   `minitrue verify`. Isso não foi um probe da Internet. O runner atual substitui
-  esse último passo pela presença inicial de ripgrep e pelo build offline de
-  Make 4.4.1 com Zig 0.16.0 implícito; falta executar a mídia recomposta.
+  esse último passo pela presença inicial de ripgrep, do metapacote M, de Make e
+  da toolchain GCC final, seguida por provas C/C++/arquivo/Makefile offline; Zig
+  deve permanecer apenas no cache. Falta reconstruir e executar a mídia.
 - **Gates do perfil oficial:** o canal e `--only-binary` estão implementados,
   e o perfil marca `INSTALL_READY=yes`, mas o cache usado no E2E é de
   desenvolvimento com `TRUST=builder`. O superset network-v1 — a closure do
   target antigo mais o objeto pinado de `ripgrep` — foi testado historicamente.
-  Agora ripgrep pertence a `target.world`, e Make/Zig a `cache.world`; o lock v2 e a
-  verificação offline estão cobertos por unidade, mas a mídia integrada ainda
-  precisa ser aceita. Ainda não há
+  Agora `target.world` inclui ripgrep e `miniplenty-buildbase`; Make pertence
+  tanto à closure instalada quanto à disponibilidade de `cache.world`, enquanto
+  Zig pertence somente ao cache/sob demanda. A mídia integrada ainda precisa
+  ser construída e aceita. Antes disso, `gcc-pass2` e `binutils-glibc` precisam
+  de rebuild com `install-strip` e reemissão no canal; índice, cache, lock, EFI e
+  ISO também mudam. Ainda não há
   endpoint, chave de release, índice ou artefatos oficiais publicados. A
-  verdadeira meta-receita `base`, runit e a política uid/gid continuam abertos;
-  `base` 0.2 ainda é `base-config` de fato. `profiles/official` permanece
+  separação nominal de `base` 0.2 para `base-config`, runit e a política uid/gid
+  continuam abertos; o agregador de produção agora é a verdadeira meta-receita
+  `miniplenty-buildbase`. `profiles/official` permanece
   `STATUS=development`, portanto nenhuma saída recebe a classe de insumos
   oficiais. `STATUS=release` já exige três pinos separados:
   `OFFICIAL_CONTENT_SHA256`, `OFFICIAL_BOOT_EFI_SHA256` e
@@ -273,14 +299,15 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   preparados e publicados sem substituição antes da imagem. Isso evita imagem
   publicada pelo Minipax sem sidecars, mas corrida ou falha pode deixar parte
   ou todos os sidecars sem imagem; não existe rollback multi-arquivo.
-- **Escala do Minipax:** cada árvore Newspeak, overlay ou cache está limitada a
-  128 MiB e 50.000 entradas e é materializada integralmente em memória, junto
-  do tar normalizado. O consumo do canal mantém simultaneamente o transporte
+- **Escala do Minipax:** Newspeak e overlay estão limitadas a 128 MiB de
+  conteúdo regular cada; cache, a 384 MiB; cada árvore admite 50.000 entradas,
+  e `cache.tar` é aceito até 416 MiB. As árvores são materializadas
+  integralmente em memória, junto do tar normalizado. O consumo do canal mantém simultaneamente o transporte
   `.tar.zst` selado e o tar descompactado; o pico de RAM aproxima a soma dos
   dois. O instalador vivo acrescenta a raiz pré-validada em `/run`, trocando
-  memória por garantia fail-before-wipe. O perfil mínimo offline cabe nesse
-  envelope; ampliar o world exigirá streaming e provavelmente uma partição de
-  dados separada.
+  memória por garantia fail-before-wipe. O novo perfil ainda precisa ser
+  recomposto e medido para demonstrar que cabe nesses limites; ampliar o world
+  exigirá streaming e provavelmente uma partição de dados separada.
 - **Escala do canal:** o consumidor sela transporte e tar e limita cada um a
   16 GiB, mas ainda não limita a quantidade de entradas do tar. Um objeto
   assinado enorme pode esgotar memória no preflight — sem alcançar o wipe, mas
@@ -354,10 +381,11 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   operação rolling do canal oficial não está fechada; é gate de release.
 - **Nomes canônicos:** hoje `gcc` = scaffolding, `gcc-pass2` = o GCC real;
   renomeação final ainda pendente mesmo após o E2-clean.
-- **`base` ainda não é a meta-receita normativa:** o nome hoje pertence à
-  configuração de boot e o parser ainda não implementa `KIND=meta`. A migração
-  precisa preservar ownership dos rootfs que já registraram `base` antes de
-  renomeá-la para `base-config` e criar o agregador do instalador.
+- **Agregador e configuração-base agora são distintos:**
+  `miniplenty-buildbase` implementa o agregador normativo `KIND=meta`/`WORLD=M`;
+  `base` 0.2 continua sendo a receita com payload de configuração de boot. Uma
+  eventual renomeação para `base-config` ainda precisará preservar ownership de
+  rootfs já registrados.
 - **Kernel ainda não é reproduzível entre builders:** a receita gera uma nova
   chave de assinatura de módulos em cada build. A política de release precisa
   separar o artefato reprodutível da assinatura/chave operacional.

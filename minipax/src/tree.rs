@@ -8,6 +8,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
 const MAX_TREE_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_CACHE_TREE_BYTES: u64 = 384 * 1024 * 1024;
 const MAX_TREE_ENTRIES: usize = 50_000;
 
 #[derive(Default)]
@@ -21,6 +22,13 @@ pub enum TreePolicy {
     Newspeak,
     Overlay,
     Cache,
+}
+
+pub(crate) const fn max_tree_bytes(policy: TreePolicy) -> u64 {
+    match policy {
+        TreePolicy::Cache => MAX_CACHE_TREE_BYTES,
+        TreePolicy::Newspeak | TreePolicy::Overlay => MAX_TREE_BYTES,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -278,7 +286,8 @@ fn collect_dir(
             if metadata.nlink() > 1 {
                 bail!("hardlink não permitido na árvore: {}", path.display());
             }
-            let remaining = MAX_TREE_BYTES.saturating_sub(budget.bytes);
+            let limit = max_tree_bytes(policy);
+            let remaining = limit.saturating_sub(budget.bytes);
             let mut content = Vec::new();
             fs::File::open(&path)?
                 .take(remaining + 1)
@@ -286,7 +295,7 @@ fn collect_dir(
             if content.len() as u64 > remaining {
                 bail!(
                     "árvore excede o limite de desenvolvimento de {} MiB; streaming é gate de release",
-                    MAX_TREE_BYTES / 1024 / 1024
+                    limit / 1024 / 1024
                 );
             }
             budget.bytes += content.len() as u64;
@@ -370,6 +379,13 @@ mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn cache_tem_orcamento_maior_sem_relaxar_newspeak_e_overlay() {
+        assert_eq!(max_tree_bytes(TreePolicy::Newspeak), 128 * 1024 * 1024);
+        assert_eq!(max_tree_bytes(TreePolicy::Overlay), 128 * 1024 * 1024);
+        assert_eq!(max_tree_bytes(TreePolicy::Cache), 384 * 1024 * 1024);
+    }
 
     #[test]
     fn overlay_recusa_namespace_e_link_que_escapa() {

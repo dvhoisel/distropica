@@ -14,8 +14,8 @@ use std::path::{Component, Path, PathBuf};
 
 const MAX_CONTROL_BYTES: u64 = 1024 * 1024;
 const MAX_ARCHIVE_BYTES: u64 = 192 * 1024 * 1024;
+const MAX_CACHE_ARCHIVE_BYTES: u64 = 416 * 1024 * 1024;
 const MAX_BOOT_EFI_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_TREE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_TREE_ENTRIES: usize = 50_000;
 
 const META_FIELDS: &[&str] = &[
@@ -263,7 +263,11 @@ fn load_media(source: &Path) -> Result<MediaSnapshot> {
     // Offline: objetos fechados. Online: somente bootstrap de canal, validado
     // estruturalmente depois da extração. Nos dois casos o tar está preso por
     // CACHE_SHA256 no profile.lock antes de qualquer escrita no target.
-    let cache = Some(read_regular(&cache_path, "cache.tar", MAX_ARCHIVE_BYTES)?);
+    let cache = Some(read_regular(
+        &cache_path,
+        "cache.tar",
+        MAX_CACHE_ARCHIVE_BYTES,
+    )?);
     if (cache.is_some() && lock_fields["CACHE_SHA256"] == "-")
         || (cache.is_none() && lock_fields["CACHE_SHA256"] != "-")
     {
@@ -427,10 +431,11 @@ fn decode_archive(bytes: &[u8], policy: TreePolicy, what: &str) -> Result<Vec<De
             }
             DecodedKind::Directory
         } else if entry_type == tar::EntryType::Regular {
-            let remaining = MAX_TREE_BYTES.saturating_sub(content_bytes);
+            let limit = tree::max_tree_bytes(policy);
+            let remaining = limit.saturating_sub(content_bytes);
             let declared_size = item.size();
             if declared_size > remaining {
-                bail!("{what} excede {} MiB", MAX_TREE_BYTES / 1024 / 1024);
+                bail!("{what} excede {} MiB", limit / 1024 / 1024);
             }
             let mut content = Vec::with_capacity(declared_size as usize);
             (&mut item).take(remaining + 1).read_to_end(&mut content)?;

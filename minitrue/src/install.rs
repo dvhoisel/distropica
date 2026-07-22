@@ -324,6 +324,7 @@ fn plan_install(
     let needs_install = match recipe.kind {
         Kind::Binary => binary_needs_install(ctx, recipe, fingerprint)?,
         Kind::Source => source_needs_install(ctx, recipe, fingerprint, policy)?,
+        Kind::Meta => meta_needs_install(ctx, recipe, fingerprint)?,
     };
     let from_channel =
         if recipe.kind == Kind::Source && needs_install && policy != BinaryPolicy::SourceOnly {
@@ -448,6 +449,17 @@ fn source_needs_install(
     }
 }
 
+fn meta_needs_install(ctx: &Ctx, recipe: &Recipe, fingerprint: &str) -> Result<bool> {
+    let rec_dir = ctx.records_dir().join(&recipe.name);
+    let Some(meta) = read_meta_strict(&rec_dir)? else {
+        return Ok(true);
+    };
+    ensure_supported_record_format(&meta, &recipe.name)?;
+    Ok(!(meta.get("VERSION") == Some(&recipe.version)
+        && meta.get("FINGERPRINT").map(String::as_str) == Some(fingerprint)
+        && record_is_intact(ctx, &rec_dir, recipe)))
+}
+
 fn install_one(
     ctx: &Ctx,
     r: &Recipe,
@@ -471,7 +483,78 @@ fn install_one(
     match r.kind {
         Kind::Binary => install_binary(ctx, r, explicit, fingerprint),
         Kind::Source => install_source(ctx, r, explicit, fingerprint, policy, selection),
+        Kind::Meta => install_meta(ctx, r, explicit, fingerprint),
     }
+}
+
+// ---------- mundo M: conjunto declarativo sem payload ----------
+
+fn install_meta(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> Result<()> {
+    let rec_dir = ctx.records_dir().join(&r.name);
+    ensure_real_directory_or_absent(&ctx.root, &rec_dir, "registro do metapacote")?;
+    let installed_meta = read_meta_strict(&rec_dir)?;
+    if installed_meta.is_none()
+        && rec_dir.is_dir()
+        && fs::read_dir(&rec_dir)?.next().transpose()?.is_some()
+    {
+        return fail(
+            4,
+            format!(
+                "{}: diretório de registro preexistente não tem meta; adoção recusada",
+                r.name
+            ),
+        );
+    }
+    if let Some(meta) = installed_meta {
+        ensure_supported_record_format(&meta, &r.name)?;
+        if meta.get("VERSION") == Some(&r.version)
+            && meta.get("FINGERPRINT").map(String::as_str) == Some(fingerprint)
+            && record_is_intact(ctx, &rec_dir, r)
+        {
+            if explicit {
+                world_add(ctx, &r.name)?;
+            }
+            println!("os registros já estão corretos: {} {}", r.name, r.version);
+            return Ok(());
+        }
+        let manifest = read_manifest_strict(&rec_dir)?;
+        if meta.get("KIND").map(String::as_str) != Some("meta")
+            || meta.get("WORLD").map(String::as_str) != Some("M")
+            || !manifest.is_empty()
+        {
+            return fail(
+                4,
+                format!(
+                    "{}: registro existente tem payload ou outro mundo; migração para meta recusada",
+                    r.name
+                ),
+            );
+        }
+    }
+
+    let mut manifest = Vec::new();
+    write_record(
+        ctx,
+        &rec_dir,
+        r,
+        "M",
+        &mut manifest,
+        RecordWrite {
+            artifact_hash: None,
+            fingerprint,
+            manifest_typed: true,
+            source_origin: SourceRecordOrigin::Local,
+            journal: None,
+        },
+    )?;
+    if explicit {
+        world_add(ctx, &r.name)?;
+    }
+    println!(
+        "{} {} — conjunto declarativo retificado. doubleplusgood.",
+        r.name, r.version
+    );
+    Ok(())
 }
 
 // ---------- mundo A: binário do mantenedor ----------
@@ -3507,7 +3590,30 @@ pub fn memoryhole(ctx: &Ctx, names: &[String]) -> Result<()> {
             code: 1,
             msg: format!("{name}: manifesto ilegível — memoryhole recusado: {error}"),
         })?;
-        if manifest.is_empty() && record_meta.get("PROVISIONAL").map(String::as_str) != Some("1") {
+        let empty_meta = record_meta.get("KIND").map(String::as_str) == Some("meta")
+            && record_meta.get("WORLD").map(String::as_str) == Some("M")
+            && record_meta.get("ORIGIN").map(String::as_str) == Some("meta");
+        if empty_meta {
+            match read_regular_nofollow(&rec_dir.join("manifest")) {
+                Ok(bytes) if bytes == b"\n" => {}
+                Ok(_) => {
+                    return fail(
+                        1,
+                        format!("{name}: manifesto meta não canônico — memoryhole recusado"),
+                    )
+                }
+                Err(_) => {
+                    return fail(
+                        1,
+                        format!("{name}: manifesto meta ilegível — memoryhole recusado"),
+                    )
+                }
+            }
+        }
+        if manifest.is_empty()
+            && record_meta.get("PROVISIONAL").map(String::as_str) != Some("1")
+            && !empty_meta
+        {
             return fail(
                 1,
                 format!("{name}: manifesto ausente/vazio — memoryhole recusado"),
@@ -3768,6 +3874,35 @@ pub fn verify(ctx: &Ctx) -> Result<()> {
                 problems += 1;
             }
             if meta.get("RECORD_FORMAT").map(String::as_str) == Some(RECORD_FORMAT) {
+                let Some(dependencies) = meta.get("DEPS") else {
+                    println!("wrongthink: registro v2 de {name} não declara DEPS");
+                    problems += 1;
+                    continue;
+                };
+                for dependency in dependencies.split_whitespace() {
+                    if recipe::validate_name(dependency).is_err() {
+                        println!("wrongthink: {name} declara dependência inválida {dependency:?}");
+                        problems += 1;
+                        continue;
+                    }
+                    let dependency_record = ctx.records_dir().join(dependency);
+                    let dependency_is_real = fs::symlink_metadata(&dependency_record)
+                        .is_ok_and(|metadata| metadata.file_type().is_dir());
+                    let dependency_meta = dependency_is_real
+                        && read_meta_strict(&dependency_record).is_ok_and(|dependency_meta| {
+                            dependency_meta.is_some_and(|dependency_meta| {
+                                dependency_meta.get("NAME").map(String::as_str) == Some(dependency)
+                            })
+                        });
+                    if !dependency_meta {
+                        println!(
+                            "wrongthink: dependência {dependency} de {name} não tem registro factual"
+                        );
+                        problems += 1;
+                    }
+                }
+            }
+            if meta.get("RECORD_FORMAT").map(String::as_str) == Some(RECORD_FORMAT) {
                 let version = meta.get("VERSION").map(String::as_str);
                 let baseline = version.and_then(|version| {
                     recipe::validate_version(&name, version).ok().and_then(|_| {
@@ -3798,8 +3933,81 @@ pub fn verify(ctx: &Ctx) -> Result<()> {
                     continue;
                 }
             };
-            if manifest.is_empty() && !is_provisional(ctx, &name) {
+            let is_meta = meta.get("KIND").map(String::as_str) == Some("meta")
+                && meta.get("WORLD").map(String::as_str) == Some("M")
+                && meta.get("ORIGIN").map(String::as_str) == Some("meta");
+            let meta_marker_present = meta.get("KIND").map(String::as_str) == Some("meta")
+                || meta.get("WORLD").map(String::as_str) == Some("M")
+                || meta.get("ORIGIN").map(String::as_str) == Some("meta");
+            if meta_marker_present && !is_meta {
+                println!("wrongthink: registro meta de {name} tem KIND/WORLD/ORIGIN incoerentes");
+                problems += 1;
+            }
+            if is_meta {
+                let forbidden = [
+                    "ARTIFACT_HASH",
+                    "TRANSACTION_ID",
+                    "PROVISIONAL",
+                    "REPROCORR",
+                ];
+                if meta.get("SHA256").is_none_or(|value| !value.is_empty())
+                    || meta.get("NAME").map(String::as_str) != Some(name.as_str())
+                    || meta.get("SUPERSEDES").is_none_or(|value| !value.is_empty())
+                    || meta.get("DEPS").is_none_or(|value| value.is_empty())
+                    || meta.get("DEPS").is_some_and(|value| {
+                        value
+                            .split_whitespace()
+                            .any(|dep| recipe::validate_name(dep).is_err())
+                    })
+                    || !meta
+                        .get("FINGERPRINT")
+                        .is_some_and(|value| canonical_sha256(value))
+                    || forbidden.iter().any(|field| meta.contains_key(*field))
+                {
+                    println!("wrongthink: metapacote {name} contém campos de payload/build");
+                    problems += 1;
+                }
+                let recipe_current = read_regular_nofollow(&e.path().join("recipe"));
+                let recipe_versioned = meta.get("VERSION").map(|version| {
+                    read_regular_nofollow(&e.path().join(format!("recipe@{version}")))
+                });
+                let recipe_coherent = recipe_current.as_ref().is_ok_and(|current| {
+                    !current.is_empty()
+                        && recipe_versioned.as_ref().is_some_and(|versioned| {
+                            versioned
+                                .as_ref()
+                                .is_ok_and(|versioned| versioned == current)
+                        })
+                        && recipe::literal_assignment_bytes(current, "NAME").as_deref()
+                            == Some(name.as_str())
+                        && recipe::literal_assignment_bytes(current, "VERSION").as_ref()
+                            == meta.get("VERSION")
+                        && recipe::literal_assignment_bytes(current, "KIND").as_deref()
+                            == Some("meta")
+                        && recipe::literal_assignment_bytes(current, "DEPS").as_ref()
+                            == meta.get("DEPS")
+                });
+                if !recipe_coherent {
+                    println!("wrongthink: snapshots da receita meta de {name} são incoerentes");
+                    problems += 1;
+                }
+                let current = read_regular_nofollow(&e.path().join("manifest"));
+                let versioned = meta.get("VERSION").map(|version| {
+                    read_regular_nofollow(&e.path().join(format!("manifest@{version}")))
+                });
+                if !current.is_ok_and(|bytes| bytes == b"\n")
+                    || !versioned.is_some_and(|bytes| bytes.is_ok_and(|bytes| bytes == b"\n"))
+                {
+                    println!("wrongthink: manifesto vazio de {name} não é canônico");
+                    problems += 1;
+                }
+            }
+            if manifest.is_empty() && !is_provisional(ctx, &name) && !is_meta {
                 println!("wrongthink: manifesto de {name} está ausente/vazio");
+                problems += 1;
+            }
+            if is_meta && !manifest.is_empty() {
+                println!("wrongthink: metapacote {name} reivindica payload");
                 problems += 1;
             }
             for line in manifest {
@@ -3899,6 +4107,22 @@ struct RecordWrite<'a> {
     journal: Option<&'a mut Journal>,
 }
 
+fn record_kind(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Binary => "binary",
+        Kind::Source => "source",
+        Kind::Meta => "meta",
+    }
+}
+
+fn record_world(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Binary => "A",
+        Kind::Source => "B",
+        Kind::Meta => "M",
+    }
+}
+
 fn write_record(
     ctx: &Ctx,
     rec_dir: &Path,
@@ -3923,6 +4147,7 @@ fn write_record(
         ("B", SourceRecordOrigin::Channel(selection)) => {
             format!("canal:{}", selection.channel)
         }
+        ("M", _) => "meta".to_string(),
         _ => bail!("mundo de registro inválido: {world}"),
     };
     let transaction = write
@@ -3934,7 +4159,7 @@ fn write_record(
         "RECORD_FORMAT={RECORD_FORMAT}\nNAME={}\nVERSION={}\nKIND={}\nWORLD={}\nORIGIN={}\nSHA256={}\nDEPS={}\nFINGERPRINT={}\nINSTALLED_AT={}\n",
         r.name,
         r.version,
-        if r.kind == Kind::Binary { "binary" } else { "source" },
+        record_kind(r.kind),
         world,
         origin,
         r.sha256.join(" "),
@@ -3997,11 +4222,13 @@ fn write_record(
         sha256_bytes(body.as_bytes())
     ));
     // Sempre por último: é a única marca que autoriza recovery a concluir uma
-    // transação mundo B em vez de revertê-la.
+    // transação journalizada em vez de revertê-la.
     meta.push_str(&transaction);
-    // Todas as partes são preparadas antes da primeira mutação. No mundo B cada
-    // troca também entra no journal; o `meta` com txid é sempre a última e única
-    // marca de commit. No mundo A mantém-se a troca atômica arquivo-a-arquivo.
+    // Todas as partes são preparadas antes da primeira mutação. Quando o
+    // chamador fornece Journal (instalações B e migrações legadas A), cada
+    // troca entra nele; o `meta` com txid é a última e única marca de commit.
+    // Sem Journal (instalações A normais e mundo M), cada arquivo ainda troca
+    // atomicamente.
     let files = [
         (rec_dir.join("manifest"), body.as_bytes()),
         (
@@ -4385,16 +4612,8 @@ fn provisional_cession_state(
     {
         return Ok(ProvisionalCession::NotCeded);
     }
-    let expected_kind = if recipe.kind == Kind::Binary {
-        "binary"
-    } else {
-        "source"
-    };
-    let expected_world = if recipe.kind == Kind::Binary {
-        "A"
-    } else {
-        "B"
-    };
+    let expected_kind = record_kind(recipe.kind);
+    let expected_world = record_world(recipe.kind);
     if !recipe.provisional
         || meta.get("VERSION") != Some(&recipe.version)
         || meta.get("KIND").map(String::as_str) != Some(expected_kind)
@@ -4549,16 +4768,8 @@ fn validate_manifest_line_syntax(line: &str) -> Result<()> {
 }
 
 fn record_meta_matches(meta: &HashMap<String, String>, recipe: &Recipe) -> bool {
-    let expected_kind = if recipe.kind == Kind::Binary {
-        "binary"
-    } else {
-        "source"
-    };
-    let expected_world = if recipe.kind == Kind::Binary {
-        "A"
-    } else {
-        "B"
-    };
+    let expected_kind = record_kind(recipe.kind);
+    let expected_world = record_world(recipe.kind);
     let field = |name: &str| meta.get(name).map(String::as_str);
     let channel_origin = field("ORIGIN").and_then(|origin| origin.strip_prefix("canal:"));
     let origin_matches = match recipe.kind {
@@ -4592,6 +4803,19 @@ fn record_meta_matches(meta: &HashMap<String, String>, recipe: &Recipe) -> bool 
                     })
                 })
         }),
+        Kind::Meta => {
+            field("ORIGIN") == Some("meta")
+                && channel_origin.is_none()
+                && [
+                    "TRUST",
+                    "CHANNEL_PATH",
+                    "CHANNEL_SHA256",
+                    "CHANNEL_INDEX_SHA256",
+                    "CHANNEL_LOCK_SHA256",
+                ]
+                .iter()
+                .all(|name| field(name).is_none())
+        }
     };
     if field("RECORD_FORMAT") != Some(RECORD_FORMAT)
         || field("NAME") != Some(recipe.name.as_str())
@@ -4620,16 +4844,18 @@ fn record_meta_matches(meta: &HashMap<String, String>, recipe: &Recipe) -> bool 
         } else {
             field("PROVISIONAL").is_some()
         })
-        || (if recipe.kind == Kind::Source {
-            field("TRANSACTION_ID").is_none_or(str::is_empty)
-        } else {
-            field("TRANSACTION_ID").is_some_and(str::is_empty)
-        })
+        || match recipe.kind {
+            Kind::Source => field("TRANSACTION_ID").is_none_or(str::is_empty),
+            // Migrações legadas do mundo A podem carregar um txid factual;
+            // um valor vazio nunca é válido. Mundo M não usa Journal.
+            Kind::Binary => field("TRANSACTION_ID").is_some_and(str::is_empty),
+            Kind::Meta => field("TRANSACTION_ID").is_some(),
+        }
     {
         return false;
     }
-    if recipe.kind == Kind::Source {
-        field("ARTIFACT_HASH").is_some_and(|hash| {
+    match recipe.kind {
+        Kind::Source => field("ARTIFACT_HASH").is_some_and(|hash| {
             hash.len() == 64
                 && hash
                     .bytes()
@@ -4638,9 +4864,8 @@ fn record_meta_matches(meta: &HashMap<String, String>, recipe: &Recipe) -> bool 
                     .reprocorr
                     .as_deref()
                     .is_none_or(|pinned| pinned == hash)
-        })
-    } else {
-        field("ARTIFACT_HASH").is_none()
+        }),
+        Kind::Binary | Kind::Meta => field("ARTIFACT_HASH").is_none(),
     }
 }
 
@@ -4685,6 +4910,9 @@ fn record_is_intact(ctx: &Ctx, rec_dir: &Path, recipe: &Recipe) -> bool {
         Ok(versioned) => versioned,
         Err(_) => return false,
     };
+    if recipe.kind == Kind::Meta && (manifest != "\n" || versioned != "\n") {
+        return false;
+    }
     let baseline_hash = sha256_bytes(versioned.as_bytes());
     if meta.get("MANIFEST_BASELINE_SHA256") != Some(&baseline_hash) {
         return false;
@@ -4702,7 +4930,8 @@ fn record_is_intact(ctx: &Ctx, rec_dir: &Path, recipe: &Recipe) -> bool {
         && versioned_lines
             .iter()
             .all(|line| manifest_integrity(line).is_some())
-        && (recipe.provisional || !lines.is_empty())
+        && (recipe.kind == Kind::Meta || recipe.provisional || !lines.is_empty())
+        && (recipe.kind != Kind::Meta || lines.is_empty())
         && lines.iter().all(|line| {
             let Some(expected) = manifest_integrity(line) else {
                 return false;
@@ -5708,6 +5937,7 @@ fn world_label(meta: &HashMap<String, String>) -> &'static str {
     match meta.get("WORLD").map(String::as_str) {
         Some("A") => "A — binário do mantenedor (em /opt, links em /usr)",
         Some("B") => "B — compilado da fonte (árvore em /usr)",
+        Some("M") => "M — conjunto declarativo sem payload",
         _ => "?",
     }
 }
@@ -5718,11 +5948,13 @@ fn origin_label(meta: &HashMap<String, String>) -> String {
     match meta.get("ORIGIN").map(String::as_str) {
         Some("vendor") => "binário de vendor (upstream)".into(),
         Some("fonte") => "compilado localmente da fonte".into(),
+        Some("meta") => "conjunto declarativo local".into(),
         Some(o) if o.starts_with("canal:") => format!("canal binário «{}» (SPEC-0009)", &o[6..]),
         Some(o) => o.to_string(),
         None => match meta.get("WORLD").map(String::as_str) {
             Some("A") => "binário de vendor (upstream)".into(),
             Some("B") => "compilado localmente da fonte".into(),
+            Some("M") => "conjunto declarativo local".into(),
             _ => "desconhecida".into(),
         },
     }
@@ -5886,6 +6118,120 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static CNT: AtomicU32 = AtomicU32::new(0);
+
+    #[test]
+    fn meta_only_binary_registra_intencao_sem_payload() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-meta-e2e-{}-{n}", std::process::id()));
+        let recipes = root.join("var/lib/minitrue/newspeak");
+        let cache = root.join("var/cache/minitrue");
+        fs::create_dir_all(recipes.join("compiler")).unwrap();
+        fs::create_dir_all(recipes.join("miniplenty-buildbase")).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+
+        let payload = b"#!/bin/sh\nprintf 'compiler\\n'\n";
+        let hash = sha256_bytes(payload);
+        fs::write(cache.join(&hash), payload).unwrap();
+        fs::write(
+            recipes.join("compiler/recipe"),
+            format!(
+                "NAME=compiler\nVERSION=1\nKIND=binary\nSRC=https://invalid.example/compiler\nSHA256={hash}\nLINKS=compiler=bin/compiler\ninstall_pkg() {{\n mkdir -p \"$PREFIX/bin\"\n cp \"$DL\" \"$PREFIX/bin/compiler\"\n chmod 755 \"$PREFIX/bin/compiler\"\n}}\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            recipes.join("miniplenty-buildbase/recipe"),
+            "NAME=miniplenty-buildbase\nVERSION=1\nKIND=meta\nDEPS=compiler\nABOUT='conjunto de produção'\n",
+        )
+        .unwrap();
+        let context = Ctx {
+            root: root.clone(),
+            offline: true,
+            tofu: false,
+            jobs: 1,
+        };
+        let requested = vec!["miniplenty-buildbase".to_string()];
+
+        // O próprio meta não precisa de canal nem de exceção a
+        // --only-binary; a política continua valendo para suas dependências.
+        rectify(&context, &requested, BinaryPolicy::BinaryOnly).unwrap();
+        assert_eq!(
+            fs::read_to_string(context.world_path()).unwrap(),
+            "miniplenty-buildbase\n"
+        );
+        assert!(root.join("usr/bin/compiler").is_symlink());
+        assert_eq!(dependents_of(&context, "compiler"), requested);
+
+        let record = context.records_dir().join("miniplenty-buildbase");
+        let meta = read_meta_strict(&record).unwrap().unwrap();
+        assert_eq!(meta.get("KIND").map(String::as_str), Some("meta"));
+        assert_eq!(meta.get("WORLD").map(String::as_str), Some("M"));
+        assert_eq!(meta.get("ORIGIN").map(String::as_str), Some("meta"));
+        assert!(!meta.contains_key("ARTIFACT_HASH"));
+        assert!(!meta.contains_key("TRANSACTION_ID"));
+        assert_eq!(fs::read(record.join("manifest")).unwrap(), b"\n");
+        assert_eq!(fs::read(record.join("manifest@1")).unwrap(), b"\n");
+        verify(&context).unwrap();
+
+        let meta_path = record.join("meta");
+        let canonical_meta = fs::read_to_string(&meta_path).unwrap();
+        fs::write(
+            &meta_path,
+            canonical_meta.replacen("NAME=miniplenty-buildbase\n", "NAME=outro-conjunto\n", 1),
+        )
+        .unwrap();
+        assert!(
+            verify(&context).is_err(),
+            "NAME factual divergente do diretório deve falhar"
+        );
+        fs::write(&meta_path, &canonical_meta).unwrap();
+
+        fs::write(
+            &meta_path,
+            format!("{canonical_meta}TRANSACTION_ID=nao-pertence-a-meta\n"),
+        )
+        .unwrap();
+        assert!(
+            verify(&context).is_err(),
+            "meta não pode carregar marcador transacional"
+        );
+        rectify(&context, &requested, BinaryPolicy::BinaryOnly).unwrap();
+        assert!(!read_meta_strict(&record)
+            .unwrap()
+            .unwrap()
+            .contains_key("TRANSACTION_ID"));
+        verify(&context).unwrap();
+
+        // Fast path e operações de mantenedor preservam a distinção:
+        // conjunto não vira tar/attestation, e sustenta seus componentes.
+        rectify(&context, &requested, BinaryPolicy::BinaryOnly).unwrap();
+        assert!(channel_emit(&context, &root.join("canal-meta"), &requested).is_err());
+        assert!(memoryhole(&context, &["compiler".to_string()]).is_err());
+
+        let compiler_meta = context.records_dir().join("compiler/meta");
+        let compiler_meta_hidden = context.records_dir().join("compiler/meta.hidden");
+        fs::rename(&compiler_meta, &compiler_meta_hidden).unwrap();
+        assert!(verify(&context).is_err(), "DEPS sem registro deve falhar");
+        fs::rename(&compiler_meta_hidden, &compiler_meta).unwrap();
+
+        fs::write(record.join("manifest"), b"").unwrap();
+        assert!(verify(&context).is_err(), "vazio não canônico deve falhar");
+        assert!(
+            memoryhole(&context, &requested).is_err(),
+            "memoryhole não deve normalizar registro meta corrompido"
+        );
+        fs::write(record.join("manifest"), b"\n").unwrap();
+        verify(&context).unwrap();
+
+        memoryhole(&context, &requested).unwrap();
+        assert!(!record.exists());
+        assert!(context.records_dir().join("compiler").is_dir());
+        assert!(root.join("usr/bin/compiler").is_symlink());
+        assert!(read_world(&context).is_empty());
+        verify(&context).unwrap();
+
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn objeto_extra_da_midia_fica_disponivel_para_rectify_offline_posterior() {
@@ -6884,6 +7230,69 @@ mod tests {
             fs::read(rec.join("manifest@1")).unwrap()
         );
         assert!(record_is_intact(&ctx, &rec, &recipe));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn migracao_v1_binaria_preserva_txid_factual_no_fast_path() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-migrate-v1-a-{}-{n}", std::process::id()));
+        let recipe_dir = root.join("var/lib/minitrue/newspeak/tool");
+        let rec = root.join("var/lib/minitrue/records/tool");
+        let payload = root.join("opt/tool/1/bin/tool");
+        fs::create_dir_all(&recipe_dir).unwrap();
+        fs::create_dir_all(&rec).unwrap();
+        mkparent(&payload).unwrap();
+        fs::write(&payload, b"payload\n").unwrap();
+        symlink("1", root.join("opt/tool/current")).unwrap();
+        fs::write(
+            recipe_dir.join("recipe"),
+            format!(
+                "NAME=tool\nVERSION=1\nKIND=binary\nSRC=https://invalid.example/tool\nSHA256={}\ninstall_pkg() {{ :; }}\n",
+                "a".repeat(64)
+            ),
+        )
+        .unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let recipe = recipe::load(&ctx, "tool").unwrap();
+        let fingerprint = recipe::build_fingerprints(std::slice::from_ref(&recipe))
+            .unwrap()
+            .remove("tool")
+            .unwrap();
+        fs::write(
+            rec.join("meta"),
+            format!(
+                "RECORD_FORMAT=1\nNAME=tool\nVERSION=1\nKIND=binary\nWORLD=A\nFINGERPRINT={fingerprint}\n"
+            ),
+        )
+        .unwrap();
+        fs::write(rec.join("recipe"), &recipe.recipe_bytes).unwrap();
+        fs::write(rec.join("recipe@1"), &recipe.recipe_bytes).unwrap();
+        fs::write(rec.join("manifest"), "/opt/tool/1/bin/tool\n").unwrap();
+        fs::write(rec.join("manifest@1"), "/opt/tool/1/bin/tool\n").unwrap();
+
+        assert!(migrate_legacy_record(&ctx, &rec, &recipe, &fingerprint).unwrap());
+        let migrated = read_meta_strict(&rec).unwrap().unwrap();
+        assert!(migrated
+            .get("TRANSACTION_ID")
+            .is_some_and(|value| !value.is_empty()));
+        assert!(record_is_intact(&ctx, &rec, &recipe));
+        assert!(!binary_needs_install(&ctx, &recipe, &fingerprint).unwrap());
+
+        let canonical = fs::read_to_string(rec.join("meta")).unwrap();
+        let txid = migrated.get("TRANSACTION_ID").unwrap();
+        fs::write(
+            rec.join("meta"),
+            canonical.replace(&format!("TRANSACTION_ID={txid}\n"), "TRANSACTION_ID=\n"),
+        )
+        .unwrap();
+        assert!(!record_is_intact(&ctx, &rec, &recipe));
+        assert!(binary_needs_install(&ctx, &recipe, &fingerprint).unwrap());
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -35,7 +35,7 @@ custo GUI (mesa/GTK) é isolado no Estágio 4b.
 | firefox / thunderbird | tar.xz (Mozilla) | notório | glibc + GTK ⇒ E4b |
 | blender | tar.xz | notório | glibc + GL |
 | vs code | tar.gz oficial | notório | glibc |
-| google chrome | .deb do vendor (embalagem) | notório | SPEC-0004 §4.4 |
+| google chrome | .deb do vendor (embalagem) | notório | SPEC-0004 §4.5 |
 | libreoffice | tar.gz contendo .deb/.rpm (embalagem) | notório | |
 | telegram / discord | tar.xz / tar.gz | notório | proprietários; política própria? (§5) |
 | obsidian 1.12.7 | tar.gz (há também .deb) | 2026-07-18 | sobrevive ao banimento de AppImage: tar.gz oficial existe |

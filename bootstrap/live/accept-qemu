@@ -15,7 +15,7 @@ LOG_DIR=
 OVMF_CODE=${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE_4M.fd}
 OVMF_VARS_TEMPLATE=${OVMF_VARS_TEMPLATE:-/usr/share/OVMF/OVMF_VARS_4M.fd}
 QEMU=${QEMU_SYSTEM_X86_64:-}
-DISK_SIZE_MIB=2048
+DISK_SIZE_MIB=4096
 MEMORY_MIB=2048
 INSTALL_TIMEOUT=600
 BOOT_TIMEOUT=180
@@ -37,8 +37,8 @@ Opções:
   --ovmf-code ARQ        default: /usr/share/OVMF/OVMF_CODE_4M.fd
   --ovmf-vars ARQ        template default: /usr/share/OVMF/OVMF_VARS_4M.fd
   --qemu ARQ             default: qemu-system-x86_64 do PATH
-  --disk-size-mib N      default: 2048 (mínimo: 256)
-  --memory-mib N         default: 2048 (mínimo: 512)
+  --disk-size-mib N      default: 4096 (mínimo: 2048)
+  --memory-mib N         default: 2048 (mínimo: 2048)
   --install-timeout N    segundos para instalar e reiniciar (default: 600)
   --boot-timeout N       segundos para alcançar o getty (default: 180)
   --accel tcg|kvm        default: tcg; kvm exige /dev/kvm acessível
@@ -88,10 +88,10 @@ positive_decimal --disk-size-mib "$DISK_SIZE_MIB"
 positive_decimal --memory-mib "$MEMORY_MIB"
 positive_decimal --install-timeout "$INSTALL_TIMEOUT"
 positive_decimal --boot-timeout "$BOOT_TIMEOUT"
-[ "$DISK_SIZE_MIB" -ge 256 ] && [ "$DISK_SIZE_MIB" -le 1048576 ] ||
-    fail "--disk-size-mib precisa estar entre 256 e 1048576"
-[ "$MEMORY_MIB" -ge 512 ] && [ "$MEMORY_MIB" -le 131072 ] ||
-    fail "--memory-mib precisa estar entre 512 e 131072"
+[ "$DISK_SIZE_MIB" -ge 2048 ] && [ "$DISK_SIZE_MIB" -le 1048576 ] ||
+    fail "--disk-size-mib precisa estar entre 2048 e 1048576"
+[ "$MEMORY_MIB" -ge 2048 ] && [ "$MEMORY_MIB" -le 131072 ] ||
+    fail "--memory-mib precisa estar entre 2048 e 131072"
 [ "$INSTALL_TIMEOUT" -ge 1 ] && [ "$INSTALL_TIMEOUT" -le 86400 ] ||
     fail "--install-timeout precisa estar entre 1 e 86400"
 [ "$BOOT_TIMEOUT" -ge 1 ] && [ "$BOOT_TIMEOUT" -le 86400 ] ||

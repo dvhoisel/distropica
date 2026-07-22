@@ -101,10 +101,13 @@ partir de nada além de binários upstream — foi **demonstrada**:
 - **Bootstrap (Estágio 2) — executado pelo `rectify`.** A partir de um mundo
   musl semeado apenas pelo binário oficial do Zig (`zig cc`), o `minitrue
   rectify gcc-pass2` construiu os 16 pacotes até um **gcc nativo** (C e C++)
-  hospedado na **glibc**, sem toolchain de outra distro. O **E2-clean** já foi
-  executado uma vez, a frio, num rootfs novo com o grafo corrigido; falta uma
-  segunda execução em ambiente independente para a prova forte (SPEC-0005 §4).
-- **`minitrue` — implementado** (Rust): mundo A (`/opt`) e mundo B (`/usr`),
+  hospedado na **glibc**, sem toolchain de outra distro. Essa execução
+  **E2-clean** é evidência histórica: ocorreu uma vez, a frio, num rootfs novo
+  com o grafo então vigente. As receitas atuais com `install-strip` precisam de
+  rebuild e, depois, comparação entre dois ambientes limpos para uma nova prova
+  forte (SPEC-0005 §4).
+- **`minitrue` — implementado** (Rust): mundo A (`/opt`), mundo B (`/usr`) e
+  mundo M para metapacotes declarativos (`KIND=meta`, `WORLD=M`, sem payload),
   hash + assinatura (minisign), registros em texto com **fingerprint de build**
   e **manifesto v2** (conteúdo + tipo, alvo de symlink e árvore mundo A),
   empacotamento determinístico (`pack`), imagem de STAGE selada, attestations
@@ -127,11 +130,19 @@ partir de nada além de binários upstream — foi **demonstrada**:
   disponibilidade offline verificável, não intenção de instalação.
   Perfil, mídia e instalação recebem classes separadas que descrevem apenas
   quais **insumos** foram pinados — nunca se autoatribuem a condição de
-  reprodução oficial. O perfil de desenvolvimento instala `base`, `linux` e
-  `ripgrep` por padrão e exige que o cache offline disponibilize a fonte do GNU
-  Make e o Zig; antes de retificar o target, o Minipax confere os artefatos declarados com
-  `minitrue --offline cache verify`. `install-media` valida o payload antes de
-  materializá-lo.
+  reprodução oficial. O perfil de desenvolvimento declara `base`, `linux`,
+  `ripgrep` e `miniplenty-buildbase` como target padrão. Esse último é um metapacote sem
+  payload: suas dependências diretas são `base`, `make` e `gcc-pass2`, cuja
+  closure final instala `linux-headers`, glibc, `mathlibs-glibc`,
+  `binutils-glibc` e o GCC nativo. Assim, Make, `gcc`, `g++`, `as`, `ld`, `ar`
+  e `ranlib` já fazem parte do sistema mínimo, vindos do canal em uma instalação
+  `--only-binary`; Zig permanece apenas no cache e é materializado sob demanda
+  quando uma compilação fonte `seed`/`cross` realmente ocorre. Antes de
+  retificar o target, o Minipax confere os artefatos declarados em `cache.world`
+  com `minitrue --offline cache verify`. `install-media` valida o payload antes
+  de materializá-lo. O perfil fixa `MEDIA_SIZE_MIB=512` para dimensionar a
+  saída IMG e registrar esse parâmetro no lock; a ISO cresce conforme o payload
+  e não fica limitada nem preenchida até 512 MiB por esse campo.
 - **Mídia viva UEFI — implementação inicial.**
   `bootstrap/live/build-efi` produz um kernel EFI-stub com initramfs,
   BusyBox, Minipax e Minitrue `static-pie` ligados com musl. O PID 1 encontra a
@@ -149,10 +160,11 @@ partir de nada além de binários upstream — foi **demonstrada**:
   rota e DNS local; depois desligou novamente o cabo, instalou o `ripgrep 15.2.0`
   somente do cache com `minitrue --offline rectify` e terminou com `verify`
   limpo. Essa é evidência histórica da revisão network-v1. O runner atual foi
-  alterado para exigir ripgrep já no primeiro boot e provar um build de GNU Make
-  4.4.1 inteiramente offline, com Zig 0.16.0 instalado automaticamente como
-  dependência de build e mantido fora do `world`; a nova mídia ainda precisa
-  passar por esse aceite. O kernel mantém
+  alterado para exigir ripgrep e `miniplenty-buildbase` já no primeiro sistema
+  instalado e, ainda sem rede, compilar, linkar e executar C, C++, uma biblioteca
+  estática e um Makefile com a toolchain nativa; Zig precisa continuar ausente
+  do sistema e disponível apenas no cache. A nova mídia ainda precisa passar por
+  esse aceite. O kernel mantém
   `CONFIG_MODULES=y`, mas a mídia não distribui módulos:
   os drivers indispensáveis são built-in e o release
   `7.1.4-distropica-live` evita procurar acidentalmente os módulos `7.1.4` do
@@ -163,8 +175,11 @@ partir de nada além de binários upstream — foi **demonstrada**:
   observado num rootfs com `/etc/shadow` previamente provisionado. O caminho
   EFI/initramfs da mídia, separado desse smoke, passou no aceite funcional
   QEMU/OVMF; runit e a gestão completa do boot instalado seguem abertos.
-- **Reprodutibilidade — provada.** Dois builds independentes de m4, gmp, gcc e
-  glibc produzem artefato byte-a-byte idêntico (SPEC-0010).
+- **Reprodutibilidade — prova histórica parcial.** Dois builds independentes
+  produziram artefatos byte a byte idênticos de m4, gmp, gcc e glibc nas
+  receitas e payloads então medidos (SPEC-0010). As receitas atuais de
+  `gcc-pass2` e `binutils-glibc`, alteradas para solicitar `install-strip`,
+  ainda precisam de rebuild repetido e nova comparação.
 
 Ainda não fechados: publicação de um canal oficial e de um bundle estático
 assinados, reprodução independente da mídia, cobertura de hardware UEFI real,
@@ -231,32 +246,45 @@ bootstrap/live/build-efi --output target/BOOTX64.EFI
 
 A ISO interativa pode ser exercitada de ponta a ponta no VirtualBox. O runner
 cria uma VM efêmera com UEFI64, VMSVGA, SATA/AHCI e uma interface VirtIO NAT
-inicialmente com o cabo desligado; o VDI aparece no guest como `/dev/sda`.
+inicialmente com o cabo desligado; por padrão, o VDI tem 4096 MiB e aparece no
+guest como `/dev/sda`.
 Depois que a closure já está validada em RAM, ele ejeta a ISO **antes** de enviar
 a autorização de wipe, instala no VDI e comprova o segundo boot e o login de
-root ainda sem rede. Num terceiro boot, conecta o cabo e prova DHCP IPv4, rota
-padrão, `resolv.conf`, resolução de `localhost` pelo resolvedor NAT e alcance do
-gateway do VirtualBox. O target atual já precisa conter ripgrep 15.2.0 desde o
-primeiro boot. Zig e GNU Make devem começar ausentes; após desligar novamente o
-cabo, o runner executa `minitrue --offline --no-binary rectify make`. Esse build
-deve instalar GNU Make 4.4.1, materializar Zig 0.16.0 automaticamente e terminar
-com `minitrue verify` limpo. `make`, solicitado explicitamente, entra no
-`world`; Zig, dependência de build implícita, permanece fora dele.
+root ainda sem rede. Nesse segundo boot, exige ripgrep 15.2.0, o registro
+`KIND=meta`/`WORLD=M` de `miniplenty-buildbase`, GNU Make 4.4.1, binutils 2.45 e
+GCC/G++ 15.3.0 já instalados. Ainda sem link, compila e executa programas C e
+C++, cria e liga um arquivo estático e constrói outro programa por Makefile;
+depois roda `minitrue verify`. Só então, num terceiro boot, conecta o cabo e
+prova DHCP IPv4, rota padrão, `resolv.conf`, resolução de `localhost` pelo
+resolvedor NAT e alcance do gateway do VirtualBox. Zig deve permanecer sem
+binário e sem registro: ele é cache/semente sob demanda, não parte do target.
+
+`miniplenty-buildbase` não carrega arquivos próprios. A receita declara
+`DEPS="base make gcc-pass2"`; seu registro M e manifesto vazio representam o
+conjunto solicitado, enquanto os pacotes da closure têm registros próprios.
+Além de Make e GCC, a closure final traz `linux-headers`, glibc,
+`mathlibs-glibc` e `binutils-glibc`. Como `base` e o metapacote são desejos
+explícitos do perfil, ambos entram em `/etc/minitrue/world`; as dependências da
+toolchain ficam instaladas sem se tornarem desejos top-level.
 
 O `cache.world` do perfil declara GNU Make e Zig como disponibilidades
 obrigatórias da mídia offline. Na instalação, o Minipax chama
 `minitrue --offline cache verify make zig` antes de `rectify`: hashes e a
 assinatura do Zig são conferidos sem download, registro ou instalação. Isso
 mantém distintas a disponibilidade no cache, autenticada por
-`CACHE_WORLD_SHA256`, e a intenção do `target.world`.
+`CACHE_WORLD_SHA256`, e a intenção do `target.world`. Make acaba instalado por
+ser dependência de `miniplenty-buildbase`, não por constar em `cache.world`;
+Zig continua apenas disponível para futuras compilações fonte.
 
 O núcleo desse percurso já foi exercitado separadamente numa cópia isolada do
-target, sem atribuir a ele o aceite da ISO: `cache verify make zig` conferiu os
-tarballs e a assinatura minisign do Zig; em seguida,
+target, antes da adoção do metapacote e sem atribuir a ele o aceite da ISO:
+`cache verify make zig` conferiu os tarballs e a assinatura minisign do Zig; em
+seguida,
 `minitrue --offline --no-binary rectify make` partiu sem registros de Zig/Make,
 instalou Zig 0.16.0 como dependência, compilou GNU Make 4.4.1, deixou somente
-`make` no `world` e terminou com `minitrue verify` limpo. O que segue pendente é
-provar o mesmo caminho a partir da nova mídia no VirtualBox.
+`make` no `world` e terminou com `minitrue verify` limpo. Essa continua sendo
+uma evidência histórica válida do caminho fonte; o runner atual não recompila
+Make e testa, em vez disso, a toolchain final já instalada.
 O diretório de execução precisa ser novo:
 
 ```sh
@@ -265,7 +293,14 @@ bootstrap/live/accept-virtualbox \
   --run-dir target/acceptance-virtualbox
 ```
 
-O cenário descrito acima ainda precisa ser validado com a mídia recomposta. O
+O cenário descrito acima ainda precisa ser validado com uma mídia recomposta.
+As receitas de `gcc-pass2` e `binutils-glibc` passaram a solicitar
+`make install-strip`, e o grafo final também mudou; portanto seus payloads e
+fingerprints precisam ser reconstruídos, os pacotes precisam ser reemitidos no
+canal e o índice/cache/lock/EFI/ISO precisam ser regenerados antes do aceite.
+O perfil passou a `MEDIA_SIZE_MIB=512`, que dimensiona somente a saída IMG; a
+ISO acompanha o tamanho real do payload. Os runners QEMU e VirtualBox usam
+discos de 4096 MiB por padrão. Nada disso constitui uma nova execução. O
 aceite anterior passou em 2026-07-21 com VirtualBox
 `7.2.6_Ubuntur172322`. Duas composições da ISO a partir dos mesmos insumos
 foram byte a byte idênticas. Os hashes abaixo registram a evidência histórica
@@ -374,8 +409,13 @@ endpoint, chave ou mídia oficial tenham sido publicados.
 O perfil `profiles/official` declara `INSTALL_READY=yes`, mas continua com
 `STATUS=development`. A prontidão significa que o world mínimo pode ser
 materializado num alvo vazio quando o cache/canal correto é fornecido; não
-significa release, endpoint público ou mídia oficial. O cache de
-desenvolvimento usado nos testes não é versionado como release. Para registros
+significa release, endpoint público ou mídia oficial. O target atual inclui
+`base`, `linux`, `ripgrep` e `miniplenty-buildbase`; o metapacote `KIND=meta`
+fica no mundo M sem payload e agrega Make e a toolchain GCC final. Em
+`--only-binary`, o metapacote é resolvido localmente, mas seus pacotes fonte
+precisam existir como artefatos autenticados do canal: a instalação não deve
+recompilar GCC no computador do usuário. O cache de desenvolvimento usado nos
+testes não é versionado como release. Para registros
 v2 íntegros, `minitrue channel emit --output DIR <pacotes...>` gera artefatos,
 índice v2 e `emit.meta` com `CHANNEL_EMIT_FORMAT=2`; o índice ainda precisa ser
 assinado externamente. Quando o registro veio de canal, o comando reutiliza o
@@ -384,6 +424,14 @@ um build local, só reconstrói a partir das claims quando consegue provar
 topologia, metadados e `ARTIFACT_HASH`; ambiguidade falha fechado. Um pipeline
 de release deve emitir no próprio build e conservar o artefato autenticado, não
 usar a reconstrução posterior como raiz de publicação.
+
+O canal atual ainda não contém os novos artefatos prontos para essa closure.
+Além da mudança de dependências, as receitas de `gcc-pass2` e
+`binutils-glibc` passaram a solicitar `make install-strip` para reduzir o
+footprint esperado. O efeito exato, a funcionalidade e a reprodutibilidade dos
+novos payloads ainda precisam ser medidos em rebuilds; depois será necessário
+reemiti-los, assinar o novo índice, recompor cache/lock/EFI/ISO e executar os
+aceites. A ISO resultante não tem tamanho fixado por `MEDIA_SIZE_MIB`.
 
 O outro caminho também foi exercitado com os executores musl estáticos: na
 revisão anterior, a instalação direta `--offline --only-binary` materializou
@@ -440,9 +488,11 @@ use binários estáticos. Por padrão, a casca de desenvolvimento compila ambos
 para `x86_64-unknown-linux-musl` e recusa uma saída que contenha `INTERP`;
 executáveis passados explicitamente por `MINIPAX`/`MINITRUE` continuam sendo
 insumos do usuário e não recebem dessa casca uma alegação de linkagem ou
-proveniência. Neste marco,
-cada árvore de Newspeak, overlay ou cache é limitada a 128 MiB de conteúdo
-regular e 50 mil entradas. Os modos não dependem dos bits preservados pelo Git:
+proveniência. Neste marco, as árvores Newspeak e overlay são limitadas,
+cada uma, a 128 MiB de conteúdo regular; a árvore de cache, a 384 MiB. Cada
+árvore admite até 50 mil entradas, e o arquivo de entrada `cache.tar` é aceito
+até 416 MiB. Conteúdo e tar normalizado ainda ficam simultaneamente em memória.
+Os modos não dependem dos bits preservados pelo Git:
 diretórios são normalizados para `0755` (com `root/` do overlay em `0700`),
 `shadow`/`gshadow` e seus backups para `0600`, regulares executáveis para `0755`
 e os demais para `0644`. Durante o consumo de canal, o snapshot `.tar.zst` e o
@@ -458,8 +508,11 @@ executores estáticos e também aceita os dois prontos. Para compilar o kernel,
 ele requer ainda `make`, `gcc`, `flex`, `bison`, `pkg-config` e os headers de
 `libelf`; a composição ISO requer `xorriso`. O aceite headless do VirtualBox
 requer `VBoxManage` e `tesseract` e recusa iniciar se já houver um `VBoxSVC` do
-mesmo usuário. O bundle estático assinado e o canal oficial publicado ainda são
-gates de release. Na variante ISO, versão e SHA-256 do `xorriso` são registrados e o
+mesmo usuário. Os dois runners de instalação reservam agora 4096 MiB para o
+disco por padrão, coerentes com a toolchain instalada; isso não altera o disco
+histórico de 256 MiB registrado nos blocos de evidência. O bundle estático
+assinado e o canal oficial publicado ainda são gates de release. Na variante
+ISO, versão e SHA-256 do `xorriso` são registrados e o
 compositor recusa se o binário mudar durante a execução, mas a toolchain e o
 bundle completos ainda não estão pinados. Por isso o repositório **não anuncia
 uma ISO oficial publicada**. Ele já consegue construir o EFI vivo e compor a
@@ -522,6 +575,7 @@ sh -n bootstrap/channel-from-rootfs bootstrap/live/build-efi \
 |-------|-------------|
 | `minitrue` | A ferramenta central (Ministério da Verdade) |
 | `minipax` | O instalador (Ministério da Paz — anexa territórios novos) |
+| `miniplenty-buildbase` | Metapacote do conjunto-base de produção (Ministério da Fartura): Make e toolchain nativa, sem payload próprio |
 | `rectify` | Instalar/atualizar — retificar os registros |
 | `memoryhole` | Remover — o pacote nunca existiu |
 | `newspeak` | A árvore de receitas — vocabulário mínimo, sem ambiguidade |

@@ -20,14 +20,25 @@ entra em `CACHE_SHA256` e é semeado antes do primeiro `rectify`. Ele não exist
 hoje porque endpoint e chave ainda não foram publicados; valores fictícios
 tornariam uma mídia online aparentemente pronta, mas inoperante.
 
-`INSTALL_READY=yes` declara que o world mínimo (`base` + `linux` + `ripgrep`,
-com BusyBox como dependência) pode ser materializado num alvo vazio. O caminho
-validado no marco anterior usa um cache de desenvolvimento com índice minisign e
-`--offline --only-binary`; ele não compila a toolchain E2 no computador do
-usuário. Esse cache e sua chave de assinatura ainda não são artefatos oficiais
-publicados pelo projeto. Passá-lo por `--cache` é um override explícito e
-classifica esse build como `custom`; um futuro `channel-bootstrap/` versionado
-preservará `development` até o perfil ser promovido com os pinos de release.
+`INSTALL_READY=yes` declara que o world mínimo (`base` + `linux` + `ripgrep` +
+`miniplenty-buildbase`) pode ser materializado num alvo vazio. O último item é
+uma receita `KIND=meta`: não contém payload, fica registrada como `WORLD=M` com
+manifesto vazio e agrega `DEPS="base make gcc-pass2"`. A closure de
+`gcc-pass2` instala ainda `linux-headers`, glibc, `mathlibs-glibc` e
+`binutils-glibc`; o resultado mínimo já oferece GNU Make e a toolchain GCC
+nativa para C e C++. O caminho de instalação pretendido usa um canal assinado
+com `--offline --only-binary`: o metapacote é resolvido localmente e os pacotes
+fonte de sua closure vêm como artefatos do canal, sem compilar a toolchain E2 no
+computador do usuário. Esse novo canal/cache ainda precisa ser construído,
+reemitido e aceito; não é o cache validado no marco anterior.
+
+O cache e sua chave de assinatura ainda não são artefatos oficiais publicados
+pelo projeto. Passá-lo por `--cache` é um override explícito e classifica esse
+build como `custom`; um futuro `channel-bootstrap/` versionado preservará
+`development` até o perfil ser promovido com os pinos de release. O perfil
+fixa `MEDIA_SIZE_MIB=512` para dimensionar a saída IMG e registrar o valor no
+lock. Esse campo não fixa o tamanho da ISO, que acompanha o payload; a nova
+mídia ainda não foi recomposta.
 
 O cache offline completo pode ser um superconjunto estrito da closure de
 `target.world`. Objetos adicionais continuam presos por `CACHE_SHA256` e são
@@ -42,19 +53,22 @@ minitrue --offline cache verify make zig
 
 Essa conferência valida o hash e, quando pinada, a assinatura dos artefatos já
 presentes, sem rede e sem instalação. No perfil atual, a fonte do GNU Make
-4.4.1 e o Zig 0.16.0 são obrigatórios na disponibilidade offline, mas continuam
-fora de `target.world`: não ganham registro, links nem entrada em
-`/etc/minitrue/world` durante a instalação mínima. Já o ripgrep consta em
-`target.world`, por isso `/usr/bin/rg` deve estar instalado desde o primeiro
-boot.
+4.4.1 e o Zig 0.16.0 são obrigatórios na disponibilidade offline. A declaração
+em `cache.world`, por si, não instala nenhum deles: Make é instalado porque
+`miniplenty-buildbase` depende dele; Zig continua apenas no cache, sem binário,
+registro ou entrada em `/etc/minitrue/world`, até que uma compilação fonte o
+exija. Ripgrep e o metapacote constam diretamente em `target.world`; por isso
+`/usr/bin/rg`, Make e a toolchain final devem existir desde o primeiro boot.
 
 Quando uma receita `KIND=source` com `TOOLCHAIN=seed` ou `cross` precisa ser
 compilada localmente, o Minitrue trata Zig como dependência de build implícita:
 instala-o antes do build e prende sua identidade ao fingerprint do pacote. Um
 artefato de canal evita a compilação e não instala Zig; receitas `none` ou
 `native` também não o puxam. Como dependência implícita, Zig não entra no
-`world`; somente o pacote solicitado explicitamente entra. O override
-`--cache` continua classificando a composição como `custom`.
+`world`; somente o pacote solicitado explicitamente entra. Na instalação do
+perfil, o desejo explícito é `miniplenty-buildbase`: suas dependências ficam
+registradas e instaladas, mas não viram desejos top-level. O override `--cache`
+continua classificando a composição como `custom`.
 
 O overlay fornece o estado mínimo de contas e boot: conta root inicialmente
 bloqueada, `fstab`, `securetty`, `passwd` e `group`. A mídia viva pede uma senha
@@ -93,15 +107,22 @@ bootstrap/live/accept-virtualbox \
 ```
 
 O runner cria uma VM efêmera UEFI64/VMSVGA/SATA com uma NIC VirtIO NAT. O cabo
-permanece desligado durante a instalação e o segundo boot; o VDI é `/dev/sda`
-no guest. Com o payload já validado em RAM, a ISO é ejetada antes da autorização
-do wipe. A aceitação atual exige que o primeiro sistema instalado já contenha
-ripgrep 15.2.0, mas ainda não Zig nem GNU Make. Depois de provar reboot sem ISO,
-login e rede local num terceiro boot, desliga novamente o cabo e executa
-`minitrue --offline --no-binary rectify make`: o resultado esperado é GNU Make
-4.4.1 no `world`, Zig 0.16.0 materializado automaticamente para o build e fora
-do `world`, seguido de `verify` limpo. Esse cenário novo ainda precisa ser
-executado no VirtualBox com uma mídia recomposta.
+permanece desligado durante a instalação e o segundo boot; por padrão o VDI tem
+4096 MiB e é `/dev/sda` no guest. Com o payload já validado em RAM, a ISO é
+ejetada antes da autorização do wipe. A aceitação atual exige que o primeiro
+sistema instalado já contenha ripgrep 15.2.0, `miniplenty-buildbase` registrado
+como `KIND=meta`/`WORLD=M`, GNU Make 4.4.1, binutils 2.45 e GCC/G++ 15.3.0, mas
+não Zig. Ainda sem rede, o runner compila e executa C e C++, cria e liga uma
+biblioteca estática, constrói por Makefile e passa em `minitrue verify`. Só
+depois prova a rede local num terceiro boot. Esse cenário novo ainda precisa
+ser executado no VirtualBox com uma mídia recomposta.
+
+Antes disso, `gcc-pass2` e `binutils-glibc` precisam ser reconstruídos: suas
+receitas agora solicitam `make install-strip`, e a mudança do grafo altera os
+fingerprints. Os novos payloads devem ser reemitidos, o índice assinado e o
+cache/lock/EFI/ISO recompostos. O runner QEMU também passou a usar disco de
+4096 MiB por padrão. Essas são mudanças de código e de contrato, não uma nova
+evidência de execução.
 
 O bloco abaixo preserva a **evidência histórica** network-v1, anterior ao
 `target.world` e ao contrato de toolchain atuais. Naquela revisão, ripgrep era

@@ -4,10 +4,13 @@ KIND=source
 TOOLCHAIN=cross
 RETRIES=100
 SUPERSEDES="gcc libstdcxx"
-DEPS="glibc mathlibs-glibc libstdcxx"
-BUILD_DEPS="gcc binutils-cross binutils-glibc"
+DEPS="linux-headers glibc mathlibs-glibc binutils-glibc"
+BUILD_DEPS="gcc binutils-cross libstdcxx"
 ABOUT="O gcc NATIVO da passada 2 (c,c++, GCC 15.3.0, hospedado na glibc) — o fecho do Estágio 2 (SPEC-0005 §4, vencido 2026-07-20). Construído pelo gcc da passada 1 (cross), com a glibc, os mathlibs-glibc e o binutils-glibc já presentes. Produz gcc/g++ nativos que compilam e rodam C e C++/STL sem shims. Oito muros vencidos na investigação, todos aqui codificados: (1) triple nativo build=host=target=distropica (senão a configure exige um g++ de build sem prefixo); (2/3) shims que injetam /usr no pass-1 gcc/g++, com -isystem (buscado após os -I do pacote, senão o obstack.h da glibc sombreia o da libiberty); (4) SELFTEST_TARGETS= (o pass-1 é flaky); (5) mathlibs+binutils glibc (DEPS/BUILD_DEPS acima); (6) mathlibs com -std=gnu17 (na receita mathlibs-glibc); (7/8) --disable-lto (o plugin depende do binutils-glibc, e o LTO fica off por opção, coerente com o pass-1). SUPERSEDE o gcc-passada-1 nos mesmos caminhos (cross-gcc, cc1/cc1plus em /usr/libexec) — colisão = dívida de 'fingerprint de build' (§4)."
-LICENSE=GPL-3.0-or-later
+# O payload reúne compilador GPL, runtimes com GCC Runtime Library Exception,
+# manuais GFDL e componentes compiler-rt/BSD. Até existir SBOM arquivo a
+# arquivo, uma expressão agregada manual seria uma falsa precisão.
+LICENSE=NOASSERTION
 SRC="https://ftp.gnu.org/gnu/gcc/gcc-15.3.0/gcc-15.3.0.tar.xz"
 SHA256=fa59c1beef8995f27c4d71c1df227587189315d3e6faff1bb4306e61b0c530eb
 
@@ -48,7 +51,11 @@ SHIM
         --disable-dependency-tracking
     # SELFTEST_TARGETS=: o selftest roda o cc1 recém-feito; o pass-1 é flaky.
     retry make -j"$JOBS" SELFTEST_TARGETS=
-    make install DESTDIR="$STAGE" SELFTEST_TARGETS=
+    # A imagem mínima precisa do compilador, não de ~750 MiB de DWARF nos
+    # executáveis cc1/cc1plus. O target upstream preserva os binários e
+    # bibliotecas de desenvolvimento, removendo apenas símbolos de depuração;
+    # um pacote -dbg separado poderá conservá-los no futuro.
+    make install-strip DESTDIR="$STAGE" SELFTEST_TARGETS=
 
     # Reconcilia lib64→lib: o gcc x86_64 instala libstdc++/libgcc_s em
     # /usr/lib64; a glibc fixou /usr/lib (libc_cv_slibdir). Move para bater.
@@ -57,4 +64,9 @@ SHIM
         cp -a "$STAGE/usr/lib64/." "$STAGE/usr/lib/"
         rm -rf "$STAGE/usr/lib64"
     fi
+
+    # Make e muitos configure scripts usam o nome POSIX `cc`. O upstream
+    # instala gcc/g++/c++, mas não esse alias; o buildbase deve funcionar sem
+    # exigir que cada projeto conheça a escolha concreta do compilador C.
+    ln -s gcc "$STAGE/usr/bin/cc"
 }

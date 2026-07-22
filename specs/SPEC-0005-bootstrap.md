@@ -1,6 +1,6 @@
 # SPEC-0005 — Bootstrap em estágios
 
-**Status:** rascunho v0.5 · 2026-07-22
+**Status:** rascunho v0.6 · 2026-07-22
 **Depende de:** todas as anteriores.
 
 ## 1. A tese do bootstrap
@@ -82,11 +82,17 @@ define a tentativa de reproduzir a mídia oficial byte a byte. Trocar `world`,
 como **custom**, muda seu lock e seus hashes e não lhe concede a assinatura nem
 o nome de artefato oficial do projeto.
 
-No estado atual, `profiles/official` declara `INSTALL_READY=yes` e
-`STATUS=development`. A prontidão afirma que o world mínimo pode ser instalado
-num target vazio com o cache/canal correto; **não** afirma que já exista canal,
-bundle ou mídia oficial publicada, nem muda a classe de desenvolvimento para
-release.
+No estado atual, `profiles/official` declara `INSTALL_READY=yes`,
+`STATUS=development` e `MEDIA_SIZE_MIB=512`. O último campo dimensiona somente
+a saída IMG e participa do lock; a ISO cresce conforme o payload e não recebe
+dele um tamanho fixo. O target inclui
+`miniplenty-buildbase`, o conjunto declarativo que torna o sistema instalado
+apto a produzir software com Make, headers Linux, binutils nativo e GCC C/C++.
+A prontidão afirma que esse world pode ser instalado num target vazio com o
+cache/canal correto; **não** afirma que já exista canal, bundle ou mídia oficial
+publicada, nem muda a classe de desenvolvimento para release. Os runners atuais
+reservam discos de 4096 MiB por padrão; esse tamanho do destino não é o tamanho
+da mídia nem altera os hashes dos ensaios históricos.
 
 ### 1.3 Usuário normal e reprodutor
 
@@ -146,8 +152,11 @@ runner validou somente o resolvedor local e o gateway da NAT, sem depender da
 Internet. Em seguida, o cabo foi desconectado outra vez: `ripgrep` 15.2.0,
 inicialmente ausente, foi instalado por `minitrue --offline rectify ripgrep`, e
 o `verify` posterior terminou limpo. Esse resultado é a evidência histórica
-network-v1, anterior ao perfil que instala ripgrep por padrão e declara Make e
-Zig em `cache.world`. Seu console usa simpledrm/fbcon e a cmdline
+network-v1, anterior ao perfil que instala ripgrep e o conjunto de produção por
+padrão, recebe Make e a toolchain final do canal e declara Make e Zig em
+`cache.world`. A fonte de Make permanece congelada e verificável para rebuild e
+oferta offline, embora o binário seja instalado pelo canal; Zig é a semente sob
+demanda. Seu console usa simpledrm/fbcon e a cmdline
 `console=ttyS0,115200 console=tty0 panic=-1 rdinit=/init`, com `tty0` por
 último para ser o console interativo primário. Ainda faltam o bundle estático
 assinado de release, endpoint/chave/pool de canal oficial, `channel refresh`
@@ -270,6 +279,18 @@ plano escolhe compilação local. Um pacote atendido por canal não expande essa
 aresta, e `TOOLCHAIN=none|native` também não instala Zig. Como dependência
 implícita, a semente não entra no `world` salvo se for solicitada diretamente.
 
+No caminho normal da distribuição, `target.world` pede
+`miniplenty-buildbase`. Essa receita é `KIND=meta`: não possui payload e agrega
+`base`, `make` e `gcc-pass2`. Entre os componentes da toolchain, apenas o meta é
+uma intenção explícita no `world`; seus componentes continuam instalados como
+dependências. Com
+`--only-binary`, GNU Make, GCC final, binutils nativo, headers Linux e runtimes
+vêm do canal assinado, sem expandir as sementes de build. O `cache.world` exige
+Make e Zig: conserva a fonte verificada de Make para rebuild/oferta offline e a
+semente Zig para compilação `seed`/`cross` sob demanda. Verificar esse cache não
+cria registro, comando nem intenção para nenhum dos dois; Make fica instalado
+por depender do meta, enquanto Zig permanece fora do target binário.
+
 O ICE flaky do gcc-passada-1 vira contrato: a receita declara `RETRIES` e
 envolve o comando em `retry` (SPEC-0004 §3); o `make` incremental resume a
 cada tentativa até fechar. A `glibc` e o `gcc` já declaram `RETRIES=50`.
@@ -295,7 +316,8 @@ o registro de aceite e das correções encontradas está ao fim desta seção. F
 repetir o E2-clean num segundo ambiente independente e versionar as evidências.
 
 A partir daqui `CC` do contrato de receitas (SPEC-0004 §3) passa a ser o
-gcc nativo; `zig cc` permanece disponível como pacote comum.
+gcc nativo; `zig cc` permanece disponível como receita/semente, sem precisar
+estar instalado no target atendido pelo canal.
 
 **Critério de aceite:** `minitrue rectify neovim` (tarball oficial,
 linkado contra glibc — verificado em 2026-07-18) instala e `nvim --version`
@@ -586,10 +608,22 @@ com SHA256 real pinado.
   consertos provados: `libstdcxx`, `mathlibs-glibc` (gmp+mpfr+mpc glibc,
   `-std=gnu17`), `binutils-glibc` (`--enable-plugins`), `gcc-pass2` (triple
   nativo, shims `-isystem` do pass-1, `--disable-lto`, `SELFTEST_TARGETS=`,
-  reconciliação lib64→lib). A **ordem do E2** fica no grafo de DEPS:
+  reconciliação lib64→lib). Na transcrição original, a **ordem observada do
+  E2** foi:
   `rectify gcc-pass2` puxa `glibc → mathlibs-glibc → libstdcxx →
   binutils-glibc → gcc-pass2` (com `gcc` pass-1 e `binutils-cross` como
   BUILD_DEPS). Validadas: sintaxe (`sh -n`) e carga (campos + DEPS).
+
+  O contrato final corrige a fronteira entre execução e scaffolding:
+  `gcc-pass2` declara hoje `DEPS="linux-headers glibc mathlibs-glibc
+  binutils-glibc"` e `BUILD_DEPS="gcc binutils-cross libstdcxx"`. O
+  `libstdcxx` intermediário serve apenas para construir a passada 2 e é
+  supersedido pela libstdc++ final que o próprio `gcc-pass2` instala. Já os
+  headers Linux e o binutils nativo pertencem à closure de execução do sistema
+  apto a compilar; as sementes `gcc`, `binutils`, `binutils-cross`, `libstdcxx`,
+  `gmp`, `mpfr` e `mpc` não devem sobreviver no target binário final. O
+  `minitrue verify` confere agora a presença factual das `DEPS` de execução de
+  cada registro v2, em vez de validar apenas os arquivos do próprio pacote.
 
   **O gap que a transcrição expôs — supersessão / fingerprint de build.** Os
   rebuilds-glibc instalam nos **mesmos caminhos** dos seus equivalentes
@@ -642,7 +676,7 @@ com SHA256 real pinado.
   (não por scripts) compila e roda **C** (`self-host ok`) e **C++/STL**
   (`libstdc++.so.6, libc.so.6` — dinâmico glibc), sem shims.
 
-  **E2-CLEAN — reproduzível a frio (2026-07-20).** A primeira prova rodou num
+  **E2-CLEAN — evidência histórica a frio (2026-07-20).** A primeira prova rodou num
   rootfs trabalhado; agora foi refeita **do zero**. Um rootfs **novo**
   (`rootfs-clean`), semeado só com o E0/E1 (busybox, zig, make — verificado:
   registros = exatamente esses três, zero resíduo do E2) e o cache de fontes,
@@ -651,6 +685,17 @@ com SHA256 real pinado.
   rodam **C** (`self-host ok`) e **C++/STL**, e a **`libstdc++` final está em
   `/usr/lib`** (não a intermediária em lib64) — as libs finais são as
   selecionadas.
+
+  Para reduzir o footprint esperado na mídia mínima, as receitas de
+  `binutils-glibc` e `gcc-pass2` passaram a solicitar `make install-strip`. A
+  decisão foi motivada pelo peso do payload anterior sem strip, especialmente
+  `cc1`/`cc1plus`; ainda não está provado o efeito exato nem que somente dados
+  de depuração serão retirados. É preciso reconstruir os payloads, medir o
+  resultado, executar os probes funcionais e repetir o build para testar sua
+  identidade byte a byte. Pacotes `-dbg` separados poderão preservar símbolos
+  no futuro. `MEDIA_SIZE_MIB=512` orça apenas a IMG; a ISO acompanha o payload,
+  e nenhuma das duas mídias novas foi recomposta ou aceita. Os discos de aceite
+  continuam com 4096 MiB.
 
   Rodar a frio **expôs dois bugs que o rootfs trabalhado mascarava**, ambos
   corrigidos: (1) `doublethink: /usr/bin/ar já pertence a busybox` — a
@@ -661,10 +706,11 @@ com SHA256 real pinado.
   faz `/usr/lib64 → lib` (usr-merge). Também a aresta `gcc → binutils-cross`
   (que faltava) foi confirmada na ordem: binutils-cross **antes** de gcc.
 
-  **Falta para "reproduzível ×2":** repetir num **segundo** ambiente limpo
-  independente (a reprodutibilidade *de artefato* — byte-a-byte — já está
-  provada para gcc e glibc em SPEC-0010 §6; o cotejo do artefato do E2-clean
-  completo é o passo restante). Os scripts hoje transitórios em
+  **Falta para "reproduzível ×2":** a prova byte a byte de gcc e glibc em
+  SPEC-0010 §6 é histórica e vale para as receitas e artefatos então medidos.
+  O `gcc-pass2` atual com `install-strip` precisa ser reconstruído em dois
+  ambientes limpos e cotejado, assim como o artefato E2-clean completo. Os
+  scripts hoje transitórios em
   `rootfs/tmp/*.sh` DEVEM ser promovidos, junto com hashes e logs, para
   `proofs/e2/` versionado; o rootfs em si continua fora do repositório.
 
@@ -716,12 +762,23 @@ O cache continua sendo um override `custom`, e o ensaio não comprova Internet,
 hardware real, reprodução entre builders independentes nem uma ISO oficial
 publicada.
 
-O runner atual foi adaptado ao novo contrato: ripgrep 15.2.0 deve estar
-presente desde o primeiro boot; Zig e GNU Make começam ausentes; depois de
-desconectar a rede, `minitrue --offline --no-binary rectify make` deve compilar
-GNU Make 4.4.1, instalando Zig 0.16.0 automaticamente como dependência de build.
-O aceite exige `make` no `world`, Zig fora dele e `minitrue verify` limpo. Essa
-nova prova ainda depende de recompor a mídia e executar o runner no VirtualBox.
+O runner atual foi adaptado ao novo contrato e usa um VDI de 4096 MiB por
+padrão. No segundo boot, ainda sem cabo, deve encontrar ripgrep 15.2.0 e o
+registro sem payload de `miniplenty-buildbase` (`KIND=meta`, `WORLD=M`,
+`ORIGIN=meta`) como intenção explícita. GNU Make 4.4.1, headers Linux, glibc,
+mathlibs-glibc, binutils 2.45 e GCC/G++ 15.3.0 devem estar instalados por canal,
+mas não como desejos separados no `world`. Zig deve continuar somente no cache;
+os registros de Zig e das demais sementes `gcc`, `binutils`, `binutils-cross`,
+`libstdcxx`, `gmp`, `mpfr` e `mpc` devem estar ausentes.
+
+Com o link ainda desligado, o aceite compila e executa C usando headers da glibc
+e do Linux, compila e executa C++17 com STL, `unique_ptr`, exceções e
+`libstdc++.so.6`, cria e linka uma biblioteca estática com `ar`/`ranlib`, e usa
+um Makefile que chama GCC. Só depois de `minitrue verify` limpo ele liga a NAT
+para a prova separada de DHCP, DNS e gateway. A nova mídia que satisfaz esse
+contrato ainda precisa ser recomposta e o runner precisa ser executado;
+`MEDIA_SIZE_MIB=512` dimensiona sua variante IMG, não fixa o tamanho da ISO.
+Os resultados network-v1 continuam apenas como evidência histórica.
 
 **Critério normativo de aceite do estágio completo:** boot UEFI chega a getty;
 login root; `minitrue verify` limpo. O aceite VirtualBox fecha os três pontos em
@@ -747,8 +804,8 @@ futura própria.
 |---------|-----------|-----------------|
 | E0 | chroot musl-estático habitável | baixo |
 | E1 | `./configure && make` funciona | atrito zig-cc×autotools |
-| E2 ✅ | ABI glibc + gcc nativo (pass-2) — **E2-clean: reproduzido a frio** de um rootfs novo (16 pacotes, libs finais selecionadas) 2026-07-20 | GCC hospedado por clang; matriz glibc↔GCC; toolchain-semente musl→glibc |
-| E3 🟡 | EFI-stub + instalação offline; QEMU automatizado cobre segundo boot e fail-before-wipe, e o VirtualBox network-v1 histórico cobre prompts, `/dev/sda`, reboot sem ISO, login root, DHCP/DNS/gateway VirtIO NAT, instalação posterior de ripgrep com link desligado e `verify` limpo. O novo aceite ripgrep-default + build offline de Make/Zig ainda precisa ser executado; runit segue aberto | hardware real e política final de init |
+| E2 ✅ | ABI glibc + gcc nativo (pass-2) — **E2-clean histórico:** fluxo exercitado a frio num rootfs novo (16 pacotes, libs finais selecionadas) em 2026-07-20; receitas atuais com `install-strip` aguardam rebuild e nova prova | GCC hospedado por clang; matriz glibc↔GCC; toolchain-semente musl→glibc |
+| E3 🟡 | EFI-stub + instalação offline; QEMU automatizado cobre segundo boot e fail-before-wipe, e o VirtualBox network-v1 histórico cobre prompts, `/dev/sda`, reboot sem ISO, login root, DHCP/DNS/gateway VirtIO NAT, instalação posterior de ripgrep com link desligado e `verify` limpo. O novo aceite de `miniplenty-buildbase`, toolchain final vinda do canal, sementes ausentes e builds offline de C/C++/STL/archive/Make ainda precisa ser executado; runit segue aberto | hardware real e política final de init |
 | E4a | userland vendor console | baixo |
 | E4b | GUI + Firefox | volume brutal de fonte (mesa/GTK) |
 

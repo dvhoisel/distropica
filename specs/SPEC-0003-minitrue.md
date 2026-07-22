@@ -1,6 +1,6 @@
 # SPEC-0003 — minitrue, a ferramenta
 
-**Status:** rascunho v0.7 · 2026-07-22
+**Status:** rascunho v0.8 · 2026-07-22
 **Depende de:** SPEC-0001 (política), SPEC-0002 (layout), SPEC-0004 (receitas).
 
 ## 1. Identidade
@@ -89,7 +89,10 @@ de canal, reutiliza o tar autenticado do cache; para registros locais, só
 reconstrói quando consegue provar topologia, metadados e `ARTIFACT_HASH`, e
 falha fechado na ambiguidade. Um release DEVE emitir junto do build, assinar o
 índice externamente e conservar o artefato autenticado. O projeto ainda não
-publicou URL, chave, índice nem pool de um canal oficial.
+publicou URL, chave, índice nem pool de um canal oficial. Metapacotes não têm
+payload nem `ARTIFACT_HASH` e, portanto, são recusados por `channel emit`: o
+canal publica os pacotes fonte pré-buildados que eles agregam, nunca o nó
+declarativo.
 
 ### Disponibilidade verificável do cache
 
@@ -125,6 +128,10 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
   outro pacote não entram no `world`. Assim, Zig materializado automaticamente
   para compilar uma receita `seed`/`cross` permanece fora da intenção, a menos
   que tenha sido pedido explicitamente.
+- Um `KIND=meta` pedido explicitamente, como `miniplenty-buildbase`, entra no
+  `world`; sua retificação não acrescenta os componentes ao `world` (eles só
+  aparecem ali se também forem pedidos separadamente). Remover o meta retira
+  essa intenção sem apagar implicitamente os componentes.
 
 ## 3. Fluxo de `rectify`
 
@@ -139,14 +146,18 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
    Estágio 2 (SPEC-0005).
 3. **Dependências**: resolução por busca em profundidade com detecção de ciclo;
    instala o que falta, na ordem. Sem comparação de versões — a árvore
-   newspeak em um commit é o conjunto consistente. Para uma receita mundo B,
-   a seleção de canal ocorre antes de expandir dependências de build: se um
-   artefato é escolhido, apenas as `DEPS` de runtime entram no plano. Quando o
-   pacote é realmente compilado (`--no-binary` ou fallback de fonte), o plano
-   expande `BUILD_DEPS` e também a dependência de toolchain implícita em `zig`
-   para `TOOLCHAIN=seed|cross`. Receitas `TOOLCHAIN=none|native` e qualquer
-   `KIND=binary` não ganham essa aresta. Declaração explícita duplicada de Zig
-   é deduplicada.
+   newspeak em um commit é o conjunto consistente. Um `KIND=meta` **sempre
+   expande suas `DEPS`**, inclusive quando o próprio registro já está íntegro;
+   ele não consulta canal, não é barrado por `--only-binary` e não acrescenta
+   dependências de build. A política binária continua valendo normalmente para
+   cada dependência agregada. Para uma receita mundo B, a seleção de canal
+   ocorre antes de expandir dependências de build: se um artefato é escolhido,
+   apenas as `DEPS` de runtime entram no plano. Quando o pacote é realmente
+   compilado (`--no-binary` ou fallback de fonte), o plano expande
+   `BUILD_DEPS` e também a dependência de toolchain implícita em `zig` para
+   `TOOLCHAIN=seed|cross`. Receitas `TOOLCHAIN=none|native`, `KIND=binary` e
+   `KIND=meta` não ganham essa aresta. Declaração explícita duplicada de Zig é
+   deduplicada.
 4. **Fetch**: para cada URL de `SRC`, baixar para
    `/var/cache/minitrue/<sha256>` (nome do arquivo no cache = hash
    esperado). Se já existe com hash válido, rede não é tocada.
@@ -192,6 +203,9 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
      `usr/share/`. Não se estende a `usr/share/factory`, a aliases usr-merge nem
      a diretórios vazios reivindicáveis. STAGE vazio, hardlinks, nomes não-UTF-8
      e tipos especiais são recusados.
+   - **Mundo M** (`KIND=meta`): não faz fetch, não seleciona canal, não executa
+     função e não aplica payload. Depois de retificar todas as `DEPS`, grava
+     somente o registro declarativo v2 com manifesto vazio canônico (§6).
 7. **Registro**: grava `/var/lib/minitrue/records/<nome>/{meta,manifest,recipe}` (§6);
    nomes pedidos explicitamente na linha de comando entram no `world` (§2).
 8. **Falha de build**: log integral movido para
@@ -201,19 +215,25 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
 ## 4. Fluxo de `memoryhole`
 
 1. Recuperar primeiro eventual journal órfão do pacote e ler o manifesto em
-   modo estrito; formato futuro, arquivo ausente/vazio ou tag desconhecida
-   fazem a remoção falhar fechado. Remover na ordem inversa: links de comando,
-   claims sob `/opt/<nome>` (mundo A) ou cada caminho listado (mundo B).
-   Diretório vazio de mundo B sai somente por `rmdir`; pais não reivindicados
-   não são podados.
+   modo estrito; formato futuro, arquivo ausente, corpo de zero bytes ou tag
+   desconhecida fazem a remoção falhar fechado. Há duas exceções tipadas para
+   um manifesto canônico sem claims (`"\n"`): a combinação `KIND=meta`,
+   `WORLD=M`, `ORIGIN=meta`; e um registro `PROVISIONAL=1` que já cedeu todas
+   as claims, mantendo `manifest@VERSION` como baseline versionado. Remover na
+   ordem inversa: links de comando, claims sob
+   `/opt/<nome>` (mundo A) ou cada caminho listado (mundo B). Diretório vazio
+   de mundo B sai somente por `rmdir`; pais não reivindicados não são podados.
 2. Preservados por padrão: `/etc/opt/<nome>`, `/var/opt/<nome>` e qualquer
    caminho cuja prova de conteúdo/tipo/alvo diferir do manifesto (§6) —
    modificado pelo usuário ⇒ fica, com aviso. É a prova tipada do registro v2
    que torna essa promessa **enforçável** (sem ela, não há como saber o que o
    usuário mexeu). `--tudo` remove também esses.
-3. Registro apagado por último. Saída: `"<nome> nunca existiu."`
+3. Registro apagado por último. No mundo M, isso e a retirada do `world` são
+   toda a remoção: suas `DEPS` ficam instaladas e podem passar a órfãs, mas não
+   são apagadas sem ordem. Saída: `"<nome> nunca existiu."`
 4. Pacote requerido por outro registro (`DEPS` reversa) ⇒ recusa com a
-   lista de dependentes; `--force-orfaos` não existe no v0.
+   lista de dependentes; isso impede remover um componente enquanto um meta o
+   sustenta. `--force-orfaos` não existe no v0.
 
 ## 5. Rollback, unperson e órfãos (herança GoboLinux, mundo A)
 
@@ -235,8 +255,9 @@ symlink — o flip do `Current` do GoboLinux, aqui confinado ao mundo A:
   manifestos: links em `/usr` apontando para dentro de `/opt` sem dono em
   manifesto algum (sobras de mexida manual) são listados como *wrongthink*,
   com sugestão de remoção. Nada é apagado sem ordem.
-- Ambos os comandos recusam pacotes do mundo B com explicação: lá os
-  arquivos em `/usr` **são** a instalação; não existe o que flipar.
+- Ambos os comandos recusam pacotes dos mundos B e M com explicação: no
+  primeiro, os arquivos em `/usr` **são** a instalação; no segundo, não há
+  payload nem versão retida para flipar.
 
 **Política de retenção** (resolve a questão aberta da SPEC-0002):
 `rectify` retém a versão anterior ao atualizar (corrente + 1); mais velhas
@@ -248,7 +269,7 @@ são removidas no upgrade. `memoryhole` remove tudo. Ajustável via
 Três papéis, persistidos em cinco folhas (`meta`, `manifest`,
 `manifest@<versão>`, `recipe`, `recipe@<versão>`):
 
-- `meta` — `RECORD_FORMAT=`, `NAME=`, `VERSION=`, `KIND=`, `WORLD=A|B`,
+- `meta` — `RECORD_FORMAT=`, `NAME=`, `VERSION=`, `KIND=`, `WORLD=A|B|M`,
   `ORIGIN=`, `SHA256=` (por artefato), `DEPS=`, `SUPERSEDES=`, `FINGERPRINT=`,
   `ABOUT=`, `REPROCORR=`, `ARTIFACT_HASH=` (mundo B),
   `MANIFEST_BASELINE_SHA256=`, `INSTALLED_AT=` (ISO-8601) e
@@ -256,12 +277,11 @@ Três papéis, persistidos em cinco folhas (`meta`, `manifest`,
   pino `REPROCORR` são congelados no momento da instalação: inspeção posterior
   não precisa executar a receita histórica. O **`RECORD_FORMAT`** versiona o
   esquema do registro (hoje `2`), para migração e leitura consciente. O
-  **`ORIGIN`** é de
-  onde veio o artefato — `vendor` (mundo A),
-  `fonte` (mundo B compilado localmente) ou `canal:<nome>` quando os canais
+  **`ORIGIN`** é de onde veio o artefato ou a declaração — `vendor` (mundo
+  A), `fonte` (mundo B compilado localmente), `canal:<nome>` quando os canais
   (SPEC-0009 §8) o instalam, caso em que `TRUST=`, `CHANNEL_PATH=`,
   `CHANNEL_SHA256=`, `CHANNEL_INDEX_SHA256=` e `CHANNEL_LOCK_SHA256=` também
-  entram.
+  entram, ou `meta` (mundo M local, sem campos de canal).
   O **`FINGERPRINT`** é a identidade de build (SPEC-0011 §4): sha256 do
   arquivo `recipe` inteiro + do `files/` (via o `pack` determinístico),
   **combinado transitivamente com o fingerprint das `DEPS`+`BUILD_DEPS` e da
@@ -302,7 +322,24 @@ Três papéis, persistidos em cinco folhas (`meta`, `manifest`,
   também é congelado para o fingerprint e o mesmo snapshot é materializado no
   `WORK` do build, evitando mudança de insumo entre parse e execução.
 
-`manifest` e `recipe` ganham cópia da versão ativa nos dois mundos
+No mundo M, `SHA256=` e `SUPERSEDES=` ficam vazios; não existem
+`ARTIFACT_HASH`, `TRANSACTION_ID`, `PROVISIONAL`, `REPROCORR` nem campos de
+canal. `manifest` e `manifest@<versão>` contêm exatamente um byte newline
+(`"\n"`): é a representação canônica do conjunto vazio e seu hash alimenta
+`MANIFEST_BASELINE_SHA256`. `verify` exige a tripla `KIND=meta`/`WORLD=M`/
+`ORIGIN=meta`, os campos vazios/ausentes corretos, `DEPS` canônico não vazio,
+fingerprint canônico, snapshots de receita coerentes e ambos os manifestos
+iguais a essa forma vazia; qualquer marcador parcial ou claim de payload é
+*wrongthink*.
+
+Para **todo** registro v2, `verify` também percorre `DEPS`: cada nome precisa
+ser canônico e apontar para um diretório de registro factual cujo `meta`
+confirme o mesmo `NAME`. Isso prova o fechamento de runtime, inclusive o
+conjunto sustentado por um meta. `BUILD_DEPS` e a aresta de toolchain não são
+exigidos no sistema instalado, pois um artefato de canal deliberadamente não
+os materializa.
+
+`manifest` e `recipe` ganham cópia da versão ativa nos três mundos
 (`manifest@<versão>`, `recipe@<versão>`). A receita versionada coincide com a
 corrente; o manifesto versionado coincide em pacotes comuns e vira baseline
 em provisionals, cujo ativo só perde linhas por cessão declarada. No mundo A
@@ -379,7 +416,8 @@ respondem, sem estado extra:
 
 - **`explain <caminho>`** — de quem é um arquivo e toda a sua proveniência:
   o pacote e a versão que o reivindicam (varrendo os manifestos), o mundo
-  (A/B), a **origem** (`ORIGIN`: vendor/fonte/canal), a **confiança** (`TRUST`,
+  (A/B; mundo M não reivindica caminhos), a **origem** (`ORIGIN`:
+  vendor/fonte/canal; `meta` aparece na inspeção do pacote), a **confiança** (`TRUST`,
   quando de canal), o **`reprocorr`** da receita (se pina hash reprodutível —
   a base da corroboração, SPEC-0010 §5) e os **corroboradores** (quando o canal
   os registra), se é **provisório**, o `FINGERPRINT`, o **hash do próprio
@@ -399,7 +437,8 @@ respondem, sem estado extra:
   explicitamente** (consta no `world`, §2), quais pacotes o **requerem**
   (dependência reversa, lendo `DEPS` dos registros), e se é **órfão** (nem
   explícito nem dependência — candidato a `memoryhole --orfaos`); mais a
-  origem e o estado provisório.
+  origem e o estado provisório. O mesmo mecanismo explica um meta como desejo
+  explícito e seus componentes como dependências dele.
 
 É a característica distintiva: não "tenho um gerenciador pequeno", e sim
 "todo arquivo do sistema explica a si mesmo". Habilitada pelo registro —
@@ -426,7 +465,9 @@ hashado, `recipe`/`recipe@` idênticos e claims tipadas conferindo no rootfs; um
 `REPROCORR` pinado também precisa coincidir com `ARTIFACT_HASH`. Limite de
 confiança: sem pino externo, `ARTIFACT_HASH` e `FINGERPRINT` continuam vindo do
 registro local. Defender contra adulteração privilegiada posterior requer
-reter a imagem selada, usar índice/canal assinado ou emitir no instante do build.
+reter a imagem selada, usar índice/canal assinado ou emitir no instante do
+build. Mundo M não é atestável nem emitível: sua identidade é a receita e o
+fingerprint transitivo, não um artefato.
 
 ## 7. Colisões (*doublethink*)
 
