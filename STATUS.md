@@ -2,9 +2,10 @@
 
 Fonte única da verdade sobre a maturidade. As `specs/` descrevem a **norma**;
 este arquivo descreve o **estado**. Atualizado à mão (2026-07-21, após o canal
-binário assinado, a instalação offline do perfil mínimo e o aceite final-v10
-do BOOT EFI vivo com instalação, segundo boot sem ISO e recusa antes do wipe de
-um `profile.lock` incoerente com `media.meta`).
+binário assinado, a instalação offline do perfil mínimo, o aceite automatizado
+final-v10 em QEMU/OVMF e o aceite interativo em VirtualBox/EFI, ambos com
+instalação e segundo boot sem ISO; o final-v10 também inclui a recusa antes do
+wipe de um `profile.lock` incoerente com `media.meta`).
 Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
 ## minitrue (a ferramenta)
@@ -60,10 +61,11 @@ Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | Limites das árvores | ✅ | 🟡 unit | 128 MiB e 50.000 entradas por árvore Newspeak/overlay/cache; conteúdo e tar ficam em memória. No canal, `.tar.zst` selado e tar descompactado coexistem, somando o pico de RAM; streaming é gate de release |
 | Modo offline/cache | ✅ | ✅ unit + E2E dev | cache assinado fecha o perfil mínimo sem rede; ainda limitado a 128 MiB/50 mil entradas e materializado em memória |
 | Modo online/bootstrap de canal | ✅ | ✅ unit | Minipax exige config + índice/assinatura pareados, rejeita objetos e semeia antes de `rectify`; Minitrue valida minisign no uso. Não há endpoint oficial para E2E |
-| BOOT EFI vivo (kernel+initramfs+Minipax+Minitrue) | ✅ | ✅ E2E final-v10 | fixa Linux 7.1.4, BusyBox e executores musl `static-pie`. `CONFIG_MODULES=y`, nenhum `.ko` na mídia e release `7.1.4-distropica-live`; drivers necessários são built-in e deliberadamente estreitos |
-| Instalação por ISO em QEMU/OVMF | ✅ | ✅ E2E final-v10 | antes de escolher disco, materializa closure em `/run` e exporta snapshot EFI validado; depois particiona, copia, verifica, instala EFI e publica o marcador completo por último. Segundo boot ocorreu sem ISO |
+| BOOT EFI vivo (kernel+initramfs+Minipax+Minitrue) | ✅ | ✅ E2E QEMU + VirtualBox | fixa Linux 7.1.4, BusyBox e executores musl `static-pie`. `CONFIG_MODULES=y`, nenhum `.ko` na mídia e release `7.1.4-distropica-live`; o EFI interativo acrescenta `simpledrm`+`fbcon` built-in e não fixa disco nem ativa o modo de teste automatizado |
+| Instalação por ISO em QEMU/OVMF | ✅ | ✅ E2E final-v10 | aceite histórico e automatizado: antes de escolher disco, materializa closure em `/run` e exporta snapshot EFI validado; depois particiona, copia, verifica, instala EFI e publica o marcador completo por último. Segundo boot ocorreu sem ISO |
+| Instalação interativa por ISO no VirtualBox | ✅ | ✅ E2E local 7.2.6 | EFI64 + VMSVGA, console gráfico por `simpledrm`/`fbcon`, teclado PS/2 e armazenamento Intel AHCI. Pediu senha de root, confirmação e o disco inteiro `/dev/sda`; a ISO foi ejetada antes da autorização/wipe e o segundo boot pelo VDI ocorreu sem ISO, com login de root (`uid=0`) |
 | Boot da IMG em QEMU/OVMF | 🟡 | — | compositor IMG existe e reproduziu localmente; o aceite funcional final-v10 exercitou somente a ISO |
-| Particionamento/escrita destrutiva em disco | ✅ | ✅ QEMU/OVMF final-v10 | PID 1 só recebe/autoriza `/dev/vda` depois do preflight em `/run`; ISO com lock incoerente deixou um disco zerado intacto. Cria MBR com ESP FAT32 de 64 MiB + raiz ext2; não é ainda um particionador geral |
+| Particionamento/escrita destrutiva em disco | ✅ | ✅ QEMU final-v10 + VirtualBox interativo | PID 1 só recebe/autoriza o disco depois do preflight em `/run`: `/dev/vda` no aceite automatizado e `/dev/sda` no interativo. O negativo final-v10 deixou um disco zerado intacto; o VirtualBox prosseguiu após ejeção pré-wipe porque a closure já estava materializada. Cria MBR com ESP FAT32 de 64 MiB + raiz ext2; não é ainda um particionador geral |
 
 O perfil `profiles/official` continua com `STATUS=development`, mas agora
 declara `INSTALL_READY=yes`: há uma closure mínima materializável com o cache
@@ -98,6 +100,41 @@ RESULT=pass
 INCONSISTENT_PROFILE_LOCK_RESULT=refused-before-wipe
 ```
 
+Separadamente, o aceite interativo iniciou a ISO numa VM VirtualBox EFI64 sem
+rede, exibiu no console gráfico os prompts de nova senha, repetição e autorização
+do disco `/dev/sda`, ejetou a ISO **antes** de enviar o disco a apagar e concluiu
+a partir da closure pré-validada em RAM. O reboot emitido pelo instalador
+iniciou o mesmo VDI sem mídia óptica; o login de `root` abriu um shell e `id`
+informou `uid=0`. As duas composições locais dessa ISO foram byte a byte idênticas. É um
+segundo hipervisor no mesmo host, não hardware real nem builder independente:
+
+```text
+EVIDENCIA_VIRTUALBOX_INTERATIVA=local-development
+ACCEPTANCE_META=target/vbox-acceptance-interactive-v4/evidence/acceptance.meta
+VBOX_VERSION=7.2.6_Ubuntur172322
+VBOXMANAGE_BINARY_SHA256=3d019f23c6d755ed1f6a3bb05f4481fd56015719bf51e4299dca0267fbcc021a
+NETWORK=none
+FIRMWARE=efi64
+GRAPHICS=vmsvga
+GUEST_GRAPHICS_CONSOLE=simpledrm-fbcon
+EVIDENCE_INPUT=ps2-keyboard
+STORAGE=IntelAhci
+GUEST_DISK=/dev/sda
+ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
+REPEATED_ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
+BOOT_EFI_SHA256=a07b369e6d666e4ff9bb7bb6bba3eda763852a43d31e14971e77908280ebfa3b
+DISK_SHA256=c93c4d8dcb44dd8b7587c7fded8b8a7d87f5434053fa843573534131c641be30
+SERIAL_LOG_SHA256=0f1b04c7bc3bbb82fe50016b8e83e4ee25c26da950a0defc7225ce72f645b8ea
+NEW_PASSWORD_SCREENSHOT_SHA256=926c91d7271fbd3defed7902cdf82454f141f3647f436cc4c93ee20d964ec989
+LOGIN_WITHOUT_ISO_SCREENSHOT_SHA256=b1ea90f806e1a96a937f004c42eec8479e081ee65a35b2c9d38694bc2a72b070
+ROOT_UID0_SCREENSHOT_SHA256=cd9f5164ef4fc73d98c78677447d334b37c1e47dd66957c36fc1af33c692e57d
+ISO_EJECTED_BEFORE_WIPE=yes
+SECOND_BOOT_WITHOUT_ISO=yes
+ROOT_LOGIN_UID=0
+RUN_STATE=passed
+FINAL_RESULT=passed
+```
+
 Mesmo quando preenchidos, esses hashes identificarão uma execução do workspace
 de desenvolvimento; não serão pinos de release nem substituirão manifesto
 externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
@@ -109,7 +146,7 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
 | E0 — chroot musl-estático | ✅ | |
 | E1 — `./configure && make` | ✅ | |
 | E2 — glibc + gcc nativo | ✅ | **E2-clean: reproduzido a frio** (rootfs novo, seed limpo, 16 pacotes, gcc nativo compila C/C++, libs finais em /usr/lib). Falta só repetir num 2º ambiente independente |
-| E3 — kernel + boot QEMU | 🟡 | O smoke anterior bootou Linux 7.1.4 do E2 com raiz 9p e exercitou módulos assinados. Separadamente, o EFI-stub live passou no E2E ISO→disco→boot sem mídia. E3 segue parcial por faltar runit, `.config` de hardware geral e gestão completa de contas |
+| E3 — kernel + boot | 🟡 | O smoke anterior bootou Linux 7.1.4 do E2 com raiz 9p e exercitou módulos assinados. Separadamente, o EFI-stub live passou em ISO→disco→boot sem mídia tanto no aceite automatizado QEMU/OVMF quanto no interativo VirtualBox/EFI; este último cobriu `simpledrm`/`fbcon`, PS/2, AHCI e `/dev/sda`. E3 segue parcial por faltar runit, `.config` de hardware geral e gestão completa de contas |
 | — openssl 4.0.1 (base de confiança do kernel) | ✅ | mundo B, compilado pela toolchain nativa (libcrypto/libssl, `-DZLIB`); SHA conferido no download. Habilita geração/uso da chave de módulos; **attestation usa ed25519-dalek e independe de OpenSSL**. O materializador de `/etc` agora trata symlinks, com regressão coberta |
 | — base 0.1 (config Fase B) | ✅ | — | receita de montagem: `/etc/inittab`+`rc.d/rcS`+`rcK`+`os-release`+`hostname` via fábrica; não cria `/etc/shadow`, portanto sozinha não fecha login autenticado |
 | E4 — userland vendor / GUI | ⬜ | |
@@ -128,10 +165,10 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
 | Executor da instalação medido = executado | ✅ local (`memfd` selado, ambiente fechado e hash no `install.manifest`) |
 | Rootfs instalado byte-a-byte idêntico | ⬜ (`INSTALLED_AT`, uid/gid e demais metadados ainda impedem o claim) |
 | IMG byte-idêntica em duas composições | ✅ local (fixture, mesmo binário/toolchain; GPT/FAT normalizados) |
-| ISO byte-idêntica em duas composições | ✅ local para fixture e para a ISO final-v10 (mesmo binário e mesmo `xorriso`, cujo executável é medido) |
+| ISO byte-idêntica em duas composições | ✅ local para fixture, ISO final-v10 e ISO interativa do VirtualBox (mesmos insumos, binário e `xorriso`, cujo executável é medido) |
 | IMG/ISO byte-idênticas entre builders independentes | ⬜ |
 | Reprodução reconhecida contra manifesto oficial externo assinado | ⬜ (sidecars locais não são autoridade) |
-| Boot e instalação funcionais da mídia de desenvolvimento | ✅ final-v10 em QEMU/OVMF; inclui segundo boot sem ISO e negativo fail-before-wipe |
+| R4 — reprodução funcional da mídia de desenvolvimento | ✅ local em QEMU/OVMF (final-v10 automatizado, segundo boot e negativo fail-before-wipe) e VirtualBox/EFI (fluxo interativo, ejeção pré-wipe, segundo boot sem ISO e root `uid=0`); não prova hardware real, builders independentes nem release oficial |
 
 ## Limitações conhecidas (do parecer externo)
 
@@ -140,7 +177,8 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   (SUPERSEDES seed→busybox; libstdc++ lib64×lib usr-merge). Falta repetir num
   **2º ambiente independente** para "reproduzível ×2" e mover scripts, hashes
   e logs de prova hoje transitórios para um diretório versionado `proofs/e2/`.
-- **Mídia instalável validada em QEMU/OVMF:** o aceite final-v10 cobriu a ordem
+- **Mídia instalável validada em QEMU/OVMF e VirtualBox/EFI:** o aceite
+  automatizado final-v10 cobriu a ordem
   atual. O PID 1 primeiro materializa e verifica toda a closure em
   `/run/distropica-prepared`, configura a conta e recebe de
   `install-media --export-boot-efi` um snapshot EFI medido. Somente depois pede
@@ -148,8 +186,11 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   `minitrue verify`, grava o EFI e publica por último
   `disk-install.complete`. O teste negativo confirmou a recusa de um
   `profile.lock` incoerente com `media.meta` antes de qualquer wipe. Isso ainda
-  não prova boot
-  da IMG, hardware real, reprodução entre builders ou release oficial.
+  não prova boot da IMG, hardware real, reprodução entre builders ou release
+  oficial. O aceite interativo separado repetiu o caminho positivo no
+  VirtualBox 7.2.6: console gráfico, teclado PS/2, AHCI `/dev/sda`, prompts de
+  senha e disco, ejeção da ISO antes da autorização/wipe, segundo boot sem ISO
+  e shell de root com `uid=0`.
 - **Gates do perfil oficial:** o canal e `--only-binary` estão implementados,
   e o perfil marca `INSTALL_READY=yes`, mas o cache usado no E2E é uma migração
   de desenvolvimento com `TRUST=builder`. Ainda não há endpoint, chave de
@@ -162,10 +203,12 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   `OFFICIAL_MINITRUE_SHA256`. A coincidência gera apenas `official-inputs`; o
   claim de reprodução depende de comparar o sha256 final com um manifesto
   oficial externo assinado, cuja publicação ainda não existe.
-- **Cobertura do kernel vivo:** o `.config` inicial cobre UEFI x86_64,
-  virtio, CD/SCSI, AHCI/PIIX, ISO9660, ext2/ext4 e FAT. Isso é suficiente para o
-  alvo QEMU, não para afirmar suporte genérico a controladores NVMe, USB,
-  rede, vídeo e armazenamento encontrados em hardware real. O kernel mantém
+- **Cobertura do kernel vivo:** o `.config` cobre UEFI x86_64, virtio,
+  CD/SCSI, AHCI/PIIX, teclado PS/2, ISO9660, ext2/ext4, FAT e o framebuffer EFI
+  pelo caminho `simpledrm`/`fbcon`. Isso fechou o console, a entrada e o disco
+  SATA do VirtualBox usado no aceite, além do alvo QEMU; não permite afirmar
+  suporte genérico a controladores NVMe, USB, rede, GPUs ou armazenamento
+  encontrados em hardware real. O kernel mantém
   `CONFIG_MODULES=y`, mas o initramfs não leva módulos; tudo que a instalação
   precisa deve estar built-in. `LOCALVERSION=-distropica-live` produz o
   release `7.1.4-distropica-live`, isolando a busca automática de

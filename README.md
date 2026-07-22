@@ -112,9 +112,12 @@ partir de nada além de binários upstream — foi **demonstrada**:
   EFI validado pelo próprio `install-media`. Só então exige a escolha explícita
   do disco, cria ESP FAT32 + raiz ext2, copia o sistema preparado, executa
   `minitrue verify`, instala o EFI e publica por último o marcador de instalação
-  completa. A execução final-v10 passou no aceite QEMU/OVMF e também recusou
-  um `profile.lock` incoerente com `media.meta` antes de qualquer escrita no
-  disco, cobrindo essa ordem *fail-before-wipe*. O kernel mantém
+  completa. A execução final-v10 passou no aceite automatizado QEMU/OVMF e
+  também recusou um `profile.lock` incoerente com `media.meta` antes de
+  qualquer escrita no disco, cobrindo essa ordem *fail-before-wipe*. Uma ISO
+  interativa separada passou no VirtualBox 7.2.6: exibiu os prompts no
+  framebuffer, instalou em SATA (`/dev/sda`), reiniciou sem a ISO e aceitou o
+  login de root. O kernel mantém
   `CONFIG_MODULES=y`, mas a mídia não distribui módulos:
   os drivers indispensáveis são built-in e o release
   `7.1.4-distropica-live` evita procurar acidentalmente os módulos `7.1.4` do
@@ -152,7 +155,17 @@ o `SOURCE_DATE_EPOCH` e a prontidão declarada para instalação.
 
 O caminho hoje fechado é o de desenvolvimento **offline**, com um cache de
 canal assinado. Os exemplos abaixo supõem esse cache em `$CACHE` e privilégios
-para escrever no target ou no disco:
+para escrever no target ou no disco.
+
+### ISO interativa de desenvolvimento
+
+Este é o caminho para uma pessoa e o candidato técnico à futura mídia oficial:
+o EFI é construído **sem** `--install-device`. Ele não escolhe disco nem
+autoriza destruição na linha de comando do kernel; depois de validar todo o
+payload, o instalador pede uma senha e exige que a pessoa digite explicitamente
+o dispositivo inteiro que será apagado. Enquanto perfil, canal, cache e
+manifesto de release não forem publicados com pinos oficiais, a saída abaixo
+continua sendo uma composição local `development`/`custom`, não uma ISO oficial.
 
 ```sh
 # 1. Instalação direta numa raiz já montada; não particiona discos.
@@ -177,10 +190,52 @@ bootstrap/live/build-efi --output target/BOOTX64.EFI
   --output target/distropica.img
 ```
 
-O aceite automatizado usa uma imagem EFI **separada**, construída com
-`--install-device /dev/vda`, e então executa duas VMs: instala a ISO num disco
-raw novo e inicia esse disco novamente sem a ISO. Essa flag embute autorização
-destrutiva e `distropica.test=1`; não a use numa mídia destinada a pessoas.
+A ISO interativa pode ser exercitada de ponta a ponta no VirtualBox. O runner
+cria uma VM efêmera sem rede, com UEFI64, VMSVGA e SATA/AHCI; o VDI aparece no
+guest como `/dev/sda`. Depois que a closure já está validada em RAM, ele ejeta a
+ISO **antes** de enviar a autorização de wipe, instala no VDI, observa o reboot
+sem mídia e comprova o login de root. O diretório de execução precisa ser novo:
+
+```sh
+bootstrap/live/accept-virtualbox \
+  --iso target/distropica.iso \
+  --run-dir target/acceptance-virtualbox
+```
+
+Esse aceite passou em 2026-07-21 com VirtualBox
+`7.2.6_Ubuntur172322`. Duas composições da ISO a partir dos mesmos insumos
+foram byte a byte idênticas:
+
+```text
+EVIDENCIA_VIRTUALBOX_INTERATIVA=local-development
+ACCEPTANCE_META=target/vbox-acceptance-interactive-v4/evidence/acceptance.meta
+VBOX_VERSION=7.2.6_Ubuntur172322
+FIRMWARE=efi64
+GRAPHICS=vmsvga
+STORAGE=IntelAhci
+GUEST_DISK=/dev/sda
+NETWORK=none
+ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
+REPEATED_ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
+BOOT_EFI_SHA256=a07b369e6d666e4ff9bb7bb6bba3eda763852a43d31e14971e77908280ebfa3b
+RUN_STATE=passed
+ISO_EJECTED_BEFORE_WIPE=yes
+SECOND_BOOT_WITHOUT_ISO=yes
+ROOT_LOGIN=yes
+FINAL_RESULT=passed
+```
+
+Essa igualdade é uma prova local de composição determinística, não uma
+reprodução independente nem um pino de release.
+
+### ISO automatizada destrutiva — somente aceite QEMU
+
+O aceite QEMU usa uma imagem EFI **diferente**, construída com
+`--install-device /dev/vda`. Essa opção embute no kernel a autorização para
+apagar `/dev/vda` e ativa `distropica.test=1`, que mantém a conta root bloqueada
+para o ensaio automático. O artefato existe exclusivamente para uma VM
+descartável criada pelo runner: **nunca distribua, publique, monte em hardware
+real ou apresente essa variante como ISO instalável para pessoas**.
 
 ```sh
 bootstrap/live/build-efi \
@@ -197,7 +252,8 @@ bootstrap/live/accept-qemu \
 ```
 
 Por segurança, tanto o caminho de `--disk` quanto o de `--log-dir` precisam
-ainda não existir; use nomes novos ao repetir o aceite.
+ainda não existir; use nomes novos ao repetir o aceite. Essa restrição refere-se
+ao runner QEMU acima; o runner VirtualBox impõe a mesma política ao `--run-dir`.
 
 O aceite final-v10 foi executado em 2026-07-21, sem NIC e com aceleração TCG.
 Ele instalou a ISO num disco raw vazio e iniciou esse disco novamente sem a
@@ -309,15 +365,21 @@ dados própria para caches maiores continuam gates de release.
 Neste marco, a casca pública constrói os binários Rust estáticos quando o
 toolchain Rust/musl, um compilador C compatível e `readelf` estão disponíveis,
 ou aceita `MINIPAX` e `MINITRUE` já fornecidos. O construtor live exige
-executores estáticos e também aceita os dois prontos. O bundle estático assinado
-e o canal oficial publicado ainda são gates de release. Na variante ISO, versão
-e SHA-256 do `xorriso` são registrados e o
+executores estáticos e também aceita os dois prontos. Para compilar o kernel,
+ele requer ainda `make`, `gcc`, `flex`, `bison`, `pkg-config` e os headers de
+`libelf`; a composição ISO requer `xorriso`. O aceite headless do VirtualBox
+requer `VBoxManage` e `tesseract` e recusa iniciar se já houver um `VBoxSVC` do
+mesmo usuário. O bundle estático assinado e o canal oficial publicado ainda são
+gates de release. Na variante ISO, versão e SHA-256 do `xorriso` são registrados e o
 compositor recusa se o binário mudar durante a execução, mas a toolchain e o
 bundle completos ainda não estão pinados. Por isso o repositório **não anuncia
 uma ISO oficial publicada**. Ele já consegue construir o EFI vivo e compor a
 mídia localmente. Boot, instalação offline em disco vazio, reboot sem a mídia
 e recusa antes do wipe de um `profile.lock` incoerente com `media.meta` foram
-comprovados pelo aceite final-v10 acima.
+comprovados pelo aceite final-v10 acima. A experiência interativa — console
+gráfico, confirmação humana do disco SATA, reboot sem ISO e login — foi
+comprovada separadamente no VirtualBox; nenhum dos dois ensaios promove o
+perfil de desenvolvimento a release.
 
 ## Segurança e validação
 
@@ -359,7 +421,8 @@ Os verificadores usados no desenvolvimento podem ser reproduzidos com:
 (cd minipax && cargo fmt --check)
 sh -n bootstrap/distropica-bootstrap
 sh -n bootstrap/channel-from-rootfs bootstrap/live/build-efi \
-  bootstrap/live/accept-qemu bootstrap/live/init bootstrap/live/udhcpc.script
+  bootstrap/live/accept-qemu bootstrap/live/accept-virtualbox \
+  bootstrap/live/init bootstrap/live/udhcpc.script
 ```
 
 ## Vocabulário

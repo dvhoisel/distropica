@@ -40,10 +40,57 @@ configura a conta, valida o root preparado e usa
 autoriza e particiona o disco, copia o root, executa `minitrue verify`, instala o
 snapshot EFI e publica por último o marcador `disk-install.complete`.
 
-O aceite final-v10 passou em QEMU/OVMF sem NIC: instalou em disco vazio, iniciou
-o disco sem a ISO e recusou uma variante cujo `profile.lock` não correspondia
-ao hash de `media.meta` antes de qualquer wipe. Duas composições locais da ISO
-foram byte a byte idênticas:
+Há duas classes de artefato vivo que não podem ser confundidas:
+
+- A **ISO interativa de desenvolvimento**, construída sem
+  `--install-device`, é o caminho humano e o candidato técnico à futura mídia
+  oficial. Ela pede senha, valida todo o payload antes de oferecer o disco e
+  exige que a pessoa digite o dispositivo inteiro a apagar. Hoje continua
+  `development`/`custom`: não é uma release oficial.
+- A **ISO automatizada destrutiva do aceite QEMU**, construída com
+  `--install-device /dev/vda`, incorpora autorização para apagar esse disco e
+  `distropica.test=1`. Ela serve somente à VM raw descartável criada por
+  `bootstrap/live/accept-qemu`; **nunca deve ser distribuída, publicada nem
+  usada em hardware real**.
+
+A variante interativa pode ser aceita com:
+
+```sh
+bootstrap/live/accept-virtualbox \
+  --iso target/distropica.iso \
+  --run-dir target/acceptance-virtualbox
+```
+
+O runner cria uma VM efêmera sem rede, com UEFI64, VMSVGA e SATA/AHCI. O VDI é
+`/dev/sda` no guest. Com o payload já validado em RAM, a ISO é ejetada antes da
+autorização do wipe; o próprio instalador reinicia pelo VDI, e o runner verifica
+o segundo boot sem ISO e o login de root. Esse fluxo passou em 2026-07-21 no
+VirtualBox `7.2.6_Ubuntur172322`; duas composições a partir dos mesmos insumos
+produziram ISO byte a byte idêntica:
+
+```text
+EVIDENCIA_VIRTUALBOX_INTERATIVA=local-development
+ACCEPTANCE_META=target/vbox-acceptance-interactive-v4/evidence/acceptance.meta
+VBOX_VERSION=7.2.6_Ubuntur172322
+FIRMWARE=efi64
+GRAPHICS=vmsvga
+STORAGE=IntelAhci
+GUEST_DISK=/dev/sda
+ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
+REPEATED_ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
+BOOT_EFI_SHA256=a07b369e6d666e4ff9bb7bb6bba3eda763852a43d31e14971e77908280ebfa3b
+RUN_STATE=passed
+ISO_EJECTED_BEFORE_WIPE=yes
+SECOND_BOOT_WITHOUT_ISO=yes
+ROOT_LOGIN=yes
+FINAL_RESULT=passed
+```
+
+O aceite automatizado final-v10, preservado como evidência separada, passou em
+QEMU/OVMF sem NIC: instalou em disco vazio, iniciou o disco sem a ISO e recusou
+uma variante cujo `profile.lock` não correspondia ao hash de `media.meta` antes
+de qualquer wipe. Duas composições locais dessa ISO de teste também foram byte
+a byte idênticas:
 
 ```text
 EVIDENCIA_FINAL_V10=local-development

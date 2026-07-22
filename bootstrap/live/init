@@ -9,7 +9,15 @@ PATH=/bin:/usr/bin:/sbin:/usr/sbin
 export PATH HOME=/ TERM=linux
 
 say() {
-    echo "distropica-live: $*"
+    message="distropica-live: $*"
+    printf '%s\n' "$message"
+    # Na mídia interativa, /dev/console aponta para tty0. Espelhe somente os
+    # marcadores não secretos no UART para permitir diagnóstico e sincronizar
+    # o aceite headless, sem deslocar os prompts de senha do framebuffer.
+    if [ -c /dev/ttyS0 ] &&
+       ! grep -qw 'distropica.test=1' /proc/cmdline 2>/dev/null; then
+        printf '%s\n' "$message" >/dev/ttyS0 2>/dev/null || true
+    fi
 }
 
 rescue() {
@@ -286,7 +294,9 @@ prepare_system() {
         --minitrue /bin/minitrue \
         --export-boot-efi "$prepared_efi" \
         --only-binary || rescue "Minipax recusou a mídia antes da escrita em disco"
+    say "solicitando senha de root no console gráfico"
     set_root_password "$prepared_root" || rescue "não configurei a senha de root"
+    say "senha de root configurada"
     [ -f "$prepared_efi" ] && [ ! -L "$prepared_efi" ] ||
         rescue "Minipax não exportou um EFI regular do snapshot validado"
     actual_efi_hash=$(sha256sum "$prepared_efi" | awk '{print $1}')

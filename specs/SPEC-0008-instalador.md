@@ -1,6 +1,6 @@
 # SPEC-0008 — minipax, instalação e mídia
 
-**Status:** implementação inicial v0.4 · 2026-07-21
+**Status:** implementação inicial v0.5 · 2026-07-21
 
 **Depende de:** SPEC-0003 (minitrue `--root`), SPEC-0005 (estágios),
 SPEC-0006 (init), SPEC-0009 (canais) e SPEC-0010 (reprodutibilidade).
@@ -408,6 +408,17 @@ Assim, depois do `switch_root`, a busca automática não reutiliza por acidente
 `/lib/modules/7.1.4`; isso não amplia a cobertura estreita de drivers deste
 marco.
 
+A mídia destinada a pessoas DEVE ser construída sem `--install-device` e não
+DEVE conter `distropica.test=1`. Sua cmdline atual é
+`console=ttyS0,115200 console=tty0 panic=-1 rdinit=/init`: manter `tty0` por
+último faz do framebuffer o console primário sem perder o log UART. Para que
+esse contrato funcione antes de haver módulos, o EFI vivo DEVE trazer built-in
+`CONFIG_SYSFB_SIMPLEFB`, `CONFIG_DRM_SIMPLEDRM`,
+`CONFIG_DRM_FBDEV_EMULATION`, `CONFIG_DRM_CLIENT_DEFAULT_FBDEV` e
+`CONFIG_FRAMEBUFFER_CONSOLE`. A variante automatizada do QEMU é outro
+artefato: embute `/dev/vda` e `distropica.test=1` e não pode ser apresentada
+como instalador humano.
+
 O instalador copia esse mesmo EFI para `EFI/BOOT/BOOTX64.EFI` na ESP. A gestão
 do sistema instalado deverá reter o EFI anterior em
 `EFI/distropica/anterior.efi` e nunca remover o kernel em execução. Rotação
@@ -448,7 +459,10 @@ gate de release.
 
 `bootstrap/live/build-efi --install-device /dev/...` embute também
 `distropica.test=1`, suprime a interação e deixa root bloqueado. Essa opção é
-para aceite automatizado e é destrutiva; não é o caminho de usuário.
+para aceite automatizado e é destrutiva; não é o caminho de usuário. Sem
+essa opção, o instalador DEVE pedir e confirmar a senha de root, concluir o
+preflight sem alterar disco e então pedir que o operador digite o dispositivo
+inteiro a apagar.
 
 `bootstrap/live/accept-qemu` consome uma ISO construída dessa forma, cria sem
 sobrescrever um disco raw e uma variável store OVMF, instala com rede ausente e
@@ -481,6 +495,38 @@ Esses identificadores registram uma execução de desenvolvimento; não são pin
 de release nem substitutos de um manifesto oficial externo assinado.
 Uma segunda composição local byte a byte igual continuará sem provar
 reprodução entre builders independentes.
+
+O caminho humano foi exercitado separadamente por
+`bootstrap/live/accept-virtualbox`. O runner recusou preventivamente as flags
+automatizadas, confirmou prompts pelo framebuffer, injetou a senha pelo
+teclado PS/2, esperou o preflight, ejetou a ISO antes de autorizar `/dev/sda` e
+depois comprovou o reboot pelo VDI e o login `root` como uid 0:
+
+```text
+EVIDENCIA_VIRTUALBOX_INTERATIVO_V1=local-development
+ACCEPTANCE_META=target/vbox-acceptance-interactive-v4/evidence/acceptance.meta
+VBOX_VERSION=7.2.6_Ubuntur172322
+FIRMWARE=efi64
+GRAPHICS=vmsvga
+STORAGE=IntelAhci
+GUEST_DISK=/dev/sda
+NETWORK=none
+CMDLINE=console=ttyS0,115200 console=tty0 panic=-1 rdinit=/init
+ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
+REPEATED_ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
+BOOT_EFI_SHA256=a07b369e6d666e4ff9bb7bb6bba3eda763852a43d31e14971e77908280ebfa3b
+ISO_EJECTED_BEFORE_WIPE=yes
+SECOND_BOOT_WITHOUT_ISO=yes
+ROOT_LOGIN=yes
+RUN_STATE=passed
+FINAL_RESULT=passed
+```
+
+O aceite VirtualBox não substitui o final-v10 de QEMU: o primeiro prova a
+experiência humana e o console gráfico com SATA `/dev/sda`; o segundo preserva
+a automação em `/dev/vda` e o probe negativo que demonstra
+fail-before-wipe. Ambos são execuções locais de desenvolvimento, não testes
+em hardware real nem reprodução entre builders independentes.
 
 O MBR/ext2/64 MiB é uma escolha de bootstrap compatível com os applets do
 BusyBox, não o desenho final GPT/ext4/ESP maior. Dual boot, seleção de
@@ -520,11 +566,11 @@ Os testes atuais demonstram composição determinística em ambiente controlado,
 validação estrutural de PE/COFF, geração GPT/FAT e ISO, publicação individual
 sem sobrescrita, ingestão hostil de payload e instalação offline real do
 perfil mínimo por canal. O EFI e o fluxo de disco estão implementados; o
-aceite final-v10 comprovou instalação em disco vazio, segundo boot sem mídia
-até `rcS`/getty e recusa antes do wipe de um `profile.lock` incoerente com
-`media.meta`.
-Isso não prova boot da IMG, hardware real, reprodução independente ou
-publicação oficial.
+aceite final-v10 em QEMU comprovou instalação automatizada, segundo boot sem
+mídia até `rcS`/getty e recusa antes do wipe; o aceite VirtualBox comprovou a
+variante humana, seus prompts gráficos, instalação SATA, reboot pelo VDI sem
+ISO e login root. Isso não prova boot da IMG, hardware real, reprodução
+independente ou publicação oficial.
 
 ## 10. Questões em aberto
 

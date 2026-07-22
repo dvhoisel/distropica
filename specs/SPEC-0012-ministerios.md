@@ -1,6 +1,6 @@
 # SPEC-0012 — Os Quatro Ministérios
 
-**Status:** rascunho v0.2 · 2026-07-21
+**Status:** rascunho v0.3 · 2026-07-21
 **Palavras-chave normativas:** DEVE / NÃO DEVE / DEVERIA / PODE (interpretação análoga à RFC 2119).
 
 ## 1. Propósito
@@ -21,7 +21,7 @@ memorização e à coesão; onde ele brigar com a clareza, a clareza vence.
 |---|---|---|---|
 | **Minitrue** (Verdade) | reescreve o passado | a ferramenta do usuário: `rectify`, `memoryhole`/unperson, `explain`/`why`; hoje também hospeda comandos de mantenedor | SPEC-0003 — **existe** (binário) |
 | **Miniplenty** (Fartura) | produção, racionamento | lado mantenedor: build, `pack`, `attest`, `channel emit`, índices, publicação, reprodução | SPEC-0009/0010 — **parcial** (`pack`/`attest`/`channel emit` implementados dentro do minitrue; binário próprio e publicação futuros) |
-| **Minipax** (Paz) | a guerra perpétua | resolve perfis, assenta rootfs e compõe mídias IMG/ISO | SPEC-0008/0009 — **parcial** (orquestração, composição, EFI vivo e instalação em QEMU/OVMF existem; release e hardware real não) |
+| **Minipax** (Paz) | a guerra perpétua | resolve perfis, assenta rootfs e compõe mídias IMG/ISO | SPEC-0008/0009 — **parcial** (orquestração, composição, EFI vivo e instalação automatizada em QEMU e humana em VirtualBox existem; release e hardware real não) |
 | **Miniluv** (Amor) | lei, punição, Sala 101 | **enforcement**: verificar, rejeitar o não-conforme, punir o desvio | §4 — **latente, onipresente** |
 
 ## 3. Fronteiras (Minitrue / Miniplenty / Minipax)
@@ -47,9 +47,13 @@ memorização e à coesão; onde ele brigar com a clareza, a clareza vence.
   resolução de dependências, ownership nem registro de pacotes. O protótipo em
   Rust já faz essa orquestração. O compositor ainda recebe um `BOOTX64.EFI`
   explícito, mas o pipeline versionado já o produz com
-  `bootstrap/live/build-efi`; o instalador vivo, o segundo boot sem ISO e a
-  recusa antes do wipe de um `profile.lock` incoerente com `media.meta`
-  passaram no aceite final-v10 offline QEMU/OVMF (SPEC-0010 §9).
+  `bootstrap/live/build-efi`. O aceite final-v10 offline em QEMU/OVMF cobre a
+  variante automatizada `/dev/vda` + `distropica.test=1`, o segundo boot sem
+  ISO e a recusa antes do wipe de um `profile.lock` incoerente com
+  `media.meta`. Separadamente, a variante humana, sem `--install-device`,
+  passou no VirtualBox com simpledrm/fbcon, prompts gráficos de senha e disco,
+  SATA `/dev/sda`, ejeção da ISO depois do preflight e antes do wipe, reboot
+  pelo VDI sem ISO e login root (SPEC-0010 §9).
   Um perfil de release precisa pinar `OFFICIAL_CONTENT_SHA256`,
   `OFFICIAL_BOOT_EFI_SHA256` e `OFFICIAL_MINITRUE_SHA256`. A coincidência em
   cada fronteira permite apenas a classe autoatribuída `official-inputs` para
@@ -84,7 +88,9 @@ instalação:
    `INSTALL_READY=no` recusa antes de qualquer mutação do target. O perfil
    `official` atual declara `INSTALL_READY=yes`, mas também
    `STATUS=development`: está apto com o cache/canal correto, não promovido a
-   release.
+   release. Na mídia humana, o initramfs exige senha confirmada e dispositivo
+   digitado; a variante com `--install-device` pertence somente ao aceite
+   automatizado e não pode substituir essa interface.
 3. **Minitrue** decide *como cada pacote vira fato*: resolve receitas e
    dependências, busca/verifica insumos, aplica ownership/journal e registra o
    resultado sob a raiz indicada. O Minipax o chama para `rectify` e `verify`;
@@ -99,9 +105,12 @@ uma razão para transferir lógica de pacotes ao instalador.
 **Limite do estado atual:** não há endpoint, chave, índice e pool de canal
 oficial publicados; tampouco bundle estático assinado, ISO/IMG oficial,
 manifesto externo de release, aceite em hardware real ou reprodução oficial
-por builders independentes. O aceite QEMU/OVMF e a igualdade entre duas
-composições locais são evidências de desenvolvimento, não autoridade de
-release. Também são gates a operação administrativa `channel refresh`, a
+por builders independentes. Os aceites QEMU/OVMF e VirtualBox e a igualdade
+entre duas composições locais da ISO humana (SHA-256
+`183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426`, EFI
+`a07b369e6d666e4ff9bb7bb6bba3eda763852a43d31e14971e77908280ebfa3b`)
+são evidências locais de desenvolvimento, não autoridade de release. Também
+são gates a operação administrativa `channel refresh`, a
 conversão integral do Journal path-based para operações fd-relative contra
 TOCTOU e streaming: durante o consumo de canal coexistem em RAM o `.tar.zst`
 selado e o tar descompactado, e a mídia viva retém ainda a closure em `/run`.

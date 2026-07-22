@@ -1,6 +1,6 @@
 # SPEC-0010 — Builds, sistemas e mídias reprodutíveis
 
-**Status:** implementação parcial v0.2 · 2026-07-21
+**Status:** implementação parcial v0.3 · 2026-07-21
 **Depende de:** SPEC-0003 (minitrue), SPEC-0004 (newspeak), SPEC-0008
 (minipax), SPEC-0009 (canais).
 
@@ -25,8 +25,8 @@ saída posterior de reprodutível. O projeto distingue os níveis abaixo:
 | **R1 — pacote** | tar normalizado do `STAGE` (`reprocorr`) | provado para m4, gmp, gcc e glibc |
 | **R2 — sistema declarado** | `profile.lock`: worlds, Newspeak, overlay, cache, arquitetura, epoch, tamanho de mídia e prontidão de instalação | implementado no `minipax`; torna os insumos auditáveis e repetíveis |
 | **R2b — rootfs byte-a-byte** | árvore instalada inteira, já materializada | **não provado**; registros contêm tempo de instalação e uid/gid ainda não fazem parte do contrato |
-| **R3 — mídia** | bytes finais de `.img` ou `.iso` para o mesmo conjunto completo de insumos | provado localmente com fixtures e o mesmo binário/toolchain; reprodução entre builders ainda não foi feita (§8) |
-| **R4 — reprodução funcional** | mídia dá boot e instala um sistema equivalente em outra máquina | provado localmente por final-v10 em QEMU/OVMF, incluindo segundo boot sem ISO e negativo fail-before-wipe. Não provado em hardware real nem como reprodução oficial |
+| **R3 — mídia** | bytes finais de `.img` ou `.iso` para o mesmo conjunto completo de insumos | provado localmente com fixtures e, para a ISO humana aceita no VirtualBox, por duas composições idênticas no mesmo ambiente; reprodução entre builders ainda não foi feita (§8) |
+| **R4 — reprodução funcional** | mídia dá boot e instala um sistema equivalente em outra máquina | provado localmente por dois caminhos separados: final-v10 automatizado em QEMU/OVMF, incluindo fail-before-wipe, e ISO humana em VirtualBox, incluindo prompts, reboot sem ISO e login root. Não provado em hardware real nem como reprodução oficial |
 
 Portanto, R3 não implica R4: uma imagem pode ser byte-reprodutível e ainda
 conter apenas um PE/COFF sintaticamente válido usado como fixture de teste.
@@ -300,6 +300,14 @@ empacota módulos e depende exclusivamente dos drivers built-in. Além de
 separar a identidade do kernel vivo, o release resultante impede que a busca
 automática consuma `/lib/modules/7.1.4` do target.
 
+O construtor produz duas classes operacionais que NÃO DEVEM ser confundidas.
+Sem `--install-device`, a variante humana omite `distropica.test=1`, usa a
+cmdline `console=ttyS0,115200 console=tty0 panic=-1 rdinit=/init` e traz
+simpledrm/fbcon built-in para prompts no framebuffer. Com
+`--install-device /dev/vda`, a variante de aceite QEMU embute também
+`distropica.test=1`, automatiza o alvo destrutivo e deixa root bloqueado. Os
+hashes de uma variante não corroboram nem identificam a outra.
+
 Os três pinos de release fecham fronteiras diferentes. O conteúdo exato produz
 `PROFILE_CLASS=official-inputs`; a mídia só preserva
 `MEDIA_CLASS=official-inputs` quando também reproduz
@@ -425,10 +433,36 @@ RESULT=pass
 INCONSISTENT_PROFILE_LOCK_RESULT=refused-before-wipe
 ```
 
+O aceite interativo real, em VirtualBox 7.2.6/EFI64/VMSVGA/SATA, usou um EFI
+sem `--install-device`. Ele confirmou os dois prompts de senha e o prompt de
+disco no framebuffer, ejetou a ISO depois do preflight e antes de autorizar o
+wipe de `/dev/sda`, acompanhou o reboot pelo VDI sem ISO e autenticou `root`
+como uid 0. A ISO foi composta duas vezes com bytes idênticos no mesmo
+ambiente:
+
+```text
+EVIDENCIA_VIRTUALBOX_INTERATIVO_V1=local-development
+ACCEPTANCE_META=target/vbox-acceptance-interactive-v4/evidence/acceptance.meta
+VBOX_VERSION=7.2.6_Ubuntur172322
+GUEST_DISK=/dev/sda
+NETWORK=none
+CMDLINE=console=ttyS0,115200 console=tty0 panic=-1 rdinit=/init
+ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
+REPEATED_ISO_SHA256=183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426
+BOOT_EFI_SHA256=a07b369e6d666e4ff9bb7bb6bba3eda763852a43d31e14971e77908280ebfa3b
+ISO_EJECTED_BEFORE_WIPE=yes
+SECOND_BOOT_WITHOUT_ISO=yes
+ROOT_LOGIN=yes
+RUN_STATE=passed
+FINAL_RESULT=passed
+```
+
 Essas são evidências locais de desenvolvimento, não pinos oficiais nem um
-manifesto externo assinado. Uma recomposição local da mesma ISO
-byte a byte igual fortalecerá R3 no mesmo ambiente, mas não substituirá a
-comparação entre builders independentes.
+manifesto externo assinado. A igualdade das duas composições da ISO humana
+fortalece R3 somente dentro do mesmo ambiente; não substitui a comparação
+entre builders independentes. Do mesmo modo, o VirtualBox fecha o caminho
+humano, enquanto o QEMU automatizado continua sendo a evidência específica do
+negativo fail-before-wipe.
 
 Essas provas exercitam localmente R2 e o compositor de R3, não fecham um
 release. Permanecem gates:

@@ -1,6 +1,6 @@
 # SPEC-0005 — Bootstrap em estágios
 
-**Status:** rascunho v0.3 · 2026-07-21
+**Status:** rascunho v0.4 · 2026-07-21
 **Depende de:** todas as anteriores.
 
 ## 1. A tese do bootstrap
@@ -131,15 +131,24 @@ fornecidos por `MINIPAX`/`MINITRUE`. Estes últimos continuam sendo insumos do
 usuário: a casca não lhes atribui linkagem estática, assinatura ou proveniência.
 
 Uma ISO offline de desenvolvimento instalou em QEMU/OVMF um disco raw vazio e
-o reiniciou sem a ISO até `rcS`/getty. O aceite final-v10 cobre a ordem atual:
-closure e EFI são materializados e validados em `/run` antes da escolha do
-disco, e um `profile.lock` incoerente com `media.meta` foi recusado antes do
-wipe. Ainda faltam o bundle estático assinado de release, endpoint/chave/pool de
-canal oficial, `channel refresh` auditável, pinos e manifesto externo de
-release, uma ISO/IMG oficial publicada, reprodução oficial por builders
-independentes e testes em hardware real. Portanto, os comandos acima são o
-contrato público em construção e uma implementação funcional de
-desenvolvimento, não a promessa de uma release já publicada.
+o reiniciou sem a ISO até `rcS`/getty. Esse aceite automatizado final-v10 usa
+uma variante construída com `--install-device /dev/vda` e
+`distropica.test=1`; ele permanece separado do caminho humano e cobre também a
+recusa fail-before-wipe de um `profile.lock` incoerente com `media.meta`.
+
+A variante humana, construída sem `--install-device`, também passou num aceite
+local real sob VirtualBox 7.2.6: exibiu no framebuffer os prompts de senha e de
+disco, recebeu `/dev/sda`, teve a ISO ejetada depois do preflight integral em
+`/run` e antes do wipe, reiniciou pelo VDI sem ISO e aceitou login de `root`.
+Seu console usa simpledrm/fbcon e a cmdline
+`console=ttyS0,115200 console=tty0 panic=-1 rdinit=/init`, com `tty0` por
+último para ser o console interativo primário. Ainda faltam o bundle estático
+assinado de release, endpoint/chave/pool de canal oficial, `channel refresh`
+auditável, pinos e manifesto externo de release, uma ISO/IMG oficial
+publicada, reprodução oficial por builders independentes e testes em hardware
+real. Portanto, os comandos acima são o contrato público em construção e uma
+implementação funcional de desenvolvimento, não a promessa de uma release já
+publicada.
 
 ## 2. Estágio 0 — do host ao chroot (musl-estático)
 
@@ -646,12 +655,17 @@ com SHA256 real pinado.
 
 ## 5. Estágio 3 — boot de verdade
 
-**Entregável:** Distrópica dá boot em QEMU até login.
+**Entregável:** Distrópica dá boot em hipervisor UEFI até login.
 
 - Kernel da fonte, configuração mínima virtio e drivers indispensáveis ao
   instalador embutidos;
 - kernel **EFI-stub** com initramfs BusyBox e o `init` vivo legível, gerado por
   `bootstrap/live/build-efi` como `BOOTX64.EFI`;
+- a variante humana DEVE ter simpledrm e fbcon built-in
+  (`CONFIG_SYSFB_SIMPLEFB`, `CONFIG_DRM_SIMPLEDRM`,
+  `CONFIG_DRM_FBDEV_EMULATION`, `CONFIG_DRM_CLIENT_DEFAULT_FBDEV` e
+  `CONFIG_FRAMEBUFFER_CONSOLE`) e deixar `console=tty0` como o último console
+  da cmdline, para que prompts e teclado funcionem no framebuffer UEFI;
 - **sem bootloader separado no v0:** OVMF/UEFI carrega o mesmo EFI-stub da
   mídia e da ESP instalada. Sem mídia, o initramfs localiza a raiz por
   `LABEL=DISTROPICA_ROOT` e faz `switch_root`;
@@ -665,19 +679,25 @@ com SHA256 real pinado.
   O target mínimo de desenvolvimento aceito hoje usa o `/sbin/init` disponível
   e chegou a `rcS`/getty.
 
-**Estado de implementação (2026-07-21):** o aceite final-v10 de
-`bootstrap/live/accept-qemu` passou offline, sem NIC, em duas fases: ISO →
-disco raw vazio e depois disco instalado → boot sem ISO em QEMU/OVMF. Uma
-segunda composição local da ISO foi byte a byte idêntica. O fluxo faz o
-preflight integral em `/run` antes da autorização destrutiva; uma execução
-negativa com `profile.lock` incoerente com `media.meta` deixou o disco zerado
-intacto. Isso não comprova hardware real, reprodução entre builders
-independentes nem uma ISO oficial publicada.
+**Estado de implementação (2026-07-21):** há dois aceites deliberadamente
+separados. `bootstrap/live/accept-qemu` passou offline, sem NIC, com a variante
+automatizada (`/dev/vda` + `distropica.test=1`): ISO → disco raw vazio, boot
+sem ISO até `rcS`/getty e probe negativo fail-before-wipe. A variante humana,
+sem `--install-device`, passou em `bootstrap/live/accept-virtualbox` com
+EFI64/VMSVGA/SATA: prompts gráficos de senha e disco, alvo `/dev/sda`, ejeção
+da ISO depois do preflight e antes do wipe, reboot pelo VDI sem ISO, getty e
+login `root` comprovado como uid 0. Duas composições locais dessa ISO humana
+foram byte a byte idênticas, com
+SHA-256 `183a25211175577408e7e21ef960db720b6c6c2fa99face5d0eb1cf71834e426`;
+o EFI medido foi
+`a07b369e6d666e4ff9bb7bb6bba3eda763852a43d31e14971e77908280ebfa3b`.
+Isso não comprova hardware real, reprodução entre builders independentes nem
+uma ISO oficial publicada.
 
 **Critério normativo de aceite do estágio completo:** boot UEFI chega a getty;
-login root; `minitrue verify` limpo. O teste automatizado atual prova instalação
-e chegada a `rcS`/getty, mas não automatiza o login interativo nem fecha as
-dívidas de runit e hardware real.
+login root; `minitrue verify` limpo. O aceite VirtualBox fecha a instalação e o
+login interativos em hipervisor; continuam abertos o `verify` executado depois
+do login, as dívidas de runit e o aceite em hardware real.
 
 ## 6. Estágio 4 — userland vendor
 
@@ -698,7 +718,7 @@ futura própria.
 | E0 | chroot musl-estático habitável | baixo |
 | E1 | `./configure && make` funciona | atrito zig-cc×autotools |
 | E2 ✅ | ABI glibc + gcc nativo (pass-2) — **E2-clean: reproduzido a frio** de um rootfs novo (16 pacotes, libs finais selecionadas) 2026-07-20 | GCC hospedado por clang; matriz glibc↔GCC; toolchain-semente musl→glibc |
-| E3 🟡 | EFI-stub + instalação offline, segundo boot até `rcS`/getty e negativo fail-before-wipe comprovados no aceite final-v10 em QEMU/OVMF; login/runit seguem abertos | hardware real e política final de init |
+| E3 🟡 | EFI-stub + instalação offline; QEMU automatizado cobre segundo boot e fail-before-wipe, e VirtualBox interativo cobre prompts, `/dev/sda`, reboot sem ISO e login root; runit/verify pós-login seguem abertos | hardware real e política final de init |
 | E4a | userland vendor console | baixo |
 | E4b | GUI + Firefox | volume brutal de fonte (mesa/GTK) |
 

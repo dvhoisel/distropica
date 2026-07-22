@@ -1,0 +1,480 @@
+#!/bin/sh
+# Aceite funcional da mídia interativa sob VirtualBox/EFI.
+#
+# Cria um registro VirtualBox isolado, um VDI novo e uma VM efêmera. A senha
+# usada no ensaio só existe em memória. A ISO é ejetada antes da autorização
+# de /dev/sda, de modo que o reboot do instalador já prove o boot pelo VDI.
+set -eu
+umask 022
+LC_ALL=C
+export LC_ALL
+
+ISO=
+RUN_DIR=
+VBOX=${VBOXMANAGE:-}
+DISK_SIZE_MIB=2048
+MEMORY_MIB=2048
+PREPARE_TIMEOUT=600
+INSTALL_TIMEOUT=600
+BOOT_TIMEOUT=180
+VM_CREATED=no
+DISK_REGISTERED=no
+VM_UUID=
+VM_NAME=
+META=
+SERIAL=
+VBOX_LOG=
+SCREEN_INDEX=0
+
+usage() {
+    cat <<'EOF'
+uso: bootstrap/live/accept-virtualbox --iso ARQ --run-dir NOVO-DIR [opções]
+
+Obrigatórios:
+  --iso ARQ              ISO interativa offline já construída
+  --run-dir NOVO-DIR     diretório novo para VDI, VM, logs e screenshots
+
+Opções:
+  --vboxmanage ARQ       default: VBoxManage do PATH
+  --disk-size-mib N      default: 2048 (mínimo: 256)
+  --memory-mib N         default: 2048 (mínimo: 512)
+  --prepare-timeout N    segundos até validar a closure (default: 600)
+  --install-timeout N    segundos para instalar/reiniciar (default: 600)
+  --boot-timeout N       segundos até o login pelo VDI (default: 180)
+
+O script recusa preventivamente uma ISO que contenha `distropica.install=` ou
+`distropica.test=1`: essas opções pertencem somente ao aceite automatizado e
+destrutivo do QEMU. A VM usa EFI64, VMSVGA, teclado PS/2, SATA/AHCI e nenhuma
+rede. O VDI aparece como /dev/sda. A senha efêmera não é salva nos artefatos.
+EOF
+}
+
+fail() {
+    echo "accept-virtualbox: erro: $*" >&2
+    exit 1
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --iso) ISO=${2:?}; shift 2 ;;
+        --run-dir) RUN_DIR=${2:?}; shift 2 ;;
+        --vboxmanage) VBOX=${2:?}; shift 2 ;;
+        --disk-size-mib) DISK_SIZE_MIB=${2:?}; shift 2 ;;
+        --memory-mib) MEMORY_MIB=${2:?}; shift 2 ;;
+        --prepare-timeout) PREPARE_TIMEOUT=${2:?}; shift 2 ;;
+        --install-timeout) INSTALL_TIMEOUT=${2:?}; shift 2 ;;
+        --boot-timeout) BOOT_TIMEOUT=${2:?}; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) fail "opção desconhecida: $1" ;;
+    esac
+done
+
+[ -n "$ISO" ] || fail "--iso é obrigatório"
+[ -n "$RUN_DIR" ] || fail "--run-dir é obrigatório"
+
+decimal() {
+    case "$2" in
+        0) ;;
+        [1-9]*)
+            case "$2" in *[!0-9]*) fail "$1 precisa ser inteiro decimal não negativo" ;; esac
+            ;;
+        *) fail "$1 precisa ser inteiro decimal não negativo" ;;
+    esac
+}
+
+for pair in \
+    "--disk-size-mib:$DISK_SIZE_MIB" \
+    "--memory-mib:$MEMORY_MIB" \
+    "--prepare-timeout:$PREPARE_TIMEOUT" \
+    "--install-timeout:$INSTALL_TIMEOUT" \
+    "--boot-timeout:$BOOT_TIMEOUT"; do
+    decimal "${pair%%:*}" "${pair#*:}"
+done
+[ "$DISK_SIZE_MIB" -ge 256 ] && [ "$DISK_SIZE_MIB" -le 1048576 ] ||
+    fail "--disk-size-mib precisa estar entre 256 e 1048576"
+[ "$MEMORY_MIB" -ge 512 ] && [ "$MEMORY_MIB" -le 131072 ] ||
+    fail "--memory-mib precisa estar entre 512 e 131072"
+for timeout_value in "$PREPARE_TIMEOUT" "$INSTALL_TIMEOUT" "$BOOT_TIMEOUT"; do
+    [ "$timeout_value" -ge 1 ] && [ "$timeout_value" -le 86400 ] ||
+        fail "timeouts precisam estar entre 1 e 86400"
+done
+
+for command in awk basename chmod cp date dirname grep id mkdir od pgrep readlink \
+    sed sha256sum sleep strings tesseract tr uuidgen wc xorriso; do
+    command -v "$command" >/dev/null 2>&1 || fail "dependência ausente: $command"
+done
+if [ -z "$VBOX" ]; then
+    VBOX=$(command -v VBoxManage 2>/dev/null || true)
+fi
+[ -n "$VBOX" ] || fail "VBoxManage ausente (use --vboxmanage)"
+
+canonical_file() {
+    input=$1
+    label=$2
+    [ -f "$input" ] || fail "$label ausente/não regular: $input"
+    resolved=$(readlink -f -- "$input")
+    [ -n "$resolved" ] && [ -f "$resolved" ] ||
+        fail "$label não pôde ser resolvido: $input"
+    printf '%s\n' "$resolved"
+}
+
+canonical_new_dir() {
+    input=$1
+    parent=$(dirname -- "$input")
+    leaf=$(basename -- "$input")
+    case "$leaf" in ""|.|..) fail "--run-dir não tem nome final seguro: $input" ;; esac
+    [ -d "$parent" ] || fail "diretório pai de --run-dir não existe: $parent"
+    parent=$(CDPATH= cd -- "$parent" && pwd -P)
+    resolved=$parent/$leaf
+    [ ! -e "$resolved" ] && [ ! -L "$resolved" ] ||
+        fail "--run-dir já existe; nada será sobrescrito: $resolved"
+    printf '%s\n' "$resolved"
+}
+
+absolute_executable() {
+    input=$1
+    parent=$(dirname -- "$input")
+    leaf=$(basename -- "$input")
+    [ -d "$parent" ] || fail "diretório de VBoxManage ausente: $parent"
+    parent=$(CDPATH= cd -- "$parent" && pwd -P)
+    resolved=$parent/$leaf
+    [ -f "$resolved" ] && [ -x "$resolved" ] ||
+        fail "VBoxManage ausente/não executável: $resolved"
+    # Preserve o basename VBoxManage: em algumas instalações ele é um link
+    # para VBox.sh, que decide qual programa iniciar a partir de argv[0].
+    printf '%s\n' "$resolved"
+}
+
+ISO=$(canonical_file "$ISO" ISO)
+VBOX=$(absolute_executable "$VBOX")
+[ -r /dev/urandom ] || fail "/dev/urandom não está legível"
+if pgrep -u "$(id -u)" -x VBoxSVC >/dev/null 2>&1; then
+    fail "já existe um VBoxSVC deste usuário; feche VirtualBox/VMs antes do aceite isolado"
+fi
+RUN_DIR=$(canonical_new_dir "$RUN_DIR")
+mkdir -- "$RUN_DIR"
+chmod 755 "$RUN_DIR"
+mkdir "$RUN_DIR/evidence" "$RUN_DIR/machines" "$RUN_DIR/vbox-home"
+chmod 700 "$RUN_DIR/vbox-home"
+
+export VBOX_USER_HOME=$RUN_DIR/vbox-home
+META=$RUN_DIR/evidence/acceptance.meta
+SERIAL=$RUN_DIR/evidence/console.serial
+VBOX_LOG=$RUN_DIR/evidence/vboxmanage.log
+EFI=$RUN_DIR/evidence/BOOTX64.EFI
+DISK=$RUN_DIR/disk.vdi
+
+iso_sha=$(sha256sum "$ISO" | awk '{print $1}')
+vbox_launcher_sha=$(sha256sum "$VBOX" | awk '{print $1}')
+vbox_binary=$(readlink -f -- "$VBOX")
+if [ "$(basename -- "$vbox_binary")" = VBox.sh ]; then
+    case "$vbox_binary" in
+        */share/virtualbox/VBox.sh)
+            vbox_prefix=${vbox_binary%/share/virtualbox/VBox.sh}
+            vbox_candidate=$vbox_prefix/lib/virtualbox/VBoxManage
+            if [ -f "$vbox_candidate" ] && [ -x "$vbox_candidate" ]; then
+                vbox_binary=$vbox_candidate
+            fi
+            ;;
+    esac
+fi
+vbox_binary_sha=$(sha256sum "$vbox_binary" | awk '{print $1}')
+vbox_version=$("$VBOX" --version)
+printf '%s\n' \
+    'ACCEPTANCE_FORMAT=1' \
+    'RUN_STARTED=preflight' \
+    "ISO=$ISO" \
+    "ISO_SHA256=$iso_sha" \
+    "RUN_DIR=$RUN_DIR" \
+    "VBOXMANAGE_LAUNCHER=$VBOX" \
+    "VBOXMANAGE_LAUNCHER_SHA256=$vbox_launcher_sha" \
+    "VBOXMANAGE_BINARY=$vbox_binary" \
+    "VBOXMANAGE_BINARY_SHA256=$vbox_binary_sha" \
+    "VBOX_VERSION=$vbox_version" \
+    "DISK=$DISK" \
+    "DISK_SIZE_MIB=$DISK_SIZE_MIB" \
+    "MEMORY_MIB=$MEMORY_MIB" \
+    'FIRMWARE=efi64' \
+    'GRAPHICS=vmsvga' \
+    'STORAGE=IntelAhci' \
+    'GUEST_DISK=/dev/sda' \
+    'NETWORK=none' \
+    'SECURE_BOOT=off' > "$META"
+
+xorriso -osirrox on -indev "$ISO" \
+    -extract /EFI/BOOT/BOOTX64.EFI "$EFI" >"$RUN_DIR/evidence/xorriso.log" 2>&1 ||
+    fail "não extraí /EFI/BOOT/BOOTX64.EFI da ISO"
+[ -s "$EFI" ] || fail "BOOTX64.EFI extraído está vazio"
+if strings -a "$EFI" | grep -Fq 'distropica.install='; then
+    fail "ISO contém distropica.install=; recusei a variante destrutiva"
+fi
+if strings -a "$EFI" | grep -Fq 'distropica.test=1'; then
+    fail "ISO contém distropica.test=1; recusei a variante automatizada"
+fi
+interactive_cmdline='console=ttyS0,115200 console=tty0 panic=-1 rdinit=/init'
+strings -a "$EFI" | grep -Fqx "$interactive_cmdline" ||
+    fail "BOOTX64.EFI não contém a cmdline interativa esperada"
+efi_sha=$(sha256sum "$EFI" | awk '{print $1}')
+printf 'BOOT_EFI_SHA256=%s\nCMDLINE=%s\n' "$efi_sha" "$interactive_cmdline" >> "$META"
+
+VM_UUID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+VM_NAME=distropica-accept-$VM_UUID
+ephemeral_password=dtp$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')9a
+
+vbox() {
+    "$VBOX" "$@" >>"$VBOX_LOG" 2>&1
+}
+
+vm_info() {
+    "$VBOX" showvminfo "$VM_UUID" --machinereadable 2>>"$VBOX_LOG"
+}
+
+vm_state() {
+    vm_info | sed -n 's/^VMState="\([^"]*\)"$/\1/p'
+}
+
+safe_vm_config() {
+    config=$(vm_info | sed -n 's/^CfgFile="\(.*\)"$/\1/p')
+    case "$config" in
+        "$RUN_DIR"/machines/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+cleanup() {
+    status=$?
+    cleanup_error=no
+    trap - 0 HUP INT TERM
+    if [ "$VM_CREATED" = yes ]; then
+        vm_info >"$RUN_DIR/evidence/final-vm-info.txt" 2>>"$VBOX_LOG" || true
+        if safe_vm_config; then
+            state=$(vm_state 2>/dev/null || true)
+            case "$state" in
+                running|paused|stuck|starting|saving|restoring)
+                    if ! "$VBOX" controlvm "$VM_UUID" poweroff >>"$VBOX_LOG" 2>&1; then
+                        cleanup_error=yes
+                    fi
+                    ;;
+            esac
+            cleanup_deadline=$(($(date +%s) + 30))
+            while :; do
+                state=$(vm_state 2>/dev/null || true)
+                case "$state" in poweroff|aborted|saved|"") break ;; esac
+                if [ "$(date +%s)" -ge "$cleanup_deadline" ]; then
+                    cleanup_error=yes
+                    break
+                fi
+                sleep 1
+            done
+            if [ "$DISK_REGISTERED" = yes ]; then
+                "$VBOX" storageattach "$VM_UUID" --storagectl=SATA \
+                    --port=0 --device=0 --type=hdd --medium=none \
+                    >>"$VBOX_LOG" 2>&1 || cleanup_error=yes
+            fi
+            if "$VBOX" unregistervm "$VM_UUID" >>"$VBOX_LOG" 2>&1; then
+                VM_CREATED=no
+            else
+                cleanup_error=yes
+            fi
+        else
+            echo "accept-virtualbox: configuração inesperada; VM não foi alterada no cleanup" >&2
+            cleanup_error=yes
+        fi
+    fi
+    if [ "$DISK_REGISTERED" = yes ]; then
+        if "$VBOX" closemedium disk "$DISK" >>"$VBOX_LOG" 2>&1; then
+            DISK_REGISTERED=no
+        else
+            cleanup_error=yes
+        fi
+    fi
+    if [ "$cleanup_error" = yes ] && [ "$status" -eq 0 ]; then
+        echo "accept-virtualbox: erro: cleanup isolado não foi concluído" >&2
+        status=1
+    fi
+    if [ -n "$META" ] && [ -f "$META" ]; then
+        if [ "$status" -eq 0 ]; then result=passed; else result=failed; fi
+        printf 'FINAL_RESULT=%s\nFINISHED_UTC=%s\n' \
+            "$result" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$META"
+    fi
+    exit "$status"
+}
+trap cleanup 0
+trap 'exit 130' HUP INT TERM
+
+echo "accept-virtualbox: fase 1/4: criando VM EFI/SATA isolada"
+vbox createvm --name="$VM_NAME" --platform-architecture=x86 \
+    --ostype=Linux_64 --basefolder="$RUN_DIR/machines" \
+    --uuid="$VM_UUID" --register
+VM_CREATED=yes
+safe_vm_config || fail "CfgFile da VM saiu do diretório isolado"
+vbox modifyvm "$VM_UUID" --memory="$MEMORY_MIB" --cpus=2 \
+    --firmware=efi64 --tpm-type=none --chipset=piix3 --ioapic=on \
+    --x86-long-mode=on --graphicscontroller=vmsvga --vram=32 \
+    --accelerate-3d=off --boot1=dvd --boot2=disk --boot3=none --boot4=none \
+    --nic1=none --audio-enabled=off --clipboard-mode=disabled \
+    --drag-and-drop=disabled --usb-ohci=off --usb-ehci=off --usb-xhci=off \
+    --mouse=ps2 --keyboard=ps2 --uart1 0x3f8 4 --uart-type1 16550A \
+    --uart-mode1 file "$SERIAL"
+vbox createmedium disk --filename="$DISK" --size="$DISK_SIZE_MIB" \
+    --format=VDI --variant=Standard
+DISK_REGISTERED=yes
+vbox storagectl "$VM_UUID" --name=SATA --add=sata --controller=IntelAhci \
+    --portcount=2 --bootable=on
+vbox storageattach "$VM_UUID" --storagectl=SATA --port=0 --device=0 \
+    --type=hdd --medium="$DISK" --mtype=normal
+vbox storageattach "$VM_UUID" --storagectl=SATA --port=1 --device=0 \
+    --type=dvddrive --medium="$ISO" --mtype=readonly
+vm_info > "$RUN_DIR/evidence/initial-vm-info.txt"
+
+wait_for_log() {
+    needle=$1
+    wanted=$2
+    timeout_seconds=$3
+    deadline=$(($(date +%s) + timeout_seconds))
+    while :; do
+        count=0
+        if [ -f "$SERIAL" ]; then
+            count=$(grep -F -c -- "$needle" "$SERIAL" 2>/dev/null || true)
+        fi
+        [ "$count" -ge "$wanted" ] && return 0
+        state=$(vm_state 2>/dev/null || true)
+        case "$state" in running|starting) ;; *) fail "VM ficou em estado $state esperando: $needle" ;; esac
+        [ "$(date +%s)" -lt "$deadline" ] ||
+            fail "timeout esperando no serial: $needle"
+        sleep 1
+    done
+}
+
+wait_for_state() {
+    wanted_state=$1
+    timeout_seconds=$2
+    deadline=$(($(date +%s) + timeout_seconds))
+    while :; do
+        state=$(vm_state 2>/dev/null || true)
+        [ "$state" = "$wanted_state" ] && return 0
+        [ "$(date +%s)" -lt "$deadline" ] ||
+            fail "timeout esperando estado $wanted_state (atual: $state)"
+        sleep 1
+    done
+}
+
+screenshot() {
+    shot_label=$1
+    SCREEN_INDEX=$((SCREEN_INDEX + 1))
+    number=$(printf '%02d' "$SCREEN_INDEX")
+    png=$RUN_DIR/evidence/$number-$shot_label.png
+    vbox controlvm "$VM_UUID" screenshotpng "$png" 0
+    SCREEN_TEXT=${png%.png}.txt
+    tesseract "$png" "${png%.png}" >>"$VBOX_LOG" 2>&1 ||
+        fail "OCR falhou para $png"
+}
+
+require_screen_text() {
+    screen_needle=$1
+    screen_label=$2
+    screen_timeout=$3
+    screen_deadline=$(($(date +%s) + screen_timeout))
+    screen_attempt=0
+    while :; do
+        screen_attempt=$((screen_attempt + 1))
+        screenshot "$screen_label-$screen_attempt"
+        if grep -Fiq -- "$screen_needle" "$SCREEN_TEXT"; then
+            return 0
+        fi
+        state=$(vm_state 2>/dev/null || true)
+        case "$state" in running) ;; *) fail "VM ficou em estado $state esperando texto gráfico: $screen_needle" ;; esac
+        [ "$(date +%s)" -lt "$screen_deadline" ] ||
+            fail "OCR não encontrou no framebuffer: $screen_needle"
+        sleep 1
+    done
+}
+
+type_text() {
+    "$VBOX" controlvm "$VM_UUID" keyboardputstring "$1" >/dev/null 2>>"$VBOX_LOG"
+}
+
+press_enter() {
+    "$VBOX" controlvm "$VM_UUID" keyboardputscancode 1c 9c >/dev/null 2>>"$VBOX_LOG"
+}
+
+echo "accept-virtualbox: fase 2/4: exercitando prompts gráficos"
+vbox startvm "$VM_UUID" --type=headless
+wait_for_log 'distropica-live: solicitando senha de root no console gráfico' 1 "$PREPARE_TIMEOUT"
+sleep 2
+require_screen_text 'Nova senha de root' nova-senha 30
+type_text "$ephemeral_password"
+press_enter
+sleep 2
+require_screen_text 'Repita a sen' repetir-senha 30
+type_text "$ephemeral_password"
+press_enter
+wait_for_log 'distropica-live: senha de root configurada' 1 60
+wait_for_log 'distropica-live: payload e closure validados; nenhum disco foi alterado' 1 60
+sleep 2
+require_screen_text 'dispositivo inteiro a APAGAR' autorizar-disco 30
+
+# O payload e o EFI já estão em /run. Remover a mídia antes do wipe faz do
+# reboot emitido pelo próprio instalador uma prova de boot sem CD-ROM.
+vbox storageattach "$VM_UUID" --storagectl=SATA --port=1 --device=0 \
+    --type=dvddrive --medium=emptydrive --forceunmount
+vm_info > "$RUN_DIR/evidence/after-eject-vm-info.txt"
+grep -Fq '"SATA-1-0"="emptydrive"' "$RUN_DIR/evidence/after-eject-vm-info.txt" ||
+    fail "VirtualBox não confirmou a ejeção da ISO"
+type_text /dev/sda
+press_enter
+wait_for_log 'distropica-live: APAGANDO /dev/sda:' 1 120
+
+echo "accept-virtualbox: fase 3/4: reboot real pelo VDI sem ISO"
+wait_for_log 'distropica-live: INSTALLATION COMPLETE em /dev/sda; reiniciando' 1 "$INSTALL_TIMEOUT"
+wait_for_log 'distropica-live: kernel vivo iniciado' 2 "$BOOT_TIMEOUT"
+wait_for_log 'distropica-live: raiz instalada encontrada em /dev/sda2' 1 "$BOOT_TIMEOUT"
+wait_for_log 'distropica login:' 1 "$BOOT_TIMEOUT"
+sleep 3
+require_screen_text 'distropica login' login-sem-iso 30
+
+echo "accept-virtualbox: fase 4/4: login root e prova pelo UART"
+type_text root
+press_enter
+sleep 2
+type_text "$ephemeral_password"
+press_enter
+sleep 3
+type_text 'echo VBOX_ROOT_UID_$(id -u) >/dev/ttyS0'
+press_enter
+wait_for_log 'VBOX_ROOT_UID_0' 1 30
+type_text 'clear; echo VBOX_ROOT_SCREEN_OK; id; cat /etc/os-release; findfs LABEL=DISTROPICA_ROOT'
+press_enter
+sleep 3
+require_screen_text 'ROOT_SCREEN_OK' root-shell 30
+type_text 'sync; echo VBOX_SYNC_OK >/dev/ttyS0'
+press_enter
+wait_for_log 'VBOX_SYNC_OK' 1 30
+
+vm_info > "$RUN_DIR/evidence/running-passed-vm-info.txt"
+vbox controlvm "$VM_UUID" poweroff
+wait_for_state poweroff 30
+vm_info > "$RUN_DIR/evidence/powered-off-vm-info.txt"
+vbox storageattach "$VM_UUID" --storagectl=SATA --port=0 --device=0 \
+    --type=hdd --medium=none
+vbox unregistervm "$VM_UUID"
+VM_CREATED=no
+vbox closemedium disk "$DISK"
+DISK_REGISTERED=no
+disk_sha=$(sha256sum "$DISK" | awk '{print $1}')
+printf '%s\n' \
+    'RUN_STATE=passed' \
+    'ISO_EJECTED_BEFORE_WIPE=yes' \
+    'SECOND_BOOT_WITHOUT_ISO=yes' \
+    'ROOT_LOGIN=yes' \
+    "DISK_SHA256=$disk_sha" >> "$META"
+(
+    cd "$RUN_DIR/evidence"
+    for artifact in *.png *.txt console.serial; do
+        [ -f "$artifact" ] || continue
+        sha256sum "$artifact"
+    done
+) > "$RUN_DIR/evidence/SHA256SUMS"
+
+echo "accept-virtualbox: PASS"
+echo "evidência: $RUN_DIR/evidence"
