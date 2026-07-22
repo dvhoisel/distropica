@@ -57,8 +57,11 @@ build() {
     install -Dm644 .config "$STAGE/boot/config-$VERSION"
     # Instala os módulos JÁ ASSINADOS (MODULE_SIG_ALL assina no install, via
     # sign-file+libcrypto). O depmod do busybox roda dentro do modules_install.
-    make -j"$JOBS" INSTALL_MOD_PATH="$STAGE" modules_install
+    # O alvo usa /usr unificado. Estagiar diretamente em usr/lib mantém o tar
+    # original lexicalmente idêntico ao manifesto canônico; isso permite ao
+    # `channel emit` reconstruir e conferir o artefato sem ambiguidade lib/.
+    make -j"$JOBS" INSTALL_MOD_PATH="$STAGE/usr" modules_install
     # build/source apontam p/ a árvore de build efêmera (/tmp/minitrue-build-*) →
     # removidos p/ não deixar symlink pendente no alvo.
-    rm -f "$STAGE"/lib/modules/*/build "$STAGE"/lib/modules/*/source
+    rm -f "$STAGE"/usr/lib/modules/*/build "$STAGE"/usr/lib/modules/*/source
 }

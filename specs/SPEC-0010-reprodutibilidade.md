@@ -26,7 +26,7 @@ saída posterior de reprodutível. O projeto distingue os níveis abaixo:
 | **R2 — sistema declarado** | `profile.lock`: `target.world`, `live.world`, `cache.world`, Newspeak, overlay, cache, arquitetura, epoch, orçamento da IMG e prontidão de instalação | implementado no `minipax`; torna intenção e disponibilidade offline auditáveis sem confundi-las |
 | **R2b — rootfs byte-a-byte** | árvore instalada inteira, já materializada | **não provado**; registros contêm tempo de instalação e uid/gid ainda não fazem parte do contrato |
 | **R3 — mídia** | bytes finais de `.img` ou `.iso` para o mesmo conjunto completo de insumos | provado localmente com fixtures e, na revisão histórica da ISO humana aceita no VirtualBox, por duas composições idênticas no mesmo ambiente; a mídia do perfil atual e a reprodução entre builders ainda não foram feitas (§8) |
-| **R4 — reprodução funcional** | mídia dá boot e instala um sistema equivalente em outra máquina | provado localmente pelas revisões históricas final-v10 em QEMU/OVMF e network-v1 em VirtualBox. O fluxo atual com `miniplenty-buildbase`, toolchain final de canal e provas offline de compilação ainda está pendente; hardware real e reprodução oficial também não foram provados |
+| **R4 — reprodução funcional** | mídia dá boot e instala um sistema equivalente em outra máquina | provado localmente pelas revisões históricas final-v10 em QEMU/OVMF e network-v1 em VirtualBox. O fluxo atual com Vim/ncurses, `miniplenty-buildbase`, toolchain final de canal, jq binário e tree compilado offline ainda está pendente; hardware real e reprodução oficial também não foram provados |
 
 Portanto, R3 não implica R4: uma imagem pode ser byte-reprodutível e ainda
 conter apenas um PE/COFF sintaticamente válido usado como fixture de teste.
@@ -241,19 +241,23 @@ emitir a classe `official-inputs`: não há pinos nem canal de release publicado
 `minipax lock --profile <dir>` expõe exatamente esse documento para auditoria
 ou o grava, sem sobrescrever, quando recebe `--output`.
 
-O target atual declara `base`, `linux`, `ripgrep` e
+O target atual declara `base`, `linux`, `ripgrep`, `vim` e
 `miniplenty-buildbase`. O último é um conjunto `KIND=meta`, sem payload: sua
 identidade explícita no `world` (`WORLD=M`, `ORIGIN=meta`) agrega `base`, Make e
-`gcc-pass2`, enquanto os componentes permanecem dependências. Na política
-`--only-binary`, Make, linux-headers, glibc, mathlibs-glibc,
-binutils-glibc e gcc-pass2 são materializados pelo canal. Make e Zig integram
-`cache.world`; essa disponibilidade entra em R2 pelo lock, mas não cria registro
-ou intenção no target binário. A fonte de Make fica congelada para rebuild e
-oferta offline, embora seu binário seja instalado por depender do meta; Zig
-permanece semente sob demanda.
+`gcc-pass2`; Make e `gcc-pass2` permanecem dependências, enquanto `base` também
+é listado diretamente. Vim é outra intenção explícita e ncurses é sua
+dependência transitiva. Na política
+`--only-binary`, Vim, ncurses, Make, linux-headers, glibc, mathlibs-glibc, zlib,
+binutils-glibc e gcc-pass2 são materializados pelo canal. Jq, Make, tree e Zig
+integram `cache.world`; essa disponibilidade entra em R2 pelo lock, mas não cria
+registro ou intenção no target binário. A fonte de Make fica congelada para
+rebuild e oferta offline, embora seu binário seja instalado por depender do
+meta; Zig permanece semente sob demanda. Jq e tree começam ausentes: um pedido
+offline instala o primeiro do binário upstream e compila o segundo da fonte
+oficial com a toolchain nativa.
 
 A closure de execução de `gcc-pass2` é deliberadamente
-`linux-headers + glibc + mathlibs-glibc + binutils-glibc`. `gcc` passada 1,
+`linux-headers + glibc + mathlibs-glibc + zlib + binutils-glibc`. `gcc` passada 1,
 `binutils-cross` e `libstdcxx` intermediário são somente dependências de build;
 o GCC final supersede o último e instala a libstdc++ definitiva. Essa fronteira
 faz a identidade declarada do sistema apto a compilar incluir headers e
@@ -454,8 +458,9 @@ e versão do compositor. Para IMG, também conferem a assinatura GPT; para ISO,
 quando `xorriso` está disponível, conferem byte-identidade e o descritor
 ISO9660 `CD001`. Há ainda testes do lock, normalização de world, confinamento
 de overlay, recusa de target sujo e ingestão hostil de mídia. O canal assinado
-e `--only-binary` materializaram o perfil mínimo num E2E offline real. Ainda
-não houve cotejo R3 entre builders independentes. O runner
+e `--only-binary` materializaram o perfil mínimo anterior num E2E offline real;
+isso não aceita o perfil atual com Vim, jq e tree. Ainda não houve cotejo R3
+entre builders independentes. O runner
 `bootstrap/live/accept-qemu` registra hashes, parâmetros e logs das duas fases
 (instalação e segundo boot sem ISO). A execução final-v10 passou depois da
 validação da closure e do EFI em `/run` antes da escolha do disco. Uma segunda
@@ -532,20 +537,25 @@ humano, enquanto o QEMU automatizado continua sendo a evidência específica do
 negativo fail-before-wipe.
 
 O runner atual deve provar uma identidade funcional diferente. No segundo boot
-sem cabo, ripgrep 15.2.0 e o registro sem payload de
+sem cabo, ripgrep 15.2.0, Vim 9.2.0837 e o registro sem payload de
 `miniplenty-buildbase` devem existir; apenas o meta representa a toolchain no
-`world`. Make 4.4.1, linux-headers, glibc, mathlibs-glibc, binutils-glibc 2.45 e
-GCC/G++ 15.3.0 devem ter origem de canal. Make também consta em `cache.world`
-como fonte congelada; Zig continua somente no cache, e os registros de Zig,
-`gcc`, `binutils`, `binutils-cross`, `libstdcxx`, `gmp`,
-`mpfr` e `mpc` precisam estar ausentes.
+`world`. Vim e o meta são top-level; ncurses 6.6, Make 4.4.1, linux-headers,
+glibc, mathlibs-glibc, zlib 1.3.1, binutils-glibc 2.45 e GCC/G++ 15.3.0 devem ter origem de
+canal sem se tornarem intenções top-level. Jq, Make, tree e Zig constam em
+`cache.world`; jq, tree e Zig devem começar sem registro, e também precisam
+estar ausentes as sementes `gcc`, `binutils`, `binutils-cross`, `libstdcxx`,
+`gmp`, `mpfr` e `mpc`.
 
-Sem conectar a rede, o runner deve compilar e executar C com headers Linux e
-glibc, C++17 com STL/exceções e `libstdc++.so.6`, uma biblioteca estática com
-`ar`/`ranlib`, e um Makefile que invoque GCC; depois exige `minitrue verify`
-limpo. A NAT só é ligada no terceiro boot para DHCP, DNS e gateway. Como a nova
-mídia ainda não foi recomposta nem executada com os discos padrão de 4096 MiB,
-a evidência network-v1 não pode ser reutilizada como prova de R4 para o perfil
+Sem conectar a rede, o runner deve validar uma edição com Vim, compilar e
+executar C com headers Linux e glibc, C++17 com STL/exceções e
+`libstdc++.so.6`, uma biblioteca estática com `ar`/`ranlib` e um Makefile que
+invoque GCC. Depois deve instalar jq do binário upstream com
+`minitrue --offline rectify jq` e compilar tree da fonte com
+`minitrue --offline rectify tree`, mantendo Zig ausente e exigindo
+`minitrue verify` limpo. Um novo boot deve demonstrar a persistência de Vim, jq
+e tree; a NAT só é ligada depois para DHCP, DNS e gateway. Como a nova mídia
+ainda não foi recomposta nem executada com os discos padrão de 4096 MiB, a
+evidência network-v1 não pode ser reutilizada como prova de R4 para o perfil
 atual. `MEDIA_SIZE_MIB=512` dimensiona a variante IMG, não a ISO desse aceite.
 
 Essas provas exercitam localmente R2 e o compositor de R3, não fecham um

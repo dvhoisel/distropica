@@ -176,14 +176,17 @@ qualquer entrada de `cache.world` interrompe a instalação antes de
 `target.world`.
 
 O perfil de desenvolvimento oficial declara `INSTALL_READY=yes`: o target
-atual pede `base`, `linux`, `ripgrep` e `miniplenty-buildbase`. O último é
-`KIND=meta`, não possui payload e agrega `base`, GNU Make e `gcc-pass2`; sua
-closure entrega headers Linux, glibc, mathlibs-glibc, binutils nativo e GCC/G++
-final. Na instalação normal `--only-binary`, Make e toda essa toolchain vêm do
-canal. Make e Zig constam em `cache.world`: a fonte de Make permanece congelada
-e verificável para rebuild/oferta offline, apesar de seu binário ser instalado
-por depender do meta; Zig garante a semente de uma reconstrução local futura
-sem ser instalado no target binário. O caminho anterior
+atual pede `base`, `linux`, `ripgrep`, `vim` e `miniplenty-buildbase`. O último
+é `KIND=meta`, não possui payload e agrega `base`, GNU Make e `gcc-pass2`; sua
+closure entrega headers Linux, glibc, mathlibs-glibc, zlib, binutils nativo e GCC/G++
+final. Vim traz ncurses como dependência transitiva, sem transformar ncurses em
+desejo top-level. Na instalação normal `--only-binary`, Vim, ncurses, Make e
+toda essa toolchain vêm do canal. Jq, Make, tree e Zig constam em
+`cache.world`: a fonte de Make permanece congelada e verificável para
+rebuild/oferta offline, apesar de seu binário ser instalado por depender do
+meta; Zig garante a semente de uma reconstrução local futura; jq conserva o
+binário upstream e tree, a fonte oficial. Jq, tree e Zig não são instalados no
+target inicial. O caminho anterior
 foi exercitado de ponta a ponta numa raiz vazia com `--offline --only-binary`,
 antes desse contrato do perfil. O cache veio de registros históricos e usa
 `TRUST=builder`; não é um canal oficial publicado nem autoriza mudar
@@ -309,23 +312,29 @@ duas listas: bytes extras também ficam presos por `CACHE_SHA256`, mas não cria
 registro, link ou intenção.
 
 Somente `target.world` expressa a instalação inicial. No perfil atual, `base`,
-`linux`, `ripgrep` e `miniplenty-buildbase` são desejos top-level e devem
-existir desde o primeiro boot. O meta é registrado com `WORLD=M`, `ORIGIN=meta`
-e manifesto canônico sem entradas; ele mantém suas dependências instaladas sem
-possuir arquivos. Entre os componentes da toolchain, apenas o meta é desejo
-top-level: Make, headers Linux, glibc, mathlibs-glibc, binutils-glibc e
-gcc-pass2 são componentes instalados da closure.
+`linux`, `ripgrep`, `vim` e `miniplenty-buildbase` são desejos top-level e
+devem existir desde o primeiro boot. O meta é registrado com `WORLD=M`,
+`ORIGIN=meta` e manifesto canônico sem entradas; ele mantém suas dependências
+instaladas sem possuir arquivos. `base`, também alcançado pelo meta, já é
+listado diretamente. Entre os componentes da toolchain, apenas o meta é desejo
+top-level: Make, headers Linux, glibc, mathlibs-glibc, zlib, binutils-glibc e
+gcc-pass2 são componentes instalados da closure. Vim é top-level; ncurses é
+somente sua dependência transitiva.
 
-Make e Zig estão em `cache.world`. A entrada de Make conserva sua fonte
-verificada para rebuild/oferta offline; ela não é a razão de o binário estar no
-target — isso decorre da dependência do meta. Receitas fonte
+Jq, Make, tree e Zig estão em `cache.world`. A entrada de Make conserva sua
+fonte verificada para rebuild/oferta offline; ela não é a razão de o binário
+estar no target — isso decorre da dependência do meta. Receitas fonte
 `TOOLCHAIN=seed|cross` materializam Zig automaticamente apenas quando o
 Minitrue escolhe build local; canal/binário e `none|native` não o instalam.
 Assim, no caminho `--only-binary`, Zig fica disponível no cache, mas sem
-comando, registro ou entrada no `world`.
+comando, registro ou entrada no `world`. Jq e tree também começam ausentes:
+`minitrue --offline rectify jq` deve instalar o executável estático publicado
+pelo upstream, enquanto `minitrue --offline rectify tree` deve compilar a fonte
+oficial com a toolchain nativa do sistema instalado. Tree não integra o canal;
+usar `--no-binary` seria incorreto porque aplicaria a política a toda a closure.
 
 Para que essa closure represente o sistema final, `gcc-pass2` declara como
-`DEPS` de execução `linux-headers`, glibc, mathlibs-glibc e binutils-glibc; gcc
+`DEPS` de execução `linux-headers`, glibc, mathlibs-glibc, zlib e binutils-glibc; gcc
 passada 1, binutils-cross e o libstdcxx intermediário são `BUILD_DEPS`. O GCC
 final supersede esse intermediário e fornece a libstdc++ definitiva. As
 receitas de binutils-glibc e gcc-pass2 passaram a solicitar
@@ -636,20 +645,26 @@ FINAL_RESULT=passed
 
 O runner atual expressa um aceite diferente, ainda não executado sobre uma
 mídia recomposta. Com o cabo desligado no segundo boot, ele deve encontrar
-ripgrep 15.2.0 e o meta `miniplenty-buildbase` instalados. `base`, `linux`,
-`ripgrep` e o meta são explícitos no `world`; entre os componentes da
-toolchain, apenas o meta é top-level. Os registros de Make 4.4.1,
-linux-headers, glibc, mathlibs-glibc,
-binutils-glibc 2.45 e gcc-pass2 15.3.0 devem declarar origem de canal. Zig deve
-continuar apenas no cache e, junto das sementes `gcc`, `binutils`,
-`binutils-cross`, `libstdcxx`, `gmp`, `mpfr` e `mpc`, não pode possuir registro
-no target final.
+ripgrep 15.2.0, Vim 9.2.0837 e o meta `miniplenty-buildbase` instalados. `base`,
+`linux`, `ripgrep`, `vim` e o meta são explícitos no `world`; entre os
+componentes da toolchain, apenas o meta é top-level. Os registros de Vim,
+ncurses 6.6, Make 4.4.1, linux-headers, glibc, mathlibs-glibc, zlib 1.3.1,
+binutils-glibc 2.45 e gcc-pass2 15.3.0 devem declarar origem de canal. Ncurses
+não pode ser top-level. Jq, tree e Zig devem começar somente no cache e, junto
+das sementes `gcc`, `binutils`, `binutils-cross`, `libstdcxx`, `gmp`, `mpfr` e
+`mpc`, não podem possuir registro no target inicial.
 
-Ainda sem link, o runner compila e executa C com headers Linux/glibc; compila e
-executa C++17 com STL, strings, vetores, `unique_ptr`, exceções e dependência em
-`libstdc++.so.6`; cria, indexa e linka um arquivo estático com `ar`/`ranlib`; e
-executa um Makefile que chama GCC. Exige então `minitrue verify` limpo. Só no
-terceiro boot liga a NAT para as provas separadas de DHCP, DNS e gateway. Até
+Ainda sem link, o runner deve validar Vim e seu alias `vi`, compilar e executar
+C com headers Linux/glibc; compilar e executar C++17 com STL, strings, vetores,
+`unique_ptr`, exceções e dependência em `libstdc++.so.6`; criar, indexar e
+linkar um arquivo estático com `ar`/`ranlib`; e executar um Makefile que chama
+GCC. Deve então instalar jq do binário upstream por
+`minitrue --offline rectify jq` e compilar tree da fonte por
+`minitrue --offline rectify tree`, mantendo Zig ausente. A ausência de tree no
+canal e `ORIGIN=fonte` comprovam a compilação sem forçar suas dependências a
+ignorar os artefatos binários. Depois de
+`minitrue verify` limpo, um novo boot deve comprovar a persistência de Vim, jq e
+tree. Só então liga a NAT para as provas separadas de DHCP, DNS e gateway. Até
 essa execução sobre a nova mídia recomposta existir, os hashes e resultados
 network-v1 acima continuam históricos e não sustentam o novo fluxo;
 `MEDIA_SIZE_MIB=512` dimensionará a IMG, não a ISO usada no aceite.
@@ -706,9 +721,10 @@ mídia até `rcS`/getty e recusa antes do wipe; o aceite VirtualBox comprovou a
 variante humana, seus prompts gráficos, instalação SATA, reboot pelo VDI sem
 ISO, login root, DHCP/DNS/gateway no VirtIO/NAT, instalação de `ripgrep` 15.2.0
 com o link desligado e `verify` posterior limpo — tudo na revisão histórica
-network-v1. O aceite atual do meta `miniplenty-buildbase`, toolchain final do
-canal, sementes ausentes e compilação offline de C/C++/STL/archive/Make ainda
-está pendente. Isso não prova boot da IMG,
+network-v1. O aceite atual de Vim/ncurses, do meta `miniplenty-buildbase`, da
+toolchain final do canal, das sementes ausentes, da compilação offline de
+C/C++/STL/archive/Make, do jq binário e do tree compilado ainda está pendente.
+Isso não prova boot da IMG,
 Internet, hardware real, reprodução independente ou publicação oficial.
 
 ## 10. Questões em aberto

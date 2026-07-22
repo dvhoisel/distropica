@@ -2,7 +2,7 @@ NAME=python
 VERSION=3.14.6
 KIND=source
 BUILD_DEPS=binutils
-ABOUT="interpretador Python; prereq de build da glibc (scripts .py do build). python.org não publica binário Linux (SPEC-0007) — daí a ironia de ter que compilá-lo antes da glibc. Build mínimo: sem shared, sem pip, sem módulos de teste; a glibc só usa Python básico"
+ABOUT="interpretador Python; prereq de build da glibc (scripts .py do build). python.org não publica binário Linux (SPEC-0007) — daí a ironia de ter que compilá-lo antes da glibc. Build mínimo: sem shared, pip, módulos de teste ou bindings externos de OpenSSL/zlib; a glibc só usa Python básico"
 LICENSE=Python-2.0.1
 SRC="https://www.python.org/ftp/python/$VERSION/Python-$VERSION.tar.xz"
 SHA256=143b1dddefaec3bd2e21e3b839b34a2b7fb9842272883c576420d605e9f30c63
@@ -13,8 +13,15 @@ build() {
     # dlopen dos módulos de extensão. MODULE_BUILDTYPE=static compila os módulos
     # da stdlib EMBUTIDOS no interpretador (a tag *@MODULE_BUILDTYPE@* do
     # Setup.stdlib.in). CFLAGS: zig cc trata __DATE__/__TIME__ como erro
-    # (getbuildinfo.c). O que precisa de lib externa (zlib, ffi…) é pulado;
-    # a glibc só usa Python básico.
+    # (getbuildinfo.c). Desabilitar explicitamente os módulos externos que já
+    # existem no root pós-E2 impede que um rebuild do bootstrap misture o alvo
+    # musl do Zig com libcrypto/libz da glibc. A glibc só usa Python básico.
+    cat > Modules/Setup.local <<'SETUP'
+*disabled*
+_ssl
+_hashlib
+zlib
+SETUP
     MODULE_BUILDTYPE=static ./configure --prefix=/usr --disable-shared \
         --without-ensurepip --with-ensurepip=no --disable-test-modules \
         CFLAGS="-Wno-error=date-time -Wno-error"

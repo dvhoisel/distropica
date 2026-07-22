@@ -16,4 +16,7 @@ build() {
     ./configure --prefix=/usr --disable-nls --disable-dependency-tracking
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
+    # Mesmo com NLS desativado, o install cria a hierarquia de locales vazia.
+    # Ela pertence à glibc no root final e não é payload do Flex.
+    rm -rf -- "$STAGE/usr/share/locale"
 }

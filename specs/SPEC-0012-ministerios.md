@@ -21,7 +21,7 @@ memorização e à coesão; onde ele brigar com a clareza, a clareza vence.
 |---|---|---|---|
 | **Minitrue** (Verdade) | reescreve o passado | a ferramenta do usuário: `rectify`, `memoryhole`/unperson, `explain`/`why`; hoje também hospeda comandos de mantenedor | SPEC-0003 — **existe** (binário) |
 | **Miniplenty** (Fartura) | produção, racionamento | lado mantenedor: build, `pack`, `attest`, `channel emit`, índices, publicação, reprodução | SPEC-0009/0010 — **parcial** (`pack`/`attest`/`channel emit` implementados dentro do minitrue; binário próprio e publicação futuros) |
-| **Minipax** (Paz) | a guerra perpétua | resolve perfis, assenta rootfs e compõe mídias IMG/ISO | SPEC-0008/0009 — **parcial** (orquestração, composição, EFI vivo e instalação automatizada em QEMU e humana em VirtualBox existem; release e hardware real não) |
+| **Minipax** (Paz) | a guerra perpétua | resolve perfis, assenta rootfs e compõe mídias IMG/ISO | SPEC-0008/0009 — **parcial** (orquestração, composição, EFI vivo e instalações históricas em QEMU/VirtualBox existem; o perfil atual, release e hardware real ainda não foram aceitos) |
 | **Miniluv** (Amor) | lei, punição, Sala 101 | **enforcement**: verificar, rejeitar o não-conforme, punir o desvio | §4 — **latente, onipresente** |
 
 ## 3. Fronteiras (Minitrue / Miniplenty / Minipax)
@@ -71,24 +71,29 @@ memorização e à coesão; onde ele brigar com a clareza, a clareza vence.
   com `minitrue verify` limpo (SPEC-0010 §9). Essa é evidência histórica
   network-v1.
 
-  No perfil atual, `target.world` pede ripgrep e `miniplenty-buildbase`; quando
-  a nova mídia for recomposta, Make, headers Linux, glibc, mathlibs-glibc,
-  binutils nativo e GCC/G++ final deverão vir do canal. Make e Zig constam em
-  `cache.world`: a fonte de Make fica congelada para rebuild/oferta offline,
-  embora o binário seja instalado por depender do meta; Zig fica somente no
-  cache. `MEDIA_SIZE_MIB=512` dimensiona a variante IMG, enquanto a ISO cresce
-  conforme o payload. O `gcc-pass2` mantém como dependências de execução
-  `linux-headers`, glibc,
-  mathlibs-glibc e binutils-glibc; gcc passada 1, binutils-cross e libstdcxx
-  intermediário são apenas scaffolding de build e não devem aparecer no target
-  binário final.
+  No perfil atual, `target.world` pede `base`, `linux`, `ripgrep`, `vim` e
+  `miniplenty-buildbase`; quando a nova mídia for recomposta, Vim, ncurses,
+  Make, headers Linux, glibc, mathlibs-glibc, zlib, binutils nativo e GCC/G++ final
+  deverão vir do canal. Vim é desejo top-level e ncurses, sua dependência
+  transitiva. Jq, Make, tree e Zig constam em `cache.world`: a fonte de Make
+  fica congelada para rebuild/oferta offline, embora o binário seja instalado
+  por depender do meta; Zig fica somente no cache; jq e tree começam ausentes.
+  O primeiro deve ser instalado offline do binário upstream e o segundo,
+  compilado offline da fonte oficial com a toolchain nativa.
+  `MEDIA_SIZE_MIB=512` dimensiona a variante IMG, enquanto a ISO cresce conforme
+  o payload. O `gcc-pass2` mantém como dependências de execução
+  `linux-headers`, glibc, mathlibs-glibc, zlib e binutils-glibc; gcc passada 1,
+  binutils-cross e libstdcxx intermediário são apenas scaffolding de build e
+  não devem aparecer no target binário final.
 
   Com um VDI de 4096 MiB por padrão e o cabo desligado, o runner VirtualBox
-  atual exige as sementes ausentes e prova C, C++17/STL/exceções, libstdc++,
-  arquivo estático com `ar`/`ranlib`, Make invocando GCC e `minitrue verify`.
-  Só depois liga a NAT para DHCP/DNS/gateway. A nova mídia ainda não foi
-  recomposta nem executada; os hashes e resultados network-v1 permanecem
-  históricos.
+  atual exige as sementes ausentes, valida Vim, prova
+  C, C++17/STL/exceções, libstdc++, arquivo estático com `ar`/`ranlib` e Make
+  invocando GCC, instala jq do binário upstream e compila tree da fonte, tudo
+  offline. Depois de `minitrue verify` e de um novo boot que demonstre
+  persistência, liga a NAT para DHCP/DNS/gateway. A nova mídia ainda não foi
+  recomposta nem executada; esses requisitos não estão aceitos, e os hashes e
+  resultados network-v1 permanecem históricos.
   Um perfil de release precisa pinar `OFFICIAL_CONTENT_SHA256`,
   `OFFICIAL_BOOT_EFI_SHA256` e `OFFICIAL_MINITRUE_SHA256`. A coincidência em
   cada fronteira permite apenas a classe autoatribuída `official-inputs` para

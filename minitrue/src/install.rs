@@ -3943,12 +3943,20 @@ pub fn verify(ctx: &Ctx) -> Result<()> {
                 println!("wrongthink: registro meta de {name} tem KIND/WORLD/ORIGIN incoerentes");
                 problems += 1;
             }
+            if meta.get("RECORD_FORMAT").map(String::as_str) == Some(RECORD_FORMAT)
+                && !is_meta
+                && license_of(&e.path(), &meta).is_none()
+            {
+                println!("wrongthink: registro v2 de {name} não declara LICENSE válida");
+                problems += 1;
+            }
             if is_meta {
                 let forbidden = [
                     "ARTIFACT_HASH",
                     "TRANSACTION_ID",
                     "PROVISIONAL",
                     "REPROCORR",
+                    "LICENSE",
                 ];
                 if meta.get("SHA256").is_none_or(|value| !value.is_empty())
                     || meta.get("NAME").map(String::as_str) != Some(name.as_str())
@@ -4179,6 +4187,11 @@ fn write_record(
             selection.index_sha256,
             selection.lock_sha256,
         ));
+    }
+    // LICENSE descreve o payload. Metapacotes não carregam payload próprio e
+    // portanto omitem o campo; registros A/B novos sempre o congelam aqui.
+    if let Some(license) = &r.license {
+        meta.push_str(&format!("LICENSE={license}\n"));
     }
     if r.provisional {
         meta.push_str("PROVISIONAL=1\n");
@@ -4767,7 +4780,7 @@ fn validate_manifest_line_syntax(line: &str) -> Result<()> {
     }
 }
 
-fn record_meta_matches(meta: &HashMap<String, String>, recipe: &Recipe) -> bool {
+fn record_meta_matches(rec_dir: &Path, meta: &HashMap<String, String>, recipe: &Recipe) -> bool {
     let expected_kind = record_kind(recipe.kind);
     let expected_world = record_world(recipe.kind);
     let field = |name: &str| meta.get(name).map(String::as_str);
@@ -4826,6 +4839,12 @@ fn record_meta_matches(meta: &HashMap<String, String>, recipe: &Recipe) -> bool 
         || field("SHA256") != Some(recipe.sha256.join(" ").as_str())
         || field("DEPS") != Some(recipe.deps.join(" ").as_str())
         || field("SUPERSEDES") != Some(recipe.supersedes.join(" ").as_str())
+        || match recipe.kind {
+            Kind::Binary | Kind::Source => {
+                license_of(rec_dir, meta).as_deref() != recipe.license.as_deref()
+            }
+            Kind::Meta => field("LICENSE").is_some() || recipe.license.is_some(),
+        }
         || field("INSTALLED_AT").is_none_or(str::is_empty)
         || !field("MANIFEST_BASELINE_SHA256").is_some_and(|hash| {
             hash.len() == 64
@@ -4876,7 +4895,7 @@ fn record_meta_matches(meta: &HashMap<String, String>, recipe: &Recipe) -> bool 
 /// após cessões declaradas; nos demais eles precisam ser idênticos.
 fn record_is_intact(ctx: &Ctx, rec_dir: &Path, recipe: &Recipe) -> bool {
     let meta = match read_meta_strict(rec_dir) {
-        Ok(Some(meta)) if record_meta_matches(&meta, recipe) => meta,
+        Ok(Some(meta)) if record_meta_matches(rec_dir, &meta, recipe) => meta,
         _ => return false,
     };
     if verify_channel_provenance(ctx, &meta).is_err() {
@@ -6047,6 +6066,9 @@ pub fn explain(ctx: &Ctx, target: &str) -> Result<()> {
             }
             println!("  instalado:   {}", field("INSTALLED_AT"));
             println!("  receita:     {}", rec.join("recipe").display());
+            if let Some(license) = license_of(&rec, &meta) {
+                println!("  licença:     {license}");
+            }
             if let Some(about) = about_of(&rec, &meta) {
                 println!("  é:           {about}");
             }
@@ -6107,6 +6129,20 @@ fn about_of(rec_dir: &Path, meta: &HashMap<String, String>) -> Option<String> {
         .filter(|value| !value.chars().any(char::is_control))
 }
 
+/// Extrai a licença congelada. Registros v2 anteriores ao campo continuam
+/// legíveis pela atribuição literal no snapshot histórico, aberto sem seguir
+/// symlink e jamais executado. Se o campo existe no `meta`, inclusive vazio ou
+/// inválido, ele é factual e não pode ser mascarado pelo fallback.
+fn license_of(rec_dir: &Path, meta: &HashMap<String, String>) -> Option<String> {
+    let value = match meta.get("LICENSE") {
+        Some(value) => Some(value.clone()),
+        None => read_regular_nofollow(&rec_dir.join("recipe"))
+            .ok()
+            .and_then(|bytes| recipe::literal_assignment_bytes(&bytes, "LICENSE")),
+    }?;
+    recipe::license_value_is_valid(&value).then_some(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6135,7 +6171,7 @@ mod tests {
         fs::write(
             recipes.join("compiler/recipe"),
             format!(
-                "NAME=compiler\nVERSION=1\nKIND=binary\nSRC=https://invalid.example/compiler\nSHA256={hash}\nLINKS=compiler=bin/compiler\ninstall_pkg() {{\n mkdir -p \"$PREFIX/bin\"\n cp \"$DL\" \"$PREFIX/bin/compiler\"\n chmod 755 \"$PREFIX/bin/compiler\"\n}}\n"
+                "NAME=compiler\nVERSION=1\nKIND=binary\nLICENSE=NOASSERTION\nSRC=https://invalid.example/compiler\nSHA256={hash}\nLINKS=compiler=bin/compiler\ninstall_pkg() {{\n mkdir -p \"$PREFIX/bin\"\n cp \"$DL\" \"$PREFIX/bin/compiler\"\n chmod 755 \"$PREFIX/bin/compiler\"\n}}\n"
             ),
         )
         .unwrap();
@@ -6167,6 +6203,7 @@ mod tests {
         assert_eq!(meta.get("KIND").map(String::as_str), Some("meta"));
         assert_eq!(meta.get("WORLD").map(String::as_str), Some("M"));
         assert_eq!(meta.get("ORIGIN").map(String::as_str), Some("meta"));
+        assert!(!meta.contains_key("LICENSE"));
         assert!(!meta.contains_key("ARTIFACT_HASH"));
         assert!(!meta.contains_key("TRANSACTION_ID"));
         assert_eq!(fs::read(record.join("manifest")).unwrap(), b"\n");
@@ -6200,6 +6237,18 @@ mod tests {
             .unwrap()
             .unwrap()
             .contains_key("TRANSACTION_ID"));
+        verify(&context).unwrap();
+
+        fs::write(&meta_path, format!("{canonical_meta}LICENSE=NOASSERTION\n")).unwrap();
+        assert!(
+            verify(&context).is_err(),
+            "meta sem payload não pode declarar LICENSE"
+        );
+        rectify(&context, &requested, BinaryPolicy::BinaryOnly).unwrap();
+        assert!(!read_meta_strict(&record)
+            .unwrap()
+            .unwrap()
+            .contains_key("LICENSE"));
         verify(&context).unwrap();
 
         // Fast path e operações de mantenedor preservam a distinção:
@@ -6253,7 +6302,7 @@ mod tests {
             fs::write(
                 recipe_dir.join("recipe"),
                 format!(
-                    "NAME={name}\nVERSION=1\nKIND=binary\nSRC=https://media.invalid/{name}\nSHA256={hash}\nLINKS=\"{name}=bin/{name}\"\ninstall_pkg() {{\n  mkdir -p \"$PREFIX/bin\"\n  cp \"$DL\" \"$PREFIX/bin/{name}\"\n  chmod 755 \"$PREFIX/bin/{name}\"\n}}\n"
+                    "NAME={name}\nVERSION=1\nKIND=binary\nLICENSE=NOASSERTION\nSRC=https://media.invalid/{name}\nSHA256={hash}\nLINKS=\"{name}=bin/{name}\"\ninstall_pkg() {{\n  mkdir -p \"$PREFIX/bin\"\n  cp \"$DL\" \"$PREFIX/bin/{name}\"\n  chmod 755 \"$PREFIX/bin/{name}\"\n}}\n"
                 ),
             )
             .unwrap();
@@ -6296,6 +6345,7 @@ mod tests {
         assert_eq!(meta.get("WORLD").map(String::as_str), Some("A"));
         assert_eq!(meta.get("ORIGIN").map(String::as_str), Some("vendor"));
         assert_eq!(meta.get("SHA256"), Some(&extra_hash));
+        assert_eq!(meta.get("LICENSE").map(String::as_str), Some("NOASSERTION"));
         assert!(!meta.contains_key("CHANNEL_SHA256"));
         assert!(!cache.join("channel-config").exists());
         assert!(!cache.join("channels").exists());
@@ -6664,7 +6714,7 @@ mod tests {
         fs::create_dir_all(&recipe_dir).unwrap();
         fs::write(
             recipe_dir.join("recipe"),
-            "NAME=pkg\nVERSION=1\nKIND=source\nbuild(){ :; }\n",
+            "NAME=pkg\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nbuild(){ :; }\n",
         )
         .unwrap();
         let ctx = Ctx {
@@ -7143,7 +7193,11 @@ mod tests {
         mkparent(&installed).unwrap();
         fs::create_dir_all(&rec).unwrap();
         mkparent(&source).unwrap();
-        fs::write(&source, "NAME=pkg\nVERSION=1\nKIND=source\nbuild(){ :; }\n").unwrap();
+        fs::write(
+            &source,
+            "NAME=pkg\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nbuild(){ :; }\n",
+        )
+        .unwrap();
         fs::write(&installed, b"original\n").unwrap();
         let ctx = Ctx {
             root: root.clone(),
@@ -7167,7 +7221,30 @@ mod tests {
         fs::write(rec.join("recipe"), &recipe.recipe_bytes).unwrap();
         fs::write(rec.join("recipe@1"), &recipe.recipe_bytes).unwrap();
 
-        assert!(record_is_intact(&ctx, &rec, &recipe));
+        assert!(
+            record_is_intact(&ctx, &rec, &recipe),
+            "registro v2 anterior a LICENSE deve usar o snapshot literal"
+        );
+        let legacy_meta = fs::read_to_string(rec.join("meta")).unwrap();
+        fs::write(
+            rec.join("meta"),
+            legacy_meta.replace("DEPS=\n", "DEPS=\nLICENSE=MIT\n"),
+        )
+        .unwrap();
+        assert!(
+            !record_is_intact(&ctx, &rec, &recipe),
+            "LICENSE factual divergente deve invalidar o fast path"
+        );
+        fs::write(
+            rec.join("meta"),
+            legacy_meta.replace("DEPS=\n", "DEPS=\nLICENSE=\n"),
+        )
+        .unwrap();
+        assert!(
+            !record_is_intact(&ctx, &rec, &recipe),
+            "LICENSE factual vazia não pode cair no fallback"
+        );
+        fs::write(rec.join("meta"), &legacy_meta).unwrap();
         fs::write(&installed, b"adulterado\n").unwrap();
         assert!(!record_is_intact(&ctx, &rec, &recipe));
         fs::write(&installed, b"original\n").unwrap();
@@ -7189,7 +7266,7 @@ mod tests {
         fs::create_dir_all(&rec).unwrap();
         fs::write(
             recipe_dir.join("recipe"),
-            "NAME=seed\nVERSION=1\nKIND=source\nTOOLCHAIN=none\nPROVISIONAL=1\nbuild(){ :; }\n",
+            "NAME=seed\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nTOOLCHAIN=none\nPROVISIONAL=1\nbuild(){ :; }\n",
         )
         .unwrap();
         let ctx = Ctx {
@@ -7248,7 +7325,7 @@ mod tests {
         fs::write(
             recipe_dir.join("recipe"),
             format!(
-                "NAME=tool\nVERSION=1\nKIND=binary\nSRC=https://invalid.example/tool\nSHA256={}\ninstall_pkg() {{ :; }}\n",
+                "NAME=tool\nVERSION=1\nKIND=binary\nLICENSE=NOASSERTION\nSRC=https://invalid.example/tool\nSHA256={}\ninstall_pkg() {{ :; }}\n",
                 "a".repeat(64)
             ),
         )
@@ -7306,7 +7383,7 @@ mod tests {
         fs::create_dir_all(&rec).unwrap();
         fs::write(
             recipe_dir.join("recipe"),
-            "NAME=seed\nVERSION=1\nKIND=source\nPROVISIONAL=1\nABOUT=novo\nbuild(){ :; }\n",
+            "NAME=seed\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nPROVISIONAL=1\nABOUT=novo\nbuild(){ :; }\n",
         )
         .unwrap();
         let historical = b"NAME=seed\nVERSION=1\nKIND=source\nPROVISIONAL=1\nbuild(){ :; }\n";
@@ -7642,7 +7719,7 @@ mod tests {
         fs::create_dir_all(&recipe_dir).unwrap();
         fs::write(
             recipe_dir.join("recipe"),
-            "NAME=pkg\nVERSION=1\nKIND=source\nbuild(){ :; }\n",
+            "NAME=pkg\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nbuild(){ :; }\n",
         )
         .unwrap();
         let recipe = recipe::load(&ctx, "pkg").unwrap();
@@ -7693,7 +7770,7 @@ mod tests {
         fs::create_dir_all(&recipe_dir).unwrap();
         fs::write(
             recipe_dir.join("recipe"),
-            "NAME=pkg\nVERSION=1\nKIND=source\nbuild(){ :; }\n",
+            "NAME=pkg\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nbuild(){ :; }\n",
         )
         .unwrap();
         let ctx = Ctx {
@@ -8035,7 +8112,7 @@ mod tests {
         fs::write(
             rec.join("recipe"),
             format!(
-                "ABOUT=\"$(touch {})\"\nREPROCORR={}\n",
+                "ABOUT=\"$(touch {})\"\nLICENSE=MIT\nREPROCORR={}\n",
                 marker.display(),
                 "b".repeat(64)
             ),
@@ -8044,9 +8121,11 @@ mod tests {
 
         let meta = HashMap::from([
             ("ABOUT".to_string(), "snapshot confiável".to_string()),
+            ("LICENSE".to_string(), "Apache-2.0".to_string()),
             ("REPROCORR".to_string(), "a".repeat(64)),
         ]);
         assert_eq!(about_of(&rec, &meta).as_deref(), Some("snapshot confiável"));
+        assert_eq!(license_of(&rec, &meta).as_deref(), Some("Apache-2.0"));
         assert_eq!(
             reprocorr_of(&rec, &meta).as_deref(),
             Some("a".repeat(64).as_str())
@@ -8056,11 +8135,18 @@ mod tests {
         // Legado literal continua legível; a expansão dinâmica é recusada.
         let legacy = HashMap::new();
         assert_eq!(about_of(&rec, &legacy), None);
+        assert_eq!(license_of(&rec, &legacy).as_deref(), Some("MIT"));
         assert_eq!(
             reprocorr_of(&rec, &legacy).as_deref(),
             Some("b".repeat(64).as_str())
         );
         assert!(!marker.exists());
+        let invalid = HashMap::from([("LICENSE".to_string(), String::new())]);
+        assert_eq!(
+            license_of(&rec, &invalid),
+            None,
+            "campo factual inválido não pode ser mascarado pelo fallback"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -8187,14 +8273,14 @@ mod tests {
             fs::write(
                 recipes_dir.join("pkg/recipe"),
                 format!(
-                    "NAME=pkg\nVERSION=1\nKIND=source\nTOOLCHAIN={toolchain}\n{explicit}build(){{ :; }}\n"
+                    "NAME=pkg\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nTOOLCHAIN={toolchain}\n{explicit}build(){{ :; }}\n"
                 ),
             )
             .unwrap();
             fs::write(
                 recipes_dir.join("zig/recipe"),
                 format!(
-                    "NAME=zig\nVERSION=1\nKIND=binary\nSRC=https://e/zig.tar.xz\nSHA256={}\ninstall_pkg(){{ :; }}\n",
+                    "NAME=zig\nVERSION=1\nKIND=binary\nLICENSE=NOASSERTION\nSRC=https://e/zig.tar.xz\nSHA256={}\ninstall_pkg(){{ :; }}\n",
                     "a".repeat(64)
                 ),
             )
@@ -8251,7 +8337,7 @@ mod tests {
         fs::write(
             recipe_dir.join("recipe"),
             format!(
-                "NAME=tool\nVERSION=1\nKIND=binary\nSRC=https://example.invalid/tool.tar\nSHA256={hash}\ninstall_pkg(){{ return 99; }}\n"
+                "NAME=tool\nVERSION=1\nKIND=binary\nLICENSE=NOASSERTION\nSRC=https://example.invalid/tool.tar\nSHA256={hash}\ninstall_pkg(){{ return 99; }}\n"
             ),
         )
         .unwrap();
@@ -8309,19 +8395,19 @@ mod tests {
         fs::write(
             recipes.join("pkg/recipe"),
             format!(
-                "NAME=pkg\nVERSION=1\nKIND=source\nTOOLCHAIN=seed\nBUILD_DEPS=compiler\nREPROCORR={reprocorr}\nEPOCH={epoch}\nbuild() {{\n  printf 'BUILD NAO PODIA RODAR\\n' > \"$ROOT/build-ran\"\n  return 99\n}}\n"
+                "NAME=pkg\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nTOOLCHAIN=seed\nBUILD_DEPS=compiler\nREPROCORR={reprocorr}\nEPOCH={epoch}\nbuild() {{\n  printf 'BUILD NAO PODIA RODAR\\n' > \"$ROOT/build-ran\"\n  return 99\n}}\n"
             ),
         )
         .unwrap();
         fs::write(
             recipes.join("compiler/recipe"),
-            "NAME=compiler\nVERSION=1\nKIND=source\nTOOLCHAIN=none\nbuild() {\n  printf 'E2 NAO PODIA RODAR\\n' > \"$ROOT/compiler-ran\"\n  return 99\n}\n",
+            "NAME=compiler\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nTOOLCHAIN=none\nbuild() {\n  printf 'E2 NAO PODIA RODAR\\n' > \"$ROOT/compiler-ran\"\n  return 99\n}\n",
         )
         .unwrap();
         fs::write(
             recipes.join("zig/recipe"),
             format!(
-                "NAME=zig\nVERSION=1\nKIND=binary\nSRC=https://example.invalid/zig.tar.xz\nSHA256={}\ninstall_pkg() {{\n  printf 'ZIG NAO PODIA INSTALAR\\n' > \"$ROOT/zig-ran\"\n  return 99\n}}\n",
+                "NAME=zig\nVERSION=1\nKIND=binary\nLICENSE=NOASSERTION\nSRC=https://example.invalid/zig.tar.xz\nSHA256={}\ninstall_pkg() {{\n  printf 'ZIG NAO PODIA INSTALAR\\n' > \"$ROOT/zig-ran\"\n  return 99\n}}\n",
                 "b".repeat(64)
             ),
         )

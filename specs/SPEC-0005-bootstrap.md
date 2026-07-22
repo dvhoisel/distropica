@@ -85,9 +85,11 @@ o nome de artefato oficial do projeto.
 No estado atual, `profiles/official` declara `INSTALL_READY=yes`,
 `STATUS=development` e `MEDIA_SIZE_MIB=512`. O último campo dimensiona somente
 a saída IMG e participa do lock; a ISO cresce conforme o payload e não recebe
-dele um tamanho fixo. O target inclui
+dele um tamanho fixo. O target inclui Vim como editor canônico e
 `miniplenty-buildbase`, o conjunto declarativo que torna o sistema instalado
 apto a produzir software com Make, headers Linux, binutils nativo e GCC C/C++.
+Ncurses é instalado como dependência transitiva de Vim, não como desejo
+top-level.
 A prontidão afirma que esse world pode ser instalado num target vazio com o
 cache/canal correto; **não** afirma que já exista canal, bundle ou mídia oficial
 publicada, nem muda a classe de desenvolvimento para release. Os runners atuais
@@ -153,10 +155,13 @@ Internet. Em seguida, o cabo foi desconectado outra vez: `ripgrep` 15.2.0,
 inicialmente ausente, foi instalado por `minitrue --offline rectify ripgrep`, e
 o `verify` posterior terminou limpo. Esse resultado é a evidência histórica
 network-v1, anterior ao perfil que instala ripgrep e o conjunto de produção por
-padrão, recebe Make e a toolchain final do canal e declara Make e Zig em
-`cache.world`. A fonte de Make permanece congelada e verificável para rebuild e
-oferta offline, embora o binário seja instalado pelo canal; Zig é a semente sob
-demanda. Seu console usa simpledrm/fbcon e a cmdline
+padrão, recebe Make e a toolchain final do canal e declara jq, Make, tree e Zig
+em `cache.world`. A fonte de Make permanece congelada e verificável para
+rebuild e oferta offline, embora o binário seja instalado pelo canal; Zig é a
+semente sob demanda. Jq e tree começam ausentes: o primeiro deve ser instalado
+offline do binário upstream e o segundo compilado offline da fonte oficial. Vim
+e ncurses também não pertenciam àquela evidência histórica. Seu console usa
+simpledrm/fbcon e a cmdline
 `console=ttyS0,115200 console=tty0 panic=-1 rdinit=/init`, com `tty0` por
 último para ser o console interativo primário. Ainda faltam o bundle estático
 assinado de release, endpoint/chave/pool de canal oficial, `channel refresh`
@@ -279,17 +284,19 @@ plano escolhe compilação local. Um pacote atendido por canal não expande essa
 aresta, e `TOOLCHAIN=none|native` também não instala Zig. Como dependência
 implícita, a semente não entra no `world` salvo se for solicitada diretamente.
 
-No caminho normal da distribuição, `target.world` pede
-`miniplenty-buildbase`. Essa receita é `KIND=meta`: não possui payload e agrega
+No caminho normal da distribuição, `target.world` pede `base`, `linux`,
+`ripgrep`, `vim` e `miniplenty-buildbase`. O meta não possui payload e agrega
 `base`, `make` e `gcc-pass2`. Entre os componentes da toolchain, apenas o meta é
-uma intenção explícita no `world`; seus componentes continuam instalados como
-dependências. Com
-`--only-binary`, GNU Make, GCC final, binutils nativo, headers Linux e runtimes
-vêm do canal assinado, sem expandir as sementes de build. O `cache.world` exige
-Make e Zig: conserva a fonte verificada de Make para rebuild/oferta offline e a
-semente Zig para compilação `seed`/`cross` sob demanda. Verificar esse cache não
-cria registro, comando nem intenção para nenhum dos dois; Make fica instalado
-por depender do meta, enquanto Zig permanece fora do target binário.
+uma intenção explícita no `world`; Make e `gcc-pass2` continuam instalados como
+dependências, enquanto `base` também é listado diretamente. Vim é top-level e
+traz ncurses transitivamente. Com
+`--only-binary`, Vim, ncurses, GNU Make, GCC final, binutils nativo, headers
+Linux e runtimes vêm do canal assinado, sem expandir as sementes de build. O
+`cache.world` exige jq, Make, tree e Zig: conserva a fonte verificada de Make
+para rebuild/oferta offline, a semente Zig para compilação `seed`/`cross` sob
+demanda, o binário upstream de jq e a fonte oficial de tree. Verificar esse
+cache não cria registro, comando nem intenção: Make fica instalado por depender
+do meta; jq, tree e Zig permanecem fora do target inicial.
 
 O ICE flaky do gcc-passada-1 vira contrato: a receita declara `RETRIES` e
 envolve o comando em `retry` (SPEC-0004 §3); o `make` incremental resume a
@@ -319,9 +326,10 @@ A partir daqui `CC` do contrato de receitas (SPEC-0004 §3) passa a ser o
 gcc nativo; `zig cc` permanece disponível como receita/semente, sem precisar
 estar instalado no target atendido pelo canal.
 
-**Critério de aceite:** `minitrue rectify neovim` (tarball oficial,
-linkado contra glibc — verificado em 2026-07-18) instala e `nvim --version`
-roda.
+**Critério de aceite:** o artefato de canal de Vim, compilado da fonte oficial
+contra glibc e ncurses, instala e `vim --version`/uma edição não interativa
+funcionam; ncurses fica registrado como dependência, não como intenção
+top-level. Esse critério ainda precisa ser exercitado na mídia recomposta.
 
 **Riscos (os maiores do projeto, fora o 4b):**
 - GCC hospedado por clang/zig-cc: sabidamente possível, mas com atrito de
@@ -615,8 +623,10 @@ com SHA256 real pinado.
   BUILD_DEPS). Validadas: sintaxe (`sh -n`) e carga (campos + DEPS).
 
   O contrato final corrige a fronteira entre execução e scaffolding:
-  `gcc-pass2` declara hoje `DEPS="linux-headers glibc mathlibs-glibc
-  binutils-glibc"` e `BUILD_DEPS="gcc binutils-cross libstdcxx"`. O
+  `gcc-pass2` declara hoje `DEPS="linux-headers glibc mathlibs-glibc zlib
+  binutils-glibc"` e `BUILD_DEPS="gcc binutils-cross libstdcxx"`. Zlib é
+  construída cedo pelo cross GCC e passa a ser uma dependência explícita do
+  binutils e do compilador finais, em vez de ser capturada do root. O
   `libstdcxx` intermediário serve apenas para construir a passada 2 e é
   supersedido pela libstdc++ final que o próprio `gcc-pass2` instala. Já os
   headers Linux e o binutils nativo pertencem à closure de execução do sistema
@@ -737,8 +747,8 @@ com SHA256 real pinado.
   própria mídia, cria ESP FAT32 + raiz ext2, copia e verifica o root preparado,
   instala o snapshot EFI, publica o marcador completo por último e reinicia;
 - runit como PID 1 + mdev permanece o contrato do sistema final (SPEC-0006).
-  O target mínimo de desenvolvimento aceito hoje usa o `/sbin/init` disponível
-  e chegou a `rcS`/getty.
+  O target mínimo das evidências históricas usa o `/sbin/init` disponível e
+  chegou a `rcS`/getty; isso não aceita o perfil atual.
 
 **Estado de implementação (2026-07-22):** há dois aceites deliberadamente
 separados. `bootstrap/live/accept-qemu` passou offline, sem NIC, com a variante
@@ -763,33 +773,44 @@ hardware real, reprodução entre builders independentes nem uma ISO oficial
 publicada.
 
 O runner atual foi adaptado ao novo contrato e usa um VDI de 4096 MiB por
-padrão. No segundo boot, ainda sem cabo, deve encontrar ripgrep 15.2.0 e o
-registro sem payload de `miniplenty-buildbase` (`KIND=meta`, `WORLD=M`,
-`ORIGIN=meta`) como intenção explícita. GNU Make 4.4.1, headers Linux, glibc,
-mathlibs-glibc, binutils 2.45 e GCC/G++ 15.3.0 devem estar instalados por canal,
-mas não como desejos separados no `world`. Zig deve continuar somente no cache;
-os registros de Zig e das demais sementes `gcc`, `binutils`, `binutils-cross`,
-`libstdcxx`, `gmp`, `mpfr` e `mpc` devem estar ausentes.
+padrão. No segundo boot, ainda sem cabo, deve encontrar ripgrep 15.2.0, Vim
+9.2.0837 e o registro sem payload de `miniplenty-buildbase` (`KIND=meta`,
+`WORLD=M`, `ORIGIN=meta`) como intenções explícitas. Ncurses 6.6, GNU Make
+4.4.1, headers Linux, glibc, mathlibs-glibc, zlib 1.3.1, binutils 2.45 e GCC/G++ 15.3.0
+devem estar instalados por canal, mas ncurses e os componentes da toolchain não
+podem ser desejos separados no `world`. Jq, tree e Zig devem começar somente no
+cache; seus registros e os das demais sementes `gcc`, `binutils`,
+`binutils-cross`, `libstdcxx`, `gmp`, `mpfr` e `mpc` devem estar ausentes.
 
-Com o link ainda desligado, o aceite compila e executa C usando headers da glibc
-e do Linux, compila e executa C++17 com STL, `unique_ptr`, exceções e
-`libstdc++.so.6`, cria e linka uma biblioteca estática com `ar`/`ranlib`, e usa
-um Makefile que chama GCC. Só depois de `minitrue verify` limpo ele liga a NAT
-para a prova separada de DHCP, DNS e gateway. A nova mídia que satisfaz esse
-contrato ainda precisa ser recomposta e o runner precisa ser executado;
-`MEDIA_SIZE_MIB=512` dimensiona sua variante IMG, não fixa o tamanho da ISO.
-Os resultados network-v1 continuam apenas como evidência histórica.
+Com o link ainda desligado, o aceite deve editar um arquivo com Vim, compilar e
+executar C usando headers da glibc e do Linux, compilar e executar C++17 com
+STL, `unique_ptr`, exceções e `libstdc++.so.6`, criar e linkar uma biblioteca
+estática com `ar`/`ranlib` e usar um Makefile que chama GCC. Deve então instalar
+jq do binário upstream com `minitrue --offline rectify jq` e compilar tree da
+fonte com `minitrue --offline rectify tree`, mantendo Zig ausente. Como tree
+não possui artefato nesse canal, a origem `fonte` é obrigatória sem forçar a
+recompilação local de toda a closure.
+Depois de `minitrue verify` limpo, um novo boot deve comprovar a persistência de
+Vim, jq e tree; só então a NAT é ligada para a prova separada de DHCP, DNS e
+gateway. A nova mídia que satisfaz esse contrato ainda precisa ser recomposta e
+o runner precisa ser executado; `MEDIA_SIZE_MIB=512` dimensiona sua variante
+IMG, não fixa o tamanho da ISO. Os resultados network-v1 continuam apenas como
+evidência histórica e não comprovam esses requisitos.
 
 **Critério normativo de aceite do estágio completo:** boot UEFI chega a getty;
-login root; `minitrue verify` limpo. O aceite VirtualBox fecha os três pontos em
-hipervisor, inclusive o `verify` executado depois do login e da instalação
-offline de um pacote adicional. Continuam abertas as dívidas de runit e o
-aceite em hardware real.
+login root; `minitrue verify` limpo. A execução histórica do VirtualBox fechou
+esses três pontos para o perfil antigo. O perfil atual acrescenta Vim/ncurses e
+as provas offline distintas de jq binário e tree compilado; enquanto o runner
+novo não passar, esses requisitos permanecem pendentes. Continuam abertas as
+dívidas de runit e o aceite em hardware real.
 
 ## 6. Estágio 4 — userland vendor
 
 **4a — console (barato):** node, go, rustup, bun, deno, jq, vscode-server,
-sqlite… — praticamente tudo cai pronto do mundo A após o E2.
+sqlite… — praticamente tudo cai pronto do mundo A após o E2. Jq é o primeiro
+caso obrigatório no cache do perfil atual: começa ausente e deve ser instalado
+offline do binário upstream; tree exerce o contraponto do mundo B ao ser
+compilado da fonte localmente.
 
 **4b — GUI (a Longa Marcha):** o Firefox oficial precisa de GTK3, que
 precisa de glib/pango/cairo/harfbuzz, que precisam de wayland + **mesa** —
@@ -805,7 +826,7 @@ futura própria.
 | E0 | chroot musl-estático habitável | baixo |
 | E1 | `./configure && make` funciona | atrito zig-cc×autotools |
 | E2 ✅ | ABI glibc + gcc nativo (pass-2) — **E2-clean histórico:** fluxo exercitado a frio num rootfs novo (16 pacotes, libs finais selecionadas) em 2026-07-20; receitas atuais com `install-strip` aguardam rebuild e nova prova | GCC hospedado por clang; matriz glibc↔GCC; toolchain-semente musl→glibc |
-| E3 🟡 | EFI-stub + instalação offline; QEMU automatizado cobre segundo boot e fail-before-wipe, e o VirtualBox network-v1 histórico cobre prompts, `/dev/sda`, reboot sem ISO, login root, DHCP/DNS/gateway VirtIO NAT, instalação posterior de ripgrep com link desligado e `verify` limpo. O novo aceite de `miniplenty-buildbase`, toolchain final vinda do canal, sementes ausentes e builds offline de C/C++/STL/archive/Make ainda precisa ser executado; runit segue aberto | hardware real e política final de init |
+| E3 🟡 | EFI-stub + instalação offline; QEMU automatizado cobre segundo boot e fail-before-wipe, e o VirtualBox network-v1 histórico cobre prompts, `/dev/sda`, reboot sem ISO, login root, DHCP/DNS/gateway VirtIO NAT, instalação posterior de ripgrep com link desligado e `verify` limpo. O novo aceite de Vim/ncurses, `miniplenty-buildbase`, toolchain final vinda do canal, sementes ausentes, builds offline de C/C++/STL/archive/Make, jq binário e tree compilado ainda precisa ser executado; runit segue aberto | hardware real e política final de init |
 | E4a | userland vendor console | baixo |
 | E4b | GUI + Firefox | volume brutal de fonte (mesa/GTK) |
 

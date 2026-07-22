@@ -1,5 +1,9 @@
-# Fontes de reconstrução obrigatórias na mídia offline. O Make final é
+# Artefatos de prova e fontes de reconstrução obrigatórias na mídia offline.
+# Jq começa ausente e será instalado como binário upstream; tree também começa
+# ausente e será compilado da fonte no sistema instalado. O Make final é
 # instalado pelo canal por meio de miniplenty-buildbase, mas seu tar permanece
 # disponível; Zig continua apenas como semente sob demanda de builds locais.
+jq
 make
+tree
 zig

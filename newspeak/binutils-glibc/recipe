@@ -4,7 +4,7 @@ KIND=source
 TOOLCHAIN=cross
 RETRIES=20
 SUPERSEDES="busybox binutils binutils-cross"
-DEPS="glibc"
+DEPS="glibc zlib"
 BUILD_DEPS="gcc binutils-cross"
 ABOUT="binutils 2.45 reconstruído como GLIBC (dinâmico), não musl-estático. Passo do E2 descoberto na passada 2 (SPEC-0005 §4): o ld/ar da semente são estáticos musl e NÃO fazem dlopen do liblto_plugin.so ('dynamic loading not supported'), travando o link das target-libs do pass-2 — nem --disable-lto resolve, pois o ar é configurado com --plugin. Reconstruído glibc (interpreter /lib64/ld-linux-x86-64.so.2), o ld/ar passam a carregar plugins. SUPERSEDE o binutils-semente nos mesmos /usr/bin (as/ld/ar/nm) — colisão = dívida de 'fingerprint de build' (§4). --enable-plugins liga o suporte a plugin; -std=gnu17 p/ o código pré-C23."
 LICENSE="GPL-2.0-or-later AND GPL-3.0-or-later AND GFDL-1.3-invariants-or-later AND GFDL-1.3-no-invariants-or-later"
@@ -19,7 +19,11 @@ exec /usr/bin/x86_64-distropica-linux-gnu-gcc -isystem /usr/include -B/usr/lib -
 SHIM
     chmod +x "$WORK/.tc"/*
     export PATH="$WORK/.tc:$PATH"
-    export CC=x86_64-distropica-linux-gnu-gcc AR=ar RANLIB=ranlib
+    # A identidade final não pode depender de ferramentas/bibliotecas que
+    # acaso já existam no root reutilizado. LEX=: usa os scanners gerados do
+    # tarball e evita um DT_NEEDED acidental em libfl; zlib é uma dependência
+    # explícita, construída antes por cross toolchain.
+    export CC=x86_64-distropica-linux-gnu-gcc AR=ar RANLIB=ranlib LEX=: LEXLIB=
 
     tar -xJf "$DL" --strip-components=1
     mkdir -p build && cd build
@@ -27,6 +31,7 @@ SHIM
     # habilita o dlopen do liblto_plugin.so). MAKEINFO=true: sem texinfo.
     ../configure --prefix=/usr --disable-nls --disable-werror --disable-gprofng \
         --enable-default-hash-style=gnu --enable-deterministic-archives \
+        --with-system-zlib \
         --enable-plugins --disable-dependency-tracking
     retry make -j"$JOBS" MAKEINFO=true
     # Evita transportar centenas de MiB de DWARF na ISO mínima. As ferramentas
@@ -35,7 +40,8 @@ SHIM
 
     # Veja newspeak/binutils: o aplicador mundo-B ainda não preserva grupos de
     # hardlinks, portanto o payload precisa selar cada alias como arquivo
-    # regular independente.
+    # regular independente. Um nome por execução evita que a alteração de
+    # nlink durante a travessia deixe o último alias escapar de um lote.
     find "$STAGE" -type f -links +1 -exec sh -ec '
         for path do
             copy=$path.minitrue-copy
@@ -45,5 +51,5 @@ SHIM
             cp -p "$path" "$copy"
             mv -f "$copy" "$path"
         done
-    ' sh {} +
+    ' sh {} \;
 }

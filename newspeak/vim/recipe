@@ -1,0 +1,63 @@
+NAME=vim
+VERSION=9.2.0837
+KIND=source
+TOOLCHAIN=native
+SUPERSEDES="busybox"
+DEPS="glibc ncurses"
+BUILD_DEPS="make gcc-pass2 binutils-glibc ncurses gawk perl"
+ABOUT="Vim de terminal com edição multibyte, syntax, eval e cores verdadeiras; compilado uma vez pela Distrópica a partir da tag estável assinada do upstream e entregue pronto pelo canal binário"
+# O runtime do Vim agrega arquivos sob licenças distintas; mantenha
+# NOASSERTION até o SBOM por arquivo enumerar todas elas.
+LICENSE=NOASSERTION
+SRC="https://github.com/vim/vim/archive/refs/tags/v$VERSION.tar.gz"
+SHA256=7acd07bf6466bceb53c29bd5a5b38c55143f771376d8507b515f603f9caeb7f8
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    ./configure --prefix=/usr --with-features=normal \
+        --with-compiledby=Distropica --enable-gui=no --without-x \
+        --without-wayland --disable-xsmp --disable-xsmp-interact \
+        --disable-xim --disable-fontset --disable-cscope --disable-netbeans \
+        --disable-terminal --enable-multibyte --disable-nls --disable-acl \
+        --disable-gpm --disable-canberra --disable-libsodium \
+        --disable-selinux --disable-smack --disable-xattr --disable-sysmouse \
+        --without-local-dir --with-tlib=tinfo
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+
+    # O target Unix instala atalhos de GVim mesmo com GUI desativada. Também
+    # descarta helpers opcionais que exigiriam Perl, Python, csh ou nawk em
+    # runtime; o editor, ajuda, syntax, ftplugins e vimtutor permanecem.
+    rm -f -- "$STAGE/usr/share/applications/gvim.desktop" \
+        "$STAGE/usr/share/applications/vim.desktop"
+    if [ -d "$STAGE/usr/share/icons" ]; then
+        find "$STAGE/usr/share/icons" -type f -name gvim.png -delete
+    fi
+    rm -rf -- "$STAGE/usr/share/vim/vim92/tools"
+    rm -f -- "$STAGE/usr/share/vim/vim92/doc/vim2html.pl"
+    rm -f -- "$STAGE/usr/share/man/man1/evim.1"
+
+    # Vim não cria `vi` por padrão nesta configuração. Assuma o nome POSIX e
+    # faça o applet provisório do BusyBox ceder ao editor definitivo.
+    if [ -e "$STAGE/usr/bin/vi" ] || [ -L "$STAGE/usr/bin/vi" ]; then
+        return 1
+    fi
+    ln -s vim "$STAGE/usr/bin/vi"
+    if [ -e "$STAGE/usr/share/man/man1/vi.1" ] || \
+        [ -L "$STAGE/usr/share/man/man1/vi.1" ]; then
+        return 1
+    fi
+    ln -s vim.1 "$STAGE/usr/share/man/man1/vi.1"
+
+    find "$STAGE" -type f -links +1 -exec sh -ec '
+        for path do
+            copy=$path.minitrue-copy
+            if [ -e "$copy" ] || [ -L "$copy" ]; then
+                exit 1
+            fi
+            cp -p "$path" "$copy"
+            mv -f "$copy" "$path"
+        done
+    ' sh {} \;
+    find "$STAGE" -mindepth 1 -depth -type d -empty -delete
+}

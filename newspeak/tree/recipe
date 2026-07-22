@@ -1,0 +1,21 @@
+NAME=tree
+VERSION=2.3.2
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc"
+ABOUT="lista diretórios como árvore. Pacote de prova do Mundo B: o cache offline conserva a fonte oficial e o minitrue o compila no sistema instalado com a toolchain nativa"
+LICENSE=GPL-2.0-or-later
+SRC="https://oldmanprogrammer.net/tar/tree/tree-$VERSION.tgz"
+SHA256=6b941dd6cbecfb4d3250700e4d08d8e0c251488981dd4868b90d744234300e21
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    make -j"$JOBS" CC="$CC" CFLAGS="-O2 -pipe"
+
+    mkdir -p "$STAGE/usr/bin" "$STAGE/usr/share/man/man1"
+    cp tree "$STAGE/usr/bin/tree"
+    chmod 755 "$STAGE/usr/bin/tree"
+    cp doc/tree.1 "$STAGE/usr/share/man/man1/tree.1"
+    chmod 644 "$STAGE/usr/share/man/man1/tree.1"
+}

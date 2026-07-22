@@ -16,16 +16,14 @@ build() {
     make install DESTDIR="$STAGE"
 
     # O upstream instala gawk e o nome versionado como hardlinks. O manifesto
-    # mundo-B ainda não representa grupos de hardlinks; sele cada alias como
-    # arquivo regular independente, exatamente como o aplicador o materializa.
-    find "$STAGE" -type f -links +1 -exec sh -ec '
-        for path do
-            copy=$path.minitrue-copy
-            if [ -e "$copy" ] || [ -L "$copy" ]; then
-                exit 1
-            fi
-            cp -p "$path" "$copy"
-            mv -f "$copy" "$path"
-        done
-    ' sh {} +
+    # mundo-B ainda não representa grupos de hardlinks; sele explicitamente o
+    # alias conhecido como arquivo regular independente. Não dependa de
+    # `find -links`: o applet disponível varia durante a troca de toolchains.
+    versioned="$STAGE/usr/bin/gawk-$VERSION"
+    copy=$versioned.minitrue-copy
+    [ -f "$STAGE/usr/bin/gawk" ] && [ ! -L "$STAGE/usr/bin/gawk" ]
+    [ -f "$versioned" ] && [ ! -L "$versioned" ]
+    [ ! -e "$copy" ] && [ ! -L "$copy" ]
+    cp -p "$versioned" "$copy"
+    mv -f "$copy" "$versioned"
 }

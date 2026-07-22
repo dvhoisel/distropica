@@ -24,4 +24,7 @@ build() {
         --disable-demangler --disable-dependency-tracking
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
+    # O install ainda materializa diretórios de locale vazios com NLS off;
+    # a glibc é a dona canônica deles no root final.
+    rm -rf -- "$STAGE/usr/share/locale"
 }

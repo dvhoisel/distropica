@@ -1,6 +1,6 @@
 # SPEC-0004 — newspeak, o formato das receitas
 
-**Status:** rascunho v0.6 · 2026-07-22
+**Status:** rascunho v0.7 · 2026-07-22
 **Depende de:** SPEC-0001 (elegibilidade), SPEC-0003 (contrato de execução).
 
 Newspeak é o vocabulário mínimo: uma receita diz **de onde vem, como se
@@ -44,6 +44,7 @@ Condicionais:
 |-------|-------------|
 | `SRC` | URL(s) HTTPS dos artefatos, separadas por espaço. Obrigatório em `KIND=binary` e nas receitas `source` respaldadas por artefato upstream; omitido em receitas `source` de montagem e em `KIND=meta` |
 | `SHA256` | um hash por item de `SRC`, na mesma ordem. É obrigatório quando `SRC` existe no contrato pinado; `SRC` e `SHA256` são ambos omitidos numa receita de montagem e proibidos em `KIND=meta` |
+| `LICENSE` | obrigatório e não vazio em `KIND=binary` e `KIND=source`; proibido em `KIND=meta`. Contém uma expressão SPDX do **payload instalado**, ou `NOASSERTION` quando um bundle de terceiros ainda aguarda inventário conclusivo. Deve ocupar uma única linha, sem caracteres de controle; o parser valida essa forma segura, não toda a gramática SPDX. Não relicencia o arquivo `recipe`: a implementação autoral da receita segue a licença do repositório, enquanto o software de terceiros conserva a licença upstream. `NOASSERTION` é conservador, não dispensa preservar avisos nem o SBOM antes da publicação |
 
 Uma receita `source` sem `SRC` é uma receita de **montagem**: seu `build()`
 gera o payload apenas de conteúdo versionado com a própria receita. Ela não
@@ -61,7 +62,6 @@ Opcionais:
 | `LINKS` | mundo A: comandos a expor, `nome=caminho/relativo/no/prefix`, sem `/`, `.` ou `..` nos componentes; default: todo executável em `bin/` do prefix |
 | `REQUIRES_GLIBC` | `1` ⇒ só instala após o Estágio 2 (SPEC-0005) |
 | `ABOUT` | uma linha: o que é / justificativa de classificação |
-| `LICENSE` | expressão SPDX do **payload instalado**, ou `NOASSERTION` quando um bundle de terceiros ainda aguarda inventário conclusivo. Não relicencia o arquivo `recipe`: a implementação autoral da receita segue a licença do repositório, enquanto o software de terceiros conserva a licença upstream. `NOASSERTION` é conservador, não dispensa preservar avisos nem o SBOM antes da publicação |
 | `SIG` | URL(s) de assinatura destacada, uma por artefato, na ordem de `SRC` (§5) |
 | `SIGSUMS` | norma do Marco 0.2: URL única de lista de checksums assinada; parser atual reconhece, executor ainda recusa (§5) |
 | `SIGKEY` | hoje: chave minisign/signify pinada em uma linha base64; caminho `files/*.asc` pertence ao OpenPGP futuro |
@@ -84,10 +84,12 @@ Funções:
 
 O parser implementa `KIND=meta` com validação fechada. `DEPS` precisa conter
 ao menos uma receita; `TOOLCHAIN` deve ser omitido ou `none`; `SRC`, `SHA256`,
-`BUILD_DEPS`, `LINKS`, `SIG`, `SIGSUMS`, `SIGKEY`, `REPROCORR`,
+`LICENSE`, `BUILD_DEPS`, `LINKS`, `SIG`, `SIGSUMS`, `SIGKEY`, `REPROCORR`,
 `REQUIRES_GLIBC`, `PROVISIONAL`, `SUPERSEDES`, `EPOCH`, `RETRIES`, `files/`,
 `build()` e `install_pkg()` são proibidos. `NAME`, `VERSION`, `KIND`, `DEPS` e
-os metadados descritivos continuam sujeitos às validações gerais. O primeiro
+`ABOUT` continuam sujeitos às validações gerais. Como o meta não possui
+payload, seu inventário de licenças é o fechamento das suas `DEPS`, não uma
+licença atribuída ao nó agregador. O primeiro
 meta oficial é `miniplenty-buildbase`; `base` permanece uma receita
 `KIND=source`, pois materializa o esqueleto real do sistema.
 
@@ -184,6 +186,7 @@ NAME=zig
 VERSION=0.16.0
 KIND=binary
 ABOUT="toolchain Zig; fornece zig cc, o compilador C do mundo-fonte pré-E2"
+LICENSE=NOASSERTION
 SRC="https://ziglang.org/download/$VERSION/zig-x86_64-linux-$VERSION.tar.xz"
 SHA256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
 SIG="$SRC.minisig"
@@ -202,6 +205,7 @@ NAME=ripgrep
 VERSION=15.2.0
 KIND=binary
 ABOUT="grep moderno; upstream publica musl estático — roda desde o E0"
+LICENSE=MIT
 SRC="https://github.com/BurntSushi/ripgrep/releases/download/$VERSION/ripgrep-$VERSION-x86_64-unknown-linux-musl.tar.gz"
 SHA256=33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c
 LINKS="rg=rg"
@@ -218,6 +222,7 @@ NAME=make
 VERSION=4.4.1
 KIND=source
 ABOUT="GNU não publica binário; primeiro build do mundo-fonte. build.sh existe exatamente para compilar make sem make"
+LICENSE="GPL-3.0-or-later AND GFDL-1.3-invariants-or-later"
 SRC="https://ftp.gnu.org/gnu/make/make-$VERSION.tar.gz"
 SHA256=@PINAR@
 SIG="$SRC.sig"
@@ -241,6 +246,7 @@ VERSION=stable
 KIND=binary
 REQUIRES_GLIBC=1
 ABOUT=".deb oficial do vendor tratado como envelope: extrai, nunca executa scripts"
+LICENSE=NOASSERTION
 SRC="https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
 SHA256=@PINAR@   # vendor não versiona a URL; pinar congela a versão corrente
 LINKS="google-chrome=opt-interno/google/chrome/google-chrome"
@@ -263,6 +269,7 @@ KIND=binary
 REQUIRES_GLIBC=1
 DEPS="gtk3"        # mundo B; a Longa Marcha do Estágio 4b (SPEC-0005)
 ABOUT="tarball oficial Mozilla; dinâmico contra glibc + GTK"
+LICENSE=NOASSERTION
 SRC="https://download.mozilla.org/…linux-x86_64…$VERSION….tar.xz"
 SHA256=@PINAR@
 LINKS="firefox=firefox/firefox"
@@ -325,7 +332,8 @@ Node depende de OpenPGP/`SIGSUMS` no Marco 0.2.
   64 hex por artefato de `SRC`; ausência conjunta de `SRC`/`SHA256` apenas em
   montagem `source` ou meta; `SIGKEY_FP` presente quando `SIGKEY` é
   bloco OpenPGP; `VERSION`, dependências e `LINKS` canônicos; ausência do nome
-  reservado `files/recipe`; a função exigida pelo
+  reservado `files/recipe`; `LICENSE` presente, não vazio e em uma única linha
+  sem controles em `binary`/`source`, e ausente em `meta`; a função exigida pelo
   `KIND` definida (`install_pkg`/`build`) ou, para `meta`, `DEPS` não vazio e
   ausência dos campos, funções e `files/` proibidos no §2. Receita reprovada
   não entra na árvore oficial.

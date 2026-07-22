@@ -57,6 +57,8 @@ build() {
     # getconf e seus nomes de ABI são instalados como hardlinks. O manifesto
     # mundo-B ainda não representa esses grupos; normalize-os para arquivos
     # regulares independentes antes de selar o payload.
+    # Processe um nome por vez: em lote, separar o primeiro nome altera o nlink
+    # dos demais durante a travessia e pode deixar um alias escapar.
     find "$STAGE" -type f -links +1 -exec sh -ec '
         for path do
             copy=$path.minitrue-copy
@@ -66,5 +68,5 @@ build() {
             cp -p "$path" "$copy"
             mv -f "$copy" "$path"
         done
-    ' sh {} +
+    ' sh {} \;
 }

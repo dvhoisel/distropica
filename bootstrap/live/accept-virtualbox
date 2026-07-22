@@ -5,9 +5,9 @@
 # usada no ensaio só existe em memória. A ISO é ejetada antes da autorização
 # de /dev/sda, de modo que o reboot do instalador já prove o boot pelo VDI.
 # A instalação e o segundo boot ocorrem com o cabo virtual desconectado. Só
-# depois do aceite offline — que compila e executa programas C/C++ com a
-# toolchain nativa — a VM faz um terceiro boot com NAT para provar a
-# configuração de rede da base instalada.
+# depois do aceite offline — que prova Vim/terminfo, instala jq do binário,
+# compila tree da fonte e exercita a toolchain C/C++ nativa — a VM faz um
+# terceiro boot com NAT para provar persistência e a rede da base instalada.
 set -eu
 umask 022
 LC_ALL=C
@@ -50,7 +50,7 @@ Opções:
   --install-timeout N    segundos para instalar/reiniciar (default: 600)
   --boot-timeout N       segundos até o login pelo VDI (default: 180)
   --network-timeout N    segundos até DHCP/rota no terceiro boot (default: 120)
-  --toolchain-timeout N  segundos para provar GCC/Make offline (default: 180)
+  --toolchain-timeout N  segundos para tree e GCC/Make offline (default: 180)
   --verify-timeout N     segundos para `minitrue verify` (default: 300)
 
 O script recusa preventivamente uma ISO que contenha `distropica.install=` ou
@@ -59,10 +59,11 @@ destrutivo do QEMU. A VM usa EFI64, VMSVGA, teclado PS/2, SATA/AHCI e uma NIC
 VirtIO NAT inicialmente sem cabo. O VDI aparece como /dev/sda. Depois da
 instalação offline e do segundo boot, o runner liga o cabo e faz um terceiro
 boot para provar DHCP, DNS local via NAT, rota e gateway.
-O segundo boot exige ripgrep, `miniplenty-buildbase`, GNU Make, binutils e GCC
-nativos já instalados; com o cabo desligado, compila, linka e executa C, C++,
-arquivo estático e Makefile. Zig continua apenas disponível no cache, sem
-registro nem entrada no `world`. A senha efêmera não é salva nos artefatos.
+O segundo boot exige ripgrep, Vim, `miniplenty-buildbase`, GNU Make, binutils e
+GCC nativos já instalados. Ainda sem cabo, instala jq do binário oficial,
+compila tree da fonte, e também compila, linka e executa C, C++, arquivo
+estático e Makefile. Zig continua apenas disponível no cache, sem registro nem
+entrada no `world`. A senha efêmera não é salva nos artefatos.
 EOF
 }
 
@@ -206,7 +207,7 @@ fi
 vbox_binary_sha=$(sha256sum "$vbox_binary" | awk '{print $1}')
 vbox_version=$("$VBOX" --version)
 printf '%s\n' \
-    'ACCEPTANCE_FORMAT=3' \
+    'ACCEPTANCE_FORMAT=4' \
     'RUN_STARTED=preflight' \
     "ISO=$ISO" \
     "ISO_SHA256=$iso_sha" \
@@ -526,6 +527,18 @@ guest_command_and_wait_or_fail \
     'if command -v rg >/dev/null 2>&1 && [ -d /var/lib/minitrue/records/ripgrep ] && grep -Fqx ripgrep /etc/minitrue/world 2>/dev/null && rg --version >/tmp/vbox-rg-version 2>&1 && grep -Eq "^ripgrep 15[.]2[.]0([[:space:]]|$)" /tmp/vbox-rg-version; then cat /tmp/vbox-rg-version >/dev/ttyS0; echo VBOX_RIPGREP_DEFAULT_PRESENT_OK >/dev/ttyS0; else echo VBOX_RIPGREP_DEFAULT_PRESENT_FAILED >/dev/ttyS0; fi' \
     'VBOX_RIPGREP_DEFAULT_PRESENT_OK' 'VBOX_RIPGREP_DEFAULT_PRESENT_FAILED' 30
 
+# Vim e sua libtinfo vêm prontos do canal. Vim é desejo explícito do perfil;
+# ncurses é somente dependência. `vi` deve ter deixado de apontar ao BusyBox.
+guest_command_and_wait_or_fail \
+    'printf "%s\n" before >/tmp/vbox-vim-smoke; vim --version >/tmp/vbox-vim-version 2>&1; vi --version >/tmp/vbox-vi-version 2>&1; if command -v vim >/dev/null 2>&1 && [ "$(readlink /usr/bin/vi)" = vim ] && cmp -s /tmp/vbox-vim-version /tmp/vbox-vi-version && grep -Fq "VIM - Vi IMproved 9.2" /tmp/vbox-vim-version && grep -Fqx "Included patches: 1-837" /tmp/vbox-vim-version && grep -Fq "Compiled by Distropica" /tmp/vbox-vim-version && grep -Fq +multi_byte /tmp/vbox-vim-version && readelf -d /usr/bin/vim 2>/dev/null | grep -Fq "Shared library: [libtinfo.so.6]" && TERM=linux infocmp linux >/tmp/vbox-terminfo-linux 2>&1 && grep -Fq "linux|linux console" /tmp/vbox-terminfo-linux && vim -Nu NONE -n -es -c "s/before/VIM_OK/" -c wq /tmp/vbox-vim-smoke && grep -Fqx VIM_OK /tmp/vbox-vim-smoke && grep -Fqx ORIGIN=canal:development /var/lib/minitrue/records/vim/meta && grep -Fqx ORIGIN=canal:development /var/lib/minitrue/records/ncurses/meta && grep -Fqx vim /etc/minitrue/world && ! grep -Fqx ncurses /etc/minitrue/world 2>/dev/null; then head -n 3 /tmp/vbox-vim-version >/dev/ttyS0; echo VBOX_VIM_DEFAULT_PRESENT_OK >/dev/ttyS0; else echo VBOX_VIM_DEFAULT_PRESENT_FAILED >/dev/ttyS0; fi' \
+    'VBOX_VIM_DEFAULT_PRESENT_OK' 'VBOX_VIM_DEFAULT_PRESENT_FAILED' 60
+
+# Os dois pacotes de prova não pertencem ao perfil: o aceite instalará jq do
+# binário upstream e tree da fonte, explicitamente e ainda offline.
+guest_command_and_wait_or_fail \
+    'optional_absent=true; for package in jq tree; do command -v "$package" >/dev/null 2>&1 && optional_absent=false; [ ! -e "/var/lib/minitrue/records/$package" ] || optional_absent=false; grep -Fqx "$package" /etc/minitrue/world 2>/dev/null && optional_absent=false; done; [ ! -e /opt/jq ] || optional_absent=false; [ ! -e /usr/bin/jq ] || optional_absent=false; [ ! -e /usr/bin/tree ] || optional_absent=false; if [ "$optional_absent" = true ]; then echo VBOX_OPTIONAL_PACKAGES_INITIAL_ABSENT_OK >/dev/ttyS0; else echo VBOX_OPTIONAL_PACKAGES_INITIAL_ABSENT_FAILED >/dev/ttyS0; fi' \
+    'VBOX_OPTIONAL_PACKAGES_INITIAL_ABSENT_OK' 'VBOX_OPTIONAL_PACKAGES_INITIAL_ABSENT_FAILED' 30
+
 # O conjunto de produção é intenção top-level; seus componentes são
 # dependências vindas do canal. As sementes do bootstrap não devem vazar para
 # a raiz final atendida por artefatos.
@@ -536,7 +549,7 @@ guest_command_and_wait_or_fail \
     'manifest=/var/lib/minitrue/records/miniplenty-buildbase/manifest; if [ -d /var/lib/minitrue/records/miniplenty-buildbase ] && grep -Fqx KIND=meta /var/lib/minitrue/records/miniplenty-buildbase/meta && grep -Fqx WORLD=M /var/lib/minitrue/records/miniplenty-buildbase/meta && grep -Fqx ORIGIN=meta /var/lib/minitrue/records/miniplenty-buildbase/meta && [ "$(wc -c < "$manifest")" -eq 1 ] && [ "$(cat "$manifest")" = "" ] && grep -Fqx miniplenty-buildbase /etc/minitrue/world; then echo VBOX_MINIPLENTY_BUILDBASE_META_OK >/dev/ttyS0; else echo VBOX_MINIPLENTY_BUILDBASE_META_FAILED >/dev/ttyS0; fi' \
     'VBOX_MINIPLENTY_BUILDBASE_META_OK' 'VBOX_MINIPLENTY_BUILDBASE_META_FAILED' 30
 guest_command_and_wait_or_fail \
-    'state_ok=true; for package in make linux-headers glibc mathlibs-glibc binutils-glibc gcc-pass2; do [ -d "/var/lib/minitrue/records/$package" ] && grep -Eq "^ORIGIN=canal:" "/var/lib/minitrue/records/$package/meta" || state_ok=false; done; for seed in zig gcc binutils binutils-cross libstdcxx gmp mpfr mpc; do [ ! -e "/var/lib/minitrue/records/$seed" ] || state_ok=false; done; if "$state_ok"; then echo VBOX_FINAL_TOOLCHAIN_GRAPH_OK >/dev/ttyS0; else echo VBOX_FINAL_TOOLCHAIN_GRAPH_FAILED >/dev/ttyS0; fi' \
+    'state_ok=true; for package in make linux-headers glibc mathlibs-glibc zlib binutils-glibc gcc-pass2; do [ -d "/var/lib/minitrue/records/$package" ] && grep -Fqx ORIGIN=canal:development "/var/lib/minitrue/records/$package/meta" || state_ok=false; done; for seed in zig gcc binutils binutils-cross libstdcxx gmp mpfr mpc; do [ ! -e "/var/lib/minitrue/records/$seed" ] || state_ok=false; done; if "$state_ok"; then echo VBOX_FINAL_TOOLCHAIN_GRAPH_OK >/dev/ttyS0; else echo VBOX_FINAL_TOOLCHAIN_GRAPH_FAILED >/dev/ttyS0; fi' \
     'VBOX_FINAL_TOOLCHAIN_GRAPH_OK' 'VBOX_FINAL_TOOLCHAIN_GRAPH_FAILED' 30
 guest_command_and_wait_or_fail \
     'world_ok=true; for package in make linux-headers glibc mathlibs-glibc binutils-glibc gcc-pass2 zig; do grep -Fqx "$package" /etc/minitrue/world 2>/dev/null && world_ok=false; done; if "$world_ok" && grep -Fqx miniplenty-buildbase /etc/minitrue/world; then echo VBOX_TOOLCHAIN_WORLD_POLICY_OK >/dev/ttyS0; else echo VBOX_TOOLCHAIN_WORLD_POLICY_FAILED >/dev/ttyS0; fi' \
@@ -560,13 +573,22 @@ guest_command_and_wait_or_fail \
     'work=/tmp/vbox-toolchain; printf "%s\n" "#include <stdio.h>" "int main(void) { puts(\"MAKE_OK\"); return 0; }" > "$work/make.c"; printf "all:\n\tcc -Wall -Werror make.c -o make-built\n" > "$work/Makefile"; if make -C "$work" >/dev/ttyS0 2>&1 && [ "$("$work/make-built")" = MAKE_OK ]; then echo VBOX_NATIVE_MAKE_BUILD_OK >/dev/ttyS0; else echo VBOX_NATIVE_MAKE_BUILD_FAILED >/dev/ttyS0; fi' \
     'VBOX_NATIVE_MAKE_BUILD_OK' 'VBOX_NATIVE_MAKE_BUILD_FAILED' "$TOOLCHAIN_TIMEOUT"
 guest_command_and_wait_or_fail \
+    'if /usr/bin/minitrue --offline cache verify jq make tree zig >/dev/ttyS0 2>&1; then echo VBOX_OFFLINE_CACHE_PERSISTED_OK >/dev/ttyS0; else echo VBOX_OFFLINE_CACHE_PERSISTED_FAILED >/dev/ttyS0; fi' \
+    'VBOX_OFFLINE_CACHE_PERSISTED_OK' 'VBOX_OFFLINE_CACHE_PERSISTED_FAILED' "$VERIFY_TIMEOUT"
+guest_command_and_wait_or_fail \
+    'if /usr/bin/minitrue --offline rectify jq >/dev/ttyS0 2>&1 && [ "$(jq --version)" = jq-1.8.2 ] && [ "$(printf "%s\n" "{\"answer\":42}" | jq -r .answer)" = 42 ] && grep -Fqx KIND=binary /var/lib/minitrue/records/jq/meta && grep -Fqx WORLD=A /var/lib/minitrue/records/jq/meta && grep -Fqx ORIGIN=vendor /var/lib/minitrue/records/jq/meta && grep -Fqx jq /etc/minitrue/world; then echo VBOX_JQ_BINARY_INSTALL_OFFLINE_OK >/dev/ttyS0; else echo VBOX_JQ_BINARY_INSTALL_OFFLINE_FAILED >/dev/ttyS0; fi' \
+    'VBOX_JQ_BINARY_INSTALL_OFFLINE_OK' 'VBOX_JQ_BINARY_INSTALL_OFFLINE_FAILED' "$VERIFY_TIMEOUT"
+guest_command_and_wait_or_fail \
+    'if /usr/bin/minitrue --offline --jobs 2 rectify tree >/dev/ttyS0 2>&1 && tree --version >/tmp/vbox-tree-version 2>&1 && grep -Eq "^tree v2[.]3[.]2([[:space:]]|$)" /tmp/vbox-tree-version && tree -a -L 1 /etc >/tmp/vbox-tree-output 2>&1 && grep -Fqx /etc /tmp/vbox-tree-output && grep -Fqx KIND=source /var/lib/minitrue/records/tree/meta && grep -Fqx WORLD=B /var/lib/minitrue/records/tree/meta && grep -Fqx ORIGIN=fonte /var/lib/minitrue/records/tree/meta && grep -Eq "^ARTIFACT_HASH=[0-9a-f]{64}$" /var/lib/minitrue/records/tree/meta && grep -Fqx tree /etc/minitrue/world; then cat /tmp/vbox-tree-version >/dev/ttyS0; echo VBOX_TREE_SOURCE_BUILD_OFFLINE_OK >/dev/ttyS0; else echo VBOX_TREE_SOURCE_BUILD_OFFLINE_FAILED >/dev/ttyS0; fi' \
+    'VBOX_TREE_SOURCE_BUILD_OFFLINE_OK' 'VBOX_TREE_SOURCE_BUILD_OFFLINE_FAILED' "$TOOLCHAIN_TIMEOUT"
+guest_command_and_wait_or_fail \
+    'if command -v zig >/dev/null 2>&1 || [ -e /var/lib/minitrue/records/zig ] || grep -Fqx zig /etc/minitrue/world 2>/dev/null; then echo VBOX_ZIG_AFTER_TREE_UNEXPECTED >/dev/ttyS0; else echo VBOX_ZIG_AFTER_TREE_ABSENT_OK >/dev/ttyS0; fi' \
+    'VBOX_ZIG_AFTER_TREE_ABSENT_OK' 'VBOX_ZIG_AFTER_TREE_UNEXPECTED' 30
+guest_command_and_wait_or_fail \
     'if /usr/bin/minitrue verify >/dev/ttyS0 2>&1; then echo VBOX_MINITRUE_VERIFY_OK >/dev/ttyS0; else echo VBOX_MINITRUE_VERIFY_FAILED >/dev/ttyS0; fi' \
     'VBOX_MINITRUE_VERIFY_OK' 'VBOX_MINITRUE_VERIFY_FAILED' "$VERIFY_TIMEOUT"
-guest_command_and_wait_or_fail \
-    'if /usr/bin/minitrue --offline cache verify make zig >/dev/ttyS0 2>&1; then echo VBOX_SOURCE_CACHE_PERSISTED_OK >/dev/ttyS0; else echo VBOX_SOURCE_CACHE_PERSISTED_FAILED >/dev/ttyS0; fi' \
-    'VBOX_SOURCE_CACHE_PERSISTED_OK' 'VBOX_SOURCE_CACHE_PERSISTED_FAILED' "$VERIFY_TIMEOUT"
 
-type_text 'clear; echo VBOX_ROOT_SCREEN_OK; id; cat /etc/os-release; rg --version; gcc --version | head -n 1; make --version | head -n 1; findfs LABEL=DISTROPICA_ROOT'
+type_text 'clear; id; cat /etc/os-release; vim --version | head -n 3; rg --version; jq --version; tree --version; gcc --version | head -n 1; make --version | head -n 1; findfs LABEL=DISTROPICA_ROOT; echo VBOX_ROOT_SCREEN_OK'
 press_enter
 sleep 3
 require_screen_text 'ROOT_SCREEN_OK' root-shell 30
@@ -616,6 +638,10 @@ guest_command_and_wait \
     'echo VBOX_THIRD_BOOT_ROOT_UID_$(id -u) >/dev/ttyS0' \
     'VBOX_THIRD_BOOT_ROOT_UID_0' 30
 
+guest_command_and_wait_or_fail \
+    'persisted=true; for package in vim ncurses jq tree; do [ -d "/var/lib/minitrue/records/$package" ] || persisted=false; done; grep -Fqx ORIGIN=canal:development /var/lib/minitrue/records/vim/meta || persisted=false; grep -Fqx ORIGIN=canal:development /var/lib/minitrue/records/ncurses/meta || persisted=false; grep -Fqx ORIGIN=vendor /var/lib/minitrue/records/jq/meta || persisted=false; grep -Fqx ORIGIN=fonte /var/lib/minitrue/records/tree/meta || persisted=false; for package in vim jq tree; do grep -Fqx "$package" /etc/minitrue/world 2>/dev/null || persisted=false; done; grep -Fqx ncurses /etc/minitrue/world 2>/dev/null && persisted=false; if [ "$persisted" = true ] && command -v vim >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 && command -v tree >/dev/null 2>&1 && [ "$(jq --version)" = jq-1.8.2 ] && { tree --version 2>&1 | grep -Eq "^tree v2[.]3[.]2([[:space:]]|$)"; } && /usr/bin/minitrue verify >/dev/ttyS0 2>&1; then echo VBOX_VIM_JQ_TREE_PERSISTED_OK >/dev/ttyS0; else echo VBOX_VIM_JQ_TREE_PERSISTED_FAILED >/dev/ttyS0; fi' \
+    'VBOX_VIM_JQ_TREE_PERSISTED_OK' 'VBOX_VIM_JQ_TREE_PERSISTED_FAILED' "$VERIFY_TIMEOUT"
+
 # A base 0.2 deve executar udhcpc no rcS e materializar rota e resolv.conf.
 # O runner não chama udhcpc: observar esses fatos depois do getty prova a
 # política de boot instalada, não uma configuração feita pelo próprio teste.
@@ -635,7 +661,7 @@ guest_command_and_wait \
     'ping -c 1 -W 5 "$network_gateway" >/dev/ttyS0 2>&1 && echo VBOX_NAT_GATEWAY_PING_OK >/dev/ttyS0' \
     'VBOX_NAT_GATEWAY_PING_OK' 30
 
-type_text 'clear; id; rg --version | head -n 1; gcc --version | head -n 1; make --version | head -n 1; ip -4 addr; ip -4 route; cat /etc/resolv.conf; echo VBOX_THIRD_BOOT_SCREEN_OK'
+type_text 'clear; id; vim --version | head -n 1; rg --version | head -n 1; jq --version; tree --version; gcc --version | head -n 1; make --version | head -n 1; ip -4 addr; ip -4 route; cat /etc/resolv.conf; echo VBOX_THIRD_BOOT_SCREEN_OK'
 press_enter
 sleep 3
 require_screen_text 'THIRD_BOOT_SCREEN_OK' terceiro-boot-root 30
@@ -668,7 +694,19 @@ printf '%s\n' \
     'NAT_GATEWAY_PING=yes' \
     'RIPGREP_DEFAULT_PRESENT=yes' \
     'RIPGREP_VERSION=15.2.0' \
+    'VIM_DEFAULT_PRESENT=yes' \
+    'VIM_VERSION=9.2.0837' \
+    'NCURSES_FROM_CHANNEL=yes' \
+    'VIM_LINKS_LIBTINFO_SO_6=yes' \
+    'LINUX_TERMINFO_PRESENT=yes' \
+    'OPTIONAL_PACKAGES_INITIAL_ABSENT=yes' \
+    'JQ_BINARY_INSTALL_OFFLINE=yes' \
+    'JQ_VERSION=1.8.2' \
+    'TREE_SOURCE_BUILD_OFFLINE=yes' \
+    'TREE_VERSION=2.3.2' \
+    'VIM_JQ_TREE_PERSISTED_AFTER_REBOOT=yes' \
     'ZIG_INITIAL_ABSENT=yes' \
+    'ZIG_AFTER_TREE_ABSENT=yes' \
     'MINIPLENTY_BUILDBASE_PRESENT=yes' \
     'MINIPLENTY_BUILDBASE_WORLD=M' \
     'FINAL_TOOLCHAIN_FROM_CHANNEL=yes' \
@@ -683,8 +721,9 @@ printf '%s\n' \
     'MINIPLENTY_BUILDBASE_EXPLICIT_IN_WORLD=yes' \
     'TOOLCHAIN_COMPONENTS_NOT_EXPLICIT_IN_WORLD=yes' \
     'ZIG_NOT_EXPLICIT_IN_WORLD=yes' \
-    'SOURCE_CACHE_MAKE_ZIG_PERSISTED=yes' \
+    'OFFLINE_CACHE_JQ_MAKE_TREE_ZIG_PERSISTED=yes' \
     'MINITRUE_VERIFY=yes' \
+    'MINITRUE_VERIFY_AFTER_REBOOT=yes' \
     "DISK_SHA256=$disk_sha" >> "$META"
 (
     cd "$RUN_DIR/evidence"

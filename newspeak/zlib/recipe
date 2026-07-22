@@ -1,15 +1,24 @@
 NAME=zlib
 VERSION=1.3.1
 KIND=source
-TOOLCHAIN=native
+TOOLCHAIN=cross
 DEPS="glibc"
-BUILD_DEPS="gcc-pass2 binutils-glibc"
-ABOUT="compressão DEFLATE; dependência do elfutils (e de meio mundo). Última estável (1.3.1, 2024)."
+BUILD_DEPS="gcc binutils-cross"
+ABOUT="compressão DEFLATE 1.3.1 reconstruída cedo contra glibc pelo cross GCC; dependência explícita de binutils-glibc e gcc-pass2, sem capturar uma libz casual do root."
 LICENSE="Zlib"
 SRC="https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz"
 SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
 
 build() {
+    mkdir -p "$WORK/.tc"
+    cat > "$WORK/.tc/x86_64-distropica-linux-gnu-gcc" <<'SHIM'
+#!/bin/sh
+exec /usr/bin/x86_64-distropica-linux-gnu-gcc -isystem /usr/include -B/usr/lib -L/usr/lib "$@"
+SHIM
+    chmod +x "$WORK/.tc"/*
+    export PATH="$WORK/.tc:$PATH"
+    export CC=x86_64-distropica-linux-gnu-gcc AR=ar RANLIB=ranlib
+
     tar -xzf "$DL" --strip-components=1
     # zlib tem configure próprio (não autotools).
     ./configure --prefix=/usr

@@ -1,6 +1,6 @@
 # SPEC-0003 — minitrue, a ferramenta
 
-**Status:** rascunho v0.8 · 2026-07-22
+**Status:** rascunho v0.9 · 2026-07-22
 **Depende de:** SPEC-0001 (política), SPEC-0002 (layout), SPEC-0004 (receitas).
 
 ## 1. Identidade
@@ -271,11 +271,12 @@ Três papéis, persistidos em cinco folhas (`meta`, `manifest`,
 
 - `meta` — `RECORD_FORMAT=`, `NAME=`, `VERSION=`, `KIND=`, `WORLD=A|B|M`,
   `ORIGIN=`, `SHA256=` (por artefato), `DEPS=`, `SUPERSEDES=`, `FINGERPRINT=`,
-  `ABOUT=`, `REPROCORR=`, `ARTIFACT_HASH=` (mundo B),
+  `ABOUT=`, `LICENSE=` (somente mundos A/B), `REPROCORR=`,
+  `ARTIFACT_HASH=` (mundo B),
   `MANIFEST_BASELINE_SHA256=`, `INSTALLED_AT=` (ISO-8601) e
-  `TRANSACTION_ID=` (mundo B). `ABOUT` e o
-  pino `REPROCORR` são congelados no momento da instalação: inspeção posterior
-  não precisa executar a receita histórica. O **`RECORD_FORMAT`** versiona o
+  `TRANSACTION_ID=` (mundo B). `ABOUT`, `LICENSE` e o pino `REPROCORR` são
+  congelados no momento da instalação: inspeção posterior não precisa executar
+  a receita histórica. O **`RECORD_FORMAT`** versiona o
   esquema do registro (hoje `2`), para migração e leitura consciente. O
   **`ORIGIN`** é de onde veio o artefato ou a declaração — `vendor` (mundo
   A), `fonte` (mundo B compilado localmente), `canal:<nome>` quando os canais
@@ -298,6 +299,14 @@ Três papéis, persistidos em cinco folhas (`meta`, `manifest`,
   `manifest@<versão>` coincide com `manifest`; em provisional, a cópia
   versionada é o baseline imutável e o ativo pode conter apenas um subconjunto
   de linhas byte-idênticas após cessões.
+
+  `LICENSE` é uma extensão aditiva de `RECORD_FORMAT=2`: registros A/B novos
+  sempre o gravam e registros M sempre o omitem. Num v2 anterior sem o campo,
+  a leitura aceita apenas uma atribuição única, literal, não vazia e inequívoca
+  no snapshot `recipe`, aberto sem seguir symlink e sem executar shell.
+  Expansão, substituição de comando, duplicidade ou forma ambígua não servem de
+  fallback. A ausência não cria um novo formato; sem o fallback seguro, a
+  licença fica indisponível e o fast path do registro A/B não é íntegro.
 - `manifest` — uma entrada por linha, ordenada, no formato
   **`<prova>␠␠<caminho absoluto>`** (registro **v2**). A prova é
   `f:<sha256>` para **modo + conteúdo** de um regular, `l:<sha256>` para os bytes crus
@@ -323,8 +332,8 @@ Três papéis, persistidos em cinco folhas (`meta`, `manifest`,
   `WORK` do build, evitando mudança de insumo entre parse e execução.
 
 No mundo M, `SHA256=` e `SUPERSEDES=` ficam vazios; não existem
-`ARTIFACT_HASH`, `TRANSACTION_ID`, `PROVISIONAL`, `REPROCORR` nem campos de
-canal. `manifest` e `manifest@<versão>` contêm exatamente um byte newline
+`ARTIFACT_HASH`, `TRANSACTION_ID`, `PROVISIONAL`, `REPROCORR`, `LICENSE` nem
+campos de canal. `manifest` e `manifest@<versão>` contêm exatamente um byte newline
 (`"\n"`): é a representação canônica do conjunto vazio e seu hash alimenta
 `MANIFEST_BASELINE_SHA256`. `verify` exige a tripla `KIND=meta`/`WORLD=M`/
 `ORIGIN=meta`, os campos vazios/ausentes corretos, `DEPS` canônico não vazio,
@@ -422,17 +431,17 @@ respondem, sem estado extra:
   a base da corroboração, SPEC-0010 §5) e os **corroboradores** (quando o canal
   os registra), se é **provisório**, o `FINGERPRINT`, o **hash do próprio
   arquivo regular** (manifesto v1/v2), quando foi instalado, a receita e o seu
-  `ABOUT`, o
+  `ABOUT`, a licença declarada do payload (`LICENSE`), o
   alvo se for link, e a nota de fábrica se for um default de `/etc`. Um caminho
   sem dono é
   apontado como *wrongthink* (existe sem registro). Aceita caminho absoluto ou
   nome de comando (resolvido em `/usr/bin`); um `/etc/X` resolve pelo seu
   default de fábrica (`/usr/share/factory/etc/X`). Onde um provisório e o seu
   sucessor ainda coexistem no manifesto, vence o **não-provisório**.
-  `ABOUT` e `REPROCORR` vêm do `meta` congelado. Para registros legados que não
-  os possuam, o fallback aceita apenas uma atribuição shell comprovadamente
-  literal na cópia de `recipe`; expansão, substituição de comando ou forma
-  ambígua é omitida, nunca executada.
+  `ABOUT`, `LICENSE` e `REPROCORR` vêm do `meta` congelado. Para registros v2
+  legados que não os possuam, o fallback aceita apenas uma atribuição shell
+  única e comprovadamente literal na cópia de `recipe`; expansão, substituição
+  de comando, duplicidade ou forma ambígua é omitida, nunca executada.
 - **`why <pacote>`** — por que ele está no sistema: se é **desejado
   explicitamente** (consta no `world`, §2), quais pacotes o **requerem**
   (dependência reversa, lendo `DEPS` dos registros), e se é **órfão** (nem

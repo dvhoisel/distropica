@@ -38,6 +38,10 @@ pub struct Recipe {
     /// persistida no registro; comandos de inspeção nunca devem executar a
     /// cópia histórica da receita apenas para exibi-la.
     pub about: String,
+    /// Licença declarada para o payload instalado. Receitas de mundo A/B
+    /// precisam declará-la; metapacotes não têm payload e portanto não têm
+    /// licença própria.
+    pub license: Option<String>,
     pub kind: Kind,
     pub srcs: Vec<String>,
     pub sha256: Vec<String>,
@@ -116,6 +120,12 @@ impl Recipe {
 const DUMP: &str = r#"printf 'NAME=%s\n' "${NAME:-}"
 printf 'VERSION=%s\n' "${VERSION:-}"
 printf 'ABOUT=%s\n' "${ABOUT:-}"
+printf 'LICENSE=%s\n' "${LICENSE:-}"
+if [ "${LICENSE+x}" = x ]; then
+    printf 'HAS_LICENSE=1\n'
+else
+    printf 'HAS_LICENSE=0\n'
+fi
 printf 'KIND=%s\n' "${KIND:-}"
 printf 'SRC=%s\n' "${SRC:-}"
 printf 'SHA256=%s\n' "${SHA256:-}"
@@ -143,6 +153,8 @@ const DUMP_FIELDS: &[&str] = &[
     "NAME",
     "VERSION",
     "ABOUT",
+    "LICENSE",
+    "HAS_LICENSE",
     "KIND",
     "SRC",
     "SHA256",
@@ -317,6 +329,17 @@ pub(crate) fn validate_version(name: &str, version: &str) -> Result<()> {
     Ok(())
 }
 
+/// `LICENSE` é persistido como uma única linha em `meta`. O Minitrue não tenta
+/// implementar aqui um parser completo de expressões SPDX: `NOASSERTION` e
+/// expressões compostas continuam válidos, mas valores vazios, ambíguos ou
+/// capazes de injetar outro campo no registro são recusados.
+pub(crate) fn license_value_is_valid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 1024
+        && value == value.trim()
+        && !value.chars().any(char::is_control)
+}
+
 pub(crate) fn validate_link(name: &str, command: &str, relative: &str) -> Result<()> {
     let command_ok = !command.is_empty()
         && command.len() <= 255
@@ -414,6 +437,40 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
                 format!("{name}: KIND '{other}' inválido (binary|source|meta)"),
             )
         }
+    };
+    let license_field = field("LICENSE");
+    let has_license = match field("HAS_LICENSE").as_str() {
+        "0" => false,
+        "1" => true,
+        other => {
+            return fail(
+                2,
+                format!("{name}: marcador interno HAS_LICENSE inválido: {other:?}"),
+            )
+        }
+    };
+    let license = match kind {
+        Kind::Meta if !has_license => None,
+        Kind::Meta => {
+            return fail(
+                2,
+                format!("{name}: KIND=meta não possui payload; remova LICENSE"),
+            )
+        }
+        Kind::Binary | Kind::Source if !has_license || !license_value_is_valid(&license_field) => {
+            return fail(
+                2,
+                format!(
+                    "{name}: KIND={} exige LICENSE não vazio em uma única linha",
+                    match kind {
+                        Kind::Binary => "binary",
+                        Kind::Source => "source",
+                        Kind::Meta => unreachable!(),
+                    }
+                ),
+            )
+        }
+        Kind::Binary | Kind::Source => Some(license_field),
     };
     let srcs = list("SRC");
     let sha256: Vec<String> = list("SHA256").iter().map(|s| s.to_lowercase()).collect();
@@ -629,6 +686,7 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         name: rname,
         version,
         about,
+        license,
         kind,
         srcs,
         sha256,
@@ -843,7 +901,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let hash = "a".repeat(64);
         let body = format!(
-            "NAME=foo\nVERSION=1.0\nKIND=source\nSRC=https://e/foo.tar.xz\nSHA256={hash}\n{extra}\nbuild(){{ :; }}\n"
+            "NAME=foo\nVERSION=1.0\nKIND=source\nLICENSE=NOASSERTION\nSRC=https://e/foo.tar.xz\nSHA256={hash}\n{extra}\nbuild(){{ :; }}\n"
         );
         std::fs::write(dir.join("recipe"), body).unwrap();
         let ctx = Ctx {
@@ -867,7 +925,7 @@ mod tests {
         let hash = "a".repeat(64);
         std::fs::write(
             dir.join("recipe"),
-            format!("NAME=foo\nVERSION=1.0\nKIND=source\nSRC=https://e/f.tar.xz\nSHA256={hash}\n{extra}\nbuild(){{ :; }}\n"),
+            format!("NAME=foo\nVERSION=1.0\nKIND=source\nLICENSE=NOASSERTION\nSRC=https://e/f.tar.xz\nSHA256={hash}\n{extra}\nbuild(){{ :; }}\n"),
         )
         .unwrap();
         if !files.is_empty() {
@@ -905,7 +963,7 @@ mod tests {
         // sem SRC, sem SHA256 → OK (o build() monta o pacote)
         std::fs::write(
             dir.join("recipe"),
-            "NAME=base\nVERSION=0.1\nKIND=source\nTOOLCHAIN=native\nbuild(){ :; }\n",
+            "NAME=base\nVERSION=0.1\nKIND=source\nLICENSE=NOASSERTION\nTOOLCHAIN=native\nbuild(){ :; }\n",
         )
         .unwrap();
         let r = load(&ctx, "base").expect("receita de montagem (sem SRC) deve parsear");
@@ -915,7 +973,7 @@ mod tests {
         std::fs::write(
             dir.join("recipe"),
             format!(
-                "NAME=base\nVERSION=0.1\nKIND=source\nSHA256={}\nbuild(){{ :; }}\n",
+                "NAME=base\nVERSION=0.1\nKIND=source\nLICENSE=NOASSERTION\nSHA256={}\nbuild(){{ :; }}\n",
                 "a".repeat(64)
             ),
         )
@@ -926,12 +984,16 @@ mod tests {
         // `install_pkg` sem artefato verificado no host.
         std::fs::write(
             dir.join("recipe"),
-            "NAME=base\nVERSION=0.1\nKIND=binary\ninstall_pkg(){ :; }\n",
+            "NAME=base\nVERSION=0.1\nKIND=binary\nLICENSE=NOASSERTION\ninstall_pkg(){ :; }\n",
         )
         .unwrap();
         assert!(load(&ctx, "base").is_err(), "binary sem SRC deve falhar");
 
-        std::fs::write(dir.join("recipe"), "NAME=base\nVERSION=0.1\nKIND=source\n").unwrap();
+        std::fs::write(
+            dir.join("recipe"),
+            "NAME=base\nVERSION=0.1\nKIND=source\nLICENSE=NOASSERTION\n",
+        )
+        .unwrap();
         assert!(
             load(&ctx, "base").is_err(),
             "source sem build() deve falhar"
@@ -974,6 +1036,8 @@ mod tests {
             "REQUIRES_GLIBC=1",
             "PROVISIONAL=1",
             "SUPERSEDES=old",
+            "LICENSE=",
+            "LICENSE=NOASSERTION",
             "EPOCH=1",
             "RETRIES=1",
             "TOOLCHAIN=seed",
@@ -1029,6 +1093,47 @@ mod tests {
             load_body("SIG=https://e/foo.sig").is_err(),
             "SIG sem SIGKEY não pode ser aceita"
         );
+    }
+
+    #[test]
+    fn license_e_obrigatoria_no_payload_e_ausente_no_meta() {
+        let default = load_body("").unwrap();
+        assert_eq!(default.license.as_deref(), Some("NOASSERTION"));
+        assert_eq!(
+            load_body("LICENSE='MIT AND Apache-2.0'")
+                .unwrap()
+                .license
+                .as_deref(),
+            Some("MIT AND Apache-2.0")
+        );
+        assert!(load_body("LICENSE=").is_err(), "LICENSE vazia deve falhar");
+        assert!(
+            load_body("LICENSE=' MIT'").is_err(),
+            "LICENSE com espaço periférico deve falhar"
+        );
+        assert!(
+            load_body("LICENSE='MIT\tAND Apache-2.0'").is_err(),
+            "LICENSE com controle deve falhar"
+        );
+
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-license-{}-{n}", std::process::id()));
+        let dir = root.join("var/lib/minitrue/newspeak/foo");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("recipe"),
+            "NAME=foo\nVERSION=1\nKIND=source\nbuild(){ :; }\n",
+        )
+        .unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let error = load(&ctx, "foo").expect_err("payload sem LICENSE deve falhar");
+        assert!(error.to_string().contains("LICENSE"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1096,7 +1201,7 @@ mod tests {
         std::fs::create_dir_all(&files).unwrap();
         let hash = "a".repeat(64);
         let original = format!(
-            "NAME=foo\nVERSION=1\nKIND=source\nTOOLCHAIN=none\nSRC=https://e/foo\nSHA256={hash}\nABOUT='original'\nbuild(){{ :; }}\n"
+            "NAME=foo\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nTOOLCHAIN=none\nSRC=https://e/foo\nSHA256={hash}\nABOUT='original'\nbuild(){{ :; }}\n"
         );
         std::fs::write(dir.join("recipe"), &original).unwrap();
         std::fs::write(files.join("fix.patch"), "patch original\n").unwrap();
@@ -1145,7 +1250,7 @@ mod tests {
         std::fs::create_dir_all(&files).unwrap();
         std::fs::write(
             dir.join("recipe"),
-            "NAME=foo\nVERSION=1\nKIND=source\nbuild(){ :; }\n",
+            "NAME=foo\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nbuild(){ :; }\n",
         )
         .unwrap();
         let victim = root.join("nao-alterar");
@@ -1207,7 +1312,7 @@ mod tests {
             std::fs::create_dir_all(&d).unwrap();
             std::fs::write(
                 d.join("recipe"),
-                format!("NAME={name}\nVERSION=1\nKIND=source\nTOOLCHAIN=none\nSRC=https://e/{name}.tar.xz\nSHA256={hash}\n{extra}\nbuild(){{ :; }}\n"),
+                format!("NAME={name}\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nTOOLCHAIN=none\nSRC=https://e/{name}.tar.xz\nSHA256={hash}\n{extra}\nbuild(){{ :; }}\n"),
             )
             .unwrap();
         };
@@ -1245,14 +1350,14 @@ mod tests {
         std::fs::create_dir_all(&zig).unwrap();
         std::fs::write(
             pkg.join("recipe"),
-            "NAME=pkg\nVERSION=1\nKIND=source\nTOOLCHAIN=seed\nbuild(){ :; }\n",
+            "NAME=pkg\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nTOOLCHAIN=seed\nbuild(){ :; }\n",
         )
         .unwrap();
         let write_zig = |about: &str| {
             std::fs::write(
                 zig.join("recipe"),
                 format!(
-                    "NAME=zig\nVERSION=1\nKIND=binary\nABOUT={about}\nSRC=https://e/zig.tar.xz\nSHA256={}\ninstall_pkg(){{ :; }}\n",
+                    "NAME=zig\nVERSION=1\nKIND=binary\nLICENSE=NOASSERTION\nABOUT={about}\nSRC=https://e/zig.tar.xz\nSHA256={}\ninstall_pkg(){{ :; }}\n",
                     "a".repeat(64)
                 ),
             )
@@ -1319,7 +1424,7 @@ mod tests {
         std::fs::write(
             dir.join("recipe"),
             format!(
-                "NAME=tool\nVERSION=1\nKIND=binary\nSRC=https://e/tool.tar.xz\nSHA256={}\ninstall_pkg(){{ :; }}\n",
+                "NAME=tool\nVERSION=1\nKIND=binary\nLICENSE=NOASSERTION\nSRC=https://e/tool.tar.xz\nSHA256={}\ninstall_pkg(){{ :; }}\n",
                 "a".repeat(64)
             ),
         )

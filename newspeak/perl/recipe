@@ -27,7 +27,8 @@ build() {
 
     # O install cria aliases do executável e dos utilitários por hardlink
     # (perl/perl5.42.0 e perlbug/perlthanks). O manifesto mundo-B ainda não
-    # representa esses grupos; sele cada nome como arquivo regular independente.
+    # representa esses grupos; sele cada nome como arquivo regular independente,
+    # um por execução, pois separar um caminho altera o nlink dos restantes.
     find "$STAGE" -type f -links +1 -exec sh -ec '
         for path do
             copy=$path.minitrue-copy
@@ -37,7 +38,7 @@ build() {
             cp -p "$path" "$copy"
             mv -f "$copy" "$path"
         done
-    ' sh {} +
+    ' sh {} \;
 
     # installperl cria site_perl como destino futuro, ainda vazio. Diretórios
     # vazios virariam claims exclusivas e bloqueariam pacotes CPAN posteriores.

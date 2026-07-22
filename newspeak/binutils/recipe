@@ -29,6 +29,7 @@ build() {
     # mundo-B autentica conteúdo e tipo, mas ainda não representa grupos de
     # hardlinks; normalize-os para arquivos regulares independentes antes de
     # selar o STAGE, que é também a topologia produzida pelo aplicador atual.
+    # Um nome por execução evita perder aliases quando nlink muda na travessia.
     find "$STAGE" -type f -links +1 -exec sh -ec '
         for path do
             copy=$path.minitrue-copy
@@ -38,5 +39,5 @@ build() {
             cp -p "$path" "$copy"
             mv -f "$copy" "$path"
         done
-    ' sh {} +
+    ' sh {} \;
 }

@@ -1,6 +1,6 @@
 # SPEC-0011 — Modelo de release: rolling edge
 
-**Status:** rascunho v0.2 · 2026-07-22
+**Status:** rascunho v0.3 · 2026-07-22
 **Palavras-chave normativas:** DEVE / NÃO DEVE / DEVERIA / PODE (RFC 2119).
 **Depende de:** SPEC-0001 (premissas, P1/P2/P7), SPEC-0003 (minitrue, `--sync`,
 registro), SPEC-0008 (kernel, boot A/B), SPEC-0009 (canais), SPEC-0010
@@ -83,7 +83,7 @@ toolchain, nova dependência) não disparava rebuild. É o **fingerprint de
 build** — uma identidade que resume a receita.
 
 **Implementado (v1, 2026-07-20).** O registro guarda `FINGERPRINT=` (sha256 do
-arquivo `recipe` inteiro — que carrega VERSION, SRC, TOOLCHAIN, DEPS,
+arquivo `recipe` inteiro — que carrega VERSION, SRC, LICENSE, TOOLCHAIN, DEPS,
 BUILD_DEPS e o corpo de `build()` — mais o `files/`, via o `pack`
 determinístico da SPEC-0010). A idempotência do `rectify` compara **versão E
 fingerprint**: receita corrigida com a mesma versão ⇒ fingerprint diferente ⇒
@@ -201,6 +201,12 @@ A mídia viva e o sistema instalado DEVEM carregar a GPL da Distrópica em
 materializados antes de uma release oficial. A publicação do
 repositório-fonte, sem artefato binário oficial, não promove o perfil
 `development` a release.
+
+O `LICENSE=` congelado no registro é uma entrada declarativa para esse
+inventário, não substitui o inventário por artefato, os textos e avisos
+upstream nem a análise das combinações efetivamente distribuídas.
+`NOASSERTION` conserva explicitamente essa pendência e não libera o artefato
+para publicação oficial.
 
 ## 9. Questões em aberto
 

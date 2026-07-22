@@ -21,16 +21,18 @@ hoje porque endpoint e chave ainda não foram publicados; valores fictícios
 tornariam uma mídia online aparentemente pronta, mas inoperante.
 
 `INSTALL_READY=yes` declara que o world mínimo (`base` + `linux` + `ripgrep` +
-`miniplenty-buildbase`) pode ser materializado num alvo vazio. O último item é
-uma receita `KIND=meta`: não contém payload, fica registrada como `WORLD=M` com
-manifesto vazio e agrega `DEPS="base make gcc-pass2"`. A closure de
-`gcc-pass2` instala ainda `linux-headers`, glibc, `mathlibs-glibc` e
+`vim` + `miniplenty-buildbase`) pode ser materializado num alvo vazio. O último
+item é uma receita `KIND=meta`: não contém payload, fica registrada como
+`WORLD=M` com manifesto vazio e agrega `DEPS="base make gcc-pass2"`. A closure
+de `gcc-pass2` instala ainda `linux-headers`, glibc, `mathlibs-glibc`, zlib e
 `binutils-glibc`; o resultado mínimo já oferece GNU Make e a toolchain GCC
-nativa para C e C++. O caminho de instalação pretendido usa um canal assinado
-com `--offline --only-binary`: o metapacote é resolvido localmente e os pacotes
-fonte de sua closure vêm como artefatos do canal, sem compilar a toolchain E2 no
-computador do usuário. Esse novo canal/cache ainda precisa ser construído,
-reemitido e aceito; não é o cache validado no marco anterior.
+nativa para C e C++. Vim é outro desejo explícito e traz ncurses como
+dependência transitiva; ncurses fica instalado, mas não entra no `world` como
+desejo top-level. O caminho de instalação pretendido usa um canal assinado com
+`--offline --only-binary`: o metapacote é resolvido localmente e os pacotes
+fonte de sua closure, Vim e ncurses vêm como artefatos do canal, sem compilar
+esses componentes no computador do usuário. Esse novo canal/cache ainda precisa
+ser construído, reemitido e aceito; não é o cache validado no marco anterior.
 
 O cache e sua chave de assinatura ainda não são artefatos oficiais publicados
 pelo projeto. Passá-lo por `--cache` é um override explícito e classifica esse
@@ -48,27 +50,35 @@ verificável uma parte desse superconjunto: antes de retificar o target, uma
 instalação offline executa o equivalente a:
 
 ```sh
-minitrue --offline cache verify make zig
+minitrue --offline cache verify jq make tree zig
 ```
 
 Essa conferência valida o hash e, quando pinada, a assinatura dos artefatos já
-presentes, sem rede e sem instalação. No perfil atual, a fonte do GNU Make
-4.4.1 e o Zig 0.16.0 são obrigatórios na disponibilidade offline. A declaração
-em `cache.world`, por si, não instala nenhum deles: Make é instalado porque
-`miniplenty-buildbase` depende dele; Zig continua apenas no cache, sem binário,
-registro ou entrada em `/etc/minitrue/world`, até que uma compilação fonte o
-exija. Ripgrep e o metapacote constam diretamente em `target.world`; por isso
-`/usr/bin/rg`, Make e a toolchain final devem existir desde o primeiro boot.
+presentes, sem rede e sem instalação. No perfil atual, jq 1.8.2, a fonte do GNU
+Make 4.4.1, a fonte de tree 2.3.2 e Zig 0.16.0 são obrigatórios na
+disponibilidade offline. A declaração em `cache.world`, por si, não instala
+nenhum deles: Make é instalado porque `miniplenty-buildbase` depende dele; Zig
+continua apenas no cache até que uma compilação `seed`/`cross` o exija; jq e
+tree começam sem comando, registro ou entrada em `/etc/minitrue/world`. Depois
+da instalação, `minitrue --offline rectify jq` deve consumir o executável
+estático publicado pelo upstream, enquanto
+`minitrue --offline rectify tree` deve compilar a fonte oficial com
+a toolchain nativa já instalada. Ripgrep, Vim e o metapacote constam diretamente
+em `target.world`; por isso `/usr/bin/rg`, `/usr/bin/vim`, `/usr/bin/vi`, Make e
+a toolchain final devem existir desde o primeiro boot. Ncurses existe como
+dependência de Vim, não como intenção top-level.
 
 Quando uma receita `KIND=source` com `TOOLCHAIN=seed` ou `cross` precisa ser
 compilada localmente, o Minitrue trata Zig como dependência de build implícita:
 instala-o antes do build e prende sua identidade ao fingerprint do pacote. Um
 artefato de canal evita a compilação e não instala Zig; receitas `none` ou
 `native` também não o puxam. Como dependência implícita, Zig não entra no
-`world`; somente o pacote solicitado explicitamente entra. Na instalação do
-perfil, o desejo explícito é `miniplenty-buildbase`: suas dependências ficam
-registradas e instaladas, mas não viram desejos top-level. O override `--cache`
-continua classificando a composição como `custom`.
+`world`; somente o pacote solicitado explicitamente entra. Na toolchain do
+perfil, o único desejo explícito é `miniplenty-buildbase`: Make e `gcc-pass2`
+ficam registrados e instalados como dependências, mas não viram desejos
+top-level. `base`, também alcançado pelo meta, já é listado diretamente ao lado
+de `linux`, `ripgrep` e `vim`. O override `--cache` continua classificando a
+composição como `custom`.
 
 O overlay fornece o estado mínimo de contas e boot: conta root inicialmente
 bloqueada, `fstab`, `securetty`, `passwd` e `group`. A mídia viva pede uma senha
@@ -109,19 +119,26 @@ bootstrap/live/accept-virtualbox \
 O runner cria uma VM efêmera UEFI64/VMSVGA/SATA com uma NIC VirtIO NAT. O cabo
 permanece desligado durante a instalação e o segundo boot; por padrão o VDI tem
 4096 MiB e é `/dev/sda` no guest. Com o payload já validado em RAM, a ISO é
-ejetada antes da autorização do wipe. A aceitação atual exige que o primeiro
-sistema instalado já contenha ripgrep 15.2.0, `miniplenty-buildbase` registrado
-como `KIND=meta`/`WORLD=M`, GNU Make 4.4.1, binutils 2.45 e GCC/G++ 15.3.0, mas
-não Zig. Ainda sem rede, o runner compila e executa C e C++, cria e liga uma
-biblioteca estática, constrói por Makefile e passa em `minitrue verify`. Só
-depois prova a rede local num terceiro boot. Esse cenário novo ainda precisa
-ser executado no VirtualBox com uma mídia recomposta.
+ejetada antes da autorização do wipe. O contrato atual exige que o primeiro
+sistema instalado já contenha ripgrep 15.2.0, Vim 9.2.0837 e
+`miniplenty-buildbase` registrado como `KIND=meta`/`WORLD=M`, além de GNU Make
+4.4.1, binutils 2.45 e GCC/G++ 15.3.0 vindos do canal. Ncurses deve estar
+presente como dependência transitiva de Vim; Zig, jq e tree devem começar
+ausentes. Ainda sem rede, o runner deve validar uma edição com Vim, compilar e
+executar C e C++, criar e ligar uma biblioteca estática e construir por
+Makefile. Em seguida deve instalar jq como binário upstream com
+`minitrue --offline rectify jq` e compilar tree da fonte com
+`minitrue --offline rectify tree`, terminando com
+`minitrue verify` limpo e provando a persistência dos três num novo boot. Só
+depois prova a rede local. Esse cenário ainda precisa ser executado no
+VirtualBox com uma mídia recomposta; este texto não constitui evidência de
+aceite.
 
-Antes disso, `gcc-pass2` e `binutils-glibc` precisam ser reconstruídos: suas
-receitas agora solicitam `make install-strip`, e a mudança do grafo altera os
-fingerprints. Os novos payloads devem ser reemitidos, o índice assinado e o
-cache/lock/EFI/ISO recompostos. O runner QEMU também passou a usar disco de
-4096 MiB por padrão. Essas são mudanças de código e de contrato, não uma nova
+Antes disso, os payloads e fingerprints alcançados pelas receitas atuais,
+inclusive Vim e ncurses, precisam ser fechados; o canal deve ser reemitido, o
+índice assinado e o cache/lock/EFI/ISO recompostos. Jq e tree precisam integrar
+o cache offline verificado. O runner QEMU também passou a usar disco de 4096
+MiB por padrão. Essas são mudanças de código e de contrato, não uma nova
 evidência de execução.
 
 O bloco abaixo preserva a **evidência histórica** network-v1, anterior ao

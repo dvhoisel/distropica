@@ -200,14 +200,21 @@ opinativa, não um default entre iguais; P8 generaliza a postura para o conjunto
 base.
 
 **Opinativa não é trancada (P0, controle do usuário).** A curadoria decide o
-que vem **por default** em `target.world` — hoje `base`, `linux`, `ripgrep` e o
-metapacote `miniplenty-buildbase` (SPEC-0008 §2 e §4.2) —, não o que é
-**permitido**. `base` não é meta: é uma receita `KIND=source` de montagem que
+que vem **por default** em `target.world` — hoje `base`, `linux`, `ripgrep`,
+`vim` e o metapacote `miniplenty-buildbase` (SPEC-0008 §2 e §4.2) —, não o que
+é **permitido**. `base` não é meta: é uma receita `KIND=source` de montagem que
 materializa configuração real; `miniplenty-buildbase` é que agrega Make e a
-toolchain final sem payload próprio. Alternativas que valham a pena vivem na
-árvore e o usuário as instala com um `rectify`; elas só não são a resposta
-default. A liberdade que importa — trocar a ferramenta — fica; a que se remove
-— ter de escolher tudo antes de começar — é atrito, não liberdade.
+toolchain final sem payload próprio. Vim é o editor canônico já instalado e
+ncurses entra apenas como sua dependência transitiva. Alternativas que valham a
+pena vivem na árvore e o usuário as instala com um `rectify`; elas só não são a
+resposta default. A liberdade que importa — trocar a ferramenta — fica; a que
+se remove — ter de escolher tudo antes de começar — é atrito, não liberdade.
+
+Disponibilidade offline tampouco é escolha default. O `cache.world` atual exige
+`jq`, `make`, `tree` e `zig`, mas jq e tree começam ausentes do sistema
+instalado: o primeiro prova o consumo offline de um binário upstream elegível;
+o segundo prova a compilação offline da fonte oficial com a toolchain nativa.
+Só um pedido explícito ao Minitrue transforma cada um em intenção e fato.
 
 Critério da escolha: coerência com as premissas (binário upstream elegível, P2;
 explicável e inspecionável, P4; sem arrastar dependências que firam P1) e, entre

@@ -1,0 +1,46 @@
+NAME=ncurses
+VERSION=6.6
+KIND=source
+TOOLCHAIN=native
+SUPERSEDES="busybox"
+DEPS="glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk"
+ABOUT="bibliotecas de terminal e base terminfo; fornece libtinfo ao Vim e descrições para console Linux, xterm e demais terminais. Ncurses 6.6 é a release estável oficial de 2025-12-30"
+LICENSE=X11-distribute-modifications-variant
+SRC="https://ftp.gnu.org/gnu/ncurses/ncurses-$VERSION.tar.gz"
+SHA256=355b4cbbed880b0381a04c46617b7656e362585d52e9cf84a67e2009b749ff11
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    ./configure --prefix=/usr \
+        --with-shared --without-normal --without-debug --enable-widec \
+        --with-termlib=tinfo --without-cxx-binding --without-ada \
+        --without-tests --without-manpages --disable-stripping \
+        --enable-pc-files --with-pkg-config-libdir=/usr/lib/pkgconfig \
+        --with-default-terminfo-dir=/usr/share/terminfo \
+        --with-terminfo-dirs=/usr/share/terminfo --disable-home-terminfo \
+        --disable-rpath --disable-rpath-hack --disable-relink --without-develop \
+        --with-versioned-syms --without-gpm
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+
+    # A licença permissiva do ncurses não é instalada pelo target upstream.
+    mkdir -p "$STAGE/usr/share/licenses/ncurses"
+    cp COPYING "$STAGE/usr/share/licenses/ncurses/COPYING"
+    chmod 644 "$STAGE/usr/share/licenses/ncurses/COPYING"
+
+    # `tic` representa aliases de terminal com hardlinks (mais de mil no
+    # banco completo). O manifesto ainda não modela esses grupos; preserve o
+    # conteúdo, mas sele cada nome como arquivo regular independente.
+    find "$STAGE" -type f -links +1 -exec sh -ec '
+        for path do
+            copy=$path.minitrue-copy
+            if [ -e "$copy" ] || [ -L "$copy" ]; then
+                exit 1
+            fi
+            cp -p "$path" "$copy"
+            mv -f "$copy" "$path"
+        done
+    ' sh {} \;
+    find "$STAGE" -mindepth 1 -depth -type d -empty -delete
+}

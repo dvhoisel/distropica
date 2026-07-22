@@ -1,6 +1,6 @@
 # SPEC-0007 — Censo de binários upstream
 
-**Status:** rascunho v0.4 · 2026-07-19
+**Status:** rascunho v0.5 · 2026-07-22
 **Método:** coluna "verificado" = checagem direta na data indicada (URL do
 canal oficial consultada); "notório" = sabidamente publicado, a re-verificar
 no momento de escrever a receita. Elegibilidade conforme SPEC-0001 §2.
@@ -25,13 +25,14 @@ custo GUI (mesa/GTK) é isolado no Estágio 4b.
 | busybox 1.35.0 | binário estático solto | 2026-07-18 | oficial porém 2022; recompilar no E1 |
 | ripgrep 15.2.0 | tar.gz musl estático + .sha256 | 2026-07-18 | roda desde o E0 |
 | uutils-coreutils 0.9.0 | tar.gz musl estático | 2026-07-18 | coreutils sem compilar (§4) |
-| neovim v0.12.4 | tar.gz | 2026-07-18 | glibc ⇒ pós-E2; aceite do E2 (AppImage oficial existe, mas é inelegível) |
+| neovim v0.12.4 | tar.gz | 2026-07-18 | alternativa opcional pós-E2; o AppImage oficial existe, mas é inelegível |
 | sqlite tools 3.53 | zip de binários | 2026-07-18 | |
+| jq 1.8.2 | executável x86_64 estático solto | 2026-07-22 | instalação opcional, disponibilidade obrigatória no cache offline; não redistribuir cache/ISO enquanto o bundle não tiver SBOM e obrigações resolvidas |
 | go | tar.gz (go.dev/dl) | notório | glibc-free na prática |
 | rust | rustup + toolchains oficiais | notório | motor do próprio minitrue |
 | node | tar.xz (nodejs.org) | notório | glibc |
 | bun / deno | zip/tar (releases oficiais) | notório | |
-| jq / fd / fzf / shellcheck / pandoc | releases oficiais | notório | vários estáticos |
+| fd / fzf / shellcheck / pandoc | releases oficiais | notório | vários estáticos |
 | firefox / thunderbird | tar.xz (Mozilla) | notório | glibc + GTK ⇒ E4b |
 | blender | tar.xz | notório | glibc + GL |
 | vs code | tar.gz oficial | notório | glibc |
@@ -53,7 +54,10 @@ custo GUI (mesa/GTK) é isolado no Estágio 4b.
 | wget / wget2 | **só fonte** (verificado 2026-07-18: ftp.gnu.org tem apenas tar.gz/lz/bz2 + .sig) | dispensável como o curl: quem busca é o minitrue — **obrigatoriamente**: o applet `wget` do busybox 1.35 nem completa handshake TLS moderno (spike 2026-07-19, SPEC-0005 §8) |
 | git | só fonte (https exige libcurl+tls ⇒ build pesado) | adiável: newspeak atualiza por tarball (SPEC-0003 §11) |
 | python | **só fonte** (python.org não publica binário Linux) | pré-requisito do build da glibc; a ironia registrada |
-| perl, openssh, tmux, vim, htop | só fonte | conforme demanda |
+| vim 9.2.0837 | fonte; o AppImage oficial é inelegível | compilado uma vez pelo builder e entregue pronto pelo canal; já pertence ao perfil-alvo |
+| ncurses 6.6 | só fonte | fornece `libtinfo` e o banco terminfo ao Vim; dependência, não desejo top-level |
+| tree 2.3.2 | só fonte | prova pequena e útil de compilação offline pelo minitrue no sistema instalado |
+| perl, openssh, tmux, htop | só fonte | conforme demanda |
 | mandoc | só fonte (BSD, minúsculo) | formata os manuais da base; man page é contrato (SPEC-0001 P4) |
 | kernel linux | só fonte | E3 |
 | wayland / mesa / gtk | só fonte | a Longa Marcha (E4b) |

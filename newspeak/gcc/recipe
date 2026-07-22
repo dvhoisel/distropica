@@ -78,7 +78,7 @@ build() {
 
     # O GCC instala alguns nomes do driver como hardlinks. O manifesto
     # mundo-B ainda não representa grupos de hardlinks; sele cada alias como
-    # arquivo regular independente, exatamente como o aplicador o materializa.
+    # arquivo regular independente, um por execução, como o aplicador o faz.
     find "$STAGE" -type f -links +1 -exec sh -ec '
         for path do
             copy=$path.minitrue-copy
@@ -88,5 +88,5 @@ build() {
             cp -p "$path" "$copy"
             mv -f "$copy" "$path"
         done
-    ' sh {} +
+    ' sh {} \;
 }
