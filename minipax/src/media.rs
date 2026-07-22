@@ -299,6 +299,10 @@ fn payload(
             bytes: artifacts.target_world.into_bytes(),
         },
         PayloadFile {
+            path: "distropica/cache.world".into(),
+            bytes: artifacts.cache_world.into_bytes(),
+        },
+        PayloadFile {
             path: "distropica/overlay.tar".into(),
             bytes: artifacts.overlay_tar,
         },

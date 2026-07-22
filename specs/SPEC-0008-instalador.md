@@ -1,6 +1,6 @@
 # SPEC-0008 — minipax, instalação e mídia
 
-**Status:** implementação inicial v0.5 · 2026-07-21
+**Status:** implementação inicial v0.6 · 2026-07-22
 
 **Depende de:** SPEC-0003 (minitrue `--root`), SPEC-0005 (estágios),
 SPEC-0006 (init), SPEC-0009 (canais) e SPEC-0010 (reprodutibilidade).
@@ -48,6 +48,7 @@ perfil/
 ├── profile
 ├── live.world
 ├── target.world
+├── cache.world           # opcional; disponibilidade exigida no cache offline
 ├── overlay/              # opcional
 └── channel-bootstrap/    # opcional; somente bootstrap online
 ```
@@ -70,12 +71,15 @@ mídia ainda precisam de distribuição externa assinada.
 - `live.world` descreve o ambiente que o `BOOTX64.EFI` precisa tornar
   disponível na mídia viva;
 - `target.world` descreve os pacotes materializados no sistema instalado;
+- `cache.world` declara receitas cujos artefatos e assinaturas precisam estar
+  disponíveis e verificáveis numa instalação offline, sem pedir sua instalação;
 - `overlay/` aplica a personalização final do filesystem;
 - a árvore Newspeak vem de `--newspeak DIR` ou `DISTROPICA_NEWSPEAK`;
 - `--cache DIR` acrescenta o cache completo para operação offline ou, no
   modo online, o bootstrap estrito de configuração+índice assinado do canal.
 
-Os worlds são normalizados de forma canônica. Árvores são recusadas quando
+Os três worlds são normalizados de forma canônica; `cache.world` ausente
+equivale à forma vazia. Árvores são recusadas quando
 contêm tipos ou caminhos fora da política de cada snapshot. Seus modos também
 são canônicos e não dependem do que o Git conserva: diretórios ficam em `0755`,
 exceto `root/` do overlay em `0700`; `etc/shadow`, `etc/gshadow` e seus backups
@@ -83,9 +87,12 @@ ficam em `0600`; regulares executáveis ficam em `0755`, os demais em `0644` e
 symlinks são representados como `0777`. No snapshot de cache, todos os regulares
 ficam em `0644`. O `SOURCE_DATE_EPOCH` fixa timestamps dos arquivos empacotados.
 
-O lock textual inclui hashes SHA-256 dos dois worlds, overlay, Newspeak e
-cache, além de nome, `PROFILE_CLASS`, arquitetura, epoch, `INSTALL_READY`, o
-`PROFILE_CONTENT_SHA256` calculado e os três pinos oficiais. Ele pode ser
+O lock textual usa `PROFILE_LOCK_FORMAT=2`; sua identidade interna usa
+`PROFILE_CONTENT_FORMAT=2`. Ele inclui hashes SHA-256 dos três worlds, overlay,
+Newspeak e cache, além de nome, `PROFILE_CLASS`, arquitetura, epoch,
+`INSTALL_READY`, o `PROFILE_CONTENT_SHA256` calculado e os três pinos oficiais.
+`CACHE_WORLD_SHA256` prende a forma normalizada de `cache.world`, inclusive o
+hash da forma vazia quando o arquivo opcional não existe. O lock pode ser
 inspecionado sem construir ou instalar nada:
 
 ```sh
@@ -96,7 +103,9 @@ minipax lock --profile profiles/official --newspeak newspeak \
 
 Saídas nunca são sobrescritas. Um lock identifica os bytes resolvidos; ele
 não é, sozinho, uma assinatura nem uma declaração de que esses bytes vieram
-do projeto.
+do projeto. O envelope continua em `MEDIA_FORMAT=1`, mas o consumidor atual
+aceita dentro dele somente `PROFILE_LOCK_FORMAT=2`; mídias com lock v1
+permanecem evidência histórica, não entrada compatível com o fluxo atual.
 
 ### 2.1 Classes de perfil
 
@@ -146,18 +155,28 @@ Ele:
 4. grava um marcador inicial na raiz, cria o esqueleto FHS/usr-merge (incluindo
    `/proc`, `/sys` e `/dev`) e promove o marcador a `profile.lock.pending`;
 5. instala snapshots congelados da árvore Newspeak e do cache opcional;
-6. executa do mesmo `memfd` selado
+6. no modo offline, antes de qualquer retificação, executa do mesmo `memfd`
+   `minitrue --root DIR --offline cache verify <cache.world>` quando a lista
+   não é vazia;
+7. executa do mesmo `memfd` selado
    `minitrue --root DIR rectify <target.world>`;
-7. executa do snapshot `minitrue verify`, aplica o overlay e verifica
+8. executa do snapshot `minitrue verify`, aplica o overlay e verifica
    novamente;
-8. persiste exatamente os snapshots medidos de `minitrue` e `minipax` em
+9. persiste exatamente os snapshots medidos de `minitrue` e `minipax` em
    `/usr/bin`, grava `install.manifest` e promove o lock pendente para
    `/var/lib/minipax/profile.lock`.
 
-O perfil de desenvolvimento oficial declara `INSTALL_READY=yes`: um cache
-assinado de desenvolvimento fecha `base` e `linux` sem instalar a toolchain no
-target. Esse caminho foi exercitado de ponta a ponta numa raiz vazia com
-`--offline --only-binary`. O cache veio de registros históricos e usa
+`cache verify` impõe operação sem rede e confere SHA-256 e assinaturas pinadas,
+mas não executa receitas, não instala pacotes e não altera o `world`. A falha de
+qualquer entrada de `cache.world` interrompe a instalação antes de
+`target.world`.
+
+O perfil de desenvolvimento oficial declara `INSTALL_READY=yes`: o target
+atual pede `base`, `linux` e `ripgrep`, e `cache.world` exige a disponibilidade
+offline da fonte do GNU Make e do Zig sem instalá-los no target. O caminho
+anterior foi exercitado de ponta a ponta numa raiz vazia com
+`--offline --only-binary`, antes dessas duas mudanças do perfil. O cache veio
+de registros históricos e usa
 `TRUST=builder`; não é um canal oficial publicado nem autoriza mudar
 `STATUS=development` para `release`.
 
@@ -215,8 +234,8 @@ minipax media build \
 O payload contém:
 
 - `EFI/BOOT/BOOTX64.EFI`, fornecido explicitamente;
-- a representação canônica de `profile`, `profile.lock`, `live.world` e
-  `target.world`;
+- a representação canônica de `profile`, `profile.lock`, `live.world`,
+  `target.world` e `cache.world` (vazio quando não declarado no perfil);
 - snapshots determinísticos de Newspeak e overlay;
 - `media.meta`, que vincula modo, perfil, lock, arquitetura e hash do EFI;
 - `cache.tar`: cache completo na variante offline; na online, exclusivamente
@@ -267,17 +286,27 @@ mesmo payload lógico.
 | `online` | bootstrap obrigatório | incorpora somente `channel-config/<nome>` + `channels/<nome>/{index,index.minisig}`; o ambiente vivo baixa os artefatos da URL HTTPS pinada |
 | `offline` | obrigatório | incorpora o snapshot indicado por `--cache`; a instalação roda com rede proibida |
 
-O builder vincula o cache no lock, mas não prova por si só que ele fecha todo
-o grafo de `target.world`. Um cache offline pode ser um superconjunto estrito
-desse grafo: todos os seus bytes entram em `CACHE_SHA256` e são materializados
-em `/var/cache/minitrue`, mas somente `target.world` expressa a intenção da
-instalação inicial. Um objeto extra não cria registro, link nem entrada no
-world; uma ordem posterior como `minitrue --offline rectify ripgrep` é que o
-consome e acrescenta explicitamente o pacote à intenção local.
+O builder vincula o cache completo em `CACHE_SHA256` e a lista normalizada de
+disponibilidade em `CACHE_WORLD_SHA256`. Ele não prova por si só que o cache
+fecha todo o grafo de `target.world`; na instalação offline, porém, o Minipax
+exige `minitrue --offline cache verify` para cada nome de `cache.world` antes de
+retificar o target. Essa operação confere os artefatos e suas assinaturas sem
+baixar nem instalar. Um cache pode continuar sendo superconjunto estrito das
+duas listas: bytes extras também ficam presos por `CACHE_SHA256`, mas não criam
+registro, link ou intenção.
 
-O cache de desenvolvimento usado neste marco fechou o perfil mínimo num teste
-end-to-end offline e também carregou o objeto pinado de `ripgrep` sem
-acrescentá-lo a `target.world`. A capacidade online existe no consumidor,
+Somente `target.world` expressa a instalação inicial. No perfil atual,
+`ripgrep` está nessa lista e deve existir desde o primeiro boot; GNU Make e Zig
+estão apenas em `cache.world`, garantindo que a prova de compilação posterior
+possa ocorrer sem rede. Receitas fonte `TOOLCHAIN=seed|cross` instalam Zig automaticamente apenas
+quando o Minitrue escolhe o build local; canal/binário e `none|native` não o
+instalam. Por ser dependência de build implícita, Zig permanece fora do
+`world`.
+
+Historicamente, o cache de desenvolvimento network-v1 fechou o perfil mínimo e
+carregou o objeto pinado de `ripgrep` sem acrescentá-lo ao antigo
+`target.world`; esse resultado não prova o perfil atual. A capacidade online
+existe no consumidor,
 porém o projeto ainda não publicou endpoint, chave e índice de um canal
 oficial. O perfil oficial não inventa esses valores: sem um diretório
 `channel-bootstrap/` real ou um `--cache DIR` com esse layout estrito, a
@@ -515,7 +544,8 @@ desconectado. Num terceiro boot, o cabo foi conectado e o `rcS` da base obteve
 DHCP IPv4, rota default e servidor DNS; o runner resolveu apenas `localhost`
 pelo resolvedor da NAT e alcançou o gateway, sem depender da Internet.
 
-O cache da ISO era um superconjunto do world inicial: `ripgrep` não constava em
+Na **evidência histórica network-v1**, o cache da ISO era um superconjunto do
+world inicial: `ripgrep` não constava em
 `target.world`, e o runner comprovou que comando, registro e intenção estavam
 ausentes. Depois da prova de rede, desligou novamente o cabo e executou
 `minitrue --offline rectify ripgrep`. O objeto já presente no cache instalou
@@ -564,7 +594,16 @@ MINITRUE_VERIFY=yes
 FINAL_RESULT=passed
 ```
 
-O aceite VirtualBox não substitui o final-v10 de QEMU: o primeiro prova a
+O runner atual expressa um aceite diferente, ainda não executado sobre uma
+mídia recomposta. Ele deve encontrar ripgrep 15.2.0 já instalado e no `world`,
+com Zig e GNU Make ausentes; depois de desligar novamente o cabo, executa
+`minitrue --offline --no-binary rectify make`. O aceite só passa se GNU Make
+4.4.1 for compilado e entrar no `world`, Zig 0.16.0 for instalado
+automaticamente como dependência de build mas permanecer fora do `world`, e
+`minitrue verify` terminar limpo. Até essa execução existir, os hashes e
+resultados network-v1 acima não sustentam o novo fluxo.
+
+O aceite VirtualBox histórico não substitui o final-v10 de QEMU: o primeiro prova a
 experiência humana, o console gráfico com SATA `/dev/sda`, a configuração
 automática no VirtIO/NAT e o consumo offline de um objeto extra; o segundo
 preserva a automação em `/dev/vda` e o probe negativo que demonstra
@@ -615,7 +654,9 @@ aceite final-v10 em QEMU comprovou instalação automatizada, segundo boot sem
 mídia até `rcS`/getty e recusa antes do wipe; o aceite VirtualBox comprovou a
 variante humana, seus prompts gráficos, instalação SATA, reboot pelo VDI sem
 ISO, login root, DHCP/DNS/gateway no VirtIO/NAT, instalação de `ripgrep` 15.2.0
-com o link desligado e `verify` posterior limpo. Isso não prova boot da IMG,
+com o link desligado e `verify` posterior limpo — tudo na revisão histórica
+network-v1. O aceite atual de ripgrep por padrão e build offline Make/Zig ainda
+está pendente. Isso não prova boot da IMG,
 Internet, hardware real, reprodução independente ou publicação oficial.
 
 ## 10. Questões em aberto

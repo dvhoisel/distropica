@@ -1,12 +1,11 @@
 # STATUS — o que está feito, testado e futuro
 
 Fonte única da verdade sobre a maturidade. As `specs/` descrevem a **norma**;
-este arquivo descreve o **estado**. Atualizado à mão (2026-07-21, após o canal
-binário assinado, a instalação offline do perfil mínimo, o aceite automatizado
-final-v10 em QEMU/OVMF e o aceite network-v1 em VirtualBox/EFI, ambos com
-instalação e segundo boot sem ISO; o VirtualBox também cobriu rede VirtIO no
-terceiro boot e `rectify` mundo A offline, e o final-v10 inclui a recusa antes
-do wipe de um `profile.lock` incoerente com `media.meta`).
+este arquivo descreve o **estado**. Atualizado à mão (2026-07-22, após tornar
+ripgrep parte do target oficial, declarar Make e Zig em `cache.world`, autenticar
+essa lista no lock v2 e automatizar sua verificação offline. Os aceites final-v10 em
+QEMU/OVMF e network-v1 em VirtualBox/EFI permanecem evidências históricas da
+revisão anterior; o novo fluxo VirtualBox Make/Zig ainda precisa ser executado).
 Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
 ## Licenciamento e publicação
@@ -15,7 +14,7 @@ Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 |---|---|---|
 | Código e documentação próprios | ✅ | `GPL-3.0-or-later`; texto integral, escopo e regra de contribuição versionados |
 | Licença na base e no ambiente vivo | ✅ código | `base` instala a GPL e o aviso de escopo em `/usr/share/licenses/distropica/`, e `build-efi` os incorpora no initramfs; a mídia precisa ser recomposta para produzir nova evidência |
-| Inventário completo de terceiros | ⬜ gate de release | gerar por artefato, a partir dos insumos efetivamente distribuídos; `LICENSE=` da receita descreve apenas o payload |
+| Inventário completo de terceiros | ⬜ gate de release | gerar por artefato, a partir dos insumos efetivamente distribuídos; o bundle Zig usa `NOASSERTION` até o SBOM conclusivo, sem perder os avisos upstream |
 | Bundle de fontes correspondentes | ⬜ gate de release | publicar junto de toda futura ISO/EFI/cache/canal: fontes exatas, configs, patches, crates vendorizadas, scripts, licenças e hashes de associação |
 
 Os hashes QEMU final-v10 e VirtualBox network-v1 abaixo são evidência histórica
@@ -26,23 +25,24 @@ Não são pinos de uma mídia recomposta a partir da árvore licenciada atual.
 
 | Recurso | Estado | Testado | Nota |
 |---|---|---|---|
-| `rectify` mundo A (vendor → /opt) | ✅ | ✅ unit + E2E VBox offline | `ripgrep` 15.2.0 ausente no primeiro login, instalado explicitamente do objeto extra do cache com o cabo desligado e conferido por `verify` |
-| `rectify` mundo B (fonte → /usr) | ✅ | 🟡 unit | exercido no E2 e numa execução E2-clean a frio |
-| Perfis de toolchain (`none`/`seed`/`cross`/`native`) | ✅ | ✅ | parsing + seleção testados; `none` permite receitas de montagem sem compilador, como `base` |
+| `rectify` mundo A (vendor → /opt) | ✅ | ✅ unit + E2E local offline + VBox histórico | network-v1 instalou `ripgrep` 15.2.0 explicitamente. No fluxo atual, uma prova isolada instalou Zig 0.16.0 automaticamente do cache assinado; o novo aceite da ISO segue pendente |
+| `rectify` mundo B (fonte → /usr) | ✅ | ✅ unit + E2/E2-clean + E2E local offline | `rectify make --no-binary --offline` compilou GNU Make 4.4.1 numa cópia isolada do target |
+| Perfis de toolchain (`none`/`seed`/`cross`/`native`) | ✅ | ✅ unit + E2E local offline | `seed`/`cross` em receita fonte implicam Zig no fingerprint e no plano de compilação local; a prova Make instalou Zig antes do build e o manteve fora do `world`. Canal/binário e `none`/`native` não o instalam |
 | Receitas de montagem (sem SRC) | ✅ | ✅ | `build()` gera o pacote (config, esqueleto de `/etc`) — nada a baixar; usada por `base` 0.2, com snapshot autocontido em `files/` e fábrica `/etc` |
 | Runner mundo B em rootfs (bwrap, --unshare-net, --clearenv) | ✅ | ✅ | isola rede/ambiente do `build()`, mas o **rootfs fica gravável**; avaliação top-level da receita e mundo A ainda rodam no host |
 | `retry` de ICE | ✅ | — | usado no E2 |
-| `fingerprint` de build | ✅ | ✅ | **transitivo**; snapshot de `recipe`+`files/`, e o mesmo `files/` autocontido é materializado no `WORK` (symlinks auxiliares são recusados) |
+| `fingerprint` de build | ✅ | ✅ | **transitivo**; inclui `DEPS`, `BUILD_DEPS` e Zig implícito para fonte `seed`/`cross`. Snapshot de `recipe`+`files/`, e o mesmo `files/` autocontido é materializado no `WORK` (symlinks auxiliares são recusados) |
 | Supersessão provisional (`PROVISIONAL` + `SUPERSEDES=`) | ✅ | ✅ | declarativa; no mundo B a cessão volta se a instalação falha. `SUPERSEDES` fica no registro e prova cadeias provisional→provisional; mundo A e restauração ao remover sucessor ainda faltam |
 | `pack` determinístico (v1) | ✅ | ✅ | a parte mais madura; falta xattr/ACL/cap/sparse |
 | Manifesto v2 (conteúdo + tipo) | ✅ | ✅ | `f:` prende modo+conteúdo do regular, `l:` prende alvo, `d:` prende modo do diretório-raiz+árvore (payload A e vazios B); leitura v0/v1 mantida |
 | `verify` (presença + integridade por claim) | ✅ | 🟡 unit + E2E VBox | inspeção confinada ao rootfs; passou após o `rectify` offline de `ripgrep`; confere conteúdo/tipo/alvo/árvore e denuncia journal pendente/formato futuro, mas não varre regulares órfãos em /usr nem fecha o grafo de deps |
+| `cache verify` (disponibilidade sem instalação) | ✅ | ✅ unit + E2E local | força offline/sem TOFU, confere hashes e assinaturas dos artefatos já no cache e não cria registro, link ou entrada no `world`; conferiu os insumos reais de Zig e Make |
 | `memoryhole` (+ preserva modificado) | ✅ | 🟡 | sem `--tudo`; sem rollback do payload |
 | `explain` / `why` (proveniência) | ✅ | ✅ | ORIGIN/hash-arq; ABOUT/REPROCORR congelados no meta, com fallback literal legado sem executar receita histórica; corroboração e reprocorr |
 | `--sync` (convergir ao world) | ⬜ | — | stub; SPEC-0011 |
 | `rollback` / `unperson` / `lint` | ⬜ | — | stub |
 | Canal binário assinado | ✅ | ✅ unit + E2E offline | config HTTPS/chave minisign pinada, índice canônico v2 assinado com `RECIPE_FINGERPRINT`, cache endereçado por conteúdo, `.tar.zst` com limites e conferência do tar interno; seleção exige que a identidade autenticada coincida com a receita efetiva. `/etc/minitrue/channels/` existente é autoritativo e, vazio, desativa a seed |
-| Resolução `--no-binary` / `--only-binary` | ✅ | ✅ unit + E2E offline | binário de canal preserva mundo B; `--only-binary` falha sem artefato e não expande `BUILD_DEPS` |
+| Resolução `--no-binary` / `--only-binary` | ✅ | ✅ unit + E2E offline | binário de canal preserva mundo B; `--only-binary` falha sem artefato e não expande `BUILD_DEPS` nem Zig implícito |
 | Lock de canal | ✅ | ✅ unit + E2E offline | `CHANNEL_LOCK_FORMAT=2`; seleção, chave, índice, pacote, fingerprint autenticado, caminho, hash de transporte, `reprocorr` e trust; persistido por hash em `/var/lib/minitrue/channel-locks/` e cotejado semanticamente por `verify` |
 | `channel emit` | ✅ | ✅ unit | `CHANNEL_EMIT_FORMAT=2`; reutiliza o tar autenticado do cache para registros vindos de canal e só reconstrói registros locais quando topologia, metadados e `ARTIFACT_HASH` podem ser provados; emite pool + índice sem assinatura. Release deve emitir no próprio build |
 | Gestão de canais (`add/remove/list/refresh`) | ⬜ | — | hoje a configuração é administrada por arquivos estritos; em especial, não há `channel refresh` auditável. A CLI administrativa da SPEC-0009 é gate de release |
@@ -62,8 +62,8 @@ Não são pinos de uma mídia recomposta a partir da árvore licenciada atual.
 | Recurso | Estado | Testado | Nota |
 |---|---|---|---|
 | CLI única (`install`, `media build`, `lock`) | ✅ | ✅ unit | binário Rust separado; `bootstrap/distropica-bootstrap` apenas o localiza/compila e delega |
-| Perfil estrito + `profile.lock` | ✅ | ✅ unit | normaliza worlds; o lock prende hashes Newspeak/overlay/cache, arch, epoch, `MEDIA_SIZE_MIB`, `INSTALL_READY` e os três pinos oficiais. Release exige `INSTALL_READY=yes` e pinos `CONTENT`+`BOOT_EFI`+`MINITRUE`; conteúdo divergente vira `custom` |
-| Instalação em rootfs (`--target`) | ✅ | ✅ unit + E2E dev offline | prepara FHS/usr-merge, congela Newspeak/cache, chama `rectify --only-binary` + `verify`, aplica overlay e promove pending→lock; perfil oficial + override de cache assinado fecha `base`+`linux` e recebe classe `custom` |
+| Perfil estrito + `profile.lock` | ✅ | ✅ unit | `PROFILE_LOCK_FORMAT=2`/`PROFILE_CONTENT_FORMAT=2`; normaliza os três worlds e prende `cache.world` em `CACHE_WORLD_SHA256`, além de Newspeak/overlay/cache, arch, epoch, `MEDIA_SIZE_MIB`, `INSTALL_READY` e pinos oficiais |
+| Instalação em rootfs (`--target`) | ✅ | ✅ unit + E2E dev histórico | prepara FHS/usr-merge, congela Newspeak/cache e, offline, executa `cache verify` antes de `rectify` + `verify`; aplica overlay e promove pending→lock. O E2E anterior fechou `base`+`linux`; o target atual acrescenta ripgrep e ainda requer nova prova integrada |
 | Ingestão de mídia (`install-media`) | ✅ | ✅ unit | valida controles sem seguir symlinks, hashes de lock/EFI, coerência modo/cache e reconstitui o perfil byte a byte antes de tocar no target; `--export-boot-efi` cria sem sobrescrever o snapshot EFI validado e o remove se a instalação falhar |
 | Executor e `install.manifest` | ✅ | 🟡 unit + E2E dev | copia Minitrue para `memfd` selado, mede o Minipax, persiste ambos em `/usr/bin`; manifesto prende hashes, classe e opções `OFFLINE`/`FROM_SOURCE`/`ONLY_BINARY`. O target mínimo exige executores estáticos para usá-los após o boot |
 | Retomada e proteção do target | ✅ | ✅ unit | recusa `/`, target sujo e perfil divergente; `--resume` exige marca anterior do Minipax |
@@ -73,20 +73,21 @@ Não são pinos de uma mídia recomposta a partir da árvore licenciada atual.
 | Classes de insumos de release | ✅ | 🟡 unit | `PROFILE_CLASS`, `MEDIA_CLASS` e `INSTALL_CLASS` podem ser `official-inputs` após os respectivos pinos; isso não declara reprodução oficial |
 | Modos canônicos das árvores | ✅ | ✅ unit | dirs `0755`, `root/` do overlay `0700`, `shadow`/`gshadow` e backups `0600`, executáveis `0755`, demais regulares `0644`; não depende dos modos que o Git preserva |
 | Limites das árvores | ✅ | 🟡 unit | 128 MiB e 50.000 entradas por árvore Newspeak/overlay/cache; conteúdo e tar ficam em memória. No canal, `.tar.zst` selado e tar descompactado coexistem, somando o pico de RAM; streaming é gate de release |
-| Modo offline/cache | ✅ | ✅ unit + E2E dev + VBox | o cache assinado foi testado como superset: fecha o perfil mínimo e carrega um objeto `ripgrep` extra e pinado, inerte na instalação inicial e consumido depois por `rectify` sem rede; ainda limitado a 128 MiB/50 mil entradas e materializado em memória |
+| Modo offline/cache | ✅ | ✅ unit + E2E histórico | `cache.world` declara disponibilidade verificável sem instalação; no perfil atual exige Make e Zig. O superset network-v1 com ripgrep extra é evidência histórica. Limite atual: 128 MiB/50 mil entradas, materializado em memória |
 | Modo online/bootstrap de canal | ✅ | ✅ unit | Minipax exige config + índice/assinatura pareados, rejeita objetos e semeia antes de `rectify`; Minitrue valida minisign no uso. Não há endpoint oficial para E2E |
 | BOOT EFI vivo (kernel+initramfs+Minipax+Minitrue) | ✅ | ✅ E2E QEMU + VirtualBox | fixa Linux 7.1.4, BusyBox e executores musl `static-pie`. `CONFIG_MODULES=y`, nenhum `.ko` na mídia e release `7.1.4-distropica-live`; o EFI do VirtualBox inclui `simpledrm`+`fbcon` e VirtIO de rede built-in, sem fixar o disco |
 | Instalação por ISO em QEMU/OVMF | ✅ | ✅ E2E final-v10 | aceite histórico e automatizado: antes de escolher disco, materializa closure em `/run` e exporta snapshot EFI validado; depois particiona, copia, verifica, instala EFI e publica o marcador completo por último. Segundo boot ocorreu sem ISO |
-| Instalação por ISO no VirtualBox | ✅ | ✅ E2E local 7.2.6 network-v1 | EFI64 + VMSVGA, console por `simpledrm`/`fbcon`, teclado PS/2, Intel AHCI e `/dev/sda`. Instalação e segundo boot ocorreram com o cabo virtual desligado; a ISO foi ejetada antes do wipe, e o VDI iniciou sem ela. No terceiro boot, VirtIO/NAT obteve DHCP IPv4, rota, DNS local e acesso ao gateway; depois o cabo foi desligado para instalar `ripgrep` offline e rodar `verify` |
+| Instalação por ISO no VirtualBox | ✅ | ✅ E2E local histórico; 🟡 fluxo atual pendente | network-v1 provou EFI64/VMSVGA/SATA, reboot sem ISO e rede VirtIO/NAT, então instalou ripgrep offline. O runner atual exige ripgrep já presente e compila Make 4.4.1 offline, auto-instalando Zig 0.16.0 fora do `world`; falta executá-lo sobre mídia recomposta |
 | Boot da IMG em QEMU/OVMF | 🟡 | — | compositor IMG existe e reproduziu localmente; o aceite funcional final-v10 exercitou somente a ISO |
 | Particionamento/escrita destrutiva em disco | ✅ | ✅ QEMU final-v10 + VirtualBox network-v1 | PID 1 só recebe/autoriza o disco depois do preflight em `/run`: `/dev/vda` no aceite automatizado e `/dev/sda` no VirtualBox. O negativo final-v10 deixou um disco zerado intacto; o VirtualBox prosseguiu após ejeção pré-wipe porque a closure já estava materializada. Cria MBR com ESP FAT32 de 64 MiB + raiz ext2; não é ainda um particionador geral |
 
 O perfil `profiles/official` continua com `STATUS=development`, mas agora
-declara `INSTALL_READY=yes`: há uma closure mínima materializável com o cache
-assinado de desenvolvimento. O superset usado no aceite do VirtualBox também
-contém `ripgrep` pinado, sem incluí-lo no world inicial. Como o cache é passado
-por `--cache`, o E2E recebe classe `custom`; isso não o publica nem cria um
-canal oficial. Mesmo uma
+declara `INSTALL_READY=yes`. Seu `target.world` contém `base`, `linux` e
+`ripgrep`; seu `cache.world` contém Make e Zig, que precisam estar verificáveis
+numa instalação offline, mas não são instalados por essa declaração. O lock v2 separa
+essas intenções com `TARGET_WORLD_SHA256` e `CACHE_WORLD_SHA256`. Como o cache
+de desenvolvimento é passado por `--cache`, o E2E recebe classe `custom`; isso
+não o publica nem cria um canal oficial. Mesmo uma
 futura classe `official-inputs` não será, por si,
 reprodução oficial: isso dependerá do sha256 final pinado num manifesto
 oficial externo assinado.
@@ -116,8 +117,8 @@ RESULT=pass
 INCONSISTENT_PROFILE_LOCK_RESULT=refused-before-wipe
 ```
 
-Separadamente, o aceite network-v1 iniciou a ISO numa VM VirtualBox EFI64 com
-adaptador VirtIO/NAT e o cabo virtual desligado. Instalou em `/dev/sda`, ejetou
+Separadamente, o aceite **histórico** network-v1 iniciou a ISO numa VM
+VirtualBox EFI64 com adaptador VirtIO/NAT e o cabo virtual desligado. Instalou em `/dev/sda`, ejetou
 a ISO **antes** do wipe e concluiu a partir da closure pré-validada em RAM. O
 segundo boot iniciou o mesmo VDI sem mídia óptica e ainda sem rede, chegando ao
 login de `root`. No terceiro boot, com o cabo ligado, obteve DHCP IPv4, rota
@@ -168,6 +169,13 @@ RUN_STATE=passed
 FINAL_RESULT=passed
 ```
 
+O runner atual já descreve a próxima prova: ripgrep 15.2.0 presente desde o
+primeiro boot; Zig e GNU Make inicialmente ausentes; link desligado antes de
+`minitrue --offline --no-binary rectify make`; GNU Make 4.4.1 no `world`; Zig
+0.16.0 instalado automaticamente, mas fora do `world`; e `verify` limpo. A
+mídia recomposta ainda não foi executada no VirtualBox, portanto não há hashes
+ou resultado `passed` para esse cenário.
+
 Mesmo quando preenchidos, esses hashes identificarão uma execução do workspace
 de desenvolvimento; não serão pinos de release nem substituirão manifesto
 externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
@@ -179,7 +187,7 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
 | E0 — chroot musl-estático | ✅ | |
 | E1 — `./configure && make` | ✅ | |
 | E2 — glibc + gcc nativo | ✅ | **E2-clean: reproduzido a frio** (rootfs novo, seed limpo, 16 pacotes, gcc nativo compila C/C++, libs finais em /usr/lib). Falta só repetir num 2º ambiente independente |
-| E3 — kernel + boot | 🟡 | O smoke anterior bootou Linux 7.1.4 do E2 com raiz 9p e exercitou módulos assinados. Separadamente, o EFI-stub live passou em ISO→disco→boot sem mídia tanto no aceite automatizado QEMU/OVMF quanto no VirtualBox/EFI; o network-v1 deste último cobriu `simpledrm`/`fbcon`, PS/2, AHCI, `/dev/sda`, VirtIO/NAT e `minitrue verify` pós-login. A dívida desse `verify` foi fechada; E3 segue parcial por faltar runit, `.config` de hardware geral e gestão completa de contas |
+| E3 — kernel + boot | 🟡 | O smoke anterior bootou Linux 7.1.4 do E2 com raiz 9p e exercitou módulos assinados. Separadamente, o EFI-stub live passou em ISO→disco→boot sem mídia tanto no aceite automatizado QEMU/OVMF quanto no VirtualBox/EFI histórico; network-v1 cobriu `simpledrm`/`fbcon`, PS/2, AHCI, `/dev/sda`, VirtIO/NAT e `verify`. O novo fluxo Make/Zig está pendente; faltam ainda runit, `.config` de hardware geral e gestão completa de contas |
 | — openssl 4.0.1 (base de confiança do kernel) | ✅ | mundo B, compilado pela toolchain nativa (libcrypto/libssl, `-DZLIB`); SHA conferido no download. Habilita geração/uso da chave de módulos; **attestation usa ed25519-dalek e independe de OpenSSL**. O materializador de `/etc` agora trata symlinks, com regressão coberta |
 | — base 0.2 (config Fase B) | ✅ código | receita de montagem `GPL-3.0-or-later` com `TOOLCHAIN=none`: além de `/etc/inittab`, `rcS`, `rcK`, `os-release`, `hostname` e a cópia da GPL, sobe interfaces e tenta DHCP IPv4 sem tornar a falha fatal. O script compartilhado com o live configura endereço, rota padrão e DNS em `/etc/udhcpc/default.script`; o MOTD mostra `archives`, `verify` e `rectify`. O novo fingerprint ainda precisa de canal/cache e aceite recompostos. Não cria `/etc/shadow`, portanto sozinha não fecha login autenticado |
 | E4 — userland vendor / GUI | ⬜ | |
@@ -194,14 +202,14 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
 | Hash de artefato via `pack` = `reprocorr` | ✅ (m4/gcc/glibc) |
 | `REPROCORR` pinado + verificado no build | ✅ (`m4` pina; build de fonte grava `ARTIFACT_HASH` e exige reproduzir o pinado — crimestop se divergir) |
 | Cotejo do artefato completo produzido pelo E2-clean | ⬜ (passo posterior à primeira execução a frio) |
-| Identidade declarativa do sistema (`profile.lock`) | ✅ (conteúdo normalizado; lock inclui tamanho, prontidão, hash calculado e os três pinos oficiais) |
+| Identidade declarativa do sistema (`profile.lock`) | ✅ (`PROFILE_LOCK_FORMAT=2`/`PROFILE_CONTENT_FORMAT=2`; inclui `CACHE_WORLD_SHA256`, tamanho, prontidão, hash calculado e os três pinos oficiais) |
 | Executor da instalação medido = executado | ✅ local (`memfd` selado, ambiente fechado e hash no `install.manifest`) |
 | Rootfs instalado byte-a-byte idêntico | ⬜ (`INSTALLED_AT`, uid/gid e demais metadados ainda impedem o claim) |
 | IMG byte-idêntica em duas composições | ✅ local (fixture, mesmo binário/toolchain; GPT/FAT normalizados) |
 | ISO byte-idêntica em duas composições | ✅ local para fixture, ISO final-v10 e ISO network-v1 do VirtualBox (mesmos insumos, binário e `xorriso`, cujo executável é medido) |
 | IMG/ISO byte-idênticas entre builders independentes | ⬜ |
 | Reprodução reconhecida contra manifesto oficial externo assinado | ⬜ (sidecars locais não são autoridade) |
-| R4 — reprodução funcional da mídia de desenvolvimento | ✅ local em QEMU/OVMF (final-v10 automatizado, segundo boot e negativo fail-before-wipe) e VirtualBox/EFI (network-v1, instalação e segundo boot sem rede, terceiro boot VirtIO/NAT, depois `rectify` mundo A e `verify` offline); não prova Internet, hardware real, builders independentes nem release oficial |
+| R4 — reprodução funcional da mídia de desenvolvimento | ✅ local para as revisões históricas QEMU final-v10 e VirtualBox network-v1; 🟡 para o perfil atual, cujo runner Make/Zig ainda não foi executado. Não prova Internet, hardware real, builders independentes nem release oficial |
 
 ## Limitações conhecidas (do parecer externo)
 
@@ -210,7 +218,7 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   (SUPERSEDES seed→busybox; libstdc++ lib64×lib usr-merge). Falta repetir num
   **2º ambiente independente** para "reproduzível ×2" e mover scripts, hashes
   e logs de prova hoje transitórios para um diretório versionado `proofs/e2/`.
-- **Mídia instalável validada em QEMU/OVMF e VirtualBox/EFI:** o aceite
+- **Mídia instalável histórica validada em QEMU/OVMF e VirtualBox/EFI:** o aceite
   automatizado final-v10 cobriu a ordem
   atual. O PID 1 primeiro materializa e verifica toda a closure em
   `/run/distropica-prepared`, configura a conta e recebe de
@@ -226,12 +234,16 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   root. No terceiro boot, VirtIO/NAT exerceu o DHCP IPv4 não fatal de `base`
   0.2, rota padrão, nameserver IPv4, resolução local e gateway. Depois de
   desligar novamente o cabo, instalou `ripgrep` 15.2.0 do cache e passou em
-  `minitrue verify`. Isso não foi um probe da Internet.
+  `minitrue verify`. Isso não foi um probe da Internet. O runner atual substitui
+  esse último passo pela presença inicial de ripgrep e pelo build offline de
+  Make 4.4.1 com Zig 0.16.0 implícito; falta executar a mídia recomposta.
 - **Gates do perfil oficial:** o canal e `--only-binary` estão implementados,
   e o perfil marca `INSTALL_READY=yes`, mas o cache usado no E2E é de
-  desenvolvimento com `TRUST=builder`. Seu superset — a closure do target mais
-  o objeto pinado de `ripgrep` — foi testado: o extra ficou inerte na instalação
-  inicial e foi consumido explicitamente offline após o boot. Ainda não há
+  desenvolvimento com `TRUST=builder`. O superset network-v1 — a closure do
+  target antigo mais o objeto pinado de `ripgrep` — foi testado historicamente.
+  Agora ripgrep pertence a `target.world`, e Make/Zig a `cache.world`; o lock v2 e a
+  verificação offline estão cobertos por unidade, mas a mídia integrada ainda
+  precisa ser aceita. Ainda não há
   endpoint, chave de release, índice ou artefatos oficiais publicados. A
   verdadeira meta-receita `base`, runit e a política uid/gid continuam abertos;
   `base` 0.2 ainda é `base-config` de fato. `profiles/official` permanece

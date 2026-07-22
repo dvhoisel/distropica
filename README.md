@@ -122,12 +122,16 @@ partir de nada além de binários upstream — foi **demonstrada**:
   seus insumos num `profile.lock`, materializa o sistema em um `--target` e
   compõe mídias determinísticas nos formatos GPT/FAT32 (`.img`) e ISO9660
   UEFI (`.iso`). Instalação direta e geração de mídia usam o mesmo
-  `target.world`, `live.world`, overlay, árvore Newspeak e cache fechado.
+  `target.world`, `live.world`, `cache.world`, overlay, árvore Newspeak e cache
+  fechado. O lock v2 autentica `cache.world` separadamente: ele declara
+  disponibilidade offline verificável, não intenção de instalação.
   Perfil, mídia e instalação recebem classes separadas que descrevem apenas
   quais **insumos** foram pinados — nunca se autoatribuem a condição de
-  reprodução oficial. O perfil de desenvolvimento já fecha a instalação
-  mínima `base` + `linux` a partir de um cache binário assinado, e
-  `install-media` valida o payload antes de materializá-lo.
+  reprodução oficial. O perfil de desenvolvimento instala `base`, `linux` e
+  `ripgrep` por padrão e exige que o cache offline disponibilize a fonte do GNU
+  Make e o Zig; antes de retificar o target, o Minipax confere os artefatos declarados com
+  `minitrue --offline cache verify`. `install-media` valida o payload antes de
+  materializá-lo.
 - **Mídia viva UEFI — implementação inicial.**
   `bootstrap/live/build-efi` produz um kernel EFI-stub com initramfs,
   BusyBox, Minipax e Minitrue `static-pie` ligados com musl. O PID 1 encontra a
@@ -144,7 +148,11 @@ partir de nada além de binários upstream — foi **demonstrada**:
   e com o cabo de rede desligado. Num terceiro boot com VirtIO NAT, obteve DHCP,
   rota e DNS local; depois desligou novamente o cabo, instalou o `ripgrep 15.2.0`
   somente do cache com `minitrue --offline rectify` e terminou com `verify`
-  limpo. O kernel mantém
+  limpo. Essa é evidência histórica da revisão network-v1. O runner atual foi
+  alterado para exigir ripgrep já no primeiro boot e provar um build de GNU Make
+  4.4.1 inteiramente offline, com Zig 0.16.0 instalado automaticamente como
+  dependência de build e mantido fora do `world`; a nova mídia ainda precisa
+  passar por esse aceite. O kernel mantém
   `CONFIG_MODULES=y`, mas a mídia não distribui módulos:
   os drivers indispensáveis são built-in e o release
   `7.1.4-distropica-live` evita procurar acidentalmente os módulos `7.1.4` do
@@ -176,9 +184,13 @@ Alvo inicial: **x86_64**.
 O contrato faz da futura ISO mínima oficial, da instalação iniciada de outra
 distribuição e da mídia gerada pelo próprio usuário três entradas para o
 **mesmo pipeline**. A fonte da identidade dos insumos é o perfil
-resolvido e seu `profile.lock`, que vincula os worlds do ambiente vivo e do
-sistema-alvo, o overlay, a árvore Newspeak, o cache opcional, a arquitetura,
-o `SOURCE_DATE_EPOCH` e a prontidão declarada para instalação.
+resolvido e seu `profile.lock`, que vincula os worlds do ambiente vivo, do
+sistema-alvo e da disponibilidade de cache, o overlay, a árvore Newspeak, o
+cache opcional, a arquitetura, o `SOURCE_DATE_EPOCH` e a prontidão declarada
+para instalação. `target.world` é intenção de instalação; `cache.world` apenas
+exige que artefatos possam ser verificados offline. O documento atual usa
+`PROFILE_LOCK_FORMAT=2` e `PROFILE_CONTENT_FORMAT=2`; `CACHE_WORLD_SHA256`
+prende a lista normalizada.
 
 O caminho hoje fechado é o de desenvolvimento **offline**, com um cache de
 canal assinado. Os exemplos abaixo supõem esse cache em `$CACHE` e privilégios
@@ -224,14 +236,27 @@ Depois que a closure já está validada em RAM, ele ejeta a ISO **antes** de env
 a autorização de wipe, instala no VDI e comprova o segundo boot e o login de
 root ainda sem rede. Num terceiro boot, conecta o cabo e prova DHCP IPv4, rota
 padrão, `resolv.conf`, resolução de `localhost` pelo resolvedor NAT e alcance do
-gateway do VirtualBox. Em seguida desliga o cabo novamente e instala
-`ripgrep 15.2.0` com `minitrue --offline rectify ripgrep`, terminando com
-`minitrue verify` limpo.
+gateway do VirtualBox. O target atual já precisa conter ripgrep 15.2.0 desde o
+primeiro boot. Zig e GNU Make devem começar ausentes; após desligar novamente o
+cabo, o runner executa `minitrue --offline --no-binary rectify make`. Esse build
+deve instalar GNU Make 4.4.1, materializar Zig 0.16.0 automaticamente e terminar
+com `minitrue verify` limpo. `make`, solicitado explicitamente, entra no
+`world`; Zig, dependência de build implícita, permanece fora dele.
 
-O cache desse ensaio é deliberadamente um **superset** do `target.world`: contém
-o artefato de `ripgrep`, mas o pacote não faz parte do sistema-alvo mínimo e é
-comprovadamente ausente na instalação inicial. Assim, o último passo exercita
-uma retificação adicional offline, não uma instalação implícita pelo Minipax.
+O `cache.world` do perfil declara GNU Make e Zig como disponibilidades
+obrigatórias da mídia offline. Na instalação, o Minipax chama
+`minitrue --offline cache verify make zig` antes de `rectify`: hashes e a
+assinatura do Zig são conferidos sem download, registro ou instalação. Isso
+mantém distintas a disponibilidade no cache, autenticada por
+`CACHE_WORLD_SHA256`, e a intenção do `target.world`.
+
+O núcleo desse percurso já foi exercitado separadamente numa cópia isolada do
+target, sem atribuir a ele o aceite da ISO: `cache verify make zig` conferiu os
+tarballs e a assinatura minisign do Zig; em seguida,
+`minitrue --offline --no-binary rectify make` partiu sem registros de Zig/Make,
+instalou Zig 0.16.0 como dependência, compilou GNU Make 4.4.1, deixou somente
+`make` no `world` e terminou com `minitrue verify` limpo. O que segue pendente é
+provar o mesmo caminho a partir da nova mídia no VirtualBox.
 O diretório de execução precisa ser novo:
 
 ```sh
@@ -240,12 +265,14 @@ bootstrap/live/accept-virtualbox \
   --run-dir target/acceptance-virtualbox
 ```
 
-Esse aceite passou em 2026-07-21 com VirtualBox
+O cenário descrito acima ainda precisa ser validado com a mídia recomposta. O
+aceite anterior passou em 2026-07-21 com VirtualBox
 `7.2.6_Ubuntur172322`. Duas composições da ISO a partir dos mesmos insumos
 foram byte a byte idênticas. Os hashes abaixo registram a evidência histórica
-da revisão funcional `7148ebd`; a revisão posterior de licenciamento altera o
-snapshot de `base` e exige novo canal/cache/lock/EFI/ISO antes que exista um
-novo pino de mídia:
+da revisão funcional `7148ebd`, na qual ripgrep ainda começava ausente e era
+instalado explicitamente. As revisões posteriores de licenciamento, do perfil e
+da toolchain exigem novo canal/cache/lock/EFI/ISO antes que exista um novo pino
+de mídia:
 
 ```text
 EVIDENCIA_VIRTUALBOX_INTERATIVA=local-custom
@@ -358,9 +385,10 @@ topologia, metadados e `ARTIFACT_HASH`; ambiguidade falha fechado. Um pipeline
 de release deve emitir no próprio build e conservar o artefato autenticado, não
 usar a reconstrução posterior como raiz de publicação.
 
-O outro caminho também foi exercitado com os executores musl estáticos: a
-instalação direta `--offline --only-binary` materializou `base` + `linux` a
-partir do canal assinado de desenvolvimento e terminou com `minitrue verify`
+O outro caminho também foi exercitado com os executores musl estáticos: na
+revisão anterior, a instalação direta `--offline --only-binary` materializou
+`base` + `linux` a partir do canal assinado de desenvolvimento e terminou com
+`minitrue verify`
 sem divergências. O lock instalado teve SHA-256
 `e08ef8c874478a6333f3af53ce4e2dd144ee6f3b144db9746d4cc57d12b0a534`;
 isso é evidência local do fluxo, não um pino oficial.
@@ -456,7 +484,9 @@ após o preflight, sujeitas a TOCTOU apesar do `flock` cooperativo. O contrato
 atual pressupõe controle administrativo exclusivo do rootfs durante a mutação;
 converter o Journal inteiro a descritores confinados é gate de release.
 
-Receitas transitivas participam do fingerprint de build. Attestations Ed25519
+Receitas transitivas participam do fingerprint de build; para receitas fonte
+`TOOLCHAIN=seed|cross`, isso inclui a receita Zig implícita mesmo quando não há
+`BUILD_DEPS=zig`. Attestations Ed25519
 incluem formato, versão e fingerprint da receita, portanto não podem ser
 reaplicadas silenciosamente a outro build. Hashes e assinaturas de fontes são
 revalidados mesmo quando o artefato vem do cache.

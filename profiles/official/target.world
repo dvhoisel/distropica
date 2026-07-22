@@ -1,3 +1,5 @@
-# Perfil-alvo mínimo. base e linux vêm de canal; BusyBox é o binário upstream.
+# Perfil-alvo mínimo. base e linux vêm de canal; BusyBox e ripgrep usam os
+# binários oficiais dos respectivos upstreams.
 base
 linux
+ripgrep

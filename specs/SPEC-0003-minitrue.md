@@ -1,6 +1,6 @@
 # SPEC-0003 — minitrue, a ferramenta
 
-**Status:** rascunho v0.6 · 2026-07-21
+**Status:** rascunho v0.7 · 2026-07-22
 **Depende de:** SPEC-0001 (política), SPEC-0002 (layout), SPEC-0004 (receitas).
 
 ## 1. Identidade
@@ -26,6 +26,8 @@ minitrue rectify   --sync         converge o sistema ao world inteiro (§2)
 minitrue channel emit --output DIR <pkg>…
                                   mantenedor: emite pool + índice de canal
                                   não assinado (SPEC-0009 §4)
+minitrue cache verify <pacote>…   confere artefatos e assinaturas já presentes,
+                                  sem rede, instalação ou alteração do world
 minitrue rollback  <pacote> [<v>] mundo A: volta o current à versão retida (§5)
 minitrue unperson  <pacote>…      mundo A: some dos registros, fica em /opt (§5)
 minitrue memoryhole <pacote>…     remove do sistema e do world; --orfaos:
@@ -47,8 +49,8 @@ minitrue corroborate <pkg>        confere attestations contra a identidade insta
 
 Esta é a interface normativa. No protótipo atual estão implementados
 `rectify <pkg>`, `memoryhole`, `archives`, `verify`, `newspeak`, `explain`,
-`why`, `pack`, `attest`, `corroborate`, o consumo de canais assinados e
-`channel emit`; `--sync`, rollback, `unperson`, `lint`, a CLI de gestão
+`why`, `pack`, `attest`, `corroborate`, `cache verify`, o consumo de canais
+assinados e `channel emit`; `--sync`, rollback, `unperson`, `lint`, a CLI de gestão
 `channel add|remove|list|refresh` e as variantes de remoção/varredura acima
 continuam no Marco 0.2 (ver `STATUS.md`).
 
@@ -89,6 +91,20 @@ falha fechado na ambiguidade. Um release DEVE emitir junto do build, assinar o
 índice externamente e conservar o artefato autenticado. O projeto ainda não
 publicou URL, chave, índice nem pool de um canal oficial.
 
+### Disponibilidade verificável do cache
+
+`cache verify <pacote>…` carrega as receitas efetivas e exige que todos os
+artefatos pinados já existam em `/var/cache/minitrue` com SHA-256 correto. Se a
+receita declara `SIG`, a assinatura destacada também precisa estar presente e
+ser válida contra `SIGKEY`. A operação impõe internamente o contexto offline e
+desativa TOFU: nunca baixa, instala, cria registro, links ou entrada no
+`world`. Pacote ou receita ausente e falha criptográfica continuam seguindo os
+códigos de erro normais (§9).
+
+O Minipax usa esse comando para cumprir o `cache.world` de um perfil offline
+(SPEC-0008): `cache.world` é promessa de **disponibilidade autenticada**, não
+uma segunda lista de pacotes a instalar.
+
 ### O arquivo `world` (`/etc/minitrue/world`)
 
 A intenção do administrador, um pacote por linha (`#` comenta): o conjunto
@@ -105,6 +121,10 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
   <árvore> --world <arquivo> --target <raiz>` (SPEC-0008).
 - A dualidade que organiza a ferramenta: **o registro é o fato; o world é
   a intenção.** `verify` confere fatos; `--sync` reconcilia a intenção.
+- Dependências de runtime, de build e de toolchain instaladas para satisfazer
+  outro pacote não entram no `world`. Assim, Zig materializado automaticamente
+  para compilar uma receita `seed`/`cross` permanece fora da intenção, a menos
+  que tenha sido pedido explicitamente.
 
 ## 3. Fluxo de `rectify`
 
@@ -120,9 +140,13 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
 3. **Dependências**: resolução por busca em profundidade com detecção de ciclo;
    instala o que falta, na ordem. Sem comparação de versões — a árvore
    newspeak em um commit é o conjunto consistente. Para uma receita mundo B,
-   a seleção de canal ocorre antes de expandir `BUILD_DEPS`: se um artefato é
-   escolhido, apenas as `DEPS` de runtime entram no plano; `--no-binary` ou o
-   fallback de fonte expandem também as dependências de build.
+   a seleção de canal ocorre antes de expandir dependências de build: se um
+   artefato é escolhido, apenas as `DEPS` de runtime entram no plano. Quando o
+   pacote é realmente compilado (`--no-binary` ou fallback de fonte), o plano
+   expande `BUILD_DEPS` e também a dependência de toolchain implícita em `zig`
+   para `TOOLCHAIN=seed|cross`. Receitas `TOOLCHAIN=none|native` e qualquer
+   `KIND=binary` não ganham essa aresta. Declaração explícita duplicada de Zig
+   é deduplicada.
 4. **Fetch**: para cada URL de `SRC`, baixar para
    `/var/cache/minitrue/<sha256>` (nome do arquivo no cache = hash
    esperado). Se já existe com hash válido, rede não é tocada.
@@ -240,11 +264,14 @@ Três papéis, persistidos em cinco folhas (`meta`, `manifest`,
   entram.
   O **`FINGERPRINT`** é a identidade de build (SPEC-0011 §4): sha256 do
   arquivo `recipe` inteiro + do `files/` (via o `pack` determinístico),
-  **combinado transitivamente com o fingerprint das `DEPS`+`BUILD_DEPS`**. A
+  **combinado transitivamente com o fingerprint das `DEPS`+`BUILD_DEPS` e da
+  dependência de toolchain implícita** (`zig` em receitas fonte `seed`/`cross`). A
   idempotência do `rectify` compara **versão E fingerprint** — uma receita
   corrigida com a mesma versão muda o fingerprint e re-builda (conserta o
-  "GCC 15.3.0 mudou várias vezes sem bump"), e uma mudança num build-dep
-  propaga para os dependentes (transitivo).
+  "GCC 15.3.0 mudou várias vezes sem bump"), e uma mudança num build-dep ou na
+  receita Zig propaga para os dependentes afetados (transitivo). A identidade
+  inclui essa aresta mesmo quando um canal atende a instalação; o plano de
+  instalação, porém, só materializa Zig quando haverá compilação local.
   O fast path exige ainda registro v2 íntegro: `recipe` e `recipe@<versão>`
   precisam coincidir byte a byte com o snapshot corrente e todas as provas do
   manifesto precisam conferir no filesystem. Em pacote comum,

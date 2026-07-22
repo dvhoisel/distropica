@@ -6,8 +6,12 @@ overrides como `development`; qualquer override aplicável vira `custom`.
 Nenhuma delas é oficial.
 
 `live.world` descreve o ambiente incorporado no `BOOTX64.EFI` da mídia;
-`target.world` descreve o sistema instalado. A árvore Newspeak, o overlay e o
-cache entram no `profile.lock` por hash.
+`target.world` descreve o sistema instalado; e o `cache.world` opcional declara
+quais receitas precisam ter, no cache offline, todos os artefatos e as
+assinaturas que estiverem pinadas. A árvore Newspeak, o overlay, os três worlds
+e o cache entram no `profile.lock` por hash. O lock e sua identidade de conteúdo
+usam os formatos `PROFILE_LOCK_FORMAT=2` e `PROFILE_CONTENT_FORMAT=2`; o campo
+`CACHE_WORLD_SHA256` autentica a forma normalizada de `cache.world`.
 
 Quando o canal oficial existir, seu bootstrap versionado poderá viver em
 `channel-bootstrap/`, com `channel-config/<nome>` e
@@ -16,9 +20,9 @@ entra em `CACHE_SHA256` e é semeado antes do primeiro `rectify`. Ele não exist
 hoje porque endpoint e chave ainda não foram publicados; valores fictícios
 tornariam uma mídia online aparentemente pronta, mas inoperante.
 
-`INSTALL_READY=yes` declara que o world mínimo (`base` + `linux`, com BusyBox
-como dependência) pode ser materializado num alvo vazio. O caminho validado
-neste marco usa um cache de desenvolvimento com índice minisign e
+`INSTALL_READY=yes` declara que o world mínimo (`base` + `linux` + `ripgrep`,
+com BusyBox como dependência) pode ser materializado num alvo vazio. O caminho
+validado no marco anterior usa um cache de desenvolvimento com índice minisign e
 `--offline --only-binary`; ele não compila a toolchain E2 no computador do
 usuário. Esse cache e sua chave de assinatura ainda não são artefatos oficiais
 publicados pelo projeto. Passá-lo por `--cache` é um override explícito e
@@ -28,19 +32,29 @@ preservará `development` até o perfil ser promovido com os pinos de release.
 O cache offline completo pode ser um superconjunto estrito da closure de
 `target.world`. Objetos adicionais continuam presos por `CACHE_SHA256` e são
 semeados em `/var/cache/minitrue`, mas não expressam intenção de instalação e
-não acrescentam pacotes ao world por conta própria. `ripgrep` exemplifica essa
-separação: ele não consta em `target.world` e, portanto, começa ausente; quando
-seu tarball pinado está no cache da mídia, a pessoa pode instalá-lo depois, sem
-rede, com:
+não acrescentam pacotes ao world por conta própria. `cache.world` torna
+verificável uma parte desse superconjunto: antes de retificar o target, uma
+instalação offline executa o equivalente a:
 
 ```sh
-minitrue --offline rectify ripgrep
+minitrue --offline cache verify make zig
 ```
 
-Só essa ordem explícita instala `/usr/bin/rg`, cria o registro e acrescenta
-`ripgrep` ao world. Levar o objeto extra no cache não transforma o ripgrep em
-parte do sistema mínimo nem altera a classe `custom` causada pelo override
-`--cache`.
+Essa conferência valida o hash e, quando pinada, a assinatura dos artefatos já
+presentes, sem rede e sem instalação. No perfil atual, a fonte do GNU Make
+4.4.1 e o Zig 0.16.0 são obrigatórios na disponibilidade offline, mas continuam
+fora de `target.world`: não ganham registro, links nem entrada em
+`/etc/minitrue/world` durante a instalação mínima. Já o ripgrep consta em
+`target.world`, por isso `/usr/bin/rg` deve estar instalado desde o primeiro
+boot.
+
+Quando uma receita `KIND=source` com `TOOLCHAIN=seed` ou `cross` precisa ser
+compilada localmente, o Minitrue trata Zig como dependência de build implícita:
+instala-o antes do build e prende sua identidade ao fingerprint do pacote. Um
+artefato de canal evita a compilação e não instala Zig; receitas `none` ou
+`native` também não o puxam. Como dependência implícita, Zig não entra no
+`world`; somente o pacote solicitado explicitamente entra. O override
+`--cache` continua classificando a composição como `custom`.
 
 O overlay fornece o estado mínimo de contas e boot: conta root inicialmente
 bloqueada, `fstab`, `securetty`, `passwd` e `group`. A mídia viva pede uma senha
@@ -81,12 +95,19 @@ bootstrap/live/accept-virtualbox \
 O runner cria uma VM efêmera UEFI64/VMSVGA/SATA com uma NIC VirtIO NAT. O cabo
 permanece desligado durante a instalação e o segundo boot; o VDI é `/dev/sda`
 no guest. Com o payload já validado em RAM, a ISO é ejetada antes da autorização
-do wipe. Depois de provar o reboot sem ISO e o login de root offline, um terceiro
-boot liga o cabo e comprova DHCP IPv4, rota, DNS local e gateway. Por fim, o
-cabo é desligado outra vez e o ripgrep inicialmente ausente é instalado do
-cache com `minitrue --offline rectify ripgrep`, seguido de `verify`. Esse fluxo
-passou em 2026-07-21 no VirtualBox `7.2.6_Ubuntur172322`; duas composições a
-partir dos mesmos insumos produziram ISO byte a byte idêntica:
+do wipe. A aceitação atual exige que o primeiro sistema instalado já contenha
+ripgrep 15.2.0, mas ainda não Zig nem GNU Make. Depois de provar reboot sem ISO,
+login e rede local num terceiro boot, desliga novamente o cabo e executa
+`minitrue --offline --no-binary rectify make`: o resultado esperado é GNU Make
+4.4.1 no `world`, Zig 0.16.0 materializado automaticamente para o build e fora
+do `world`, seguido de `verify` limpo. Esse cenário novo ainda precisa ser
+executado no VirtualBox com uma mídia recomposta.
+
+O bloco abaixo preserva a **evidência histórica** network-v1, anterior ao
+`target.world` e ao contrato de toolchain atuais. Naquela revisão, ripgrep era
+um extra inicialmente ausente e foi instalado explicitamente. O fluxo passou
+em 2026-07-21 no VirtualBox `7.2.6_Ubuntur172322`; duas composições a partir dos
+mesmos insumos produziram ISO byte a byte idêntica:
 
 ```text
 EVIDENCIA_VIRTUALBOX_INTERATIVA=local-custom

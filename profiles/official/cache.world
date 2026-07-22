@@ -1,0 +1,4 @@
+# Prova de bootstrap e sua semente, obrigatórias na mídia offline. Permanecem
+# no cache; Make só é compilado quando pedido e Zig entra sob demanda no build.
+make
+zig

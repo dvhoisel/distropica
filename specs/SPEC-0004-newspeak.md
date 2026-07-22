@@ -1,6 +1,6 @@
 # SPEC-0004 — newspeak, o formato das receitas
 
-**Status:** rascunho v0.4 · 2026-07-21
+**Status:** rascunho v0.5 · 2026-07-22
 **Depende de:** SPEC-0001 (elegibilidade), SPEC-0003 (contrato de execução).
 
 Newspeak é o vocabulário mínimo: uma receita diz **de onde vem, como se
@@ -49,7 +49,7 @@ Opcionais:
 | `LINKS` | mundo A: comandos a expor, `nome=caminho/relativo/no/prefix`, sem `/`, `.` ou `..` nos componentes; default: todo executável em `bin/` do prefix |
 | `REQUIRES_GLIBC` | `1` ⇒ só instala após o Estágio 2 (SPEC-0005) |
 | `ABOUT` | uma linha: o que é / justificativa de classificação |
-| `LICENSE` | identificador SPDX do **payload instalado**. Não relicencia o arquivo `recipe`: a implementação autoral da receita segue a licença do repositório, enquanto o software de terceiros conserva a licença upstream |
+| `LICENSE` | expressão SPDX do **payload instalado**, ou `NOASSERTION` quando um bundle de terceiros ainda aguarda inventário conclusivo. Não relicencia o arquivo `recipe`: a implementação autoral da receita segue a licença do repositório, enquanto o software de terceiros conserva a licença upstream. `NOASSERTION` é conservador, não dispensa preservar avisos nem o SBOM antes da publicação |
 | `SIG` | URL(s) de assinatura destacada, uma por artefato, na ordem de `SRC` (§5) |
 | `SIGSUMS` | norma do Marco 0.2: URL única de lista de checksums assinada; parser atual reconhece, executor ainda recusa (§5) |
 | `SIGKEY` | hoje: chave minisign/signify pinada em uma linha base64; caminho `files/*.asc` pertence ao OpenPGP futuro |
@@ -58,7 +58,7 @@ Opcionais:
 | `REPROCORR` | mundo B: sha256 do **tar normalizado** reprodutível (saída de `minitrue pack`); raiz de confiança única da corroboração de canal (SPEC-0009 §6, SPEC-0010 §4) |
 | `PROVISIONAL` | `1` ⇒ pacote-semente/scaffolding que **cede** seus caminhos ao sucessor que os reivindique, sem *doublethink* (SPEC-0003 §3). Dois usos: (a) busybox → coreutils/binutils; (b) o toolchain-semente musl do E2 (gmp/mpfr/mpc/binutils/gcc) → os rebuilds-glibc, SPEC-0005 §4 |
 | `SUPERSEDES` | lista de pacotes `PROVISIONAL` cujos caminhos esta receita tem **licença** de tomar (SPEC-0003 §7). A supersessão é **declarativa**: colidir com um provisional NÃO listado aqui é *doublethink*, não cessão. Ex.: `mathlibs-glibc` pina `SUPERSEDES="gmp mpfr mpc"` |
-| `TOOLCHAIN` | perfil de toolchain do build (SPEC-0005): `none` (receita de montagem, sem compilador), `seed` (zig cc -target musl; **default**), `cross` (`x86_64-distropica-linux-gnu-*`: gcc passada 1 + binutils-cross), `native` (gcc nativo, pós-E2) |
+| `TOOLCHAIN` | perfil de toolchain do build (SPEC-0005): `none` (receita de montagem, sem compilador), `seed` (zig cc -target musl; **default**), `cross` (`x86_64-distropica-linux-gnu-*`: gcc passada 1 + binutils-cross), `native` (gcc nativo, pós-E2). Em `KIND=source`, `seed` e `cross` implicam `zig` como dependência só de build; não é necessário repetir em `BUILD_DEPS` |
 | `RETRIES` | nº de reexecuções que a função `retry` do build tolera (§3), para o ICE flaky do gcc-passada-1 (SPEC-0005/0010). Default `0` |
 
 Funções:
@@ -88,6 +88,14 @@ O minitrue executa a função da receita via `sh -e`, com:
 | `ROOT` | raiz alvo (para casos raros e legítimos de leitura) |
 | `SOURCE_DATE_EPOCH` | timestamp fixo p/ builds reprodutíveis (SPEC-0010); do campo `EPOCH` da receita ou o default do projeto |
 | `LC_ALL`/`LANG`/`TZ` | `C`/`C`/`UTC` — impostos p/ determinismo (SPEC-0010) |
+
+Para receitas `KIND=source`, `TOOLCHAIN=seed|cross` cria uma aresta implícita
+para a receita `zig`. Ela participa do fingerprint transitivo mesmo sem a
+repetição em `BUILD_DEPS`, e o Minitrue materializa Zig antes de executar
+`build()` quando escolhe compilação local. Se um artefato de canal satisfaz o
+pacote, nenhum build ocorre e Zig não é instalado. `KIND=binary` e os perfis
+`none`/`native` não recebem essa dependência. Por ser dependência, e não pedido
+explícito, Zig não entra em `/etc/minitrue/world`.
 
 O ambiente é **determinístico** (SPEC-0010): além do acima, `umask 022` e
 caminho de build canônico. A função recebe apenas o contrato; ainda precisa evitar

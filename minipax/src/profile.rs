@@ -7,7 +7,7 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
-pub const PROFILE_LOCK_FORMAT: &str = "1";
+pub const PROFILE_LOCK_FORMAT: &str = "2";
 const MAX_PROFILE_FILE: u64 = 1024 * 1024;
 
 #[derive(Default)]
@@ -39,6 +39,7 @@ pub struct ResolvedProfile {
     pub official_minitrue_sha256: Option<String>,
     pub target_world_path: PathBuf,
     pub live_world_path: PathBuf,
+    pub cache_world_path: Option<PathBuf>,
     pub overlay_path: Option<PathBuf>,
     pub newspeak_path: PathBuf,
     pub cache_path: Option<PathBuf>,
@@ -51,6 +52,7 @@ pub struct ResolvedProfile {
 pub struct ProfileArtifacts {
     pub target_world: String,
     pub live_world: String,
+    pub cache_world: String,
     pub overlay_entries: Vec<Entry>,
     pub overlay_tar: Vec<u8>,
     pub newspeak_entries: Vec<Entry>,
@@ -241,6 +243,12 @@ impl ResolvedProfile {
         let live_world_path = overrides
             .live_world
             .unwrap_or_else(|| directory.join("live.world"));
+        let cache_world_path = match fs::symlink_metadata(directory.join("cache.world")) {
+            Ok(metadata) if metadata.file_type().is_file() => Some(directory.join("cache.world")),
+            Ok(_) => bail!("cache.world precisa ser arquivo regular real"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
         let overlay_path = overrides.overlay.or_else(|| {
             directory
                 .join("overlay")
@@ -284,6 +292,7 @@ impl ResolvedProfile {
             official_minitrue_sha256,
             target_world_path,
             live_world_path,
+            cache_world_path,
             overlay_path,
             newspeak_path,
             cache_path,
@@ -295,6 +304,12 @@ impl ResolvedProfile {
     pub fn artifacts(&self) -> Result<ProfileArtifacts> {
         let target_world = normalize_world(&self.target_world_path)?;
         let live_world = normalize_world(&self.live_world_path)?;
+        let cache_world = self
+            .cache_world_path
+            .as_deref()
+            .map(normalize_world)
+            .transpose()?
+            .unwrap_or_default();
         let (overlay_entries, overlay_tar) = match &self.overlay_path {
             Some(path) => tree::snapshot(path, TreePolicy::Overlay, self.epoch)?,
             None => (Vec::new(), tree::pack(&[], self.epoch)?),
@@ -310,6 +325,7 @@ impl ResolvedProfile {
         };
         let target_world_hash = sha256(target_world.as_bytes());
         let live_world_hash = sha256(live_world.as_bytes());
+        let cache_world_hash = sha256(cache_world.as_bytes());
         let overlay_hash = sha256(&overlay_tar);
         let newspeak_hash = sha256(&newspeak_tar);
         let cache_hash = cache_tar
@@ -317,7 +333,7 @@ impl ResolvedProfile {
             .map(sha256)
             .unwrap_or_else(|| "-".into());
         let content = format!(
-            "PROFILE_CONTENT_FORMAT=1\nPROFILE_NAME={}\nARCH={}\nSOURCE_DATE_EPOCH={}\nMEDIA_SIZE_MIB={}\nINSTALL_READY={}\nTARGET_WORLD_SHA256={target_world_hash}\nLIVE_WORLD_SHA256={live_world_hash}\nOVERLAY_SHA256={overlay_hash}\nNEWSPEAK_SHA256={newspeak_hash}\nCACHE_SHA256={cache_hash}\n",
+            "PROFILE_CONTENT_FORMAT=2\nPROFILE_NAME={}\nARCH={}\nSOURCE_DATE_EPOCH={}\nMEDIA_SIZE_MIB={}\nINSTALL_READY={}\nTARGET_WORLD_SHA256={target_world_hash}\nLIVE_WORLD_SHA256={live_world_hash}\nCACHE_WORLD_SHA256={cache_world_hash}\nOVERLAY_SHA256={overlay_hash}\nNEWSPEAK_SHA256={newspeak_hash}\nCACHE_SHA256={cache_hash}\n",
             self.name,
             self.arch,
             self.epoch,
@@ -336,7 +352,7 @@ impl ResolvedProfile {
         }
         .to_string();
         let lock = format!(
-            "PROFILE_LOCK_FORMAT={PROFILE_LOCK_FORMAT}\nPROFILE_NAME={}\nPROFILE_CLASS={}\nPROFILE_CONTENT_SHA256={}\nOFFICIAL_CONTENT_SHA256={}\nARCH={}\nSOURCE_DATE_EPOCH={}\nMEDIA_SIZE_MIB={}\nINSTALL_READY={}\nOFFICIAL_BOOT_EFI_SHA256={}\nOFFICIAL_MINITRUE_SHA256={}\nTARGET_WORLD_SHA256={}\nLIVE_WORLD_SHA256={}\nOVERLAY_SHA256={}\nNEWSPEAK_SHA256={}\nCACHE_SHA256={}\n",
+            "PROFILE_LOCK_FORMAT={PROFILE_LOCK_FORMAT}\nPROFILE_NAME={}\nPROFILE_CLASS={}\nPROFILE_CONTENT_SHA256={}\nOFFICIAL_CONTENT_SHA256={}\nARCH={}\nSOURCE_DATE_EPOCH={}\nMEDIA_SIZE_MIB={}\nINSTALL_READY={}\nOFFICIAL_BOOT_EFI_SHA256={}\nOFFICIAL_MINITRUE_SHA256={}\nTARGET_WORLD_SHA256={}\nLIVE_WORLD_SHA256={}\nCACHE_WORLD_SHA256={}\nOVERLAY_SHA256={}\nNEWSPEAK_SHA256={}\nCACHE_SHA256={}\n",
             self.name,
             class,
             content_hash,
@@ -349,6 +365,7 @@ impl ResolvedProfile {
             self.official_minitrue_sha256.as_deref().unwrap_or("-"),
             target_world_hash,
             live_world_hash,
+            cache_world_hash,
             overlay_hash,
             newspeak_hash,
             cache_hash,
@@ -357,6 +374,7 @@ impl ResolvedProfile {
         Ok(ProfileArtifacts {
             target_world,
             live_world,
+            cache_world,
             overlay_entries,
             overlay_tar,
             newspeak_entries,
@@ -436,6 +454,42 @@ mod tests {
             }
         )
         .is_err());
+    }
+
+    #[test]
+    fn cache_world_opcional_normaliza_e_entra_no_lock() {
+        let temp = fixture();
+        let load = || {
+            ResolvedProfile::load(
+                temp.path(),
+                ProfileOverrides {
+                    newspeak: Some(temp.path().join("newspeak")),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let absent = load().artifacts().unwrap();
+        assert!(absent.cache_world.is_empty());
+        assert!(absent
+            .lock
+            .contains(&format!("CACHE_WORLD_SHA256={}\n", sha256(b""))));
+
+        fs::write(
+            temp.path().join("cache.world"),
+            "zig\n# disponível, não instalado\nripgrep\n",
+        )
+        .unwrap();
+        let declared = load().artifacts().unwrap();
+        assert_eq!(declared.cache_world, "ripgrep\nzig\n");
+        assert_ne!(absent.lock, declared.lock);
+        assert!(declared.lock.contains(&format!(
+            "CACHE_WORLD_SHA256={}\n",
+            sha256(declared.cache_world.as_bytes())
+        )));
+
+        fs::write(temp.path().join("cache.world"), "zig\nzig\n").unwrap();
+        assert!(load().artifacts().is_err());
     }
 
     #[test]

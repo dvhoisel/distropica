@@ -1,6 +1,6 @@
 # SPEC-0011 — Modelo de release: rolling edge
 
-**Status:** rascunho v0.1 · 2026-07-20
+**Status:** rascunho v0.2 · 2026-07-22
 **Palavras-chave normativas:** DEVE / NÃO DEVE / DEVERIA / PODE (RFC 2119).
 **Depende de:** SPEC-0001 (premissas, P1/P2/P7), SPEC-0003 (minitrue, `--sync`,
 registro), SPEC-0008 (kernel, boot A/B), SPEC-0009 (canais), SPEC-0010
@@ -90,13 +90,17 @@ fingerprint**: receita corrigida com a mesma versão ⇒ fingerprint diferente �
 re-builda. Consertado o "GCC 15.3.0 mudou várias vezes sem bump" que o modelo
 só-`VERSION` ignorava.
 
-**Transitivo (2026-07-20).** O fingerprint de build é o `own_fingerprint` da
+**Transitivo (2026-07-22).** O fingerprint de build é o `own_fingerprint` da
 receita (arquivo + `files/`) **combinado com os fingerprints das suas
-`DEPS`+`BUILD_DEPS`**, recursivamente (memoizado, robusto a ciclo). Então uma
-mudança no `binutils` propaga para o `gcc`, e um roll que altera só um build-dep
-**re-builda os dependentes**. Consertado o limite não-transitivo. (Mudar o
-algoritmo invalida os fingerprints antigos ⇒ um `rectify` seguinte re-builda a
-árvore uma vez — comportamento correto de uma troca de esquema.)
+`DEPS`+`BUILD_DEPS` e das dependências de toolchain implícitas**, recursivamente
+(memoizado, robusto a ciclo). Em receitas fonte `TOOLCHAIN=seed|cross`, a
+identidade de Zig entra mesmo sem `BUILD_DEPS=zig`. Então uma mudança no
+`binutils` propaga para o `gcc`, e mudar a semente propaga a todos os pacotes
+afetados. O plano só instala Zig quando escolhe compilação local; um artefato de
+canal conserva a mesma identidade sem expandir dependências de build.
+Consertado o limite não-transitivo. (Mudar o algoritmo invalida os fingerprints
+antigos ⇒ um `rectify` seguinte re-builda a árvore uma vez — comportamento
+correto de uma troca de esquema.)
 
 É a **mesma peça** que o Estágio 2 pediu para rodar pelo `rectify` (SPEC-0005
 §4) — uma dívida, dois usos. O `--sync` (§3.2), quando implementado, usa este

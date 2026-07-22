@@ -153,6 +153,24 @@ pub enum BinaryPolicy {
     BinaryOnly,
 }
 
+/// Confere que os insumos pinados de cada pacote já estão no cache, incluindo
+/// assinaturas destacadas, sem baixar nem instalar nada. O contexto offline
+/// local torna essa promessa independente das flags fornecidas pelo chamador.
+pub fn cache_verify(ctx: &Ctx, names: &[String]) -> Result<()> {
+    let offline = Ctx {
+        root: ctx.root.clone(),
+        offline: true,
+        tofu: false,
+        jobs: ctx.jobs,
+    };
+    for name in names {
+        let recipe = recipe::load(&offline, name)?;
+        fetch::ensure_artifacts(&offline, &recipe)?;
+        println!("cache íntegro: {} {}", recipe.name, recipe.version);
+    }
+    Ok(())
+}
+
 pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> {
     let _lock = acquire_lock(ctx)?; // segurado até o fim da operação
                                     // Uma transação órfã de outro pacote pode ter substituído justamente um
@@ -257,9 +275,13 @@ fn collect_identity(
     }
     let r = recipe::load(ctx, name)?;
     stack.push(name.to_string());
-    // DEPS (runtime) e BUILD_DEPS (só compilação) precisam existir antes deste
-    // pacote compilar; só as DEPS entram no meta como dependências de runtime.
+    // DEPS (runtime), BUILD_DEPS e a dependência implicada pela TOOLCHAIN
+    // precisam existir antes deste pacote compilar; só as DEPS entram no meta
+    // como dependências de runtime.
     for d in r.deps.iter().chain(r.build_deps.iter()) {
+        collect_identity(ctx, d, seen, stack, out)?;
+    }
+    for d in r.toolchain_build_deps() {
         collect_identity(ctx, d, seen, stack, out)?;
     }
     stack.pop();
@@ -350,6 +372,19 @@ fn plan_install(
     }
     if compile_locally {
         for dependency in &recipe.build_deps {
+            plan_install(
+                ctx,
+                dependency,
+                policy,
+                recipes,
+                fingerprints,
+                catalog,
+                seen,
+                stack,
+                out,
+            )?;
+        }
+        for dependency in recipe.toolchain_build_deps() {
             plan_install(
                 ctx,
                 dependency,
@@ -824,7 +859,7 @@ fn seed_shims(ctx: &Ctx, work: &Path) -> Result<PathBuf> {
     if !zig_host.exists() {
         return fail(
             5,
-            "toolchain seed exige o zig — `minitrue rectify zig` antes",
+            "invariante quebrada: o plano seed/cross não materializou o Zig antes do build",
         );
     }
     // Os shims rodam DENTRO do chroot (bwrap): o caminho do zig e o
@@ -6808,7 +6843,7 @@ mod tests {
         fs::create_dir_all(&rec).unwrap();
         fs::write(
             recipe_dir.join("recipe"),
-            "NAME=seed\nVERSION=1\nKIND=source\nPROVISIONAL=1\nbuild(){ :; }\n",
+            "NAME=seed\nVERSION=1\nKIND=source\nTOOLCHAIN=none\nPROVISIONAL=1\nbuild(){ :; }\n",
         )
         .unwrap();
         let ctx = Ctx {
@@ -7728,6 +7763,115 @@ mod tests {
     }
 
     #[test]
+    fn plano_source_local_expande_zig_da_toolchain_uma_vez() {
+        for (case, toolchain, explicit) in [
+            ("seed", "seed", ""),
+            ("cross", "cross", ""),
+            ("duplicado", "seed", "BUILD_DEPS=zig\n"),
+        ] {
+            let n = CNT.fetch_add(1, Ordering::Relaxed);
+            let root =
+                std::env::temp_dir().join(format!("mt-plan-zig-{case}-{}-{n}", std::process::id()));
+            let recipes_dir = root.join("var/lib/minitrue/newspeak");
+            fs::create_dir_all(recipes_dir.join("pkg")).unwrap();
+            fs::create_dir_all(recipes_dir.join("zig")).unwrap();
+            fs::write(
+                recipes_dir.join("pkg/recipe"),
+                format!(
+                    "NAME=pkg\nVERSION=1\nKIND=source\nTOOLCHAIN={toolchain}\n{explicit}build(){{ :; }}\n"
+                ),
+            )
+            .unwrap();
+            fs::write(
+                recipes_dir.join("zig/recipe"),
+                format!(
+                    "NAME=zig\nVERSION=1\nKIND=binary\nSRC=https://e/zig.tar.xz\nSHA256={}\ninstall_pkg(){{ :; }}\n",
+                    "a".repeat(64)
+                ),
+            )
+            .unwrap();
+            let ctx = Ctx {
+                root: root.clone(),
+                offline: true,
+                tofu: false,
+                jobs: 1,
+            };
+            let mut identity = Vec::new();
+            collect_identity(
+                &ctx,
+                "pkg",
+                &mut HashSet::new(),
+                &mut Vec::new(),
+                &mut identity,
+            )
+            .unwrap();
+            let fingerprints = recipe::build_fingerprints(&identity).unwrap();
+            let by_name: HashMap<&str, &Recipe> = identity
+                .iter()
+                .map(|recipe| (recipe.name.as_str(), recipe))
+                .collect();
+            let mut catalog = None;
+            let mut order = Vec::new();
+            plan_install(
+                &ctx,
+                "pkg",
+                BinaryPolicy::SourceOnly,
+                &by_name,
+                &fingerprints,
+                &mut catalog,
+                &mut HashSet::new(),
+                &mut Vec::new(),
+                &mut order,
+            )
+            .unwrap();
+            assert_eq!(order, ["zig", "pkg"], "caso {case}");
+            let _ = fs::remove_dir_all(&root);
+        }
+    }
+
+    #[test]
+    fn cache_verify_confere_sem_instalar_ou_usar_rede() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-cache-verify-{}-{n}", std::process::id()));
+        let recipe_dir = root.join("var/lib/minitrue/newspeak/tool");
+        let cache = root.join("var/cache/minitrue");
+        fs::create_dir_all(&recipe_dir).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        let payload = b"artefato pinado";
+        let hash = sha256_bytes(payload);
+        fs::write(
+            recipe_dir.join("recipe"),
+            format!(
+                "NAME=tool\nVERSION=1\nKIND=binary\nSRC=https://example.invalid/tool.tar\nSHA256={hash}\ninstall_pkg(){{ return 99; }}\n"
+            ),
+        )
+        .unwrap();
+        fs::write(cache.join(&hash), payload).unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            // Mesmo sem --offline externo, `cache verify` jamais baixa.
+            offline: false,
+            tofu: true,
+            jobs: 1,
+        };
+        let names = vec!["tool".to_string()];
+        cache_verify(&ctx, &names).unwrap();
+        assert!(!ctx.records_dir().exists());
+        assert!(!root.join("opt/tool").exists());
+        assert!(!ctx.world_path().exists());
+
+        fs::remove_file(cache.join(&hash)).unwrap();
+        let error = cache_verify(&ctx, &names).expect_err("objeto ausente deveria falhar");
+        assert_eq!(
+            error
+                .downcast_ref::<crate::Fail>()
+                .map(|failure| failure.code),
+            Some(6)
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn canal_only_binary_offline_nao_expande_build_deps_e_emite() {
         let n = CNT.fetch_add(1, Ordering::Relaxed);
         let base = std::env::temp_dir().join(format!("mt-channel-e2e-{}-{n}", std::process::id()));
@@ -7752,16 +7896,25 @@ mod tests {
         let recipes = root.join("var/lib/minitrue/newspeak");
         fs::create_dir_all(recipes.join("pkg")).unwrap();
         fs::create_dir_all(recipes.join("compiler")).unwrap();
+        fs::create_dir_all(recipes.join("zig")).unwrap();
         fs::write(
             recipes.join("pkg/recipe"),
             format!(
-                "NAME=pkg\nVERSION=1\nKIND=source\nBUILD_DEPS=compiler\nREPROCORR={reprocorr}\nEPOCH={epoch}\nbuild() {{\n  printf 'BUILD NAO PODIA RODAR\\n' > \"$ROOT/build-ran\"\n  return 99\n}}\n"
+                "NAME=pkg\nVERSION=1\nKIND=source\nTOOLCHAIN=seed\nBUILD_DEPS=compiler\nREPROCORR={reprocorr}\nEPOCH={epoch}\nbuild() {{\n  printf 'BUILD NAO PODIA RODAR\\n' > \"$ROOT/build-ran\"\n  return 99\n}}\n"
             ),
         )
         .unwrap();
         fs::write(
             recipes.join("compiler/recipe"),
-            "NAME=compiler\nVERSION=1\nKIND=source\nbuild() {\n  printf 'E2 NAO PODIA RODAR\\n' > \"$ROOT/compiler-ran\"\n  return 99\n}\n",
+            "NAME=compiler\nVERSION=1\nKIND=source\nTOOLCHAIN=none\nbuild() {\n  printf 'E2 NAO PODIA RODAR\\n' > \"$ROOT/compiler-ran\"\n  return 99\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            recipes.join("zig/recipe"),
+            format!(
+                "NAME=zig\nVERSION=1\nKIND=binary\nSRC=https://example.invalid/zig.tar.xz\nSHA256={}\ninstall_pkg() {{\n  printf 'ZIG NAO PODIA INSTALAR\\n' > \"$ROOT/zig-ran\"\n  return 99\n}}\n",
+                "b".repeat(64)
+            ),
         )
         .unwrap();
 
@@ -7918,6 +8071,10 @@ mod tests {
         assert!(
             !context.records_dir().join("compiler").exists(),
             "--only-binary pkg não puxa E2/BUILD_DEPS"
+        );
+        assert!(
+            !context.records_dir().join("zig").exists() && !root.join("zig-ran").exists(),
+            "--only-binary pkg não instala a toolchain implícita"
         );
         let meta = read_meta_strict(&context.records_dir().join("pkg"))
             .unwrap()

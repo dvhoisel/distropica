@@ -68,6 +68,20 @@ pub struct Recipe {
 }
 
 impl Recipe {
+    /// Dependências implicadas pelo contrato de `TOOLCHAIN`, mesmo quando a
+    /// receita não repete o nome em `BUILD_DEPS`. A semente também permanece
+    /// necessária no estágio cross para as ferramentas executadas no host.
+    /// Elas participam do fingerprint sempre, mas o plano só as instala quando
+    /// o pacote será realmente compilado da fonte.
+    pub fn toolchain_build_deps(&self) -> &'static [&'static str] {
+        if self.kind == Kind::Source && matches!(self.toolchain, Toolchain::Seed | Toolchain::Cross)
+        {
+            &["zig"]
+        } else {
+            &[]
+        }
+    }
+
     /// Fingerprint **próprio** (só desta receita): o arquivo `recipe` — que já
     /// carrega VERSION, SRC, SHA256, TOOLCHAIN, DEPS, BUILD_DEPS e o corpo de
     /// `build()` — mais o diretório `files/` (patches, chaves). Muda quando
@@ -657,10 +671,11 @@ fn parse_literal_value(value: &str) -> Option<String> {
 }
 
 /// Fingerprint de build **transitivo** (SPEC-0011 §4): o `own_fingerprint` da
-/// receita **combinado com os fingerprints das suas `DEPS`+`BUILD_DEPS`**,
-/// recursivamente. Assim, se o `binutils` muda, o fingerprint do `gcc` também
-/// muda — e o `rectify`/`--sync` re-builda o dependente, não só o pacote
-/// alterado. Consertando o limite não-transitivo do v1.
+/// receita combinado com os fingerprints das suas `DEPS`, `BUILD_DEPS` e
+/// dependências de toolchain implícitas, recursivamente. Assim, se o `binutils`
+/// ou a semente Zig muda, o fingerprint dos dependentes afetados também muda —
+/// e o `rectify`/`--sync` re-builda o dependente, não só o pacote alterado.
+/// Consertando o limite não-transitivo do v1.
 ///
 /// Recebe a resolução inteira já carregada e calcula todos os fingerprints sem
 /// reler a árvore. Assim a closure (receitas + `files/`) é um snapshot único do
@@ -704,8 +719,16 @@ fn build_fp_from_snapshots(
     h.update(b"minitrue-bfp-v1\0self\0");
     h.update(r.own_fingerprint()?.as_bytes());
     stack.push(name.to_string());
-    // Ordem canônica dos deps para o hash ser estável.
-    let mut deps: Vec<&String> = r.deps.iter().chain(r.build_deps.iter()).collect();
+    // Ordem canônica dos deps para o hash ser estável. A toolchain declarada
+    // também faz parte da identidade: trocar a receita do Zig invalida tudo
+    // que foi produzido pelos estágios seed/cross.
+    let mut deps: Vec<&str> = r
+        .deps
+        .iter()
+        .chain(r.build_deps.iter())
+        .map(String::as_str)
+        .chain(r.toolchain_build_deps().iter().copied())
+        .collect();
     deps.sort();
     deps.dedup();
     for d in deps {
@@ -921,7 +944,7 @@ mod tests {
         std::fs::create_dir_all(&files).unwrap();
         let hash = "a".repeat(64);
         let original = format!(
-            "NAME=foo\nVERSION=1\nKIND=source\nSRC=https://e/foo\nSHA256={hash}\nABOUT='original'\nbuild(){{ :; }}\n"
+            "NAME=foo\nVERSION=1\nKIND=source\nTOOLCHAIN=none\nSRC=https://e/foo\nSHA256={hash}\nABOUT='original'\nbuild(){{ :; }}\n"
         );
         std::fs::write(dir.join("recipe"), &original).unwrap();
         std::fs::write(files.join("fix.patch"), "patch original\n").unwrap();
@@ -1032,7 +1055,7 @@ mod tests {
             std::fs::create_dir_all(&d).unwrap();
             std::fs::write(
                 d.join("recipe"),
-                format!("NAME={name}\nVERSION=1\nKIND=source\nSRC=https://e/{name}.tar.xz\nSHA256={hash}\n{extra}\nbuild(){{ :; }}\n"),
+                format!("NAME={name}\nVERSION=1\nKIND=source\nTOOLCHAIN=none\nSRC=https://e/{name}.tar.xz\nSHA256={hash}\n{extra}\nbuild(){{ :; }}\n"),
             )
             .unwrap();
         };
@@ -1060,18 +1083,64 @@ mod tests {
     }
 
     #[test]
+    fn zig_implicito_participa_do_fingerprint_seed() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-bfp-zig-{}-{n}", std::process::id()));
+        let tree = root.join("var/lib/minitrue/newspeak");
+        let pkg = tree.join("pkg");
+        let zig = tree.join("zig");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::create_dir_all(&zig).unwrap();
+        std::fs::write(
+            pkg.join("recipe"),
+            "NAME=pkg\nVERSION=1\nKIND=source\nTOOLCHAIN=seed\nbuild(){ :; }\n",
+        )
+        .unwrap();
+        let write_zig = |about: &str| {
+            std::fs::write(
+                zig.join("recipe"),
+                format!(
+                    "NAME=zig\nVERSION=1\nKIND=binary\nABOUT={about}\nSRC=https://e/zig.tar.xz\nSHA256={}\ninstall_pkg(){{ :; }}\n",
+                    "a".repeat(64)
+                ),
+            )
+            .unwrap();
+        };
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let fingerprint = || {
+            let closure = [load(&ctx, "zig").unwrap(), load(&ctx, "pkg").unwrap()];
+            build_fingerprints(&closure).unwrap().remove("pkg").unwrap()
+        };
+
+        write_zig("semente-a");
+        let first = fingerprint();
+        write_zig("semente-b");
+        assert_ne!(first, fingerprint());
+        assert!(
+            build_fingerprints(&[load(&ctx, "pkg").unwrap()]).is_err(),
+            "snapshot seed sem a receita Zig precisa falhar fechado"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn toolchain_default_e_seed_sem_retries() {
         let r = load_body("").unwrap();
         assert_eq!(r.toolchain, Toolchain::Seed);
         assert_eq!(r.retries, 0);
+        assert_eq!(r.toolchain_build_deps(), &["zig"]);
     }
 
     #[test]
     fn toolchain_none() {
-        assert_eq!(
-            load_body("TOOLCHAIN=none").unwrap().toolchain,
-            Toolchain::None
-        );
+        let r = load_body("TOOLCHAIN=none").unwrap();
+        assert_eq!(r.toolchain, Toolchain::None);
+        assert!(r.toolchain_build_deps().is_empty());
     }
 
     #[test]
@@ -1079,14 +1148,40 @@ mod tests {
         let r = load_body("TOOLCHAIN=cross\nRETRIES=50").unwrap();
         assert_eq!(r.toolchain, Toolchain::Cross);
         assert_eq!(r.retries, 50);
+        assert_eq!(r.toolchain_build_deps(), &["zig"]);
     }
 
     #[test]
     fn toolchain_native() {
-        assert_eq!(
-            load_body("TOOLCHAIN=native").unwrap().toolchain,
-            Toolchain::Native
-        );
+        let r = load_body("TOOLCHAIN=native").unwrap();
+        assert_eq!(r.toolchain, Toolchain::Native);
+        assert!(r.toolchain_build_deps().is_empty());
+    }
+
+    #[test]
+    fn pacote_binario_nao_puxa_zig_da_toolchain() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-binary-tc-{}-{n}", std::process::id()));
+        let dir = root.join("var/lib/minitrue/newspeak/tool");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("recipe"),
+            format!(
+                "NAME=tool\nVERSION=1\nKIND=binary\nSRC=https://e/tool.tar.xz\nSHA256={}\ninstall_pkg(){{ :; }}\n",
+                "a".repeat(64)
+            ),
+        )
+        .unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let recipe = load(&ctx, "tool").unwrap();
+        assert_eq!(recipe.toolchain, Toolchain::Seed);
+        assert!(recipe.toolchain_build_deps().is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

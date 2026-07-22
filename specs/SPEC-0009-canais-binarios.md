@@ -1,6 +1,6 @@
 # SPEC-0009 — Canais binários (oficial e samizdat)
 
-**Status:** implementação inicial v0.4 · 2026-07-21
+**Status:** implementação inicial v0.5 · 2026-07-22
 **Depende de:** SPEC-0001 (premissas, P2/P6), SPEC-0003 (minitrue),
 SPEC-0004 (newspeak), SPEC-0008 (minipax).
 
@@ -209,7 +209,10 @@ canal **não** escolhe versão; a árvore versionada é a fonte de verdade):
 
 `--offline` restringe ao cache; `--no-binary` força o build de fonte
 (para quem quer compilar); `--only-binary` proíbe o fallback (falha se
-nenhum canal tiver — útil em máquina sem toolchain).
+nenhum canal tiver — útil em máquina sem toolchain). Quando o canal vence, o
+plano não expande `BUILD_DEPS` nem dependências de toolchain implícitas: uma
+receita fonte `seed`/`cross` conserva Zig no fingerprint autenticado, mas não o
+instala se não houver compilação local.
 
 ### 5.1 Usuário normal, reprodutor e gerador de mídia
 

@@ -92,6 +92,8 @@ uso: minitrue [--root DIR] [--offline] [--tofu] [--no-binary|--only-binary] [--j
   attest keygen <nome> <chave>  cria identidade ed25519 de builder
   attest <pacote> <builder> <chave>  emite attestation assinada
   corroborate <pacote>  coteja attestations confiáveis com o registro local
+  cache verify <pacote>…
+                        confere artefatos/assinaturas já presentes, sem rede ou instalação
   channel emit --output DIR <pacote>...
                         emite tar.zst + índice v2 a partir de registros B íntegros
 
@@ -237,6 +239,12 @@ fn run() -> anyhow::Result<()> {
         Some("corroborate") => match names.first() {
             Some(p) => attest::corroborate(&ctx, p),
             None => fail(1, "corroborate: diga o pacote"),
+        },
+        Some("cache") => match names.first().map(String::as_str) {
+            Some("verify") if names.len() >= 2 => install::cache_verify(&ctx, &names[1..]),
+            Some("verify") => fail(1, "cache verify: diga ao menos um pacote"),
+            Some(other) => fail(1, format!("cache: subcomando desconhecido {other}")),
+            None => fail(1, "cache: diga o subcomando (verify)"),
         },
         Some("channel") => match names.first().map(String::as_str) {
             Some("emit") if names.len() >= 2 => {

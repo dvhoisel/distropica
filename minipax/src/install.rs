@@ -463,6 +463,7 @@ pub fn install(profile: &ResolvedProfile, options: &InstallOptions) -> Result<()
     }
     let artifacts = profile.artifacts()?;
     let packages = artifacts.target_world.lines().collect::<Vec<_>>();
+    let cache_packages = artifacts.cache_world.lines().collect::<Vec<_>>();
     if packages.is_empty() {
         bail!("target.world não pode ser vazio");
     }
@@ -562,6 +563,18 @@ pub fn install(profile: &ResolvedProfile, options: &InstallOptions) -> Result<()
             false,
         )?;
     }
+    if options.offline && !cache_packages.is_empty() {
+        let mut verify_cache = Vec::with_capacity(cache_packages.len() + 2);
+        verify_cache.extend(["cache", "verify"]);
+        verify_cache.extend(cache_packages.iter().copied());
+        run_minitrue(
+            &minitrue_snapshot.path(),
+            &target,
+            &verify_cache,
+            options,
+            profile.epoch,
+        )?;
+    }
     let mut rectify = Vec::with_capacity(packages.len() + 1);
     rectify.push("rectify");
     rectify.extend(packages);
@@ -656,6 +669,7 @@ mod tests {
         .unwrap();
         fs::write(profile_dir.join("target.world"), "z\na\n").unwrap();
         fs::write(profile_dir.join("live.world"), "busybox\n").unwrap();
+        fs::write(profile_dir.join("cache.world"), "zig\n").unwrap();
         let cache = temp.path().join("cache");
         fs::create_dir(&cache).unwrap();
         let extra_payload = b"objeto extra que nao pertence ao target.world";
@@ -748,6 +762,7 @@ mod tests {
             },
         )
         .unwrap();
+        assert!(!fs::read_to_string(&calls).unwrap().contains("cache verify"));
         let offline_target = temp.path().join("offline-target");
         install(
             &profile,
@@ -763,6 +778,13 @@ mod tests {
         .unwrap();
         let calls = fs::read_to_string(calls).unwrap();
         std::env::remove_var("NEWSPEAK_PATH");
+        let cache_verify = calls
+            .find("--offline cache verify zig")
+            .expect("a instalação offline precisa verificar cache.world");
+        let offline_rectify = calls
+            .find("--offline --no-binary rectify a z")
+            .expect("a instalação offline precisa retificar target.world");
+        assert!(cache_verify < offline_rectify);
         assert!(calls.contains("--offline --no-binary rectify a z"));
         assert!(calls.contains("var/lib/minitrue/newspeak|10|--root"));
         assert!(calls.contains("--no-binary rectify a z"));

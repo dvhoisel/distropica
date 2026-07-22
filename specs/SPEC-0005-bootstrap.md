@@ -1,6 +1,6 @@
 # SPEC-0005 — Bootstrap em estágios
 
-**Status:** rascunho v0.4 · 2026-07-21
+**Status:** rascunho v0.5 · 2026-07-22
 **Depende de:** todas as anteriores.
 
 ## 1. A tese do bootstrap
@@ -145,7 +145,9 @@ conectado e a base configurou automaticamente DHCP IPv4, rota default e DNS; o
 runner validou somente o resolvedor local e o gateway da NAT, sem depender da
 Internet. Em seguida, o cabo foi desconectado outra vez: `ripgrep` 15.2.0,
 inicialmente ausente, foi instalado por `minitrue --offline rectify ripgrep`, e
-o `verify` posterior terminou limpo. Seu console usa simpledrm/fbcon e a cmdline
+o `verify` posterior terminou limpo. Esse resultado é a evidência histórica
+network-v1, anterior ao perfil que instala ripgrep por padrão e declara Make e
+Zig em `cache.world`. Seu console usa simpledrm/fbcon e a cmdline
 `console=ttyS0,115200 console=tty0 panic=-1 rdinit=/init`, com `tty0` por
 último para ser o console interativo primário. Ainda faltam o bundle estático
 assinado de release, endpoint/chave/pool de canal oficial, `channel refresh`
@@ -259,6 +261,14 @@ certo por estágio, em vez de tudo cair no zig/musl:
   **glibc** é `cross`; os shims seed seguem no PATH para o `BUILD_CC` dela.
 - **`native`** — `gcc`/`g++` nativo, hospedado na glibc. A **passada 2** e
   tudo pós-E2.
+
+Em toda receita `KIND=source`, os perfis `seed` e `cross` implicam a receita
+`zig` como dependência só de build, mesmo sem `BUILD_DEPS=zig`. Essa aresta
+participa do fingerprint transitivo; alterar a receita da semente invalida os
+pacotes produzidos por esses perfis. O Minitrue só materializa Zig quando o
+plano escolhe compilação local. Um pacote atendido por canal não expande essa
+aresta, e `TOOLCHAIN=none|native` também não instala Zig. Como dependência
+implícita, a semente não entra no `world` salvo se for solicitada diretamente.
 
 O ICE flaky do gcc-passada-1 vira contrato: a receita declara `RETRIES` e
 envolve o comando em `retry` (SPEC-0004 §3); o `make` incremental resume a
@@ -684,7 +694,7 @@ com SHA256 real pinado.
   O target mínimo de desenvolvimento aceito hoje usa o `/sbin/init` disponível
   e chegou a `rcS`/getty.
 
-**Estado de implementação (2026-07-21):** há dois aceites deliberadamente
+**Estado de implementação (2026-07-22):** há dois aceites deliberadamente
 separados. `bootstrap/live/accept-qemu` passou offline, sem NIC, com a variante
 automatizada (`/dev/vda` + `distropica.test=1`): ISO → disco raw vazio, boot
 sem ISO até `rcS`/getty e probe negativo fail-before-wipe. A variante humana,
@@ -695,7 +705,8 @@ login `root` comprovado como uid 0. Instalação e segundo boot ocorreram com o
 cabo NAT desconectado. Um terceiro boot, agora com o cabo conectado, comprovou
 DHCP IPv4 automático, rota, DNS local via resolvedor da NAT e acesso ao gateway;
 depois de desligar novamente o link, instalou `ripgrep` 15.2.0 do objeto extra
-do cache com `--offline` e terminou com `minitrue verify` limpo. A evidência está
+do cache com `--offline` e terminou com `minitrue verify` limpo. Essa é a
+evidência histórica network-v1; ela está
 em `target/vbox-acceptance-network-v1/evidence/acceptance.meta`. Duas composições
 locais dessa ISO humana foram byte a byte idênticas, com SHA-256
 `3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d`; o EFI
@@ -704,6 +715,13 @@ medido foi
 O cache continua sendo um override `custom`, e o ensaio não comprova Internet,
 hardware real, reprodução entre builders independentes nem uma ISO oficial
 publicada.
+
+O runner atual foi adaptado ao novo contrato: ripgrep 15.2.0 deve estar
+presente desde o primeiro boot; Zig e GNU Make começam ausentes; depois de
+desconectar a rede, `minitrue --offline --no-binary rectify make` deve compilar
+GNU Make 4.4.1, instalando Zig 0.16.0 automaticamente como dependência de build.
+O aceite exige `make` no `world`, Zig fora dele e `minitrue verify` limpo. Essa
+nova prova ainda depende de recompor a mídia e executar o runner no VirtualBox.
 
 **Critério normativo de aceite do estágio completo:** boot UEFI chega a getty;
 login root; `minitrue verify` limpo. O aceite VirtualBox fecha os três pontos em
@@ -730,7 +748,7 @@ futura própria.
 | E0 | chroot musl-estático habitável | baixo |
 | E1 | `./configure && make` funciona | atrito zig-cc×autotools |
 | E2 ✅ | ABI glibc + gcc nativo (pass-2) — **E2-clean: reproduzido a frio** de um rootfs novo (16 pacotes, libs finais selecionadas) 2026-07-20 | GCC hospedado por clang; matriz glibc↔GCC; toolchain-semente musl→glibc |
-| E3 🟡 | EFI-stub + instalação offline; QEMU automatizado cobre segundo boot e fail-before-wipe, e VirtualBox interativo cobre prompts, `/dev/sda`, reboot sem ISO, login root, DHCP/DNS/gateway VirtIO NAT, instalação posterior de ripgrep com link desligado e `verify` limpo; runit segue aberto | hardware real e política final de init |
+| E3 🟡 | EFI-stub + instalação offline; QEMU automatizado cobre segundo boot e fail-before-wipe, e o VirtualBox network-v1 histórico cobre prompts, `/dev/sda`, reboot sem ISO, login root, DHCP/DNS/gateway VirtIO NAT, instalação posterior de ripgrep com link desligado e `verify` limpo. O novo aceite ripgrep-default + build offline de Make/Zig ainda precisa ser executado; runit segue aberto | hardware real e política final de init |
 | E4a | userland vendor console | baixo |
 | E4b | GUI + Firefox | volume brutal de fonte (mesa/GTK) |
 

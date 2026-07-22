@@ -2,7 +2,10 @@ NAME=zig
 VERSION=0.16.0
 KIND=binary
 ABOUT="toolchain Zig; zig cc -target x86_64-linux-musl é o compilador C do mundo-fonte pré-E2"
-LICENSE=MIT
+# O tar oficial inclui Zig (MIT) e sysroots/fontes auxiliares sob várias
+# licenças. Os avisos upstream ficam preservados no payload; a expressão exata
+# do bundle depende do inventário/SBOM que ainda é gate de release.
+LICENSE=NOASSERTION
 SRC="https://ziglang.org/download/$VERSION/zig-x86_64-linux-$VERSION.tar.xz"
 SHA256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
 SIG="$SRC.minisig"

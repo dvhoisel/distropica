@@ -1,6 +1,6 @@
 # SPEC-0010 — Builds, sistemas e mídias reprodutíveis
 
-**Status:** implementação parcial v0.3 · 2026-07-21
+**Status:** implementação parcial v0.4 · 2026-07-22
 **Depende de:** SPEC-0003 (minitrue), SPEC-0004 (newspeak), SPEC-0008
 (minipax), SPEC-0009 (canais).
 
@@ -23,10 +23,10 @@ saída posterior de reprodutível. O projeto distingue os níveis abaixo:
 | Nível | Identidade comparada | Situação atual |
 |-------|----------------------|----------------|
 | **R1 — pacote** | tar normalizado do `STAGE` (`reprocorr`) | provado para m4, gmp, gcc e glibc |
-| **R2 — sistema declarado** | `profile.lock`: worlds, Newspeak, overlay, cache, arquitetura, epoch, tamanho de mídia e prontidão de instalação | implementado no `minipax`; torna os insumos auditáveis e repetíveis |
+| **R2 — sistema declarado** | `profile.lock`: `target.world`, `live.world`, `cache.world`, Newspeak, overlay, cache, arquitetura, epoch, tamanho de mídia e prontidão de instalação | implementado no `minipax`; torna intenção e disponibilidade offline auditáveis sem confundi-las |
 | **R2b — rootfs byte-a-byte** | árvore instalada inteira, já materializada | **não provado**; registros contêm tempo de instalação e uid/gid ainda não fazem parte do contrato |
-| **R3 — mídia** | bytes finais de `.img` ou `.iso` para o mesmo conjunto completo de insumos | provado localmente com fixtures e, para a ISO humana aceita no VirtualBox, por duas composições idênticas no mesmo ambiente; reprodução entre builders ainda não foi feita (§8) |
-| **R4 — reprodução funcional** | mídia dá boot e instala um sistema equivalente em outra máquina | provado localmente por dois caminhos separados: final-v10 automatizado em QEMU/OVMF, incluindo fail-before-wipe, e ISO humana em VirtualBox, incluindo prompts, reboot sem ISO, login root, DHCP/DNS e instalação offline posterior de um pacote adicional. Não provado em hardware real nem como reprodução oficial |
+| **R3 — mídia** | bytes finais de `.img` ou `.iso` para o mesmo conjunto completo de insumos | provado localmente com fixtures e, na revisão histórica da ISO humana aceita no VirtualBox, por duas composições idênticas no mesmo ambiente; a mídia do perfil atual e a reprodução entre builders ainda não foram feitas (§8) |
+| **R4 — reprodução funcional** | mídia dá boot e instala um sistema equivalente em outra máquina | provado localmente pelas revisões históricas final-v10 em QEMU/OVMF e network-v1 em VirtualBox. O fluxo atual ripgrep-default + Make/Zig está pendente; hardware real e reprodução oficial também não foram provados |
 
 Portanto, R3 não implica R4: uma imagem pode ser byte-reprodutível e ainda
 conter apenas um PE/COFF sintaticamente válido usado como fixture de teste.
@@ -210,11 +210,13 @@ independente do caminho — não só do caminho canônico do chroot.
 ## 7. Identidade declarativa do sistema
 
 O `minipax` não usa o nome de um perfil como prova de identidade. Ele resolve
-o perfil, normaliza `target.world` e `live.world`, empacota deterministicamente
-overlay, árvore Newspeak e cache, e grava um `profile.lock` textual, formato 1.
+o perfil, normaliza `target.world`, `live.world` e o `cache.world` opcional,
+empacota deterministicamente overlay, árvore Newspeak e cache, e grava um
+`profile.lock` textual com `PROFILE_LOCK_FORMAT=2`. A identidade calculada usa
+`PROFILE_CONTENT_FORMAT=2`.
 O lock também registra `INSTALL_READY`; `STATUS=release` exige valor `yes`.
-O lock contém os hashes desses insumos, o hash de conteúdo calculado, os três
-pinos oficiais, além de nome, classe, arquitetura,
+O lock contém os hashes desses insumos — inclusive `CACHE_WORLD_SHA256` —, o
+hash de conteúdo calculado, os três pinos oficiais, além de nome, classe, arquitetura,
 `SOURCE_DATE_EPOCH` e `MEDIA_SIZE_MIB`; o sha256 do próprio lock é a identidade
 curta do plano. Um perfil com `STATUS=release` precisa pinar os três campos
 `OFFICIAL_CONTENT_SHA256`, `OFFICIAL_BOOT_EFI_SHA256` e
@@ -240,8 +242,11 @@ Cada invocação parte de ambiente limpo e recebe apenas o conjunto explícito d
 variáveis determinísticas, caminho e, quando presentes, proxies. Assim, trocar
 o arquivo original entre o hash e a execução não troca o programa executado.
 
-O Minipax chama `minitrue --root <alvo> rectify <target.world>`, exige `verify`
-antes e depois do overlay administrativo e só então promove
+No modo offline, o Minipax chama primeiro
+`minitrue --root <alvo> --offline cache verify <cache.world>`; isso confere os
+artefatos e assinaturas já presentes sem rede, instalação ou mudança do
+`world`. Em seguida chama `rectify <target.world>`, exige `verify` antes e
+depois do overlay administrativo e só então promove
 `profile.lock.pending` a `profile.lock`. O `install.manifest` prende o hash e a
 classe do perfil, `INSTALL_CLASS`, arquitetura, hash do overlay, hash do
 Minitrue efetivamente executado, versão e hash do executável Minipax e as
@@ -275,7 +280,8 @@ normalizados ou explicitamente separados como estado de máquina.
 
 `minipax media build` recebe o perfil resolvido, o modo `online|offline`, o
 formato `img|iso` e um `BOOTX64.EFI` externo. O hash do EFI, a representação
-canônica do perfil, o lock, os worlds, o snapshot Newspeak, o overlay e, no
+canônica do perfil, o lock, os três worlds (incluindo `cache.world`, ainda que
+vazio), o snapshot Newspeak, o overlay e, no
 modo offline, o cache completo entram no payload. No modo online, o cache é
 restrito ao bootstrap de configuração + índice/assinatura do canal; seus bytes
 também participam do lock, mas artefatos de pacote são recusados.
@@ -433,7 +439,8 @@ RESULT=pass
 INCONSISTENT_PROFILE_LOCK_RESULT=refused-before-wipe
 ```
 
-O aceite interativo real, em VirtualBox 7.2.6/EFI64/VMSVGA/SATA, usou um EFI
+O aceite interativo histórico network-v1, em VirtualBox
+7.2.6/EFI64/VMSVGA/SATA, usou um EFI
 sem `--install-device`. Ele confirmou os dois prompts de senha e o prompt de
 disco no framebuffer, ejetou a ISO depois do preflight e antes de autorizar o
 wipe de `/dev/sda`, acompanhou o reboot pelo VDI sem ISO e autenticou `root`
@@ -481,6 +488,14 @@ fortalece R3 somente dentro do mesmo ambiente; não substitui a comparação
 entre builders independentes. Do mesmo modo, o VirtualBox fecha o caminho
 humano, enquanto o QEMU automatizado continua sendo a evidência específica do
 negativo fail-before-wipe.
+
+O runner atual deve provar uma identidade funcional diferente: ripgrep 15.2.0
+já presente no target, Zig e GNU Make inicialmente ausentes e uma retificação
+`--offline --no-binary` de GNU Make 4.4.1 que instala Zig 0.16.0 apenas como
+dependência de build. `make` deve entrar no `world`, Zig deve permanecer fora e
+o `verify` final precisa ser limpo. Como essa mídia ainda não foi recomposta e
+executada, a evidência network-v1 não pode ser reutilizada como prova de R4
+para o perfil atual.
 
 Essas provas exercitam localmente R2 e o compositor de R3, não fecham um
 release. Permanecem gates:

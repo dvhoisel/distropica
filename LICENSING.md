@@ -52,6 +52,12 @@ durável exigida de quem redistribui o binário. O projeto ainda não publica um
 ISO oficial; o bundle-fonte e o inventário de licenças são gates dessa futura
 publicação.
 
+Em particular, o tar binário oficial do Zig agrega sysroots, libc++, libunwind
+e outras fontes auxiliares sob várias licenças. Enquanto o inventário exato
+dessa composição não for gerado, sua receita declara `LICENSE=NOASSERTION` em
+vez de atribuir incorretamente MIT ao bundle inteiro. Os textos upstream
+continuam dentro do tar/payload; `NOASSERTION` não autoriza omiti-los.
+
 Quem apenas constrói ou modifica a Distrópica para uso privado não é obrigado
 por esta política a publicar sua cópia. Quem redistribui binários deve cumprir
 as licenças aplicáveis componente a componente.

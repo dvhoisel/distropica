@@ -1,6 +1,6 @@
 # SPEC-0012 — Os Quatro Ministérios
 
-**Status:** rascunho v0.3 · 2026-07-21
+**Status:** rascunho v0.4 · 2026-07-22
 **Palavras-chave normativas:** DEVE / NÃO DEVE / DEVERIA / PODE (interpretação análoga à RFC 2119).
 
 ## 1. Propósito
@@ -27,7 +27,8 @@ memorização e à coesão; onde ele brigar com a clareza, a clareza vence.
 ## 3. Fronteiras (Minitrue / Miniplenty / Minipax)
 
 - **Minitrue** DEVE caber numa página: buscar, verificar, registrar, apagar,
-  explicar, consumir canal. É o que o usuário roda. Nada que só o mantenedor
+  explicar, consumir canal e conferir disponibilidade autenticada com
+  `cache verify`. É o que o usuário roda. Nada que só o mantenedor
   precise entra aqui. O consumidor atual valida índice canônico v2 assinado,
   exige a identidade exata da receita, oferece `--no-binary`/`--only-binary` e
   persiste a escolha em `CHANNEL_LOCK_FORMAT=2`.
@@ -41,8 +42,9 @@ memorização e à coesão; onde ele brigar com a clareza, a clareza vence.
   separação em binário próprio permanece futura e NÃO muda a identidade dos
   formatos já emitidos.
 - **Minipax** carrega o que Miniplenty produziu até a máquina do usuário. Ele
-  resolve e congela perfis (`target.world`, `live.world`, Newspeak, overlay e
-  cache), registra `INSTALL_READY`, prepara a raiz, delega pacotes ao `minitrue --root`, compõe o envelope
+  resolve e congela perfis (`target.world`, `live.world`, `cache.world`,
+  Newspeak, overlay e cache), registra `INSTALL_READY`, prepara a raiz, delega
+  a verificação offline e os pacotes ao `minitrue --root`, compõe o envelope
   IMG/ISO e emite lock, manifesto e hash da mídia. Não reimplementa fetch,
   resolução de dependências, ownership nem registro de pacotes. O protótipo em
   Rust já faz essa orquestração. O compositor ainda recebe um `BOOTX64.EFI`
@@ -56,7 +58,10 @@ memorização e à coesão; onde ele brigar com a clareza, a clareza vence.
   pelo VDI sem ISO e login root. Instalação e segundo boot ficaram sem link;
   um terceiro boot comprovou DHCP/DNS por VirtIO NAT e, depois de desligar o
   link outra vez, instalou ripgrep 15.2.0 do cache com `--offline` e terminou
-  com `minitrue verify` limpo (SPEC-0010 §9).
+  com `minitrue verify` limpo (SPEC-0010 §9). Essa é evidência histórica
+  network-v1. O runner atual exige ripgrep por padrão e um build offline de GNU
+  Make que materialize Zig como dependência fora do `world`; a nova execução
+  ainda está pendente.
   Um perfil de release precisa pinar `OFFICIAL_CONTENT_SHA256`,
   `OFFICIAL_BOOT_EFI_SHA256` e `OFFICIAL_MINITRUE_SHA256`. A coincidência em
   cada fronteira permite apenas a classe autoatribuída `official-inputs` para
@@ -96,8 +101,9 @@ instalação:
    automatizado e não pode substituir essa interface.
 3. **Minitrue** decide *como cada pacote vira fato*: resolve receitas e
    dependências, busca/verifica insumos, aplica ownership/journal e registra o
-   resultado sob a raiz indicada. O Minipax o chama para `rectify` e `verify`;
-   uma falha não é reinterpretada como sucesso.
+   resultado sob a raiz indicada. O Minipax o chama para `cache verify`,
+   `rectify` e `verify`; a primeira operação só confere disponibilidade e não
+   transforma pacote em fato. Uma falha não é reinterpretada como sucesso.
 
 Na geração de mídia, Miniplenty continua dono dos artefatos de pacote e das
 attestations; Minipax apenas os organiza num veículo reprodutível. Assinar e

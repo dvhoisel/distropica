@@ -44,6 +44,7 @@ const LOCK_FIELDS: &[&str] = &[
     "OFFICIAL_MINITRUE_SHA256",
     "TARGET_WORLD_SHA256",
     "LIVE_WORLD_SHA256",
+    "CACHE_WORLD_SHA256",
     "OVERLAY_SHA256",
     "NEWSPEAK_SHA256",
     "CACHE_SHA256",
@@ -71,6 +72,7 @@ struct MediaSnapshot {
     lock: Vec<u8>,
     target_world: Vec<u8>,
     live_world: Vec<u8>,
+    cache_world: Vec<u8>,
     overlay: Vec<u8>,
     newspeak: Vec<u8>,
     cache: Option<Vec<u8>>,
@@ -214,14 +216,15 @@ fn load_media(source: &Path) -> Result<MediaSnapshot> {
         bail!("profile.lock não confere com PROFILE_LOCK_SHA256 de media.meta");
     }
     let lock_fields = parse_fields(&lock, "profile.lock", LOCK_FIELDS)?;
-    if lock_fields["PROFILE_LOCK_FORMAT"] != "1" {
-        bail!("PROFILE_LOCK_FORMAT desconhecido; esta versão aceita apenas 1");
+    if lock_fields["PROFILE_LOCK_FORMAT"] != "2" {
+        bail!("PROFILE_LOCK_FORMAT desconhecido; esta versão aceita apenas 2");
     }
     validate_class(&lock_fields["PROFILE_CLASS"], "PROFILE_CLASS do lock")?;
     for field in [
         "PROFILE_CONTENT_SHA256",
         "TARGET_WORLD_SHA256",
         "LIVE_WORLD_SHA256",
+        "CACHE_WORLD_SHA256",
         "OVERLAY_SHA256",
         "NEWSPEAK_SHA256",
     ] {
@@ -276,6 +279,11 @@ fn load_media(source: &Path) -> Result<MediaSnapshot> {
             MAX_CONTROL_BYTES,
         )?,
         live_world: read_regular(&payload.join("live.world"), "live.world", MAX_CONTROL_BYTES)?,
+        cache_world: read_regular(
+            &payload.join("cache.world"),
+            "cache.world",
+            MAX_CONTROL_BYTES,
+        )?,
         overlay: read_regular(
             &payload.join("overlay.tar"),
             "overlay.tar",
@@ -570,6 +578,7 @@ fn resolved_from_media(snapshot: &MediaSnapshot, workspace: &Path) -> Result<Res
     write_temporary(&profile_dir.join("profile"), &snapshot.profile)?;
     write_temporary(&profile_dir.join("target.world"), &snapshot.target_world)?;
     write_temporary(&profile_dir.join("live.world"), &snapshot.live_world)?;
+    write_temporary(&profile_dir.join("cache.world"), &snapshot.cache_world)?;
     materialize_archive(
         &snapshot.newspeak,
         &newspeak_dir,
@@ -599,6 +608,14 @@ fn resolved_from_media(snapshot: &MediaSnapshot, workspace: &Path) -> Result<Res
     }
     if normalize_world(&profile.target_world_path)?.as_bytes() != snapshot.target_world
         || normalize_world(&profile.live_world_path)?.as_bytes() != snapshot.live_world
+        || profile
+            .cache_world_path
+            .as_deref()
+            .map(normalize_world)
+            .transpose()?
+            .unwrap_or_default()
+            .as_bytes()
+            != snapshot.cache_world
     {
         bail!("world da mídia não está normalizado canonicamente");
     }
@@ -735,6 +752,7 @@ mod tests {
         .unwrap();
         fs::write(profile_dir.join("target.world"), "base\n").unwrap();
         fs::write(profile_dir.join("live.world"), "busybox\n").unwrap();
+        fs::write(profile_dir.join("cache.world"), "zig\n").unwrap();
         let bootstrap = profile_dir.join("channel-bootstrap");
         fs::create_dir_all(bootstrap.join("channel-config")).unwrap();
         fs::create_dir_all(bootstrap.join("channels/oficial")).unwrap();
@@ -790,6 +808,11 @@ mod tests {
         )
         .unwrap();
         fs::write(payload.join("live.world"), artifacts.live_world.as_bytes()).unwrap();
+        fs::write(
+            payload.join("cache.world"),
+            artifacts.cache_world.as_bytes(),
+        )
+        .unwrap();
         fs::write(payload.join("overlay.tar"), &artifacts.overlay_tar).unwrap();
         fs::write(payload.join("newspeak.tar"), &artifacts.newspeak_tar).unwrap();
         fs::write(
@@ -861,6 +884,24 @@ mod tests {
             "adulterado\n",
         )
         .unwrap();
+        assert!(install_media(&MediaInstallOptions {
+            source: fixture.source,
+            target: fixture.target.clone(),
+            minitrue: Some(fixture.minitrue),
+            offline: false,
+            from_source: false,
+            only_binary: false,
+            resume: false,
+            export_boot_efi: None,
+        })
+        .is_err());
+        assert!(fs::read_dir(fixture.target).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn adulteracao_de_cache_world_falha_antes_de_tocar_no_target() {
+        let fixture = media_fixture();
+        fs::write(fixture.source.join("distropica/cache.world"), "outro\n").unwrap();
         assert!(install_media(&MediaInstallOptions {
             source: fixture.source,
             target: fixture.target.clone(),
