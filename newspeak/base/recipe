@@ -3,13 +3,18 @@ VERSION=0.2
 KIND=source
 TOOLCHAIN=none
 DEPS="busybox"
-ABOUT="Config de boot da Fase B (SPEC-0006): /etc/inittab (busybox init → getty → login), rc.d/rcS (monta proc/sys/devtmpfs/tmpfs, mdev, hostname e DHCP IPv4), rc.d/rcK, hostname, motd e os-release. Receita de MONTAGEM: sem SRC (não baixa nada), o build() gera arquivos legíveis e instala o script DHCP que faz parte do mesmo snapshot da receita. Instala defaults de /etc via fábrica (/usr/share/factory/etc → materializa em /etc). NÃO gerencia contas: passwd/shadow são estado do admin (um futuro base-files/adduser + doas cuida disso; SPEC-0006 §5)."
-LICENSE="MIT-0"
+ABOUT="Config de boot da Fase B (SPEC-0006): /etc/inittab (busybox init → getty → login), rc.d/rcS (monta proc/sys/devtmpfs/tmpfs, mdev, hostname e DHCP IPv4), rc.d/rcK, hostname, motd, os-release e a licença da Distrópica. Receita de MONTAGEM: sem SRC (não baixa nada), o build() gera arquivos legíveis e instala auxiliares que fazem parte do mesmo snapshot da receita. Instala defaults de /etc via fábrica (/usr/share/factory/etc → materializa em /etc). NÃO gerencia contas: passwd/shadow são estado do admin (um futuro base-files/adduser + doas cuida disso; SPEC-0006 §5)."
+LICENSE="GPL-3.0-or-later"
 
 build() {
-    mkdir -p "$STAGE/etc/rc.d" "$STAGE/etc/udhcpc"
+    mkdir -p "$STAGE/etc/rc.d" "$STAGE/etc/udhcpc" \
+        "$STAGE/usr/share/licenses/distropica"
     install -m 0755 "$WORK/udhcpc.script" \
         "$STAGE/etc/udhcpc/default.script"
+    install -m 0644 "$WORK/GPL-3.0-or-later.txt" \
+        "$STAGE/usr/share/licenses/distropica/GPL-3.0-or-later.txt"
+    install -m 0644 "$WORK/NOTICE" \
+        "$STAGE/usr/share/licenses/distropica/NOTICE"
 
     cat > "$STAGE/etc/inittab" <<'INITTAB'
 # /etc/inittab — busybox init (SPEC-0006 Fase B). Legivel de cabo a rabo:

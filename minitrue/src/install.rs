@@ -1507,6 +1507,21 @@ fn canonical_stage_topology(
 ) -> Result<HashMap<String, String>> {
     let mut by_relative = HashMap::new();
     let mut by_virtual: HashMap<String, String> = HashMap::new();
+    let directories: HashSet<&str> = entries
+        .iter()
+        .filter(|entry| entry.is_dir())
+        .map(|entry| entry.relative.as_str())
+        .collect();
+    let has_descendant = |directory: &str| {
+        entries.iter().any(|candidate| {
+            candidate
+                .relative
+                .strip_prefix(directory)
+                .is_some_and(|suffix| suffix.starts_with('/'))
+        })
+    };
+    let usr_is_scaffold = directories.contains("usr") && has_descendant("usr");
+    let usr_share_is_scaffold = directories.contains("usr/share") && has_descendant("usr/share");
     for entry in entries {
         let relative = &entry.relative;
         let raw_virtual = relative
@@ -1533,7 +1548,21 @@ fn canonical_stage_topology(
                 let raw_is_descendant = relative
                     .strip_prefix(ancestor_relative.as_str())
                     .is_some_and(|suffix| suffix.starts_with('/'));
-                if !raw_is_descendant {
+                // O redirecionamento de `etc/` para a fábrica converge sob os
+                // diretórios estruturais `usr/` e `usr/share/`. Isso permite a
+                // um pacote carregar defaults em `etc/` e documentação em
+                // `usr/share/` sem abrir a mesma exceção para aliases usr-merge
+                // ou para uma árvore que declare `usr/share/factory` por dois
+                // nomes. O ancestral também precisa ter descendentes brutos:
+                // um diretório vazio seria uma claim `d:` e não mero scaffold.
+                // Identidades exatas já foram recusadas acima.
+                let factory_structural_ancestor = relative.starts_with("etc/")
+                    && match (ancestor_relative.as_str(), ancestor_virtual) {
+                        ("usr", "/usr") => usr_is_scaffold,
+                        ("usr/share", "/usr/share") => usr_share_is_scaffold,
+                        _ => false,
+                    };
+                if !raw_is_descendant && !factory_structural_ancestor {
                     bail!(
                         "doublethink no próprio STAGE: {ancestor_relative} e {relative} se sobrepõem como {ancestor_virtual} / {virtual_path}"
                     );
@@ -6335,6 +6364,22 @@ mod tests {
         let entries = index_sealed_stage(&image).unwrap();
         assert!(canonical_stage_topology(&root, &entries).is_err());
 
+        let factory_ancestor = root.join("stage-factory-ancestor");
+        fs::create_dir_all(factory_ancestor.join("etc/app")).unwrap();
+        fs::create_dir_all(factory_ancestor.join("usr/share/factory")).unwrap();
+        fs::write(factory_ancestor.join("etc/app/config"), b"CONFIG").unwrap();
+        let (image, _) = sealed_stage_snapshot(&factory_ancestor, 0).unwrap();
+        let entries = index_sealed_stage(&image).unwrap();
+        assert!(canonical_stage_topology(&root, &entries).is_err());
+
+        let empty_share = root.join("stage-empty-share");
+        fs::create_dir_all(empty_share.join("etc/app")).unwrap();
+        fs::create_dir_all(empty_share.join("usr/share")).unwrap();
+        fs::write(empty_share.join("etc/app/config"), b"CONFIG").unwrap();
+        let (image, _) = sealed_stage_snapshot(&empty_share, 0).unwrap();
+        let entries = index_sealed_stage(&image).unwrap();
+        assert!(canonical_stage_topology(&root, &entries).is_err());
+
         for (index, internal) in [
             "var/lib/minitrue/journal/pkg/log",
             "var/lib/minitrue/records/victim/meta",
@@ -6389,6 +6434,36 @@ mod tests {
                 .is_err()
         );
         assert_eq!(fs::read(&claimed_temp).unwrap(), b"B");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stage_permite_etc_e_usr_share_no_mesmo_pacote() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("mt-stage-factory-share-{}-{n}", std::process::id()));
+        fs::create_dir_all(root.join("usr/share")).unwrap();
+
+        let stage = root.join("stage");
+        fs::create_dir_all(stage.join("etc/app")).unwrap();
+        fs::create_dir_all(stage.join("usr/share/licenses/app")).unwrap();
+        fs::write(stage.join("etc/app/config"), b"CONFIG").unwrap();
+        fs::write(stage.join("usr/share/licenses/app/COPYING"), b"LICENSE").unwrap();
+
+        let (image, _) = sealed_stage_snapshot(&stage, 0).unwrap();
+        let entries = index_sealed_stage(&image).unwrap();
+        let paths = canonical_stage_topology(&root, &entries).unwrap();
+        assert_eq!(
+            paths.get("etc/app/config").map(String::as_str),
+            Some("/usr/share/factory/etc/app/config")
+        );
+        assert_eq!(
+            paths
+                .get("usr/share/licenses/app/COPYING")
+                .map(String::as_str),
+            Some("/usr/share/licenses/app/COPYING")
+        );
 
         let _ = fs::remove_dir_all(&root);
     }

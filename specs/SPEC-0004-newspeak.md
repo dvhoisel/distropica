@@ -49,7 +49,7 @@ Opcionais:
 | `LINKS` | mundo A: comandos a expor, `nome=caminho/relativo/no/prefix`, sem `/`, `.` ou `..` nos componentes; default: todo executável em `bin/` do prefix |
 | `REQUIRES_GLIBC` | `1` ⇒ só instala após o Estágio 2 (SPEC-0005) |
 | `ABOUT` | uma linha: o que é / justificativa de classificação |
-| `LICENSE` | identificador SPDX |
+| `LICENSE` | identificador SPDX do **payload instalado**. Não relicencia o arquivo `recipe`: a implementação autoral da receita segue a licença do repositório, enquanto o software de terceiros conserva a licença upstream |
 | `SIG` | URL(s) de assinatura destacada, uma por artefato, na ordem de `SRC` (§5) |
 | `SIGSUMS` | norma do Marco 0.2: URL única de lista de checksums assinada; parser atual reconhece, executor ainda recusa (§5) |
 | `SIGKEY` | hoje: chave minisign/signify pinada em uma linha base64; caminho `files/*.asc` pertence ao OpenPGP futuro |

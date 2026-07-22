@@ -1,0 +1,64 @@
+# Licenciamento da Distrópica
+
+Copyright (C) 2026 Daniel Hoisel.
+
+## Código e documentação próprios
+
+Salvo indicação expressa em contrário, o código, os scripts de build e
+instalação, a lógica autoral das receitas, os perfis, as especificações e a
+documentação produzidos para a Distrópica são licenciados sob a
+**GNU General Public License, versão 3 ou qualquer versão posterior**
+(`GPL-3.0-or-later`). O texto integral da versão 3 está em [LICENSE](LICENSE).
+O aviso curto que acompanha os artefatos está em [NOTICE](NOTICE).
+
+Essa concessão “ou posterior” é a que governa o conteúdo próprio mesmo que
+uma ferramenta de detecção identifique o arquivo `LICENSE` apenas como GPLv3.
+Versões antigas que tenham sido efetivamente disponibilizadas sob outra
+licença conservam as permissões já concedidas para aquelas cópias.
+
+## Receitas e componentes de terceiros
+
+O campo `LICENSE=` de uma receita Newspeak descreve a licença do **payload do
+pacote**, não a licença autoral do arquivo `recipe`. A implementação original
+da receita pertence ao código da Distrópica e segue a regra acima; o software
+que ela baixa, compila ou instala mantém a licença indicada pelo upstream.
+
+Em particular, esta licença não relicencia Linux, BusyBox, glibc, GCC, Zig,
+ripgrep, dependências Cargo nem qualquer outro componente de terceiros. Uma
+ISO ou um canal da Distrópica reúne componentes sob licenças distintas, cada
+um com seus próprios avisos e condições. O inventário definitivo e as
+combinações efetivamente distribuídas precisam ser verificados a partir dos
+insumos exatos de cada publicação.
+
+O pacote `base`, por conter payload escrito para a própria Distrópica, passa a
+declarar `GPL-3.0-or-later` nesta revisão. Cópias anteriores disponibilizadas
+como `MIT-0` não perdem retroativamente essa permissão.
+
+## Binários e fontes correspondentes
+
+Publicar o repositório de fontes não equivale, sozinho, a publicar uma release
+binária. Para cada futura ISO, EFI, cache ou canal distribuído pelo projeto, a
+Distrópica deverá oferecer, com acesso equivalente, um conjunto de fontes
+correspondentes àquele artefato. Esse conjunto deve incluir, conforme o caso:
+
+- a revisão exata da Distrópica, os dois `Cargo.lock` e as crates vendorizadas;
+- fontes upstream exatas, configurações, patches e scripts de build/instalação;
+- fontes e configuração do kernel e do BusyBox presentes na mídia;
+- textos de licença, avisos de copyright e um inventário legível por máquina;
+- hashes que associem inequivocamente o bundle-fonte ao artefato binário.
+
+Uma receita com URL e hash é rastreabilidade, mas não substitui a retenção
+durável exigida de quem redistribui o binário. O projeto ainda não publica uma
+ISO oficial; o bundle-fonte e o inventário de licenças são gates dessa futura
+publicação.
+
+Quem apenas constrói ou modifica a Distrópica para uso privado não é obrigado
+por esta política a publicar sua cópia. Quem redistribui binários deve cumprir
+as licenças aplicáveis componente a componente.
+
+## Marca
+
+A GPL rege copyright do código, não concede por si só direito de apresentar
+uma variante como publicação oficial da Distrópica. Isso não restringe o
+direito de copiar, modificar ou redistribuir o código nos termos da GPL; apenas
+evita atribuição ou endosso falsos.

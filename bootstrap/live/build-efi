@@ -215,7 +215,8 @@ INITROOT=$WORK/initramfs
 rm -rf -- "$INITROOT"
 mkdir -p "$INITROOT/bin" "$INITROOT/dev" "$INITROOT/etc" "$INITROOT/proc" \
     "$INITROOT/sys" "$INITROOT/run" "$INITROOT/tmp" "$INITROOT/usr/bin" \
-    "$INITROOT/sbin" "$INITROOT/media" "$INITROOT/target" "$INITROOT/newroot"
+    "$INITROOT/sbin" "$INITROOT/media" "$INITROOT/target" "$INITROOT/newroot" \
+    "$INITROOT/usr/share/licenses/distropica"
 cp "$BUSYBOX" "$INITROOT/bin/busybox"
 cp "$MINIPAX_BIN" "$INITROOT/bin/minipax"
 cp "$MINITRUE_BIN" "$INITROOT/bin/minitrue"
@@ -223,9 +224,14 @@ cp "$REPO/bootstrap/live/init" "$INITROOT/init"
 mkdir -p "$INITROOT/usr/share/udhcpc"
 cp "$REPO/newspeak/base/files/udhcpc.script" \
     "$INITROOT/usr/share/udhcpc/default.script"
+cp "$REPO/LICENSE" \
+    "$INITROOT/usr/share/licenses/distropica/GPL-3.0-or-later.txt"
+cp "$REPO/NOTICE" "$INITROOT/usr/share/licenses/distropica/NOTICE"
 chmod 755 "$INITROOT/init" "$INITROOT/bin/busybox" \
     "$INITROOT/bin/minipax" "$INITROOT/bin/minitrue" \
     "$INITROOT/usr/share/udhcpc/default.script"
+chmod 644 "$INITROOT/usr/share/licenses/distropica/GPL-3.0-or-later.txt"
+chmod 644 "$INITROOT/usr/share/licenses/distropica/NOTICE"
 for applet in $("$BUSYBOX" --list); do
     case "$applet" in */*) continue ;; esac
     [ -e "$INITROOT/bin/$applet" ] || ln -s busybox "$INITROOT/bin/$applet"

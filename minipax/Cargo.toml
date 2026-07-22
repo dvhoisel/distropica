@@ -3,6 +3,8 @@ name = "minipax"
 version = "0.1.0"
 edition = "2021"
 description = "O Ministério da Paz: materializa perfis e compõe mídias da Distrópica."
+license = "GPL-3.0-or-later"
+repository = "https://github.com/dvhoisel/distropica"
 
 [dependencies]
 anyhow = "1"

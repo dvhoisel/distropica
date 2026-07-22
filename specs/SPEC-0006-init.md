@@ -58,6 +58,10 @@ referência curta aos comandos `minitrue archives`, `minitrue verify` e
 `minitrue rectify <pacote>`. O MOTD é orientação local, não um serviço nem uma
 fonte de estado do sistema.
 
+Como seu payload é autoria da Distrópica, `base` declara
+`GPL-3.0-or-later` e instala o texto integral e o aviso de escopo em
+`/usr/share/licenses/distropica/`.
+
 ## 4. Fase C — alvo: runit como PID1
 
 Escolha: **runit** (fonte minúscula, três binários centrais —

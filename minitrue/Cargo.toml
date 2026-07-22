@@ -3,6 +3,8 @@ name = "minitrue"
 version = "0.1.0"
 edition = "2021"
 description = "O Ministério da Verdade: busca, verifica, registra, apaga."
+license = "GPL-3.0-or-later"
+repository = "https://github.com/dvhoisel/distropica"
 
 [dependencies]
 anyhow = "1"

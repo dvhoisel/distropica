@@ -19,6 +19,30 @@ mais recente do upstream, e o sistema é continuamente retificado para o
 presente — nunca um release congelado. O passado é reescrito para bater com o
 agora.
 
+## Licença
+
+O código, os scripts, as receitas enquanto implementação autoral, os perfis e
+a documentação próprios da Distrópica são licenciados sob a **GNU GPL versão
+3 ou qualquer versão posterior** (`GPL-3.0-or-later`). O texto integral está
+em [LICENSE](LICENSE), o aviso conciso em [NOTICE](NOTICE) e a delimitação
+completa em [LICENSING.md](LICENSING.md).
+
+Isso não relicencia o software de terceiros: Linux e BusyBox continuam
+`GPL-2.0-only`, glibc conserva LGPL/GPL, e os demais componentes mantêm as
+licenças declaradas pelos respectivos upstreams. O campo `LICENSE=` de uma
+receita descreve o payload instalado; a ISO reúne componentes sob licenças
+distintas, cujas obrigações precisam ser avaliadas componente a componente e
+nas combinações efetivamente distribuídas.
+
+Quando houver publicação de ISO, EFI, cache ou canal binário oficial, cada
+artefato deverá vir acompanhado de acesso equivalente ao seu bundle de fontes
+correspondentes: revisão da Distrópica, crates Rust vendorizadas, fontes
+upstream exatas, configurações, patches, scripts, licenças e inventário. O
+repositório público é a fonte do desenvolvimento, mas não substitui sozinho
+esse conjunto por artefato. Gerar uma imagem para uso privado não exige
+publicá-la; redistribuí-la transfere ao redistribuidor as obrigações das
+licenças presentes.
+
 ## Premissas
 
 Acima de todas, uma lente (**P0**): a Distrópica é **pragmática acima de
@@ -218,7 +242,10 @@ bootstrap/live/accept-virtualbox \
 
 Esse aceite passou em 2026-07-21 com VirtualBox
 `7.2.6_Ubuntur172322`. Duas composições da ISO a partir dos mesmos insumos
-foram byte a byte idênticas:
+foram byte a byte idênticas. Os hashes abaixo registram a evidência histórica
+da revisão funcional `7148ebd`; a revisão posterior de licenciamento altera o
+snapshot de `base` e exige novo canal/cache/lock/EFI/ISO antes que exista um
+novo pino de mídia:
 
 ```text
 EVIDENCIA_VIRTUALBOX_INTERATIVA=local-custom

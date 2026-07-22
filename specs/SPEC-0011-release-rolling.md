@@ -176,7 +176,29 @@ a cada roll. Também falta o `channel refresh` que valida o índice, apresenta a
 mudança e só então avança explicitamente o snapshot local. A publicação de um
 canal oficial continua ausente.
 
-## 8. Questões em aberto
+## 8. Conjunto publicável e fontes correspondentes
+
+O repositório da Distrópica é `GPL-3.0-or-later` para seu conteúdo próprio,
+mas uma mídia é um agregado de componentes sob licenças distintas. Publicar
+uma ISO, EFI, cache ou canal NÃO consiste apenas em publicar o binário e o
+commit que o descreve. Cada artefato oficial DEVE oferecer acesso equivalente
+a um bundle de fontes correspondente e associado pelo hash do artefato.
+
+O bundle DEVE conter a revisão exata da Distrópica, `Cargo.lock` e crates
+vendorizadas dos executores estáticos, fontes upstream exatas, configurações,
+patches, scripts de compilação/instalação, textos de licença e inventário
+legível por máquina. Para Linux e BusyBox, inclui expressamente a fonte e a
+configuração usadas. URLs e hashes das receitas são rastreabilidade, não uma
+garantia durável de disponibilidade por parte do redistribuidor.
+
+A mídia viva e o sistema instalado DEVEM carregar a GPL da Distrópica em
+`/usr/share/licenses/distropica/GPL-3.0-or-later.txt` e a concessão
+`GPL-3.0-or-later` em `NOTICE`. Licenças e avisos de terceiros também DEVEM ser
+materializados antes de uma release oficial. A publicação do
+repositório-fonte, sem artefato binário oficial, não promove o perfil
+`development` a release.
+
+## 9. Questões em aberto
 
 - **Mecanismo do rollback de mundo B**: snapshot por manifesto+backup,
   retenção do artefato de canal, ou filesystem com snapshot (mas ext4-only no

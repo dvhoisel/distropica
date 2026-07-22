@@ -162,7 +162,12 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
      pristine entra no registro (§6). Depois do build, o STAGE é empacotado
      diretamente num `memfd` selado; `ARTIFACT_HASH` e aplicação consomem essa
      mesma imagem imutável por offsets, sem uma extração gravável intermediária.
-     STAGE vazio, hardlinks, nomes não-UTF-8 e tipos especiais são recusados.
+     Uma receita pode carregar simultaneamente defaults em `etc/` e dados
+     estáticos em `usr/share/`: a convergência estrutural causada pelo desvio
+     para a fábrica é aceita apenas nos diretórios não vazios `usr/` e
+     `usr/share/`. Não se estende a `usr/share/factory`, a aliases usr-merge nem
+     a diretórios vazios reivindicáveis. STAGE vazio, hardlinks, nomes não-UTF-8
+     e tipos especiais são recusados.
 7. **Registro**: grava `/var/lib/minitrue/records/<nome>/{meta,manifest,recipe}` (§6);
    nomes pedidos explicitamente na linha de comando entram no `world` (§2).
 8. **Falha de build**: log integral movido para

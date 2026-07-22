@@ -9,6 +9,19 @@ terceiro boot e `rectify` mundo A offline, e o final-v10 inclui a recusa antes
 do wipe de um `profile.lock` incoerente com `media.meta`).
 Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
+## Licenciamento e publicação
+
+| Peça | Estado | Nota |
+|---|---|---|
+| Código e documentação próprios | ✅ | `GPL-3.0-or-later`; texto integral, escopo e regra de contribuição versionados |
+| Licença na base e no ambiente vivo | ✅ código | `base` instala a GPL e o aviso de escopo em `/usr/share/licenses/distropica/`, e `build-efi` os incorpora no initramfs; a mídia precisa ser recomposta para produzir nova evidência |
+| Inventário completo de terceiros | ⬜ gate de release | gerar por artefato, a partir dos insumos efetivamente distribuídos; `LICENSE=` da receita descreve apenas o payload |
+| Bundle de fontes correspondentes | ⬜ gate de release | publicar junto de toda futura ISO/EFI/cache/canal: fontes exatas, configs, patches, crates vendorizadas, scripts, licenças e hashes de associação |
+
+Os hashes QEMU final-v10 e VirtualBox network-v1 abaixo são evidência histórica
+anterior à mudança de licença do pacote `base` (revisão funcional `7148ebd`).
+Não são pinos de uma mídia recomposta a partir da árvore licenciada atual.
+
 ## minitrue (a ferramenta)
 
 | Recurso | Estado | Testado | Nota |
@@ -168,7 +181,7 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
 | E2 — glibc + gcc nativo | ✅ | **E2-clean: reproduzido a frio** (rootfs novo, seed limpo, 16 pacotes, gcc nativo compila C/C++, libs finais em /usr/lib). Falta só repetir num 2º ambiente independente |
 | E3 — kernel + boot | 🟡 | O smoke anterior bootou Linux 7.1.4 do E2 com raiz 9p e exercitou módulos assinados. Separadamente, o EFI-stub live passou em ISO→disco→boot sem mídia tanto no aceite automatizado QEMU/OVMF quanto no VirtualBox/EFI; o network-v1 deste último cobriu `simpledrm`/`fbcon`, PS/2, AHCI, `/dev/sda`, VirtIO/NAT e `minitrue verify` pós-login. A dívida desse `verify` foi fechada; E3 segue parcial por faltar runit, `.config` de hardware geral e gestão completa de contas |
 | — openssl 4.0.1 (base de confiança do kernel) | ✅ | mundo B, compilado pela toolchain nativa (libcrypto/libssl, `-DZLIB`); SHA conferido no download. Habilita geração/uso da chave de módulos; **attestation usa ed25519-dalek e independe de OpenSSL**. O materializador de `/etc` agora trata symlinks, com regressão coberta |
-| — base 0.2 (config Fase B) | ✅ | receita de montagem com `TOOLCHAIN=none`: além de `/etc/inittab`, `rcS`, `rcK`, `os-release` e `hostname`, sobe interfaces e tenta DHCP IPv4 sem tornar a falha fatal. O script compartilhado com o live configura endereço, rota padrão e DNS em `/etc/udhcpc/default.script`; o MOTD mostra `archives`, `verify` e `rectify`. Não cria `/etc/shadow`, portanto sozinha não fecha login autenticado |
+| — base 0.2 (config Fase B) | ✅ código | receita de montagem `GPL-3.0-or-later` com `TOOLCHAIN=none`: além de `/etc/inittab`, `rcS`, `rcK`, `os-release`, `hostname` e a cópia da GPL, sobe interfaces e tenta DHCP IPv4 sem tornar a falha fatal. O script compartilhado com o live configura endereço, rota padrão e DNS em `/etc/udhcpc/default.script`; o MOTD mostra `archives`, `verify` e `rectify`. O novo fingerprint ainda precisa de canal/cache e aceite recompostos. Não cria `/etc/shadow`, portanto sozinha não fecha login autenticado |
 | E4 — userland vendor / GUI | ⬜ | |
 
 ## Reprodutibilidade (SPEC-0010)
