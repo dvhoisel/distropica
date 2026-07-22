@@ -20,5 +20,26 @@ build() {
     # perl é notório por corridas com -j (miniperl vs extensões); o '|| make'
     # serial retoma e conserta o que a corrida deixou pela metade.
     make -j"$JOBS" || make
-    make install DESTDIR="$STAGE"
+    # install.perl instala o interpretador e os módulos, mas omite installman.
+    # Sem nroff, o Configure deixa os diretórios de manuais vazios e o alvo
+    # install completo despejaria páginas *.0 diretamente na raiz do STAGE.
+    make install.perl DESTDIR="$STAGE"
+
+    # O install cria aliases do executável e dos utilitários por hardlink
+    # (perl/perl5.42.0 e perlbug/perlthanks). O manifesto mundo-B ainda não
+    # representa esses grupos; sele cada nome como arquivo regular independente.
+    find "$STAGE" -type f -links +1 -exec sh -ec '
+        for path do
+            copy=$path.minitrue-copy
+            if [ -e "$copy" ] || [ -L "$copy" ]; then
+                exit 1
+            fi
+            cp -p "$path" "$copy"
+            mv -f "$copy" "$path"
+        done
+    ' sh {} +
+
+    # installperl cria site_perl como destino futuro, ainda vazio. Diretórios
+    # vazios virariam claims exclusivas e bloqueariam pacotes CPAN posteriores.
+    find "$STAGE" -mindepth 1 -depth -type d -empty -delete
 }
