@@ -20,7 +20,7 @@ build() {
     # --disable-demangler: não precisamos do demangler C++ (só libelf/gelf.h
     # p/ o objtool), e o teste de __cxa_demangle na libstdc++ falha.
     ./configure --prefix=/usr --program-prefix=eu- \
-        --disable-debuginfod --disable-libdebuginfod --disable-werror \
+        --disable-debuginfod --disable-libdebuginfod --disable-nls --disable-werror \
         --disable-demangler --disable-dependency-tracking
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
