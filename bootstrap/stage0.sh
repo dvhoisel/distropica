@@ -7,6 +7,13 @@ REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ROOTFS=${1:-"$REPO/rootfs"}
 export CARGO_TARGET_DIR="$REPO/target"
 
+# O runner mundo-B entra no rootfs por bwrap e precisa que todos os caminhos
+# de trabalho derivados daqui continuem válidos depois do chroot. Aceitar um
+# argumento relativo sem o tornar absoluto fazia a receita procurar
+# `target/.../tmp` de dentro do próprio target.
+mkdir -p "$ROOTFS"
+ROOTFS=$(CDPATH= cd -- "$ROOTFS" && pwd -P)
+
 echo "== distrópica stage0 → $ROOTFS =="
 command -v cargo >/dev/null 2>&1 || { echo "erro: cargo ausente (instale via rustup.rs)"; exit 1; }
 command -v bwrap >/dev/null 2>&1 || echo "aviso: bwrap ausente — a entrada rootless (enter.sh) não vai funcionar"
