@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10100f">
+  <meta name="description" content="Distrópica: uma distribuição Linux que não instala pacotes — retifica registros.">
+  <meta property="og:title" content="Distrópica">
+  <meta property="og:description" content="Binário upstream primeiro, fonte quando necessário.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://distropica.com.br/">
+  <title>Distrópica — retificando o presente</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #e7e1d5; --muted: #aaa397; --paper: #10100f;
+      --panel: #171714; --line: #34332e; --red: #df493f;
+      --red-dark: #8f2b25; --amber: #d4a557; --green: #9bb77a;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0; color: var(--ink); line-height: 1.65;
+      font-family: ui-monospace, "Cascadia Code", "Liberation Mono", monospace;
+      background:
+        linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px),
+        var(--paper);
+      background-size: 2rem 2rem;
+    }
+    a { color: inherit; }
+    a:focus-visible { outline: 2px solid var(--amber); outline-offset: 4px; }
+    .wrap { width: min(calc(100% - 2rem), 72rem); margin-inline: auto; }
+    header {
+      position: sticky; top: 0; z-index: 10;
+      border-bottom: 1px solid var(--line);
+      background: rgba(16,16,15,.92); backdrop-filter: blur(12px);
+    }
+    nav {
+      min-height: 4rem; display: flex; align-items: center;
+      justify-content: space-between; gap: 1.5rem;
+    }
+    .wordmark { text-decoration: none; letter-spacing: .16em; font-weight: 800; }
+    .navlinks { display: flex; gap: 1.25rem; font-size: .8rem; }
+    .navlinks a { color: var(--muted); text-decoration: none; }
+    .navlinks a:hover { color: var(--ink); }
+    .hero {
+      min-height: calc(100vh - 4rem); display: grid;
+      align-items: center; padding: 5rem 0;
+    }
+    .eyebrow, .stamp {
+      display: inline-flex; align-items: center; gap: .55rem; width: fit-content;
+      border: 1px solid var(--line); padding: .35rem .65rem;
+      color: var(--muted); background: var(--panel);
+      font-size: .72rem; letter-spacing: .08em; text-transform: uppercase;
+    }
+    .eyebrow::before {
+      content: ""; width: .55rem; height: .55rem; border-radius: 50%;
+      background: var(--green); box-shadow: 0 0 1rem rgba(155,183,122,.45);
+    }
+    h1 {
+      margin: 1.25rem 0 .5rem; max-width: 10ch;
+      font: 900 clamp(3.7rem, 13vw, 9rem)/.86 system-ui, sans-serif;
+      letter-spacing: -.075em; text-transform: uppercase;
+    }
+    h1 span { color: var(--red); }
+    .lead {
+      max-width: 50rem; margin: 1.75rem 0 0; color: var(--muted);
+      font-size: clamp(1rem, 2vw, 1.25rem);
+    }
+    .lead strong { color: var(--ink); }
+    .actions { display: flex; flex-wrap: wrap; gap: .8rem; margin-top: 2rem; }
+    .button {
+      display: inline-flex; justify-content: center; align-items: center;
+      min-height: 3.25rem; padding: .75rem 1.1rem;
+      border: 1px solid var(--line); text-decoration: none; font-weight: 800;
+      transition: transform .15s ease, border-color .15s ease;
+    }
+    .button:hover { transform: translateY(-2px); border-color: var(--muted); }
+    .button.primary { color: #fff; background: var(--red-dark); border-color: var(--red); }
+    .facts {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      margin-top: 3rem; border: 1px solid var(--line); background: var(--panel);
+    }
+    .fact { padding: 1rem; border-right: 1px solid var(--line); }
+    .fact:last-child { border-right: 0; }
+    .fact b, .fact small { display: block; }
+    .fact b { color: var(--amber); }
+    .fact small { color: var(--muted); }
+    section { padding: 5rem 0; border-top: 1px solid var(--line); }
+    h2 {
+      margin: 0 0 2rem;
+      font: 800 clamp(2rem, 5vw, 3.7rem)/1 system-ui, sans-serif;
+      letter-spacing: -.04em;
+    }
+    h3 { margin-top: 0; color: var(--amber); }
+    p { max-width: 70ch; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+    .card {
+      min-height: 14rem; padding: 1.35rem;
+      border: 1px solid var(--line); background: var(--panel);
+    }
+    .card p { color: var(--muted); }
+    .number { display: block; margin-bottom: 2.5rem; color: var(--red); font-weight: 900; }
+    .download { display: grid; grid-template-columns: 1.2fr .8fr; gap: 1rem; }
+    .download > div { padding: 1.5rem; border: 1px solid var(--line); background: var(--panel); }
+    code, pre { font-family: inherit; font-size: .86rem; }
+    pre {
+      overflow-x: auto; margin: 1rem 0 0; padding: 1rem;
+      color: #c8d8b1; background: #0a0a09; border-left: 3px solid var(--red-dark);
+    }
+    .hash { overflow-wrap: anywhere; color: var(--muted); font-size: .78rem; }
+    .warning {
+      margin-top: 1rem; padding: 1rem; border: 1px solid #705329;
+      color: #e8c98f; background: #211b11;
+    }
+    footer {
+      padding: 2.5rem 0; border-top: 1px solid var(--line);
+      color: var(--muted); font-size: .8rem;
+    }
+    footer .wrap { display: flex; justify-content: space-between; gap: 1rem; }
+    @media (max-width: 760px) {
+      .navlinks { display: none; }
+      .hero { min-height: auto; padding: 4rem 0; }
+      .facts, .grid, .download { grid-template-columns: 1fr; }
+      .fact { border-right: 0; border-bottom: 1px solid var(--line); }
+      .fact:last-child { border-bottom: 0; }
+      footer .wrap { display: block; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .button { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <nav class="wrap" aria-label="Navegação principal">
+      <a class="wordmark" href="#inicio">DISTRÓPICA</a>
+      <div class="navlinks">
+        <a href="#premissas">Premissas</a>
+        <a href="#download">Download</a>
+        <a href="https://github.com/dvhoisel/distropica">Código-fonte</a>
+      </div>
+    </nav>
+  </header>
+  <main id="inicio">
+    <div class="hero">
+      <div class="wrap">
+        <div class="eyebrow">protótipo instalável · x86_64 · UEFI</div>
+        <h1>DISTRÓ<span>PICA</span></h1>
+        <p class="lead">Uma distribuição Linux distópica. Não instala pacotes: <strong>retifica registros</strong>. Binário do mantenedor primeiro; fonte quando ninguém publica um.</p>
+        <div class="actions">
+          <a class="button primary" href="/releases/distropica-miniplenty-v2.iso">Baixar ISO · 334 MiB</a>
+          <a class="button" href="https://github.com/dvhoisel/distropica">Examinar o código</a>
+        </div>
+        <div class="facts" aria-label="Características da imagem">
+          <div class="fact"><b>miniplenty-v2</b><small>imagem de desenvolvimento</small></div>
+          <div class="fact"><b>Linux 7.1.4</b><small>kernel da mídia</small></div>
+          <div class="fact"><b>GCC 15.3</b><small>toolchain nativa</small></div>
+          <div class="fact"><b>GPL-3.0+</b><small>código próprio</small></div>
+        </div>
+      </div>
+    </div>
+    <section id="premissas">
+      <div class="wrap">
+        <span class="stamp">Ministério da Verdade</span>
+        <h2>O sistema é o registro.</h2>
+        <div class="grid">
+          <article class="card">
+            <span class="number">01 / ORIGEM</span>
+            <h3>Upstream primeiro</h3>
+            <p>Quando o mantenedor publica um binário Linux elegível, o Minitrue confere seu hash e o instala no Mundo A, sob <code>/opt</code>.</p>
+          </article>
+          <article class="card">
+            <span class="number">02 / FONTE</span>
+            <h3>Compilar só quando preciso</h3>
+            <p>Sem binário upstream, a receita é compilada no Mundo B com GCC/Make nativos e registrada com proveniência verificável.</p>
+          </article>
+          <article class="card">
+            <span class="number">03 / CONTROLE</span>
+            <h3>Sem gerenciador herdado</h3>
+            <p>Sem apt, pacman, Flatpak ou systemd. Receitas legíveis, hashes pinados, canal assinado e estado exposto no filesystem.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+    <section id="download">
+      <div class="wrap">
+        <span class="stamp">Distribuição autorizada</span>
+        <h2>Teste a imagem atual.</h2>
+        <div class="download">
+          <div>
+            <h3>ISO UEFI para VirtualBox</h3>
+            <p>A imagem instala um sistema mínimo com Vim, ripgrep, Make, GCC/G++ e o Minitrue. Ela também leva receitas online para instalar yq como binário upstream e compilar GNU nano da fonte.</p>
+            <div class="actions">
+              <a class="button primary" href="/releases/distropica-miniplenty-v2.iso">Baixar a ISO</a>
+              <a class="button" href="/releases/distropica-miniplenty-v2.iso.sha256">SHA-256</a>
+              <a class="button" href="/releases/distropica-miniplenty-v2.iso.manifest">Manifesto</a>
+            </div>
+            <p class="hash"><strong>SHA-256</strong><br>06be0ed021a3916c76b8e823d1e3a7846246eaccf38f00a49f7e5190c5e07a13</p>
+          </div>
+          <div>
+            <h3>Primeiro boot</h3>
+            <ol>
+              <li>Crie uma VM x86_64 com UEFI.</li>
+              <li>Monte a ISO como unidade óptica.</li>
+              <li>Use um disco virtual descartável de pelo menos 4 GiB.</li>
+              <li>Depois de instalar, remova a ISO antes do reboot.</li>
+            </ol>
+            <pre><code>minitrue rectify yq
+minitrue rectify nano
+minitrue verify</code></pre>
+          </div>
+        </div>
+        <p class="warning"><strong>Aviso:</strong> esta é uma imagem local de desenvolvimento, não um release estável. O instalador apaga integralmente o dispositivo escolhido. A v2 teve conteúdo e sidecars verificados; o aceite automatizado completo no VirtualBox foi realizado na mídia v1, que compartilha a mesma base e o mesmo EFI.</p>
+      </div>
+    </section>
+  </main>
+  <footer>
+    <div class="wrap">
+      <span>Distrópica · 2026 · doubleplusgood</span>
+      <span><a href="https://github.com/dvhoisel/distropica/blob/agent/installable-live-media/LICENSE">GPL-3.0-or-later</a> · <a href="https://github.com/dvhoisel/distropica">GitHub</a></span>
+    </div>
+  </footer>
+</body>
+</html>

@@ -31,16 +31,16 @@ dependência transitiva; ncurses fica instalado, mas não entra no `world` como
 desejo top-level. O caminho de instalação pretendido usa um canal assinado com
 `--offline --only-binary`: o metapacote é resolvido localmente e os pacotes
 fonte de sua closure, Vim e ncurses vêm como artefatos do canal, sem compilar
-esses componentes no computador do usuário. Esse novo canal/cache ainda precisa
-ser construído, reemitido e aceito; não é o cache validado no marco anterior.
+esses componentes no computador do usuário. O canal/cache local de
+desenvolvimento com essa closure foi construído, assinado e aceito na mídia
+`miniplenty-v1`; continua não sendo um canal oficial publicado.
 
 O cache e sua chave de assinatura ainda não são artefatos oficiais publicados
 pelo projeto. Passá-lo por `--cache` é um override explícito e classifica esse
 build como `custom`; um futuro `channel-bootstrap/` versionado preservará
 `development` até o perfil ser promovido com os pinos de release. O perfil
 fixa `MEDIA_SIZE_MIB=512` para dimensionar a saída IMG e registrar o valor no
-lock. Esse campo não fixa o tamanho da ISO, que acompanha o payload; a nova
-mídia ainda não foi recomposta.
+lock. Esse campo não fixa o tamanho da ISO, que acompanha o payload.
 
 O cache offline completo pode ser um superconjunto estrito da closure de
 `target.world`. Objetos adicionais continuam presos por `CACHE_SHA256` e são
@@ -67,6 +67,14 @@ a toolchain nativa já instalada. Ripgrep, Vim e o metapacote constam diretament
 em `target.world`; por isso `/usr/bin/rg`, `/usr/bin/vim`, `/usr/bin/vi`, Make e
 a toolchain final devem existir desde o primeiro boot. Ncurses existe como
 dependência de Vim, não como intenção top-level.
+
+As receitas `yq` 4.53.2 e `nano` 9.1 também fazem parte da árvore, mas não de
+nenhum dos três worlds. São provas online-only: `minitrue rectify yq` baixa o
+binário estático oficial e registra `ORIGIN=vendor`; `minitrue rectify nano`
+baixa o tarball oficial e compila com a toolchain nativa, registrando
+`ORIGIN=fonte`. Nenhum dos dois payloads está no cache da mídia. A composição
+`miniplenty-v2` leva somente as receitas; por isso requer rede no sistema
+instalado para exercitá-las.
 
 Quando uma receita `KIND=source` com `TOOLCHAIN=seed` ou `cross` precisa ser
 compilada localmente, o Minitrue trata Zig como dependência de build implícita:

@@ -2,6 +2,15 @@
 
 > Uma distribuição Linux distópica. Não instala pacotes: **retifica registros**.
 
+**[Site oficial](https://distropica.com.br/)** ·
+**[Baixar a ISO de desenvolvimento (334 MiB)](https://distropica.com.br/releases/distropica-miniplenty-v2.iso)** ·
+**[SHA-256](https://distropica.com.br/releases/distropica-miniplenty-v2.iso.sha256)** ·
+**[Manifesto](https://distropica.com.br/releases/distropica-miniplenty-v2.iso.manifest)**
+
+> **Atenção:** `miniplenty-v2` é uma imagem de desenvolvimento para VM UEFI.
+> O instalador apaga integralmente o dispositivo escolhido. Use um disco virtual
+> descartável e confira o SHA-256 antes do boot.
+
 A Distrópica parte de uma observação desconfortável sobre o mundo atual: os
 projetos novos (Zig, Go, Rust, os aplicativos das corporações) distribuem
 binários oficiais prontos, enquanto o mundo antigo (GNU, glibc, o núcleo do
@@ -277,6 +286,38 @@ mantém distintas a disponibilidade no cache, autenticada por
 ser dependência de `miniplenty-buildbase`, não por constar em `cache.world`;
 jq e tree começam ausentes para as provas pós-instalação, e Zig continua apenas
 disponível para futuras compilações fonte.
+
+### Pacotes opcionais baixados diretamente do upstream
+
+A árvore também oferece duas provas **online-only**, deliberadamente ausentes de
+`target.world` e `cache.world`. A ISO leva apenas suas receitas; portanto o
+download acontece no computador instalado, diretamente do upstream, quando a
+pessoa solicita:
+
+```sh
+# Binário Linux x86_64 estático publicado pelo projeto yq.
+minitrue rectify yq
+yq --version
+
+# Tarball de fontes publicado pelo GNU nano; build com GCC/Make nativos.
+minitrue rectify nano
+nano --version
+
+minitrue verify
+```
+
+`yq` 4.53.2 fica no Mundo A com `ORIGIN=vendor`; GNU nano 9.1 fica no Mundo B
+com `ORIGIN=fonte` e depende da ncurses já instalada pelo Vim. As duas receitas
+foram exercitadas numa cópia do target: os hashes conferiram, as versões
+executaram e `verify` terminou limpo. Sem rede, ambas falham fechado em vez de
+consumir o cache da mídia.
+
+A composição `target/distropica-miniplenty-v2.iso` incorpora essas receitas e
+reutiliza exatamente o EFI, o canal e o cache da mídia aceita anteriormente. A
+recomposição levou cerca de 10 segundos e produziu SHA-256
+`06be0ed021a3916c76b8e823d1e3a7846246eaccf38f00a49f7e5190c5e07a13`.
+Essa v2 teve conteúdo e sidecars verificados, mas ainda não repetiu o aceite
+completo no VirtualBox; o resultado `FINAL_RESULT=passed` abaixo pertence à v1.
 
 O núcleo desse percurso já foi exercitado separadamente numa cópia isolada do
 target, antes da adoção do metapacote e sem atribuir a ele o aceite da ISO:

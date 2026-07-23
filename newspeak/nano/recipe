@@ -1,0 +1,20 @@
+NAME=nano
+VERSION=9.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc ncurses"
+BUILD_DEPS="make gcc-pass2 binutils-glibc"
+ABOUT="editor de texto opcional; receita online-only que baixa a fonte oficial do GNU nano e a compila localmente com a toolchain nativa"
+LICENSE=GPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/nano/nano-$VERSION.tar.xz"
+SHA256=5f47764274cb7532349ce0aa20ec10f1e8e851a6e9fa3eb66812c43d196db042
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    LIBS="-ltinfo" ./configure --prefix=/usr --sysconfdir=/etc \
+        --enable-utf8 --disable-nls --disable-libmagic \
+        --disable-dependency-tracking
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    rm -rf -- "$STAGE/usr/share/locale"
+}

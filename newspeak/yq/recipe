@@ -1,0 +1,16 @@
+NAME=yq
+VERSION=4.53.2
+KIND=binary
+ABOUT="processador YAML/JSON/XML de linha de comando; pacote opcional online-only, instalado a partir do executável Linux x86_64 estático publicado pelo upstream"
+# O executável Go estático agrega dependências; a licença do payload completo
+# precisa de SBOM antes de qualquer redistribuição oficial pela Distrópica.
+LICENSE=NOASSERTION
+SRC="https://github.com/mikefarah/yq/releases/download/v$VERSION/yq_linux_amd64"
+SHA256=d56bf5c6819e8e696340c312bd70f849dc1678a7cda9c2ad63eebd906371d56b
+LINKS="yq=bin/yq"
+
+install_pkg() {
+    mkdir -p "$PREFIX/bin"
+    cp "$DL" "$PREFIX/bin/yq"
+    chmod 755 "$PREFIX/bin/yq"
+}

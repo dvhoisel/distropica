@@ -43,6 +43,26 @@ DISK_SHA256=53032ba2d241de40b8fe25853662879dc067b71cbed264137dd5aa64266f0b9f
 FINAL_RESULT=passed
 ```
 
+### Delta online — `miniplenty-v2`
+
+A v2 acrescenta somente duas receitas opcionais online-only: yq 4.53.2, binário
+estático oficial (`ORIGIN=vendor`), e GNU nano 9.1, compilado da fonte oficial
+com a toolchain nativa (`ORIGIN=fonte`). Ambas foram instaladas numa cópia do
+target e passaram em `minitrue verify`. Como não pertencem a `target.world` nem
+a `cache.world`, seus payloads não foram incorporados à mídia. A ISO foi
+recomposta em cerca de 10 segundos reutilizando EFI, canal e cache; o conteúdo
+das duas receitas e os sidecars foram conferidos. O aceite completo da v2 no
+VirtualBox ainda não foi repetido.
+
+```text
+ISO=target/distropica-miniplenty-v2.iso
+ISO_SHA256=06be0ed021a3916c76b8e823d1e3a7846246eaccf38f00a49f7e5190c5e07a13
+PROFILE_LOCK_SHA256=9528e4217ec6363256cda252d7992861bcc74e5a997d1903ddb151e55a4720ab
+NEWSPEAK_SHA256=65017476e659fad53d50745abd3b0e7498f2a687ea40d6643798ede7ae4f9568
+BOOT_EFI_SHA256=a800e2aca03dd62cd9e7db3bb894c24f7bdb1fdc19a26abf91566b3b824771b9
+MEDIA_MANIFEST_SHA256=07910b519086908f6baee417c299077d9e857cc35a91de64d51dec659c735d34
+```
+
 ## minitrue (a ferramenta)
 
 | Recurso | Estado | Testado | Nota |
