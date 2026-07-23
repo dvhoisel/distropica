@@ -1,8 +1,8 @@
 # SPEC-0010 — Builds, sistemas e mídias reprodutíveis
 
-**Status:** implementação parcial v0.5 · 2026-07-22
+**Status:** implementação parcial v0.6 · 2026-07-23
 **Depende de:** SPEC-0003 (minitrue), SPEC-0004 (newspeak), SPEC-0008
-(minipax), SPEC-0009 (canais).
+(minipax), SPEC-0009 (canais) e SPEC-0013 (closure e plan lock).
 
 ## 1. Princípio: reprodutibilidade é a raiz da confiança
 
@@ -227,7 +227,10 @@ O lock também registra `INSTALL_READY`; `STATUS=release` exige valor `yes`.
 O lock contém os hashes desses insumos — inclusive `CACHE_WORLD_SHA256` —, o
 hash de conteúdo calculado, os três pinos oficiais, além de nome, classe, arquitetura,
 `SOURCE_DATE_EPOCH` e `MEDIA_SIZE_MIB`; o sha256 do próprio lock é a identidade
-curta do plano. Um perfil com `STATUS=release` precisa pinar os três campos
+curta dos insumos do perfil. Ele não representa a resolução tipada das
+dependências. O futuro `PLAN_LOCK_FORMAT=1` da SPEC-0013 cumprirá esse papel e
+terá seu hash referenciado pelo `profile.lock`. Um perfil com `STATUS=release`
+precisa pinar os três campos
 `OFFICIAL_CONTENT_SHA256`, `OFFICIAL_BOOT_EFI_SHA256` e
 `OFFICIAL_MINITRUE_SHA256`. Só a coincidência exata do conteúdo calculado com
 o primeiro pode produzir `PROFILE_CLASS=official-inputs`; qualquer world,

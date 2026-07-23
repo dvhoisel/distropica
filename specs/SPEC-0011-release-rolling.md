@@ -1,10 +1,12 @@
 # SPEC-0011 — Modelo de release: rolling edge
 
-**Status:** rascunho v0.3 · 2026-07-22
+**Status:** rascunho v0.4 · 2026-07-23
 **Palavras-chave normativas:** DEVE / NÃO DEVE / DEVERIA / PODE (RFC 2119).
 **Depende de:** SPEC-0001 (premissas, P1/P2/P7), SPEC-0003 (minitrue, `--sync`,
 registro), SPEC-0008 (kernel, boot A/B), SPEC-0009 (canais), SPEC-0010
 (reprodutibilidade).
+**Complementado por:** SPEC-0013 (plano congelado, closure tipada e coleta de
+órfãos).
 
 ## 1. Princípio: rolling é o mecanismo, edge é a política
 
@@ -71,6 +73,10 @@ resolvido contra a árvore corrente, SPEC-0003 §2):
 - é o "upgrade do sistema" do rolling — mas expresso como **reconciliação**,
   não como um comando de update à parte. O sistema não "atualiza"; **converge
   ao presente**.
+
+A resolução que antecede essa convergência deve ser o plano único e tipado da
+SPEC-0013 §7: o preview e a aplicação compartilham algoritmo e plan lock;
+build-deps inativas não entram na closure runtime; órfãos são apenas apontados.
 
 ## 4. Detecção de mudança e o fingerprint de build
 

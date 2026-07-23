@@ -1,8 +1,10 @@
 # SPEC-0009 — Canais binários (oficial e samizdat)
 
-**Status:** implementação inicial v0.5 · 2026-07-22
+**Status:** implementação inicial v0.6 · 2026-07-23
 **Depende de:** SPEC-0001 (premissas, P2/P6), SPEC-0003 (minitrue),
 SPEC-0004 (newspeak), SPEC-0008 (minipax).
+**Complementado por:** SPEC-0013 (fechamento ABI, mapa de provedores e plan
+lock; ainda futuros).
 
 **Estado de implementação:** consumo de canais, `--only-binary`, cache offline,
 bootstrap online, lock de seleção e `channel emit` já existem. O índice v2
@@ -186,6 +188,11 @@ pré-buildado em vez de compilado localmente.
   `TRUST=builder`.
 - O artefato NÃO carrega scripts de pós-instalação (SPEC-0001 §2): é
   árvore passiva, como qualquer tarball.
+- Antes de integrar um canal oficial, o payload deve passar pela auditoria de
+  closure da SPEC-0013 §4. O mapa de provedores, requisitos ABI e hash de
+  closure deverão ser autenticados por um formato futuro de índice/sidecar. O
+  índice v2 e o `CHANNEL_LOCK_FORMAT=2` atuais **não** carregam essa prova e
+  não devem ser apresentados como plan lock global.
 - No consumo atual, o `.tar.zst` conferido é copiado para um snapshot selado e
   permanece vivo enquanto o tar interno é descompactado para outro `memfd`
   selado. Isso fecha hash→uso, mas faz o pico de RAM aproximar a soma de

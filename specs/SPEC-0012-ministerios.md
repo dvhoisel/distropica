@@ -1,6 +1,6 @@
 # SPEC-0012 — Os Quatro Ministérios
 
-**Status:** rascunho v0.5 · 2026-07-22
+**Status:** rascunho v0.6 · 2026-07-23
 **Palavras-chave normativas:** DEVE / NÃO DEVE / DEVERIA / PODE (interpretação análoga à RFC 2119).
 
 ## 1. Propósito
@@ -101,6 +101,12 @@ memorização e à coesão; onde ele brigar com a clareza, a clareza vence.
   sha256 final da imagem com um manifesto oficial externo assinado; um
   manifesto local não pode atribuir essa autoridade a si mesmo.
 
+A SPEC-0013 refina essa fronteira para dependências: Minitrue resolve, planeja,
+confere e explica; Miniplenty inspeciona ELF/ABI e produz o mapa de provedores;
+Minipax prende o futuro plan lock ao perfil e à mídia; Miniluv é a recusa
+normativa de requisito ausente, ambíguo ou incompatível. Nenhum ministério
+mantém um segundo resolvedor.
+
 ### 3.1 A fronteira executável
 
 O mesmo pipeline tem três executáveis/papéis, sem duas implementações de
@@ -194,4 +200,5 @@ produzidas e coletadas localmente.
 ## 5. Referências
 
 SPEC-0003 (minitrue), SPEC-0008 (instalador/Minipax), SPEC-0009 (canais/
-Miniluv+Miniplenty), SPEC-0010 (reprodutibilidade), SPEC-0011 (rolling).
+Miniluv+Miniplenty), SPEC-0010 (reprodutibilidade), SPEC-0011 (rolling) e
+SPEC-0013 (fechamento de dependências e ABI).

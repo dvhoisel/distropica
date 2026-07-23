@@ -82,10 +82,13 @@ SOURCE_BUNDLE_SHA256=9e9ea4e8baaf247353f64ebce5eff41851a1a0034a4f57d44fab835a68f
 | `pack` determinístico (v1) | ✅ | ✅ | a parte mais madura; falta xattr/ACL/cap/sparse |
 | Manifesto v2 (conteúdo + tipo) | ✅ | ✅ | `f:` prende modo+conteúdo do regular, `l:` prende alvo, `d:` prende modo do diretório-raiz+árvore (payload A e vazios B); leitura v0/v1 mantida |
 | `verify` (presença + integridade por claim) | ✅ | ✅ unit + instalação direta + VBox atual | inspeção confinada ao rootfs; confere conteúdo/tipo/alvo/árvore, denuncia journal pendente/formato futuro e exige que toda `DEPS` de registro v2 tenha registro factual válido. Não verifica `BUILD_DEPS` nem varre regulares órfãos em /usr |
-| `cache verify` (disponibilidade sem instalação) | ✅ | ✅ unit + E2E local + VBox atual | força offline/sem TOFU, confere hashes e assinaturas dos artefatos já no cache e não cria registro, link ou entrada no `world`; conferiu jq, Make, tree e Zig na mídia atual |
-| `memoryhole` (+ preserva modificado) | ✅ | 🟡 | sem `--tudo`; sem rollback do payload |
-| `explain` / `why` (proveniência) | ✅ | ✅ | ORIGIN/hash-arq; ABOUT/REPROCORR congelados no meta, com fallback literal legado sem executar receita histórica; corroboração e reprocorr |
+| `cache verify` (disponibilidade sem instalação) | ✅ | ✅ unit + E2E local + VBox atual | força offline/sem TOFU, confere hashes e assinaturas dos nomes explicitamente passados e não cria registro, link ou entrada no `world`; conferiu jq, Make, tree e Zig na mídia atual. Ainda não resolve nem prova a closure completa da SPEC-0013 |
+| `memoryhole` (+ preserva modificado) | ✅ | 🟡 | sem `--tudo`, sem `--orfaos`; sem rollback do payload |
+| `explain` / `why` (proveniência) | ✅ | ✅ | ORIGIN/hash-arq; ABOUT/REPROCORR congelados no meta, com fallback literal legado sem executar receita histórica; corroboração e reprocorr. Não mostra ainda cadeia completa, aresta tipada, plan lock ou `build-residue` |
 | `--sync` (convergir ao world) | ⬜ | — | stub; SPEC-0011 |
+| Plano/plan lock e closures tipadas | ⬜ | — | `PLAN_LOCK_FORMAT=1`, `plan` e convergência por um resolvedor comum são norma-alvo da SPEC-0013 |
+| Auditoria ELF/ABI + mapa de provedores | ⬜ | — | ainda não inspeciona `PT_INTERP`, `DT_NEEDED`, SONAME e versões de símbolos para provar fechamento |
+| PATH/view de build fechado | ⬜ | — | o runner limpa o ambiente, mas ainda expõe `/usr/bin:/bin` do rootfs; ferramentas implícitas podem vazar para o build |
 | `rollback` / `unperson` / `lint` | ⬜ | — | stub |
 | Canal binário assinado | ✅ | ✅ unit + E2E offline | config HTTPS/chave minisign pinada, índice canônico v2 assinado com `RECIPE_FINGERPRINT`, cache endereçado por conteúdo, `.tar.zst` com limites e conferência do tar interno; seleção exige que a identidade autenticada coincida com a receita efetiva. `/etc/minitrue/channels/` existente é autoritativo e, vazio, desativa a seed |
 | Resolução `--no-binary` / `--only-binary` | ✅ | ✅ unit + E2E offline histórico | binário de canal preserva mundo B; `--only-binary` resolve metapacotes locais sem artefato, mas exige artefato para cada dependência fonte e não expande `BUILD_DEPS` nem Zig implícito |

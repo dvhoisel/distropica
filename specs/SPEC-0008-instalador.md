@@ -1,9 +1,11 @@
 # SPEC-0008 — minipax, instalação e mídia
 
-**Status:** implementação inicial v0.7 · 2026-07-22
+**Status:** implementação inicial v0.8 · 2026-07-23
 
 **Depende de:** SPEC-0003 (minitrue `--root`), SPEC-0005 (estágios),
 SPEC-0006 (init), SPEC-0009 (canais) e SPEC-0010 (reprodutibilidade).
+**Complementado por:** SPEC-0013 (closure resolvida e vínculo futuro do plan
+lock ao perfil).
 
 O Ministério da Paz cuida de territórios novos. Seu contrato não começa na
 ISO: começa num **perfil resolvido**, que pode ser materializado diretamente
@@ -310,6 +312,13 @@ retificar o target. Essa operação confere os artefatos e suas assinaturas sem
 baixar nem instalar. Um cache pode continuar sendo superconjunto estrito das
 duas listas: bytes extras também ficam presos por `CACHE_SHA256`, mas não criam
 registro, link ou intenção.
+
+Antes de uma mídia oficial, essa limitação deve ser substituída pelo
+`cache verify --closure` da SPEC-0013 §7.4: o Minipax receberá do Minitrue um
+plan lock, prenderá seu hash ao `profile.lock` e falhará antes de compor a mídia
+se a política offline não fechar `target.world`. O `cache verify` atual
+continua conferindo somente os nomes explicitamente passados; não se deve
+descrevê-lo como prova dessa closure futura.
 
 Somente `target.world` expressa a instalação inicial. No perfil atual, `base`,
 `linux`, `ripgrep`, `vim` e `miniplenty-buildbase` são desejos top-level e

@@ -1,6 +1,6 @@
 # SPEC-0007 — Censo de binários upstream
 
-**Status:** rascunho v0.5 · 2026-07-22
+**Status:** rascunho v0.6 · 2026-07-23
 **Método:** coluna "verificado" = checagem direta na data indicada (URL do
 canal oficial consultada); "notório" = sabidamente publicado, a re-verificar
 no momento de escrever a receita. Elegibilidade conforme SPEC-0001 §2.
@@ -63,6 +63,11 @@ custo GUI (mesa/GTK) é isolado no Estágio 4b.
 | wayland / mesa / gtk | só fonte | a Longa Marcha (E4b) |
 | inkscape, krita | único binário oficial é AppImage ⇒ inelegível (SPEC-0001 §2) | mundo B, por consequência do banimento de AppImage |
 | ffmpeg | caso-limite: site oficial aponta builds de CI de terceiro (BtbN) | classificação pendente (SPEC-0001 §5) |
+
+Classificar um componente no mundo B não obriga cada usuário a compilá-lo.
+Depois da construção oficial e da auditoria de closure, o canal da Distrópica
+o oferece como binário; somente o fallback sem artefato aceitável ativa fonte,
+build-deps e toolchain (SPEC-0013 §3).
 
 ## 4. O dilema coreutils
 

@@ -1,7 +1,8 @@
 # SPEC-0004 — newspeak, o formato das receitas
 
-**Status:** rascunho v0.7 · 2026-07-22
+**Status:** rascunho v0.8 · 2026-07-23
 **Depende de:** SPEC-0001 (elegibilidade), SPEC-0003 (contrato de execução).
+**Complementado por:** SPEC-0013 (semântica tipada e validação da closure).
 
 Newspeak é o vocabulário mínimo: uma receita diz **de onde vem, como se
 confere e onde se encaixa** — e nada mais. Toda expressividade extra foi
@@ -57,8 +58,8 @@ Opcionais:
 
 | Campo | Significado |
 |-------|-------------|
-| `DEPS` | dependências de runtime (nomes canônicos de receitas) |
-| `BUILD_DEPS` | dependências só de build (mundo B; nomes canônicos) |
+| `DEPS` | dependências diretas de runtime (nomes canônicos de receitas); requisitos ELF externos precisam alcançar seu provedor por uma aresta direta, conforme SPEC-0013 §4 |
+| `BUILD_DEPS` | dependências só de build (mundo B; nomes canônicos), materializadas apenas quando houver compilação local; SPEC-0013 §2 |
 | `LINKS` | mundo A: comandos a expor, `nome=caminho/relativo/no/prefix`, sem `/`, `.` ou `..` nos componentes; default: todo executável em `bin/` do prefix |
 | `REQUIRES_GLIBC` | `1` ⇒ só instala após o Estágio 2 (SPEC-0005) |
 | `ABOUT` | uma linha: o que é / justificativa de classificação |

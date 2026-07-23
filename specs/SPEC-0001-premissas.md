@@ -1,6 +1,6 @@
 # SPEC-0001 — Premissas e política de elegibilidade
 
-**Status:** rascunho v0.5 · 2026-07-18
+**Status:** rascunho v0.6 · 2026-07-23
 **Palavras-chave normativas:** DEVE / NÃO DEVE / DEVERIA / PODE (interpretação análoga à RFC 2119).
 
 ## 1. Premissas fundadoras
@@ -102,6 +102,10 @@ O que não tem binário elegível é compilado da fonte oficial do projeto.
 Builds do mundo-fonte DEVERIAM usar toolchain que é ela mesma binário
 upstream (`zig cc` — ver SPEC-0005) e DEVERIAM preferir linkagem estática
 quando razoável, para reduzir o grafo de dependências em runtime.
+
+P2 e P3 definem a preferência de origem, não dispensam o fechamento. Toda
+origem precisa satisfazer o mesmo grafo tipado de runtime, build, toolchain e
+ABI especificado na SPEC-0013.
 
 ### P4 — Sem systemd
 

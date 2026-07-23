@@ -1,6 +1,6 @@
 # SPEC-0005 — Bootstrap em estágios
 
-**Status:** rascunho v0.6 · 2026-07-22
+**Status:** rascunho v0.7 · 2026-07-23
 **Depende de:** todas as anteriores.
 
 ## 1. A tese do bootstrap
@@ -816,8 +816,9 @@ compilado da fonte localmente.
 precisa de glib/pango/cairo/harfbuzz, que precisam de wayland + **mesa** —
 nada disso tem binário upstream elegível. É o maior custo de compilação do
 projeto inteiro, e fica explicitamente fora do caminho crítico dos
-estágios 0–4a. Compositor alvo mínimo (labwc? cage?) e escopo exato: spec
-futura própria.
+estágios 0–4a. A closure e a regra de construir uma vez para servir pelo
+canal estão na SPEC-0013 §9; a escolha do compositor (labwc? cage?) e o
+escopo concreto continuam reservados a uma spec futura própria.
 
 ## 7. Resumo
 

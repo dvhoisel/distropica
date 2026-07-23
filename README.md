@@ -103,6 +103,7 @@ ideológica** — cada premissa existe por um fim prático, não por dogma, e a
 | [SPEC-0010](specs/SPEC-0010-reprodutibilidade.md) | Builds reprodutíveis — a raiz de confiança dos canais |
 | [SPEC-0011](specs/SPEC-0011-release-rolling.md) | Modelo de release: rolling *edge* — sempre o estável mais recente |
 | [SPEC-0012](specs/SPEC-0012-ministerios.md) | Os quatro ministérios — fronteiras de responsabilidade das ferramentas |
+| [SPEC-0013](specs/SPEC-0013-dependencias.md) | Grafo tipado, fechamento ABI, plan lock, convergência e dependências da pilha gráfica |
 
 ## Estado
 

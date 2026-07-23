@@ -1,7 +1,9 @@
 # SPEC-0003 — minitrue, a ferramenta
 
-**Status:** rascunho v0.9 · 2026-07-22
+**Status:** rascunho v0.10 · 2026-07-23
 **Depende de:** SPEC-0001 (política), SPEC-0002 (layout), SPEC-0004 (receitas).
+**Complementado por:** SPEC-0013 (grafo tipado, fechamento ABI, plan lock e
+convergência).
 
 ## 1. Identidade
 
@@ -157,7 +159,10 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
    `BUILD_DEPS` e também a dependência de toolchain implícita em `zig` para
    `TOOLCHAIN=seed|cross`. Receitas `TOOLCHAIN=none|native`, `KIND=binary` e
    `KIND=meta` não ganham essa aresta. Declaração explícita duplicada de Zig é
-   deduplicada.
+   deduplicada. Esse resolvedor implementa a ordenação atual; a separação
+   formal entre closures de identidade/runtime/build/cache/fato, o scanner ABI,
+   o ambiente de build fechado e o futuro plan lock são normatizados pela
+   SPEC-0013 e ainda não devem ser atribuídos à implementação presente.
 4. **Fetch**: para cada URL de `SRC`, baixar para
    `/var/cache/minitrue/<sha256>` (nome do arquivo no cache = hash
    esperado). Se já existe com hash válido, rede não é tocada.
