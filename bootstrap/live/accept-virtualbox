@@ -449,7 +449,22 @@ require_screen_text() {
 }
 
 type_text() {
-    "$VBOX" controlvm "$VM_UUID" keyboardputstring "$1" >/dev/null 2>>"$VBOX_LOG"
+    # O editor de linha do shell convidado corta silenciosamente perto de 1024
+    # bytes. Falhe no host em vez de enviar uma linha que ficará sem `fi`/aspa.
+    text_bytes=$(printf '%s' "$1" | wc -c)
+    [ "$text_bytes" -le 1000 ] ||
+        fail "comando para o console excede 1000 bytes ($text_bytes)"
+    # Blocos curtos também evitam saturar a fila PS/2 do VirtualBox.
+    if ! printf '%s' "$1" | LC_ALL=C fold -b -w 256 | while IFS= read -r chunk || [ -n "$chunk" ]; do
+        "$VBOX" controlvm "$VM_UUID" keyboardputstring "$chunk" \
+            >/dev/null 2>>"$VBOX_LOG" || exit $?
+        sleep 0.1
+    done; then
+        fail "VirtualBox recusou texto do teclado virtual"
+    fi
+    # A API confirma o enfileiramento, não necessariamente o consumo pelo
+    # controlador PS/2 convidado. Não deixe o Enter ultrapassar a cauda.
+    sleep 0.5
 }
 
 press_enter() {
@@ -527,11 +542,24 @@ guest_command_and_wait_or_fail \
     'if command -v rg >/dev/null 2>&1 && [ -d /var/lib/minitrue/records/ripgrep ] && grep -Fqx ripgrep /etc/minitrue/world 2>/dev/null && rg --version >/tmp/vbox-rg-version 2>&1 && grep -Eq "^ripgrep 15[.]2[.]0([[:space:]]|$)" /tmp/vbox-rg-version; then cat /tmp/vbox-rg-version >/dev/ttyS0; echo VBOX_RIPGREP_DEFAULT_PRESENT_OK >/dev/ttyS0; else echo VBOX_RIPGREP_DEFAULT_PRESENT_FAILED >/dev/ttyS0; fi' \
     'VBOX_RIPGREP_DEFAULT_PRESENT_OK' 'VBOX_RIPGREP_DEFAULT_PRESENT_FAILED' 30
 
-# Vim e sua libtinfo vêm prontos do canal. Vim é desejo explícito do perfil;
-# ncurses é somente dependência. `vi` deve ter deixado de apontar ao BusyBox.
+# Vim e sua libtinfo vêm prontos do canal. Dividimos o probe em comandos
+# curtos: além de localizar a falha exata, isso não ultrapassa a fila PS/2 do
+# VirtualBox. Vim é desejo explícito; ncurses é somente dependência.
 guest_command_and_wait_or_fail \
-    'printf "%s\n" before >/tmp/vbox-vim-smoke; vim --version >/tmp/vbox-vim-version 2>&1; vi --version >/tmp/vbox-vi-version 2>&1; if command -v vim >/dev/null 2>&1 && [ "$(readlink /usr/bin/vi)" = vim ] && cmp -s /tmp/vbox-vim-version /tmp/vbox-vi-version && grep -Fq "VIM - Vi IMproved 9.2" /tmp/vbox-vim-version && grep -Fqx "Included patches: 1-837" /tmp/vbox-vim-version && grep -Fq "Compiled by Distropica" /tmp/vbox-vim-version && grep -Fq +multi_byte /tmp/vbox-vim-version && readelf -d /usr/bin/vim 2>/dev/null | grep -Fq "Shared library: [libtinfo.so.6]" && TERM=linux infocmp linux >/tmp/vbox-terminfo-linux 2>&1 && grep -Fq "linux|linux console" /tmp/vbox-terminfo-linux && vim -Nu NONE -n -es -c "s/before/VIM_OK/" -c wq /tmp/vbox-vim-smoke && grep -Fqx VIM_OK /tmp/vbox-vim-smoke && grep -Fqx ORIGIN=canal:development /var/lib/minitrue/records/vim/meta && grep -Fqx ORIGIN=canal:development /var/lib/minitrue/records/ncurses/meta && grep -Fqx vim /etc/minitrue/world && ! grep -Fqx ncurses /etc/minitrue/world 2>/dev/null; then head -n 3 /tmp/vbox-vim-version >/dev/ttyS0; echo VBOX_VIM_DEFAULT_PRESENT_OK >/dev/ttyS0; else echo VBOX_VIM_DEFAULT_PRESENT_FAILED >/dev/ttyS0; fi' \
-    'VBOX_VIM_DEFAULT_PRESENT_OK' 'VBOX_VIM_DEFAULT_PRESENT_FAILED' 60
+    'if vim --version >/tmp/vbox-vim-version 2>&1 && vi --version >/tmp/vbox-vi-version 2>&1; then echo VBOX_VIM_CAPTURE_OK >/dev/ttyS0; else echo VBOX_VIM_CAPTURE_FAILED >/dev/ttyS0; fi' \
+    'VBOX_VIM_CAPTURE_OK' 'VBOX_VIM_CAPTURE_FAILED' 30
+guest_command_and_wait_or_fail \
+    'if command -v vim >/dev/null 2>&1 && [ "$(readlink /usr/bin/vi)" = vim ] && cmp -s /tmp/vbox-vim-version /tmp/vbox-vi-version && grep -Fq "VIM - Vi IMproved 9.2" /tmp/vbox-vim-version && grep -Fqx "Included patches: 1-837" /tmp/vbox-vim-version && grep -Fq "Compiled by Distropica" /tmp/vbox-vim-version && grep -Fq +multi_byte /tmp/vbox-vim-version; then echo VBOX_VIM_IDENTITY_OK >/dev/ttyS0; else echo VBOX_VIM_IDENTITY_FAILED >/dev/ttyS0; fi' \
+    'VBOX_VIM_IDENTITY_OK' 'VBOX_VIM_IDENTITY_FAILED' 30
+guest_command_and_wait_or_fail \
+    'if readelf -d /usr/bin/vim 2>/dev/null | grep -Fq "Shared library: [libtinfo.so.6]" && TERM=linux infocmp linux >/tmp/vbox-terminfo-linux 2>&1 && grep -Fiq "linux|linux console" /tmp/vbox-terminfo-linux; then echo VBOX_VIM_TERMINFO_OK >/dev/ttyS0; else echo VBOX_VIM_TERMINFO_FAILED >/dev/ttyS0; fi' \
+    'VBOX_VIM_TERMINFO_OK' 'VBOX_VIM_TERMINFO_FAILED' 30
+guest_command_and_wait_or_fail \
+    'printf "%s\n" before >/tmp/vbox-vim-smoke; if vim -Nu NONE -n -es -c "s/before/VIM_OK/" -c wq /tmp/vbox-vim-smoke && grep -Fqx VIM_OK /tmp/vbox-vim-smoke; then echo VBOX_VIM_EDIT_OK >/dev/ttyS0; else echo VBOX_VIM_EDIT_FAILED >/dev/ttyS0; fi' \
+    'VBOX_VIM_EDIT_OK' 'VBOX_VIM_EDIT_FAILED' 30
+guest_command_and_wait_or_fail \
+    'if grep -Fqx ORIGIN=canal:development /var/lib/minitrue/records/vim/meta && grep -Fqx ORIGIN=canal:development /var/lib/minitrue/records/ncurses/meta && grep -Fqx vim /etc/minitrue/world && ! grep -Fqx ncurses /etc/minitrue/world 2>/dev/null; then head -n 3 /tmp/vbox-vim-version >/dev/ttyS0; echo VBOX_VIM_DEFAULT_PRESENT_OK >/dev/ttyS0; else echo VBOX_VIM_DEFAULT_PRESENT_FAILED >/dev/ttyS0; fi' \
+    'VBOX_VIM_DEFAULT_PRESENT_OK' 'VBOX_VIM_DEFAULT_PRESENT_FAILED' 30
 
 # Os dois pacotes de prova não pertencem ao perfil: o aceite instalará jq do
 # binário upstream e tree da fonte, explicitamente e ainda offline.
@@ -639,7 +667,10 @@ guest_command_and_wait \
     'VBOX_THIRD_BOOT_ROOT_UID_0' 30
 
 guest_command_and_wait_or_fail \
-    'persisted=true; for package in vim ncurses jq tree; do [ -d "/var/lib/minitrue/records/$package" ] || persisted=false; done; grep -Fqx ORIGIN=canal:development /var/lib/minitrue/records/vim/meta || persisted=false; grep -Fqx ORIGIN=canal:development /var/lib/minitrue/records/ncurses/meta || persisted=false; grep -Fqx ORIGIN=vendor /var/lib/minitrue/records/jq/meta || persisted=false; grep -Fqx ORIGIN=fonte /var/lib/minitrue/records/tree/meta || persisted=false; for package in vim jq tree; do grep -Fqx "$package" /etc/minitrue/world 2>/dev/null || persisted=false; done; grep -Fqx ncurses /etc/minitrue/world 2>/dev/null && persisted=false; if [ "$persisted" = true ] && command -v vim >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 && command -v tree >/dev/null 2>&1 && [ "$(jq --version)" = jq-1.8.2 ] && { tree --version 2>&1 | grep -Eq "^tree v2[.]3[.]2([[:space:]]|$)"; } && /usr/bin/minitrue verify >/dev/ttyS0 2>&1; then echo VBOX_VIM_JQ_TREE_PERSISTED_OK >/dev/ttyS0; else echo VBOX_VIM_JQ_TREE_PERSISTED_FAILED >/dev/ttyS0; fi' \
+    'persisted=true; for package in vim ncurses jq tree; do [ -d "/var/lib/minitrue/records/$package" ] || persisted=false; done; grep -Fqx ORIGIN=canal:development /var/lib/minitrue/records/vim/meta || persisted=false; grep -Fqx ORIGIN=canal:development /var/lib/minitrue/records/ncurses/meta || persisted=false; grep -Fqx ORIGIN=vendor /var/lib/minitrue/records/jq/meta || persisted=false; grep -Fqx ORIGIN=fonte /var/lib/minitrue/records/tree/meta || persisted=false; for package in vim jq tree; do grep -Fqx "$package" /etc/minitrue/world 2>/dev/null || persisted=false; done; grep -Fqx ncurses /etc/minitrue/world 2>/dev/null && persisted=false; if [ "$persisted" = true ]; then echo VBOX_PERSISTED_METADATA_OK >/dev/ttyS0; else echo VBOX_PERSISTED_METADATA_FAILED >/dev/ttyS0; fi' \
+    'VBOX_PERSISTED_METADATA_OK' 'VBOX_PERSISTED_METADATA_FAILED' 30
+guest_command_and_wait_or_fail \
+    'if command -v vim >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 && command -v tree >/dev/null 2>&1 && [ "$(jq --version)" = jq-1.8.2 ] && { tree --version 2>&1 | grep -Eq "^tree v2[.]3[.]2([[:space:]]|$)"; } && /usr/bin/minitrue verify >/dev/ttyS0 2>&1; then echo VBOX_VIM_JQ_TREE_PERSISTED_OK >/dev/ttyS0; else echo VBOX_VIM_JQ_TREE_PERSISTED_FAILED >/dev/ttyS0; fi' \
     'VBOX_VIM_JQ_TREE_PERSISTED_OK' 'VBOX_VIM_JQ_TREE_PERSISTED_FAILED' "$VERIFY_TIMEOUT"
 
 # A base 0.2 deve executar udhcpc no rcS e materializar rota e resolv.conf.

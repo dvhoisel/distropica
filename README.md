@@ -103,9 +103,10 @@ partir de nada além de binários upstream — foi **demonstrada**:
   rectify gcc-pass2` construiu os 16 pacotes até um **gcc nativo** (C e C++)
   hospedado na **glibc**, sem toolchain de outra distro. Essa execução
   **E2-clean** é evidência histórica: ocorreu uma vez, a frio, num rootfs novo
-  com o grafo então vigente. As receitas atuais com `install-strip` precisam de
-  rebuild e, depois, comparação entre dois ambientes limpos para uma nova prova
-  forte (SPEC-0005 §4).
+  com o grafo então vigente. O grafo atual, incluindo `zlib` explícito e os
+  payloads `install-strip` de GCC/binutils, também foi reconstruído uma vez e
+  passou nas provas C, C++, `ar` e Make; ainda falta repeti-lo em dois ambientes
+  limpos para uma nova prova forte (SPEC-0005 §4).
 - **`minitrue` — implementado** (Rust): mundo A (`/opt`), mundo B (`/usr`) e
   mundo M para metapacotes declarativos (`KIND=meta`, `WORLD=M`, sem payload),
   hash + assinatura (minisign), registros em texto com **fingerprint de build**
@@ -131,10 +132,10 @@ partir de nada além de binários upstream — foi **demonstrada**:
   Perfil, mídia e instalação recebem classes separadas que descrevem apenas
   quais **insumos** foram pinados — nunca se autoatribuem a condição de
   reprodução oficial. O perfil de desenvolvimento declara `base`, `linux`,
-  `ripgrep` e `miniplenty-buildbase` como target padrão. Esse último é um metapacote sem
+  `ripgrep`, `vim` e `miniplenty-buildbase` como target padrão. Esse último é um metapacote sem
   payload: suas dependências diretas são `base`, `make` e `gcc-pass2`, cuja
-  closure final instala `linux-headers`, glibc, `mathlibs-glibc`,
-  `binutils-glibc` e o GCC nativo. Assim, Make, `gcc`, `g++`, `as`, `ld`, `ar`
+  closure final instala `linux-headers`, glibc, `mathlibs-glibc`, `zlib`,
+  `binutils-glibc` e o GCC nativo; Vim traz `ncurses`. Assim, Make, `gcc`, `g++`, `as`, `ld`, `ar`
   e `ranlib` já fazem parte do sistema mínimo, vindos do canal em uma instalação
   `--only-binary`; Zig permanece apenas no cache e é materializado sob demanda
   quando uma compilação fonte `seed`/`cross` realmente ocorre. Antes de
@@ -159,12 +160,12 @@ partir de nada além de binários upstream — foi **demonstrada**:
   e com o cabo de rede desligado. Num terceiro boot com VirtIO NAT, obteve DHCP,
   rota e DNS local; depois desligou novamente o cabo, instalou o `ripgrep 15.2.0`
   somente do cache com `minitrue --offline rectify` e terminou com `verify`
-  limpo. Essa é evidência histórica da revisão network-v1. O runner atual foi
-  alterado para exigir ripgrep e `miniplenty-buildbase` já no primeiro sistema
-  instalado e, ainda sem rede, compilar, linkar e executar C, C++, uma biblioteca
-  estática e um Makefile com a toolchain nativa; Zig precisa continuar ausente
-  do sistema e disponível apenas no cache. A nova mídia ainda precisa passar por
-  esse aceite. O kernel mantém
+  limpo. Essa é evidência histórica da revisão network-v1. A mídia atual
+  `miniplenty-v1` também passou no runner automatizado do VirtualBox: ripgrep,
+  Vim e `miniplenty-buildbase` já estavam no sistema; C, C++, biblioteca
+  estática e Makefile funcionaram offline; jq foi instalado do binário upstream
+  e tree foi compilado da fonte; ambos persistiram após reboot e Zig permaneceu
+  somente no cache. O terceiro boot confirmou DHCP, rota e DNS local. O kernel mantém
   `CONFIG_MODULES=y`, mas a mídia não distribui módulos:
   os drivers indispensáveis são built-in e o release
   `7.1.4-distropica-live` evita procurar acidentalmente os módulos `7.1.4` do
@@ -178,8 +179,8 @@ partir de nada além de binários upstream — foi **demonstrada**:
 - **Reprodutibilidade — prova histórica parcial.** Dois builds independentes
   produziram artefatos byte a byte idênticos de m4, gmp, gcc e glibc nas
   receitas e payloads então medidos (SPEC-0010). As receitas atuais de
-  `gcc-pass2` e `binutils-glibc`, alteradas para solicitar `install-strip`,
-  ainda precisam de rebuild repetido e nova comparação.
+  `gcc-pass2` e `binutils-glibc`, com `install-strip`, foram reconstruídas e
+  exercitadas uma vez; ainda precisam de rebuild repetido e nova comparação.
 
 Ainda não fechados: publicação de um canal oficial e de um bundle estático
 assinados, reprodução independente da mídia, cobertura de hardware UEFI real,
@@ -263,18 +264,19 @@ binário e sem registro: ele é cache/semente sob demanda, não parte do target.
 `DEPS="base make gcc-pass2"`; seu registro M e manifesto vazio representam o
 conjunto solicitado, enquanto os pacotes da closure têm registros próprios.
 Além de Make e GCC, a closure final traz `linux-headers`, glibc,
-`mathlibs-glibc` e `binutils-glibc`. Como `base` e o metapacote são desejos
+`mathlibs-glibc`, zlib e `binutils-glibc`. Como `base` e o metapacote são desejos
 explícitos do perfil, ambos entram em `/etc/minitrue/world`; as dependências da
 toolchain ficam instaladas sem se tornarem desejos top-level.
 
-O `cache.world` do perfil declara GNU Make e Zig como disponibilidades
+O `cache.world` do perfil declara jq, GNU Make, tree e Zig como disponibilidades
 obrigatórias da mídia offline. Na instalação, o Minipax chama
-`minitrue --offline cache verify make zig` antes de `rectify`: hashes e a
-assinatura do Zig são conferidos sem download, registro ou instalação. Isso
+`minitrue --offline cache verify` antes de `rectify`: hashes e a assinatura do
+Zig são conferidos sem download, registro ou instalação. Isso
 mantém distintas a disponibilidade no cache, autenticada por
 `CACHE_WORLD_SHA256`, e a intenção do `target.world`. Make acaba instalado por
 ser dependência de `miniplenty-buildbase`, não por constar em `cache.world`;
-Zig continua apenas disponível para futuras compilações fonte.
+jq e tree começam ausentes para as provas pós-instalação, e Zig continua apenas
+disponível para futuras compilações fonte.
 
 O núcleo desse percurso já foi exercitado separadamente numa cópia isolada do
 target, antes da adoção do metapacote e sem atribuir a ele o aceite da ISO:
@@ -289,64 +291,60 @@ O diretório de execução precisa ser novo:
 
 ```sh
 bootstrap/live/accept-virtualbox \
-  --iso target/distropica.iso \
+  --iso target/distropica-miniplenty-v1.iso \
   --run-dir target/acceptance-virtualbox
 ```
 
-O cenário descrito acima ainda precisa ser validado com uma mídia recomposta.
-As receitas de `gcc-pass2` e `binutils-glibc` passaram a solicitar
-`make install-strip`, e o grafo final também mudou; portanto seus payloads e
-fingerprints precisam ser reconstruídos, os pacotes precisam ser reemitidos no
-canal e o índice/cache/lock/EFI/ISO precisam ser regenerados antes do aceite.
-O perfil passou a `MEDIA_SIZE_MIB=512`, que dimensiona somente a saída IMG; a
-ISO acompanha o tamanho real do payload. Os runners QEMU e VirtualBox usam
-discos de 4096 MiB por padrão. Nada disso constitui uma nova execução. O
-aceite anterior passou em 2026-07-21 com VirtualBox
-`7.2.6_Ubuntur172322`. Duas composições da ISO a partir dos mesmos insumos
-foram byte a byte idênticas. Os hashes abaixo registram a evidência histórica
-da revisão funcional `7148ebd`, na qual ripgrep ainda começava ausente e era
-instalado explicitamente. As revisões posteriores de licenciamento, do perfil e
-da toolchain exigem novo canal/cache/lock/EFI/ISO antes que exista um novo pino
-de mídia:
+Esse cenário passou de ponta a ponta em 2026-07-22 no VirtualBox
+`7.2.6_Ubuntur172322`. A instalação e o segundo boot ocorreram sem rede; a ISO
+foi ejetada antes do wipe. No sistema instalado, Vim 9.2.0837 e ripgrep 15.2.0
+já estavam presentes, a toolchain nativa compilou as quatro provas offline, jq
+1.8.2 foi instalado como binário upstream e tree 2.3.2 foi compilado da fonte.
+O terceiro boot confirmou a persistência e `minitrue verify`, além de DHCP,
+rota, DNS local e gateway do NAT:
 
 ```text
-EVIDENCIA_VIRTUALBOX_INTERATIVA=local-custom
-ACCEPTANCE_META=target/vbox-acceptance-network-v1/evidence/acceptance.meta
+EVIDENCIA_VIRTUALBOX_MINIPLENTY_V1=local-custom
+ACCEPTANCE_META=target/vbox-miniplenty-v6/evidence/acceptance.meta
+ACCEPTANCE_META_SHA256=2a88b7853a410c6de0ccbc4462de74ef7a307028cbd7a3356c47d7e02eed1561
 VBOX_VERSION=7.2.6_Ubuntur172322
 FIRMWARE=efi64
 GRAPHICS=vmsvga
 STORAGE=IntelAhci
 GUEST_DISK=/dev/sda
-NIC_TYPE=virtio
-INSTALL_NETWORK=nat-cable-disconnected
-THIRD_BOOT_NETWORK=nat-cable-connected
-DNS_PROBE=localhost-via-vbox-nat-host-resolver
-ISO_SHA256=3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d
-REPEATED_ISO_SHA256=3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d
-BOOT_EFI_SHA256=71b8977c55a3d0e25785c0299af32515e3dc71759e89f1f08d57d525f800fc88
+ISO_SHA256=bd71b63aada991578f0b6d3d87f7d67c88d4715e19566690ef6925991eafabc7
+BOOT_EFI_SHA256=a800e2aca03dd62cd9e7db3bb894c24f7bdb1fdc19a26abf91566b3b824771b9
+PROFILE_LOCK_SHA256=c84d6424646c78204ee822ff0a7617f941419130ea3c05cc60f4b320dc952f67
+CHANNEL_INDEX_SHA256=9451dfa340802ac9109eaed017d9ca5d08ca220ce1fd65ac72bac28ff27c9396
 RUN_STATE=passed
 ISO_EJECTED_BEFORE_WIPE=yes
 INSTALL_AND_SECOND_BOOT_OFFLINE=yes
 SECOND_BOOT_WITHOUT_ISO=yes
 ROOT_LOGIN=yes
-THIRD_BOOT_WITH_NAT=yes
-THIRD_BOOT_GETTY=yes
-THIRD_BOOT_ROOT_LOGIN=yes
+RIPGREP_VERSION=15.2.0
+VIM_VERSION=9.2.0837
+GCC_VERSION=15.3.0
+MAKE_VERSION=4.4.1
+NATIVE_C_COMPILE_RUN_OFFLINE=yes
+NATIVE_CXX_COMPILE_RUN_OFFLINE=yes
+NATIVE_ARCHIVE_LINK_OFFLINE=yes
+NATIVE_MAKE_BUILD_OFFLINE=yes
+JQ_BINARY_INSTALL_OFFLINE=yes
+JQ_VERSION=1.8.2
+TREE_SOURCE_BUILD_OFFLINE=yes
+TREE_VERSION=2.3.2
+VIM_JQ_TREE_PERSISTED_AFTER_REBOOT=yes
+ZIG_AFTER_TREE_ABSENT=yes
 DHCP_IPV4=yes
 DEFAULT_ROUTE=yes
-RESOLV_CONF_IPV4_NAMESERVER=yes
 DNS_LOCALHOST=yes
 NAT_GATEWAY_PING=yes
-NETWORK_DISCONNECTED_BEFORE_OFFLINE_RECTIFY=yes
-RIPGREP_INITIAL_ABSENT=yes
-RIPGREP_EXTRA_OFFLINE_RECTIFY=yes
-RIPGREP_VERSION=15.2.0
-MINITRUE_VERIFY_AFTER_RIPGREP=yes
+MINITRUE_VERIFY_AFTER_REBOOT=yes
 FINAL_RESULT=passed
 ```
 
-Essa igualdade é uma prova local de composição determinística, não uma
-reprodução independente nem um pino de release. A prova de rede limita-se ao
+Essa é uma prova funcional local, não uma reprodução independente nem um pino
+de release. A prova de rede limita-se ao
 DHCP, resolvedor de `localhost` e gateway fornecidos pelo NAT do VirtualBox: ela
 não afirma acesso à Internet. O cache continua sendo um insumo local `custom`;
 o ensaio também não cobre hardware real nem reprodução em outro ambiente.
@@ -410,7 +408,7 @@ O perfil `profiles/official` declara `INSTALL_READY=yes`, mas continua com
 `STATUS=development`. A prontidão significa que o world mínimo pode ser
 materializado num alvo vazio quando o cache/canal correto é fornecido; não
 significa release, endpoint público ou mídia oficial. O target atual inclui
-`base`, `linux`, `ripgrep` e `miniplenty-buildbase`; o metapacote `KIND=meta`
+`base`, `linux`, `ripgrep`, `vim` e `miniplenty-buildbase`; o metapacote `KIND=meta`
 fica no mundo M sem payload e agrega Make e a toolchain GCC final. Em
 `--only-binary`, o metapacote é resolvido localmente, mas seus pacotes fonte
 precisam existir como artefatos autenticados do canal: a instalação não deve
@@ -425,20 +423,19 @@ topologia, metadados e `ARTIFACT_HASH`; ambiguidade falha fechado. Um pipeline
 de release deve emitir no próprio build e conservar o artefato autenticado, não
 usar a reconstrução posterior como raiz de publicação.
 
-O canal atual ainda não contém os novos artefatos prontos para essa closure.
-Além da mudança de dependências, as receitas de `gcc-pass2` e
-`binutils-glibc` passaram a solicitar `make install-strip` para reduzir o
-footprint esperado. O efeito exato, a funcionalidade e a reprodutibilidade dos
-novos payloads ainda precisam ser medidos em rebuilds; depois será necessário
-reemiti-los, assinar o novo índice, recompor cache/lock/EFI/ISO e executar os
-aceites. A ISO resultante não tem tamanho fixado por `MEDIA_SIZE_MIB`.
+Um canal local assinado de desenvolvimento já contém os 11 artefatos da closure
+atual (`base`, toolchain, kernel, Vim/ncurses e zlib). Ele alimentou a instalação
+direta e a ISO aceita no VirtualBox; não é endpoint nem canal oficial publicado.
+Os payloads `install-strip` funcionaram no rebuild e no guest, mas ainda faltam
+dois builders independentes para a afirmação de reprodutibilidade. A ISO não
+tem tamanho fixado por `MEDIA_SIZE_MIB`.
 
-O outro caminho também foi exercitado com os executores musl estáticos: na
-revisão anterior, a instalação direta `--offline --only-binary` materializou
-`base` + `linux` a partir do canal assinado de desenvolvimento e terminou com
-`minitrue verify`
-sem divergências. O lock instalado teve SHA-256
-`e08ef8c874478a6333f3af53ce4e2dd144ee6f3b144db9746d4cc57d12b0a534`;
+O outro caminho também foi exercitado com os executores musl estáticos: a
+instalação direta `--offline --only-binary` materializou o target atual inteiro
+a partir do mesmo canal, terminou com `minitrue verify` e compilou C/C++/Make.
+Vim começou instalado, enquanto jq e tree foram retificados depois, ainda
+offline, respectivamente do binário upstream e da fonte. O lock teve SHA-256
+`c84d6424646c78204ee822ff0a7617f941419130ea3c05cc60f4b320dc952f67`;
 isso é evidência local do fluxo, não um pino oficial.
 
 `bootstrap/channel-from-rootfs` existe somente para migrar registros históricos
