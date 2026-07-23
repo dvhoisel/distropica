@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#10100f">
   <meta name="description" content="Distrópica: uma distribuição Linux que não instala pacotes — retifica registros.">
   <meta property="og:title" content="Distrópica">
-  <meta property="og:description" content="Binário upstream primeiro, fonte quando necessário.">
+  <meta property="og:description" content="Binário do mantenedor primeiro; depois o da Distrópica; fonte quando ninguém publica um.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://distropica.com.br/">
   <title>Distrópica — retificando o presente</title>
@@ -63,7 +63,6 @@
       font: 900 clamp(3.7rem, 13vw, 9rem)/.86 system-ui, sans-serif;
       letter-spacing: -.075em; text-transform: uppercase;
     }
-    h1 span { color: var(--red); }
     .lead {
       max-width: 50rem; margin: 1.75rem 0 0; color: var(--muted);
       font-size: clamp(1rem, 2vw, 1.25rem);
@@ -148,8 +147,8 @@
     <div class="hero">
       <div class="wrap">
         <div class="eyebrow">protótipo instalável · x86_64 · UEFI</div>
-        <h1>DISTRÓ<span>PICA</span></h1>
-        <p class="lead">Uma distribuição Linux distópica. Não instala pacotes: <strong>retifica registros</strong>. Binário do mantenedor primeiro; fonte quando ninguém publica um.</p>
+        <h1>DISTRÓPICA</h1>
+        <p class="lead">Uma distribuição Linux distópica. Não instala pacotes: <strong>retifica registros</strong>. Binário do mantenedor primeiro; depois, binário da Distrópica; fonte quando ninguém publica um.</p>
         <div class="actions">
           <a class="button primary" href="/releases/distropica-miniplenty-v2.iso">Baixar ISO · 334 MiB</a>
           <a class="button" href="https://github.com/dvhoisel/distropica">Examinar o código</a>
@@ -173,14 +172,14 @@
             <p>Quando o mantenedor publica um binário Linux elegível, o Minitrue confere seu hash e o instala no Mundo A, sob <code>/opt</code>.</p>
           </article>
           <article class="card">
-            <span class="number">02 / FONTE</span>
-            <h3>Compilar só quando preciso</h3>
-            <p>Sem binário upstream, a receita é compilada no Mundo B com GCC/Make nativos e registrada com proveniência verificável.</p>
+            <span class="number">02 / CANAL</span>
+            <h3>Canal da Distrópica</h3>
+            <p>Se o upstream só entrega fontes, a Distrópica compila uma vez e publica o resultado em seu canal binário assinado.</p>
           </article>
           <article class="card">
-            <span class="number">03 / CONTROLE</span>
-            <h3>Sem gerenciador herdado</h3>
-            <p>Sem apt, pacman, Flatpak ou systemd. Receitas legíveis, hashes pinados, canal assinado e estado exposto no filesystem.</p>
+            <span class="number">03 / FONTE</span>
+            <h3>Compilar como último recurso</h3>
+            <p>Quando nem o mantenedor nem um canal confiável publicam binário, a fonte oficial é compilada localmente e sua proveniência fica registrada.</p>
           </article>
         </div>
       </div>

@@ -63,20 +63,22 @@ ideológica** — cada premissa existe por um fim prático, não por dogma, e a
    repositório, sem banco de dados opaco. O estado é o filesystem.
 2. **Binário do mantenedor original primeiro.** Se o projeto publica binário
    oficial para Linux, é ele que entra — verificado por hash.
-3. **Fonte só na falta.** O que não tem binário elegível é compilado, de
-   preferência com uma toolchain que é ela mesma um binário upstream
-   (`zig cc`).
-4. **Sem systemd.** PID1 mínimo e inspecionável. Devolver a simplicidade ao
+3. **Binário da Distrópica em seguida.** Quando o upstream só publica fontes,
+   a Distrópica compila uma vez e entrega o resultado pelo canal assinado; o
+   computador do usuário não precisa reconstruir a base.
+4. **Fonte só quando ninguém publica um binário elegível.** A compilação local
+   é o último recurso e usa a fonte oficial pinada pela receita.
+5. **Sem systemd.** PID1 mínimo e inspecionável. Devolver a simplicidade ao
    usuário: todo mecanismo do sistema deve ser explicável em uma página.
-5. **FHS 3.0.** Nada de hierarquias exóticas: vendors em `/opt`, mundo
+6. **FHS 3.0.** Nada de hierarquias exóticas: vendors em `/opt`, mundo
    compilado em `/usr`, estado em `/var`.
-6. **A rede nunca decide o que é verdade.** Todo artefato é conferido contra
+7. **A rede nunca decide o que é verdade.** Todo artefato é conferido contra
    o hash pinado na receita. Divergência é *crimestop*.
-7. **Edge — sempre o estável mais recente.** A árvore pina a versão estável
+8. **Edge — sempre o estável mais recente.** A árvore pina a versão estável
    mais nova do upstream (a começar pelo kernel); *edge* é o estável na sua
    borda, não *bleeding edge*. Rolling: não há versão-do-sistema nem release
    congelado.
-8. **Opinativa — uma escolha canônica por função.** Onde há vários softwares
+9. **Opinativa — uma escolha canônica por função.** Onde há vários softwares
    para o mesmo fim, a Distrópica escolhe: o conjunto default é curado e
    singular — Newspeak aplicado ao sistema, uma resposta por necessidade. Não
    trancada: alternativas vivem na árvore, só não são o default.
