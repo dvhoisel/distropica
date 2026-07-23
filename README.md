@@ -5,7 +5,10 @@
 **[Site oficial](https://distropica.com.br/)** ·
 **[Baixar a ISO de desenvolvimento (334 MiB)](https://distropica.com.br/releases/distropica-miniplenty-v2.iso)** ·
 **[SHA-256](https://distropica.com.br/releases/distropica-miniplenty-v2.iso.sha256)** ·
-**[Manifesto](https://distropica.com.br/releases/distropica-miniplenty-v2.iso.manifest)**
+**[Manifesto](https://distropica.com.br/releases/distropica-miniplenty-v2.iso.manifest)** ·
+**[Fontes correspondentes (544 MiB)](https://distropica.com.br/releases/distropica-miniplenty-v2-corresponding-sources.tar.zst)** ·
+**[SHA das fontes](https://distropica.com.br/releases/distropica-miniplenty-v2-corresponding-sources.tar.zst.sha256)** ·
+**[Inventário das fontes](https://distropica.com.br/releases/distropica-miniplenty-v2-sources.tsv)**
 
 > **Atenção:** `miniplenty-v2` é uma imagem de desenvolvimento para VM UEFI.
 > O instalador apaga integralmente o dispositivo escolhido. Use um disco virtual
@@ -15,9 +18,9 @@ A Distrópica parte de uma observação desconfortável sobre o mundo atual: os
 projetos novos (Zig, Go, Rust, os aplicativos das corporações) distribuem
 binários oficiais prontos, enquanto o mundo antigo (GNU, glibc, o núcleo do
 que chamamos de "sistema") exige compilação a partir dos manuscritos. A
-Distrópica abraça essa distopia em vez de escondê-la: **usa o binário do
-mantenedor original sempre que ele existir, e compila da fonte apenas o que
-ninguém mais se dá ao trabalho de distribuir**.
+Distrópica abraça essa distopia em vez de escondê-la: **usa primeiro o binário
+do mantenedor original; depois, o binário assinado da própria distribuição; e
+só compila localmente quando ninguém publica um binário elegível**.
 
 Não há gerenciador de pacotes herdado — nem apt, nem pacman, nem flatpak. Há
 o `minitrue`, uma ferramenta mínima que busca, verifica, registra e apaga.
@@ -43,14 +46,15 @@ receita descreve o payload instalado; a ISO reúne componentes sob licenças
 distintas, cujas obrigações precisam ser avaliadas componente a componente e
 nas combinações efetivamente distribuídas.
 
-Quando houver publicação de ISO, EFI, cache ou canal binário oficial, cada
-artefato deverá vir acompanhado de acesso equivalente ao seu bundle de fontes
-correspondentes: revisão da Distrópica, crates Rust vendorizadas, fontes
-upstream exatas, configurações, patches, scripts, licenças e inventário. O
-repositório público é a fonte do desenvolvimento, mas não substitui sozinho
-esse conjunto por artefato. Gerar uma imagem para uso privado não exige
-publicá-la; redistribuí-la transfere ao redistribuidor as obrigações das
-licenças presentes.
+Cada ISO, EFI, cache ou canal binário publicado deve vir acompanhado de acesso
+equivalente ao seu bundle de fontes correspondentes: revisão da Distrópica,
+crates Rust vendorizadas, fontes upstream exatas, configurações, patches,
+scripts, licenças e inventário. A imagem custom `miniplenty-v2` atende essa
+regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-miniplenty-v2-corresponding-sources.tar.zst),
+preso à revisão `941383e` e ao SHA-256 da ISO. O repositório público é a fonte
+do desenvolvimento, mas não substitui sozinho esse conjunto por artefato.
+Gerar uma imagem para uso privado não exige publicá-la; redistribuí-la
+transfere ao redistribuidor as obrigações das licenças presentes.
 
 ## Premissas
 

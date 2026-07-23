@@ -8,5 +8,6 @@ Página estática publicada em `https://distropica.com.br/`.
 - `nginx.conf`: configuração final HTTP→HTTPS e arquivos de release.
 
 O diretório remoto é `/var/www/distropica.com.br`. ISOs e sidecars ficam em
-`/var/www/distropica.com.br/releases/`. O certificado Let's Encrypt usa o
-webroot desse mesmo virtual host.
+`/var/www/distropica.com.br/releases/`, junto dos bundles de fontes
+correspondentes e seus inventários. O certificado Let's Encrypt usa o webroot
+desse mesmo virtual host.

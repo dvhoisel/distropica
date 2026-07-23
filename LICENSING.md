@@ -37,7 +37,7 @@ como `MIT-0` não perdem retroativamente essa permissão.
 ## Binários e fontes correspondentes
 
 Publicar o repositório de fontes não equivale, sozinho, a publicar uma release
-binária. Para cada futura ISO, EFI, cache ou canal distribuído pelo projeto, a
+binária. Para cada ISO, EFI, cache ou canal distribuído pelo projeto, a
 Distrópica deverá oferecer, com acesso equivalente, um conjunto de fontes
 correspondentes àquele artefato. Esse conjunto deve incluir, conforme o caso:
 
@@ -48,8 +48,13 @@ correspondentes àquele artefato. Esse conjunto deve incluir, conforme o caso:
 - hashes que associem inequivocamente o bundle-fonte ao artefato binário.
 
 Uma receita com URL e hash é rastreabilidade, mas não substitui a retenção
-durável exigida de quem redistribui o binário. O projeto ainda não publica uma
-ISO oficial; o bundle-fonte e o inventário de licenças são gates dessa futura
+durável exigida de quem redistribui o binário. A imagem custom de
+desenvolvimento `miniplenty-v2` é acompanhada por um
+[bundle de fontes correspondentes](https://distropica.com.br/releases/distropica-miniplenty-v2-corresponding-sources.tar.zst),
+seu [hash](https://distropica.com.br/releases/distropica-miniplenty-v2-corresponding-sources.tar.zst.sha256)
+e um [inventário legível por máquina](https://distropica.com.br/releases/distropica-miniplenty-v2-sources.tsv).
+Isso não promove a imagem a release oficial: o SBOM arquivo a arquivo e o
+inventário conclusivo de licenças continuam sendo gates dessa futura
 publicação.
 
 Em particular, o tar binário oficial do Zig agrega sysroots, libc++, libunwind

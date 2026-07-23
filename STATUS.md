@@ -1,7 +1,7 @@
 # STATUS — o que está feito, testado e futuro
 
 Fonte única da verdade sobre a maturidade. As `specs/` descrevem a **norma**;
-este arquivo descreve o **estado**. Atualizado à mão em 2026-07-22 após
+este arquivo descreve o **estado**. Atualizado à mão em 2026-07-23 após
 reconstruir a closure atual, emitir o canal local assinado, compor a ISO e
 concluir o aceite automatizado `miniplenty-v1` no VirtualBox. Vim e ripgrep
 começam instalados; jq foi instalado do binário upstream, tree foi compilado da
@@ -15,7 +15,7 @@ Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | Código e documentação próprios | ✅ | `GPL-3.0-or-later`; texto integral, escopo e regra de contribuição versionados |
 | Licença na base e no ambiente vivo | ✅ E2E local | `base` instala a GPL e o aviso de escopo em `/usr/share/licenses/distropica/`, `build-efi` os incorpora no initramfs e a mídia atual foi recomposta e aceita |
 | Inventário completo de terceiros | ⬜ gate de release | gerar por artefato, a partir dos insumos efetivamente distribuídos; os payloads compostos de Zig e `gcc-pass2` usam `NOASSERTION` até o SBOM conclusivo, sem perder licenças nem avisos upstream |
-| Bundle de fontes correspondentes | ⬜ gate de release | publicar junto de toda futura ISO/EFI/cache/canal: fontes exatas, configs, patches, crates vendorizadas, scripts, licenças e hashes de associação |
+| Bundle de fontes correspondentes | ✅ `miniplenty-v2` custom | publicado ao lado da ISO: revisão `941383e`, 144 crates vendorizadas, fontes upstream, configs exatas de BusyBox/kernel, receitas registradas, sidecars, inventário TSV e hashes; continua sendo gate por artefato futuro |
 
 Os hashes QEMU final-v10 e VirtualBox network-v1 abaixo são evidência histórica
 anterior à mudança de licença do pacote `base` (revisão funcional `7148ebd`).
@@ -61,6 +61,9 @@ PROFILE_LOCK_SHA256=9528e4217ec6363256cda252d7992861bcc74e5a997d1903ddb151e55a47
 NEWSPEAK_SHA256=65017476e659fad53d50745abd3b0e7498f2a687ea40d6643798ede7ae4f9568
 BOOT_EFI_SHA256=a800e2aca03dd62cd9e7db3bb894c24f7bdb1fdc19a26abf91566b3b824771b9
 MEDIA_MANIFEST_SHA256=07910b519086908f6baee417c299077d9e857cc35a91de64d51dec659c735d34
+SOURCE_REVISION=941383e129fedf969838ae29dce24d5c8ef89df7
+SOURCE_BUNDLE=distropica-miniplenty-v2-corresponding-sources.tar.zst
+SOURCE_BUNDLE_SHA256=9e9ea4e8baaf247353f64ebce5eff41851a1a0034a4f57d44fab835a68fd7651
 ```
 
 ## minitrue (a ferramenta)
