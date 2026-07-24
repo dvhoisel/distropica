@@ -1511,7 +1511,13 @@ mod tests {
         let gcc = load(&ctx, "gcc-pass2").unwrap();
         assert_eq!(
             gcc.deps,
-            ["linux-headers", "glibc", "mathlibs-glibc", "binutils-glibc"]
+            [
+                "linux-headers",
+                "glibc",
+                "mathlibs-glibc",
+                "zlib",
+                "binutils-glibc"
+            ]
         );
         assert_eq!(gcc.build_deps, ["gcc", "binutils-cross", "libstdcxx"]);
 
