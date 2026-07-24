@@ -6,6 +6,9 @@ reconstruir a closure atual, emitir o canal local assinado, compor a ISO e
 concluir o aceite automatizado `miniplenty-v1` no VirtualBox. Vim e ripgrep
 começam instalados; jq foi instalado do binário upstream, tree foi compilado da
 fonte e a toolchain final passou nas provas C/C++/arquivo/Make, tudo offline.
+Em 2026-07-24 entrou a auditoria de fechamento de dependências (`minitrue
+audit`, SPEC-0013 §4); seu primeiro veredito sobre essa mesma closure está
+registrado abaixo, e ele **reprova**.
 Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
 ## Licenciamento e publicação
@@ -66,6 +69,44 @@ SOURCE_BUNDLE=distropica-miniplenty-v2-corresponding-sources.tar.zst
 SOURCE_BUNDLE_SHA256=9e9ea4e8baaf247353f64ebce5eff41851a1a0034a4f57d44fab835a68fd7651
 ```
 
+### Primeira auditoria de fechamento — a closure **não** fecha
+
+`minitrue audit` (SPEC-0013 §4) rodou sobre o target `miniplenty-v2` já
+instalado. O parser foi cotejado arquivo a arquivo com o `readelf` do host nos
+414 ELF do rootfs: **zero** `DT_NEEDED` omitido, zero inventado, zero
+divergência de `PT_INTERP` e zero divergência de versão de símbolo. Sobre essa
+base, o veredito é que a closure atual **não se fecha**, com 11 erros de duas
+naturezas — ambos reais, nenhum falso positivo:
+
+- **`/bin/bash` não existe na distro**, e a glibc entrega `ldd`, `tzselect`,
+  `xtrace` e `sotruss` com `#!/bin/bash`. Esses quatro scripts estão quebrados
+  no sistema publicado; ninguém percebeu porque ninguém os executou;
+- **dependência acidental de shell**: `gcc-pass2` (3 scripts), `glibc`
+  (`mtrace`), `ncurses` (`ncursesw6-config`) e `vim` (`vimtutor`,
+  `macros/less.sh`) usam `/bin/sh`, que existe **só porque** o busybox está
+  instalado — nenhum deles declara `busybox` em `DEPS`. É exatamente o que o
+  §4.4 proíbe: depender por acaso da dependência de outro pacote.
+
+Há ainda 5 notas de `DEPS` declarada sem requisito estático observado
+(`gcc-pass2`→`linux-headers`/`binutils-glibc`, `base`→`busybox`,
+`miniplenty-buildbase`→agregação): permitidas pelo §4.4, pendentes de
+justificativa. Corrigir os erros muda `DEPS`, logo muda fingerprint, logo
+obriga a reemitir canal e mídia — a decisão de quando pagar isso é de release,
+não da ferramenta.
+
+```text
+AUDIT_ROOT=target/direct-install-miniplenty-v2-root
+AUDIT_FORMAT=1
+PACKAGES=18
+FILES_INTERPRETED=428
+ELF_CROSSCHECKED_WITH_READELF=414
+CROSSCHECK_DIVERGENCES=0
+FACTS=665
+ERRORS=11
+NOTES=5
+CLOSURE_SHA256=451d9a137fe6770e676dde3205da1080b8a269954a39cfcc8733adf466b87dd1
+```
+
 ## minitrue (a ferramenta)
 
 | Recurso | Estado | Testado | Nota |
@@ -87,7 +128,7 @@ SOURCE_BUNDLE_SHA256=9e9ea4e8baaf247353f64ebce5eff41851a1a0034a4f57d44fab835a68f
 | `explain` / `why` (proveniência) | ✅ | ✅ | ORIGIN/hash-arq; ABOUT/REPROCORR congelados no meta, com fallback literal legado sem executar receita histórica; corroboração e reprocorr. Não mostra ainda cadeia completa, aresta tipada, plan lock ou `build-residue` |
 | `--sync` (convergir ao world) | ⬜ | — | stub; SPEC-0011 |
 | Plano/plan lock e closures tipadas | ⬜ | — | `PLAN_LOCK_FORMAT=1`, `plan` e convergência por um resolvedor comum são norma-alvo da SPEC-0013 |
-| Auditoria ELF/ABI + mapa de provedores | ⬜ | — | ainda não inspeciona `PT_INTERP`, `DT_NEEDED`, SONAME e versões de símbolos para provar fechamento |
+| Auditoria ELF/ABI + mapa de provedores (`audit`) | ✅ | ✅ unit + cotejo com `readelf` | `AUDIT_FORMAT=1`; lê `PT_INTERP`, `DT_NEEDED`, `DT_SONAME`, `RPATH`/`RUNPATH`, `verneed`/`verdef` e shebang **sem executar nada** — parser próprio pela tabela de programa, sem `ldd`. Mapa de provedores vem dos registros, resolve usr-merge componente a componente e árvore `d:` do mundo A. Serialização canônica + `CLOSURE_SHA256`. Ainda **não é gate** de `channel emit`; `dlopen`/plugin/subprocesso continuam fora do alcance estático |
 | PATH/view de build fechado | ⬜ | — | o runner limpa o ambiente, mas ainda expõe `/usr/bin:/bin` do rootfs; ferramentas implícitas podem vazar para o build |
 | `rollback` / `unperson` / `lint` | ⬜ | — | stub |
 | Canal binário assinado | ✅ | ✅ unit + E2E offline | config HTTPS/chave minisign pinada, índice canônico v2 assinado com `RECIPE_FINGERPRINT`, cache endereçado por conteúdo, `.tar.zst` com limites e conferência do tar interno; seleção exige que a identidade autenticada coincida com a receita efetiva. `/etc/minitrue/channels/` existente é autoritativo e, vazio, desativa a seed |
@@ -432,6 +473,14 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
 - **Kernel ainda não é reproduzível entre builders:** a receita gera uma nova
   chave de assinatura de módulos em cada build. A política de release precisa
   separar o artefato reprodutível da assinatura/chave operacional.
+- **Alcance da auditoria de fechamento:** `audit` prova o que é estaticamente
+  observável — `PT_INTERP`, `DT_NEEDED`, versões de símbolo e shebang. Não
+  alcança `dlopen`, plugin, helper chamado por subprocesso, dado, serviço nem
+  protocolo; para esses, o §4.1 exige aresta explícita de receita e teste de
+  integração. Ela também **não é gate** de `channel emit` nem da mídia: hoje
+  informa, não impede, e a closure publicada reprova. Só confere o payload do
+  mundo B e as árvores do mundo A já instaladas — não audita `BUILD_DEPS` nem o
+  ambiente do runner, que continuam abertos (SPEC-0013 §5).
 - **ABOUTs desatualizados:** alguns descrevem dívidas já resolvidas. O valor é
   congelado no `meta` para `explain`; corrigir exige atualizar a receita e
   reinstalar o pacote.

@@ -12,10 +12,14 @@ dependência implícita de toolchain e metapacotes; congela a árvore antes da
 primeira mutação; calcula fingerprint transitivo; ordena o grafo por DFS;
 recusa ciclos; escolhe canal antes de expandir dependências de build; registra
 `DEPS`; verifica sua presença factual; explica dependências reversas; e impede
-remover pacote ainda requerido. O fechamento ABI por inspeção de ELF, o lock
-tipado de closure, o PATH de build fechado, `cache verify --closure`, o plano
-somente-leitura, `rectify --sync` e a coleta explícita de órfãos especificados
-abaixo **ainda não estão implementados**.
+remover pacote ainda requerido. O **fechamento por inspeção estática (§4)**
+entrou em 2026-07-24 como `minitrue audit`, com `AUDIT_FORMAT=1`: parser ELF
+próprio, mapa de provedores vindo dos registros, confronto declaração ×
+observação e `CLOSURE_SHA256` canônico. Ele ainda **informa sem impedir** — não
+é gate de `channel emit` nem da mídia. O lock tipado de closure, o PATH de
+build fechado, `cache verify --closure`, o plano somente-leitura,
+`rectify --sync` e a coleta explícita de órfãos especificados abaixo
+**continuam não implementados**.
 
 ## 1. Princípio: a árvore é o lock global
 
@@ -219,8 +223,33 @@ presença do SONAME é necessária, mas pode não ser suficiente.
   deliberadamente desabilitada.
 
 O resultado DEVE ser serializado de forma canônica e receber um hash de
-closure. O formato físico ainda será definido junto da implementação; os dados
-normativos mínimos são os descritos nos §§4.1–4.3.
+closure. Os dados normativos mínimos são os descritos nos §§4.1–4.3.
+
+### 4.5 `AUDIT_FORMAT=1` — a serialização canônica
+
+O formato físico, definido junto da implementação, é texto em linhas de sete
+campos separados por TAB, uma por requisito observado:
+
+```text
+<pacote> <arquivo> <espécie> <requisito> <pacote provedor> <arquivo provedor> <versões>
+```
+
+- **espécie** é `needed` (`DT_NEEDED`), `interp` (`PT_INTERP`), `shebang` ou
+  `estatico` — este último para o objeto que nada exige, porque "não depende de
+  nada" também é um fato do fechamento;
+- **versões** lista as versões de símbolo exigidas daquele provedor, separadas
+  por vírgula e **ordenadas**, ou `-`; a ordenação é obrigatória porque a
+  serialização não pode depender da ordem em que o linker gravou o `verneed`;
+- requisito sem provedor usa `?` nos dois campos de provedor: o erro entra no
+  hash, não é omitido dele;
+- as linhas são ordenadas byte a byte e o conjunto é deduplicado.
+
+`CLOSURE_SHA256` é o sha256 desse corpo — só do corpo, sem cabeçalho nem
+rodapé, para que o hash descreva o grafo observado e não a moldura do
+relatório. Duas auditorias do mesmo payload DEVEM dar o mesmo
+`CLOSURE_SHA256`; qualquer mudança no que os artefatos exigem muda o hash. É
+essa identidade, não o texto do relatório, que um gate de publicação deve
+consumir.
 
 ## 5. Fechamento do ambiente de build
 
@@ -404,7 +433,7 @@ provar que o único conjunto escolhido declara e contém tudo de que depende.
 | fingerprint transitivo | implementado |
 | seleção de canal antes de build-deps | implementado |
 | `world`, `why` básico e proteção de dependência reversa | implementado |
-| scanner ELF/ABI e mapa de provedores | não implementado |
+| scanner ELF/ABI e mapa de provedores | implementado (`audit`, `AUDIT_FORMAT=1`), sem enforcement |
 | ambiente/PATH fechado por closure | não implementado |
 | plan lock tipado e `verify` de identidade exata da dependência | não implementado |
 | `cache verify --closure` | não implementado |

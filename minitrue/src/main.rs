@@ -1,5 +1,7 @@
 mod attest;
+mod audit;
 mod channel;
+mod elf;
 mod fetch;
 mod install;
 mod pack;
@@ -85,6 +87,9 @@ uso: minitrue [--root DIR] [--offline] [--tofu] [--no-binary|--only-binary] [--j
   memoryhole <pacote>…  remove do sistema e do world
   archives              lista os registros
   verify                confere registros e varre /usr por links órfãos
+  audit     [pacote]…   confronta DEPS com o que o payload realmente exige
+                        (ELF/shebang, sem executar nada); sem argumento, tudo.
+                        --output DIR|ARQ grava a serialização canônica
   newspeak  <pacote>    imprime a receita efetiva e sua origem
   explain   <caminho>   de quem é o arquivo e toda a sua proveniência
   why       <pacote>    por que este pacote está no sistema
@@ -178,8 +183,8 @@ fn run() -> anyhow::Result<()> {
     if (no_binary || only_binary) && cmd.as_deref() != Some("rectify") {
         return fail(1, "--no-binary/--only-binary só se aplicam a rectify");
     }
-    if output.is_some() && cmd.as_deref() != Some("channel") {
-        return fail(1, "--output só se aplica a channel emit");
+    if output.is_some() && !matches!(cmd.as_deref(), Some("channel") | Some("audit")) {
+        return fail(1, "--output só se aplica a channel emit e a audit");
     }
 
     match cmd.as_deref() {
@@ -207,6 +212,9 @@ fn run() -> anyhow::Result<()> {
         }
         Some("archives") => install::archives(&ctx),
         Some("verify") => install::verify(&ctx),
+        // Fechamento de dependências (SPEC-0013 §4): a declaração da receita
+        // confrontada com o payload instalado.
+        Some("audit") => audit::audit(&ctx, &names, output.as_deref()),
         Some("newspeak") => match names.first() {
             Some(n) => install::newspeak_show(&ctx, n),
             None => fail(1, "newspeak: diga o pacote"),

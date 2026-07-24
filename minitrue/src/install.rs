@@ -4446,7 +4446,7 @@ pub(crate) fn attestable_meta(ctx: &Ctx, pkg: &str) -> Result<HashMap<String, St
     Ok(meta)
 }
 
-fn read_manifest(rec_dir: &Path) -> Vec<String> {
+pub(crate) fn read_manifest(rec_dir: &Path) -> Vec<String> {
     read_regular_text_nofollow(&rec_dir.join("manifest"))
         // Um provisional pode ceder todas as claims e ficar com o corpo
         // canônico "\n". Linha vazia não é caminho; o status PROVISIONAL no
@@ -4764,7 +4764,7 @@ fn canonical_integrity(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-fn manifest_integrity(line: &str) -> Option<&str> {
+pub(crate) fn manifest_integrity(line: &str) -> Option<&str> {
     line.split_once("  ")
         .map(|(value, _)| value)
         .filter(|value| canonical_integrity(value))
@@ -5075,7 +5075,7 @@ fn migrate_legacy_record(
 
 /// O caminho de uma linha de manifesto. Registro **v1**: `<sha256>␠␠<caminho>`;
 /// legado v0 (linha sem os dois espaços): a própria linha. Retrocompatível.
-fn manifest_path(line: &str) -> &str {
+pub(crate) fn manifest_path(line: &str) -> &str {
     line.split_once("  ").map(|(_, p)| p).unwrap_or(line)
 }
 
