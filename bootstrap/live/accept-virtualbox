@@ -692,6 +692,24 @@ guest_command_and_wait \
     'ping -c 1 -W 5 "$network_gateway" >/dev/ttyS0 2>&1 && echo VBOX_NAT_GATEWAY_PING_OK >/dev/ttyS0' \
     'VBOX_NAT_GATEWAY_PING_OK' 30
 
+# IPv6 — a primeira medição desta distro. Até aqui todo aceite registrava
+# apenas DHCP_IPV4/RESOLV_CONF_IPV4_NAMESERVER, e "suporte a IPv6" era
+# configuração escrita, não evidência.
+#
+# Dois níveis, deliberadamente separados. É EXIGIDO o que não depende de
+# infraestrutura externa: o stack v6 do kernel responder em ::1 e a interface
+# ter link-local, que nasce sozinho em qualquer enlace Ethernet com IPv6
+# ligado. É apenas OBSERVADO o que depende de existir roteador v6 na rede do
+# hipervisor — o endereço global por SLAAC/DHCPv6 e o nameserver v6 que o rcS
+# de `base` busca por udhcpc6 e, se preciso, pelo RDNSS via rdisc6. Exigir
+# esse segundo grupo faria a configuração de rede do VirtualBox passar por
+# atestado da distro; registrá-lo como sim/não diz a verdade nos dois casos.
+guest_command_and_wait \
+    'ipv6_iface=${network_iface:-eth0}; ping6 -c 1 -W 5 ::1 >/dev/null 2>&1 && echo VBOX_IPV6_LOOPBACK_OK >/dev/ttyS0; ipv6_ll=$(ip -6 addr show dev "$ipv6_iface" 2>/dev/null | sed -n "s#.*inet6 \(fe80[0-9a-f:]*\)/.*#\1#p" | head -n 1); [ -n "$ipv6_ll" ] && printf "VBOX_IPV6_LINK_LOCAL_OK iface=%s address=%s\n" "$ipv6_iface" "$ipv6_ll" >/dev/ttyS0; ipv6_global=$(ip -6 addr show dev "$ipv6_iface" 2>/dev/null | sed -n "s#.*inet6 \([^ /]*\)/.*#\1#p" | grep -v "^fe80" | head -n 1); if [ -n "$ipv6_global" ]; then printf "VBOX_IPV6_GLOBAL_PRESENT address=%s\n" "$ipv6_global" >/dev/ttyS0; else echo VBOX_IPV6_GLOBAL_ABSENT >/dev/ttyS0; fi; if grep -Eq "^nameserver[[:space:]]+[0-9a-fA-F]*:" /etc/resolv.conf 2>/dev/null; then echo VBOX_IPV6_NAMESERVER_PRESENT >/dev/ttyS0; else echo VBOX_IPV6_NAMESERVER_ABSENT >/dev/ttyS0; fi; echo VBOX_IPV6_PROBE_DONE >/dev/ttyS0' \
+    'VBOX_IPV6_PROBE_DONE' 60
+wait_for_log 'VBOX_IPV6_LOOPBACK_OK' 1 10
+wait_for_log 'VBOX_IPV6_LINK_LOCAL_OK' 1 10
+
 type_text 'clear; id; vim --version | head -n 1; rg --version | head -n 1; jq --version; tree --version; gcc --version | head -n 1; make --version | head -n 1; ip -4 addr; ip -4 route; cat /etc/resolv.conf; echo VBOX_THIRD_BOOT_SCREEN_OK'
 press_enter
 sleep 3
@@ -709,6 +727,19 @@ VM_CREATED=no
 vbox closemedium disk "$DISK"
 DISK_REGISTERED=no
 disk_sha=$(sha256sum "$DISK" | awk '{print $1}')
+# Fatos observados, não exigidos: dependem de haver roteador IPv6 na rede do
+# hipervisor. Registrar "no" é resultado legítimo — o que não se admite é
+# omitir a linha e deixar a ausência passar por sucesso.
+if grep -Fq 'VBOX_IPV6_GLOBAL_PRESENT' "$SERIAL" 2>/dev/null; then
+    ipv6_global_fact=yes
+else
+    ipv6_global_fact=no
+fi
+if grep -Fq 'VBOX_IPV6_NAMESERVER_PRESENT' "$SERIAL" 2>/dev/null; then
+    ipv6_nameserver_fact=yes
+else
+    ipv6_nameserver_fact=no
+fi
 printf '%s\n' \
     'RUN_STATE=passed' \
     'ISO_EJECTED_BEFORE_WIPE=yes' \
@@ -723,6 +754,10 @@ printf '%s\n' \
     'RESOLV_CONF_IPV4_NAMESERVER=yes' \
     'DNS_LOCALHOST=yes' \
     'NAT_GATEWAY_PING=yes' \
+    'IPV6_KERNEL_LOOPBACK=yes' \
+    'IPV6_LINK_LOCAL=yes' \
+    "IPV6_GLOBAL_ADDRESS=$ipv6_global_fact" \
+    "IPV6_NAMESERVER=$ipv6_nameserver_fact" \
     'RIPGREP_DEFAULT_PRESENT=yes' \
     'RIPGREP_VERSION=15.2.0' \
     'VIM_DEFAULT_PRESENT=yes' \

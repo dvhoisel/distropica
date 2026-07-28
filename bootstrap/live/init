@@ -161,8 +161,15 @@ partition_disk() {
         512|1024|2048|4096) ;;
         *) rescue "tamanho de setor lógico não suportado: $logical_sector" ;;
     esac
+    # Mesma regra que o `minipax partition` aplica ao escrever de fato: o
+    # primeiro setor utilizável é 1 MiB, em setores lógicos. Fixar 2048 aqui
+    # só coincide em disco de 512 bytes; num 4Kn são 256, e a conferência de
+    # capacidade passaria a estimar uma geometria que não é a que será
+    # escrita. O erro seria conservador, mas duas contas para o mesmo layout
+    # divergirem é como se descobre tarde que uma delas estava errada.
+    first_usable=$((1048576 / logical_sector))
     esp_sectors=$((67108864 / logical_sector))
-    root_start=$((2048 + esp_sectors))
+    root_start=$((first_usable + esp_sectors))
 
     disk_sectors=$(cat "/sys/class/block/$disk_name/size" 2>/dev/null || echo 0)
     prepared_kib=$(du -sk "$prepared_root" 2>/dev/null | awk '{print $1}')
