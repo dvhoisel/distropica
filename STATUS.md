@@ -2,14 +2,19 @@
 
 Fonte única da verdade sobre a maturidade. As `specs/` descrevem a **norma**;
 este arquivo descreve o **estado**. Atualizado à mão em 2026-07-28 após
-reconstruir a closure atual, emitir o canal local assinado, compor a ISO e
-concluir o aceite automatizado `miniplenty-v1` no VirtualBox. Vim e ripgrep
-começam instalados; jq foi instalado do binário upstream, tree foi compilado da
-fonte e a toolchain final passou nas provas C/C++/arquivo/Make, tudo offline.
-Em 2026-07-24 entrou a auditoria de fechamento de dependências (`minitrue
-audit`, SPEC-0013 §4); seu primeiro veredito sobre essa mesma closure está
-registrado abaixo, e ele **reprova**. As receitas já foram corrigidas e a
-correção foi medida em simulação — falta construir.
+reconstruir a closure com o perfil de rede, provar o fechamento de
+dependências, emitir e assinar o canal com ferramenta própria, compor a ISO e
+concluir o aceite automatizado `rede-v2` no VirtualBox.
+
+O que mudou de natureza nesta revisão: a auditoria de fechamento deixou de
+**reprovar** — os 11 erros viraram 0, e agora medidos sobre a closure real, não
+em simulação. Entraram onze receitas de rede (bash, nftables, WireGuard, nmap,
+mtr, tcpdump e as bibliotecas), mais `pkgconf` e `findutils`, que o kernel e o
+netfilter exigiam para construir. A raiz do alvo passou a ser **ext4** com
+tabela **GPT escrita pelo Minipax**, ambas exercitadas contra disco pela
+primeira vez. O kernel da mídia passou a ser compilado **dentro do rootfs**,
+pelo compilador que a própria distro produziu. E o **IPv6 saiu do zero**: há
+evidência, não configuração escrita.
 Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
 ## Licenciamento e publicação
@@ -25,27 +30,63 @@ Os hashes QEMU final-v10 e VirtualBox network-v1 abaixo são evidência históri
 anterior à mudança de licença do pacote `base` (revisão funcional `7148ebd`).
 Não são pinos de uma mídia recomposta a partir da árvore licenciada atual.
 
-## Evidência integrada atual — `miniplenty-v1`
+## Evidência integrada atual — `rede-v2`
 
-A closure foi reconstruída a partir das receitas atuais e emitida num canal
-local assinado de desenvolvimento com 11 artefatos. Uma instalação direta
-`--offline --only-binary` e a instalação interativa por ISO passaram; esta
-última percorreu três boots automatizados no VirtualBox 7.2.6. A ISO foi
-ejetada antes do wipe, o segundo boot ocorreu offline, e o terceiro comprovou
-persistência e a rede local do NAT. Isso é evidência `local-custom`, não release
-oficial, hardware real nem reprodução entre builders.
+A closure foi reconstruída com o perfil de rede e emitida num canal local
+assinado com **24 artefatos** (eram 11). A instalação direta
+`--offline --only-binary` no hospedeiro e a instalação interativa por ISO
+passaram; esta última percorreu três boots automatizados no VirtualBox 7.2.6.
+A ISO foi ejetada antes do wipe, o segundo boot ocorreu offline, e o terceiro
+comprovou persistência e a rede do NAT. Isso é evidência `local-custom`, não
+release oficial, hardware real nem reprodução entre builders.
+
+Três coisas foram exercitadas pela primeira vez: a tabela **GPT escrita pelo
+Minipax** (`sda1`/`sda2`, no lugar do MBR que o fdisk do BusyBox produzia), a
+raiz **ext4** montada com `ordered data mode` — o journal que motivou a troca —
+e o **IPv6**.
 
 ```text
-ISO=target/distropica-miniplenty-v1.iso
-ISO_SHA256=bd71b63aada991578f0b6d3d87f7d67c88d4715e19566690ef6925991eafabc7
-BOOT_EFI_SHA256=a800e2aca03dd62cd9e7db3bb894c24f7bdb1fdc19a26abf91566b3b824771b9
-PROFILE_LOCK_SHA256=c84d6424646c78204ee822ff0a7617f941419130ea3c05cc60f4b320dc952f67
-CHANNEL_INDEX_SHA256=9451dfa340802ac9109eaed017d9ca5d08ca220ce1fd65ac72bac28ff27c9396
-ACCEPTANCE_META=target/vbox-miniplenty-v6/evidence/acceptance.meta
-ACCEPTANCE_META_SHA256=2a88b7853a410c6de0ccbc4462de74ef7a307028cbd7a3356c47d7e02eed1561
-DISK_SHA256=53032ba2d241de40b8fe25853662879dc067b71cbed264137dd5aa64266f0b9f
+ISO=target/distropica-rede-v2.iso
+ISO_SHA256=04ae93590a65ee7f123ee457d9929112a8226e6f7230536410b7c0fe7294a96c
+BOOT_EFI_SHA256=cd6097035503ddc8f1b1431bbe73b25deb3d2c34c01145859b8a856e4fb0f4d0
+PROFILE_CONTENT_SHA256=e3a8ab28d7e2ae52a329320b2ebd49d4277b460bf58d0f965dcd87863f93cdc5
+CHANNEL_INDEX_SHA256=16825a68eb372d72169067186a977b5976caa0d795490442a636b1e1732d4aa2
+ACCEPTANCE_META=target/vbox-rede-v2/evidence/acceptance.meta
+ACCEPTANCE_META_SHA256=0e692c2b2ea9ca1e0911a80b8270509f162929e538ffd12f2f589c92928e1b9b
+DISK_SHA256=1dc5f4f77eaa31c85ed4340f33ff26e7670b52731dcc33f56f60a22e413cbb71
+MEMORY_MIB=3072
 FINAL_RESULT=passed
 ```
+
+### IPv6 — a primeira medição
+
+```text
+IPV6_KERNEL_LOOPBACK=yes     exigido: o stack v6 do kernel responde em ::1
+IPV6_LINK_LOCAL=yes          exigido: a interface tem endereço fe80::
+IPV6_GLOBAL_ADDRESS=yes      observado: o NAT do VirtualBox entrega SLAAC
+IPV6_NAMESERVER=no           observado: essa rede não anuncia RDNSS
+```
+
+Os dois primeiros são exigências do aceite porque não dependem de
+infraestrutura externa. Os dois últimos são **observações**: dependem de haver
+roteador v6 na rede do hipervisor, e transformá-los em exigência faria a
+configuração do VirtualBox passar por atestado da distro. `IPV6_NAMESERVER=no`
+é resultado legítimo — o `rdisc6` rodou e não havia RDNSS para ler. O que não
+se admite é a linha faltar e a ausência passar por sucesso.
+
+### RAM: 3 GiB agora são requisito, não detalhe do teste
+
+Com 2048 MiB **esta mídia não instala**: o instalador é morto pelo OOM killer,
+sem mensagem própria. A causa é o modelo de memória, não um vazamento — o
+Minipax materializa as árvores inteiras em RAM, o `cache.tar` tem 311 MB, e a
+raiz validada (821 MB) vive em `/run`, que é tmpfs, **antes** de qualquer
+escrita em disco. Esse é o preço deliberado da garantia fail-before-wipe, e ele
+escala com o world: dobrar o número de pacotes dobrou o pico.
+
+Fica devendo, e é gate para hardware real: o `init` deveria conferir a memória
+disponível no preflight e **recusar cedo com mensagem**, em vez de ser morto
+pelo kernel. Morrer no OOM é o pior modo de falha possível — indistinguível de
+travamento, e sem pista do motivo.
 
 ### Delta online — `miniplenty-v2`
 
@@ -70,10 +111,11 @@ SOURCE_BUNDLE=distropica-miniplenty-v2-corresponding-sources.tar.zst
 SOURCE_BUNDLE_SHA256=9e9ea4e8baaf247353f64ebce5eff41851a1a0034a4f57d44fab835a68fd7651
 ```
 
-### Primeira auditoria de fechamento — a closure **não** fecha
+### Primeira auditoria de fechamento (histórico) — a closure não fechava
 
-`minitrue audit` (SPEC-0013 §4) rodou sobre o target `miniplenty-v2` já
-instalado. O parser foi cotejado arquivo a arquivo com o `readelf` do host nos
+Registro do primeiro veredito, mantido porque é o que dá sentido ao
+fechamento provado logo abaixo. `minitrue audit` (SPEC-0013 §4) rodou sobre o
+target `miniplenty-v2` já instalado. O parser foi cotejado arquivo a arquivo com o `readelf` do host nos
 414 ELF do rootfs: **zero** `DT_NEEDED` omitido, zero inventado, zero
 divergência de `PT_INTERP` e zero divergência de versão de símbolo. Sobre essa
 base, o veredito é que a closure atual **não se fecha**, com 11 erros de duas
@@ -93,7 +135,7 @@ Há ainda 5 notas de `DEPS` declarada sem requisito estático observado
 `miniplenty-buildbase`→agregação): permitidas pelo §4.4, pendentes de
 justificativa.
 
-**As receitas já foram corrigidas** — falta construir. Duas decisões distintas,
+**As receitas foram corrigidas E construídas.** Duas decisões distintas,
 porque os dois casos não são iguais:
 
 - **A glibc deixou de entregar os cinco scripts.** `ldd`, `tzselect`, `xtrace`,
@@ -106,41 +148,72 @@ porque os dois casos não são iguais:
   scripts são legítimos e o shell é uma dependência real: o certo é declará-la,
   não escondê-la.
 
-O efeito foi **medido**, simulando as receitas corrigidas sobre uma cópia por
-hardlink do rootfs (as claims dos cinco scripts removidas do manifesto da
-glibc, `busybox` acrescentado às três `DEPS`):
+Construir o perfil de rede acrescentou uma terceira decisão da mesma família:
+o **openssl** deixou de entregar `CA.pl` e `tsget.pl`, que exigiam
+`/usr/bin/perl`. Declarar perl arrastaria o interpretador inteiro para a
+closure de RUNTIME de todo alvo com openssl — e o nmap e o tcpdump põem o
+openssl lá. Pelo mesmo critério saíram o `e2scrub` do e2fsprogs (exige LVM, que
+esta distro não tem) e o `dnssort` do ndisc6 (perl).
+
+### Fechamento provado — 11 erros viraram 0, agora medidos
+
+O veredito anterior foi obtido em **simulação** (cópia por hardlink com `DEPS`
+editada à mão). Este foi medido sobre a closure real, reconstruída:
 
 ```text
-antes:   11 erros, 5 notas, CLOSURE_SHA256=451d9a13…
-depois:   0 erros, 5 notas, CLOSURE_SHA256=1fe20bc8…
-          "fechamento provado: todo requisito observado tem provedor declarado"
-```
-
-Construir isso muda fingerprint de glibc, gcc-pass2, ncurses e vim, logo obriga
-a reemitir canal e mídia — a decisão de quando pagar isso é de release, não da
-ferramenta.
-
-```text
-AUDIT_ROOT=target/direct-install-miniplenty-v2-root
+AUDIT_ROOT=target/e2-strip-rebuild-v2-root
 AUDIT_FORMAT=1
-PACKAGES=18
-FILES_INTERPRETED=428
-ELF_CROSSCHECKED_WITH_READELF=414
-CROSSCHECK_DIVERGENCES=0
-FACTS=665
-ERRORS=11
+PACKAGES=24
+FILES_INTERPRETED=527
+FACTS=904
+ERRORS=0
 NOTES=5
-CLOSURE_SHA256=451d9a137fe6770e676dde3205da1080b8a269954a39cfcc8733adf466b87dd1
+CLOSURE_SHA256=ed50c261bdbc22b6f1615b01a48d62c0d4a0cf9324bfad82e4b3d3fbaa4f1485
+"fechamento provado: todo requisito observado tem provedor declarado"
 ```
 
-### Perfil de rede — receitas escritas, nada construído ainda
+As cinco notas restantes são permitidas pelo §4.4 e legítimas: `base`→`ndisc6`
+e `wireguard-tools`→`nftables`/`busybox` são arestas de RUNTIME, que análise
+estática não enxerga por natureza — o `rcS` chama o `rdisc6`, o `wg-quick`
+chama o `nft`. É exatamente o caso que o §4.1 manda declarar na receita e
+cobrir por teste de integração.
 
-Entraram quatro receitas e um perfil de kernel, todos **não construídos**:
-`bash` 5.3, `libmnl` 1.0.5, `libnftnl` 1.3.1 e `nftables` 1.1.6, com SHA-256
-pinado (o do bash corroborado por mirror GNU independente). O `newspeak/linux`
-passou a exigir `USER_NS`, `TUN`, `WIREGUARD` e a fatia `NF_TABLES` do
-netfilter, com guarda que aborta o build se o `olddefconfig` descartar
-qualquer um.
+O gate funcionou na prática: `channel emit` conferiu os 904 requisitos antes de
+publicar e imprimiu *"fechamento conferido"*. Publicar deixou de ser possível
+sem que o conjunto se feche.
+
+### Perfil de rede — construído e embarcado
+
+Onze receitas novas, todas construídas e no `target.world`: `bash` 5.3,
+`nftables` 1.1.6, `wireguard-tools` 1.0.20260223, `nmap` 7.99, `mtr` 0.96 e
+`tcpdump` 4.99.6 como desejos top-level; `libmnl`, `libnftnl`, `libpcap`,
+`libcap` e o `openssl` entram por `DEPS`, que é onde a relação de fato existe.
+Todos os SHA-256 conferidos contra o tarball real do upstream.
+
+Duas receitas entraram por necessidade demonstrada, não por escolha:
+
+- **`pkgconf` 3.0.4** — não havia pkg-config algum nesta árvore, e o
+  `configure` da libnftnl e do nftables usa `PKG_CHECK_MODULES`, que é
+  exigência dura. Sem ela os dois recusam construir.
+- **`findutils` 4.11.0** — o gerador de initramfs do kernel monta a lista de
+  arquivos com `find -printf`, que o BusyBox não implementa. Ver a limitação
+  sobre construir o kernel dentro do rootfs, abaixo: **sem GNU find a distro
+  não conseguia construir o próprio kernel vivo**.
+
+**O kernel vivo passou a ter o perfil de rede.** A ESP do alvo recebe o
+`BOOTX64.EFI` da mídia, então é esse kernel que roda depois do boot — e ele
+desabilitava `NETFILTER` de propósito e não tinha `WIREGUARD`, `TUN` nem
+`USER_NS`. Embarcar nftables e wireguard-tools contra ele seria distribuir
+userspace sem com o que falar. Os onze símbolos foram conferidos no `.config`
+do artefato construído, não só pedidos.
+
+**`nmap` carrega o único patch de fonte da árvore, e ele é temporário por
+construção.** O 7.99 não compila contra o OpenSSL 4.0 (`ASN1_STRING` opaco,
+`const` nos retornos, `OPENSSL_atexit` removido). É o patch do Linux From
+Scratch, cuja origem declarada é o PR #3331 do próprio nmap — fechado porque os
+mantenedores implementaram o mesmo conserto em 2026-06-16. Já está no master do
+upstream; sai daqui quando sair em release. O conteúdo entra no `FINGERPRINT`
+pelo snapshot de `files/`, então é tão pinado quanto o tarball.
 
 **`tshark` ainda não é alcançável; `tcpdump` entrou no lugar.** A leitura do
 `CMakeLists.txt` do Wireshark desfaz a estimativa anterior de que faltava só
@@ -153,7 +226,7 @@ cinco ou seis são as mesmas de que a pilha gráfica precisa. Até lá, `tcpdump
 ferramenta de build nova — e o fluxo continua sendo o que este perfil escolheu:
 capturar na máquina, analisar o `.pcap` noutro lugar.
 
-**IPv6 saiu do zero, mas continua não exercitado.** O kernel sempre teve
+**IPv6 exercitado pela primeira vez.** O kernel sempre teve
 `CONFIG_IPV6=y` e o busybox instalado tem `udhcpc6` e `ping6` compilados
 (conferido rodando o binário — o `.config` em `source-inputs` é do busybox do
 initramfs, onde `UDHCPC6` está desligado). O que faltava era userspace: o
@@ -172,20 +245,25 @@ e segue, e o daemon vinha instalado. A mesma armadilha pegou o `nftables`
 e a receita passa a documentar uma decisão que nunca tomou; só o manifesto
 denuncia. O kernel do alvo ganhou também
 `IPV6_MULTIPLE_TABLES`, de que o `wg-quick` com `Table=auto` depende no lado
-v6. Nenhum aceite jamais exercitou IPv6: todos registram `DHCP_IPV4`,
-`RESOLV_CONF_IPV4_NAMESERVER` e `DNS_LOCALHOST`. Isto é configuração escrita,
-não evidência.
+v6. O aceite `rede-v2` registrou os quatro fatos de IPv6 na seção de evidência
+acima — dois exigidos, dois observados. O `rdisc6` executou de verdade no boot,
+o que só é possível porque o `--sbindir=/usr/bin` foi corrigido: antes ele ia
+para `/usr/sbin`, fora do PATH, e o `rcS` teria seguido em silêncio sem nunca
+o encontrar. O caminho de RDNSS em si continua sem prova positiva — a rede do
+hipervisor não anuncia DNS por RA, então o `rdisc6` rodou e não achou nada.
 
-Duas ressalvas que valem mais que as receitas:
+Uma ressalva que continua valendo, e uma que foi resolvida:
 
-- **O kernel do alvo não é o kernel que boota.** A ESP do sistema instalado
-  recebe o `BOOTX64.EFI` da mídia, e esse kernel **desabilita `NETFILTER` de
-  propósito** (`bootstrap/live/build-efi:285`), além de não ligar `USER_NS`.
-  Enquanto o instalado não bootar o próprio kernel, ligar os knobs em
-  `newspeak/linux` não muda nada no sistema em execução.
-- **`bash` existir não conserta as receitas que dependem dele.** `glibc` só
-  passará a declarar `bash` quando sua `DEPS` mudar — e isso muda fingerprint,
-  logo obriga reconstruir glibc e reemitir canal e mídia.
+- **O kernel do alvo continua não sendo o kernel que boota.** A ESP do sistema
+  instalado recebe o `BOOTX64.EFI` da mídia. A divergência de CONFIGURAÇÃO foi
+  fechada — o kernel vivo agora tem o mesmo perfil de rede do alvo —, mas a
+  divergência ESTRUTURAL permanece: uma atualização de `/boot/vmlinuz-*` pelo
+  canal não alcança o EFI de boot. Retenção, rotação e atualização atômica da
+  ESP seguem como gate.
+- **Resolvida: a dependência acidental de shell.** A `glibc` não declara `bash`
+  porque deixou de entregar os scripts que o exigiam; quem precisa de bash
+  declara (`nftables` o faz, para o `config.status` que seu próprio `configure`
+  gera). O fechamento provado acima é a medida disso.
 
 ### Hardware amd64 real — alvo declarado, parcialmente preparado
 
@@ -223,6 +301,13 @@ em hipervisor. Levantamento do que isso exige, com o que já existe:
   128 MiB por causa do journal.
 - **Wi-Fi: deliberadamente fora.** `WIRELESS` continua desabilitado; exige blob
   de firmware, que é outra decisão.
+- **Particionamento e ext4 agora EXERCITADOS** — mas em hipervisor. O aceite
+  `rede-v2` mostrou `sda: sda1 sda2` e `EXT4-fs (sda2) … ordered data mode`
+  num disco de verdade do VirtualBox. É a primeira vez que o GPT do Minipax e
+  o `mke2fs` estático rodam fora de teste unitário.
+- **RAM: 3 GiB.** Com 2 GiB a instalação morre no OOM killer. Ver a seção de
+  evidência: é consequência do modelo de memória do instalador, não de um
+  vazamento, e o preflight ainda não avisa.
 - **Nada disso foi testado em hardware real.** Toda a evidência é QEMU e
   VirtualBox. Um aceite em máquina física é o próximo tipo de prova que falta,
   e nenhuma linha acima o substitui.
@@ -640,6 +725,37 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   "DEPS declara ncurses, mas nenhum requisito estático observado o exige" —,
   não um erro. É o argumento mais forte a favor de o `audit` reportar também o
   que está declarado a mais, e não só o que falta.
+- **O kernel vivo passou a ser construído DENTRO do rootfs, e isso revelou que
+  a distro não sabia construí-lo.** O `build-efi` ganhou `--rootfs`: as
+  invocações do `make` do kernel rodam sob bwrap com o rootfs montado como
+  `/`, então o kernel da mídia é compilado pelo gcc que a própria distro
+  construiu, não pelo do hospedeiro. Fazer isso expôs um defeito que o host
+  vinha mascarando: o gerador de initramfs do kernel monta a lista de
+  arquivos com `find -printf "%p %m %U %G"`, e o `find` do BusyBox não
+  implementa `-printf` — responde `unrecognized` e devolve lista **vazia**. O
+  kernel embutia um initramfs de 512 bytes (só os dois nós de dispositivo) e
+  a máquina bootava até `check access for rdinit=/init failed: -2`. Daí a
+  receita `findutils` 4.11.0, que supersede o applet do BusyBox. A lição não
+  é sobre o kernel: é que **"a distro é autossuficiente" só se verifica
+  tirando o hospedeiro do caminho**, porque enquanto ele estiver lá as
+  lacunas são preenchidas por acidente e não aparecem. O `date` do BusyBox
+  também falha no mesmo script, mas ali é inócuo — a chamada tem `|| :` e o
+  `build-efi` já normaliza todos os mtimes para o epoch.
+- **Modo de arquivo em `files/` entra no fingerprint, e o Minipax normaliza a
+  árvore — então os dois têm de concordar.** O `own_fingerprint` de uma
+  receita empacota `files/` com os modos; o Minipax, ao materializar a árvore
+  Newspeak para a mídia, normaliza tudo para os modos canônicos (diretórios
+  `0755`, executáveis `0755`, demais regulares `0644`). Se o arquivo no repo
+  tiver outro modo — um `udhcpc6.script` criado `0664`, um diretório `files/`
+  em `0775` —, o fingerprint que o minitrue grava no registro difere do que o
+  Minipax calcula ao instalar, e o canal é recusado com `crimestop
+  (identidade)` na hora da instalação: a três passos da causa, sem nada que
+  aponte para o modo de um arquivo. Só `base` e `nmap` têm `files/`, e ambas
+  foram normalizadas. **Não há guarda**: nada impede criar um arquivo novo em
+  `files/` com modo não-canônico e só descobrir na mídia. O conserto
+  estrutural é o minitrue calcular o fingerprint sobre a MESMA visão
+  normalizada que o Minipax usa, em vez de sobre os modos que o disco por
+  acaso tem.
 - **Flag inexistente de `configure` é aceita em silêncio.** O autoconf apenas
   avisa `unrecognized options` e segue. Duas receitas afirmaram por semanas
   desligar coisas que nunca estiveram desligadas: `ndisc6` com
