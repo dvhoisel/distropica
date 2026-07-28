@@ -1516,7 +1516,8 @@ mod tests {
                 "glibc",
                 "mathlibs-glibc",
                 "zlib",
-                "binutils-glibc"
+                "binutils-glibc",
+                "busybox"
             ]
         );
         assert_eq!(gcc.build_deps, ["gcc", "binutils-cross", "libstdcxx"]);

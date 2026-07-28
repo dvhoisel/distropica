@@ -54,6 +54,21 @@ build() {
     done
     rmdir "$STAGE/sbin"
 
+    # A glibc entrega cinco utilitários que são SCRIPT, não ABI: ldd, tzselect,
+    # xtrace e sotruss em '#!/bin/bash', mtrace em '#!/bin/sh'. A auditoria de
+    # fechamento (SPEC-0013 §4) os acusou: os quatro de bash estavam quebrados
+    # no sistema publicado — não há bash na base — e o de sh só funcionava por
+    # acaso, porque alguém instalou busybox.
+    #
+    # A saída não é fazer a biblioteca C depender de um shell: é não entregar o
+    # que não é dela. O ldd, em particular, é o que esta distro recusa como
+    # ferramenta de confiança — ele é o loader executando o objeto sob suspeita
+    # (SPEC-0013 §4.1). Quem quer saber de que um binário depende usa
+    # `minitrue audit`, que lê sem executar.
+    for auxiliar in ldd tzselect xtrace sotruss mtrace; do
+        rm -f "$STAGE/usr/bin/$auxiliar"
+    done
+
     # getconf e seus nomes de ABI são instalados como hardlinks. O manifesto
     # mundo-B ainda não representa esses grupos; normalize-os para arquivos
     # regulares independentes antes de selar o payload.

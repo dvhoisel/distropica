@@ -3,7 +3,7 @@ VERSION=9.2.0837
 KIND=source
 TOOLCHAIN=native
 SUPERSEDES="busybox"
-DEPS="glibc ncurses"
+DEPS="glibc ncurses busybox"
 BUILD_DEPS="make gcc-pass2 binutils-glibc ncurses gawk perl"
 ABOUT="Vim de terminal com edição multibyte, syntax, eval e cores verdadeiras; compilado uma vez pela Distrópica a partir da tag estável assinada do upstream e entregue pronto pelo canal binário"
 # O runtime do Vim agrega arquivos sob licenças distintas; mantenha
