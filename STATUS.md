@@ -187,15 +187,22 @@ em hipervisor. Levantamento do que isso exige, com o que já existe:
   Realtek `r8169`), `CPU_IDLE`/`INTEL_IDLE` (sem estados de baixa energia um
   laptop instala quente) e o gancho de `MICROCODE`. Os críticos entraram
   também na guarda que aborta o build se o `olddefconfig` os descartar.
-- **Particionamento: pendente, e é o que falta de verdade.** O instalador cria
-  **MBR + raiz ext2**, e o próprio código explica por quê: *"BusyBox fdisk
-  1.35 não cria GPT"* (`bootstrap/live/init:187`). Num disco real isso tem
-  dois limites: MBR não endereça acima de 2 TiB, e ext2 sem journal significa
-  `fsck` a cada desligamento sujo. A saída elegante já existe na casa — o
-  Minipax **já escreve GPT** para compor a IMG; reusar esse código no
-  particionamento do alvo mantém o caminho destrutivo no Rust auditado em vez
-  de um script guiando o `fdisk` do busybox. Para ext4 falta `e2fsprogs` na
-  mídia (o busybox só tem `mkfs.ext2`).
+- **Particionamento: GPT, pelo Minipax.** O instalador criava MBR porque o
+  `fdisk` do BusyBox 1.35 não escreve GPT — e MBR trava acima de 2 TiB. O
+  Minipax já escrevia GPT para compor a IMG; `minipax partition` reusa esse
+  código, o que mantém o caminho que **apaga disco** dentro do Rust auditado.
+  Duas diferenças em relação à IMG: os GUIDs vêm de `/dev/urandom` (dois discos
+  instalados não podem compartilhar identidade de partição) e o setor lógico
+  vem do chamador — presumir 512 num 4Kn escreveria a tabela no endereço
+  errado. As cópias de reserva são gravadas antes do cabeçalho primário.
+- **Raiz ext4.** Sem journal, desligamento sujo em hardware real vira
+  verificação completa em vez de replay. O applet do busybox só faz ext2, e o
+  initramfs não tem glibc — então a mídia leva um **mke2fs estático** próprio,
+  compilado com o mesmo CC musl que já serve aos binários Rust e conferido
+  pelo mesmo `require_static`, com seu `mke2fs.conf` ao lado. No sistema
+  instalado, a receita `e2fsprogs` 1.47.4 entra em `target.world` e supersede
+  os applets equivalentes do busybox. A margem exigida da raiz subiu de 64 para
+  128 MiB por causa do journal.
 - **Wi-Fi: deliberadamente fora.** `WIRELESS` continua desabilitado; exige blob
   de firmware, que é outra decisão.
 - **Nada disso foi testado em hardware real.** Toda a evidência é QEMU e
