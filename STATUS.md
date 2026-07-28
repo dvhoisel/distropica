@@ -142,6 +142,17 @@ passou a exigir `USER_NS`, `TUN`, `WIREGUARD` e a fatia `NF_TABLES` do
 netfilter, com guarda que aborta o build se o `olddefconfig` descartar
 qualquer um.
 
+**`tshark` ainda não é alcançável; `tcpdump` entrou no lugar.** A leitura do
+`CMakeLists.txt` do Wireshark desfaz a estimativa anterior de que faltava só
+CMake: ele exige `cmake ≥ 3.22`, **`GLib ≥ 2.54` e `libgcrypt ≥ 1.8` como
+obrigatórios**, não condicionados à GUI Qt. Como a GLib se constrói com Meson,
+a corrente real é `ninja` → `meson` → `libffi` + `pcre2` → `glib` →
+`libgpg-error` → `libgcrypt` → `cmake` → `wireshark`: nove receitas, das quais
+cinco ou seis são as mesmas de que a pilha gráfica precisa. Até lá, `tcpdump`
+4.99.6 dá captura hoje sobre a `libpcap` que já está escrita, sem nenhuma
+ferramenta de build nova — e o fluxo continua sendo o que este perfil escolheu:
+capturar na máquina, analisar o `.pcap` noutro lugar.
+
 **IPv6 saiu do zero, mas continua não exercitado.** O kernel sempre teve
 `CONFIG_IPV6=y` e o busybox instalado tem `udhcpc6` e `ping6` compilados
 (conferido rodando o binário — o `.config` em `source-inputs` é do busybox do

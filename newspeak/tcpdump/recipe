@@ -1,0 +1,22 @@
+NAME=tcpdump
+VERSION=4.99.6
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libpcap openssl"
+BUILD_DEPS="make gcc-pass2 binutils-glibc"
+ABOUT="Captura e leitura de pacote na linha de comando, do mesmo projeto da libpcap. Entra porque o tshark ainda não é alcançável: o Wireshark exige CMake, GLib e libgcrypt, e a GLib se constrói com Meson — nove receitas de corrente. O tcpdump usa a libpcap que já está aqui e o openssl para descriptografar ESP; nada de novo no ferramental de build. Grava .pcap para analisar noutro lugar, que é o fluxo que este perfil escolheu quando recusou arrastar Qt para dentro da distro. Sem cap_net_raw ele exige root, como qualquer captura."
+LICENSE=BSD-3-Clause
+SRC="https://www.tcpdump.org/release/tcpdump-$VERSION.tar.xz"
+SHA256=40a8cefd45f0d2a06827e6658efb830d484868c449ad80f7efb33516af44f3da
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    # --disable-smb: o dissecador SMB é desabilitado pelo próprio upstream por
+    # histórico de vulnerabilidade; não se liga o que o autor desaconselha.
+    ./configure \
+        --prefix=/usr \
+        --with-system-libpcap \
+        --disable-smb
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+}
