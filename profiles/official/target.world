@@ -7,3 +7,18 @@ e2fsprogs
 ripgrep
 vim
 miniplenty-buildbase
+
+# Perfil de rede. Só os desejos top-level entram aqui; libmnl, libnftnl,
+# libpcap, libcap e o próprio openssl chegam por DEPS, que é onde a relação
+# de fato existe. Uma receita fora de todo world nunca é construída, nem
+# auditada, nem embarcada — escrever a receita e parar aí é decorar a árvore.
+#
+# Sem tshark: o Wireshark exige cmake, GLib e libgcrypt como obrigatórios, e a
+# GLib se constrói com Meson — nove receitas de corrente. O tcpdump dá captura
+# hoje sobre a libpcap, e o .pcap se analisa noutra máquina.
+bash
+nftables
+wireguard-tools
+nmap
+mtr
+tcpdump
