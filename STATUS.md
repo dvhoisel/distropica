@@ -142,6 +142,22 @@ passou a exigir `USER_NS`, `TUN`, `WIREGUARD` e a fatia `NF_TABLES` do
 netfilter, com guarda que aborta o build se o `olddefconfig` descartar
 qualquer um.
 
+**IPv6 saiu do zero, mas continua não exercitado.** O kernel sempre teve
+`CONFIG_IPV6=y` e o busybox instalado tem `udhcpc6` e `ping6` compilados
+(conferido rodando o binário — o `.config` em `source-inputs` é do busybox do
+initramfs, onde `UDHCPC6` está desligado). O que faltava era userspace: o
+`rcS` só chamava `udhcpc`. Agora ele tenta, em ordem e sem tornar nada fatal,
+DHCPv6 (`udhcpc6` + `default6.script` novo, que **acrescenta** nameserver em
+vez de reescrever o `resolv.conf` do v4) e, se ainda não houver nameserver v6,
+lê o RDNSS do Router Advertisement com `rdisc6` — o kernel faz SLAAC sozinho
+mas não expõe o RDNSS, e o busybox não sabe lê-lo. Daí a receita `ndisc6`
+1.0.8, compilada **sem** o daemon `rdnssd`: numa distro sem gerenciador de
+serviço, uma execução única é a forma certa. O kernel do alvo ganhou também
+`IPV6_MULTIPLE_TABLES`, de que o `wg-quick` com `Table=auto` depende no lado
+v6. Nenhum aceite jamais exercitou IPv6: todos registram `DHCP_IPV4`,
+`RESOLV_CONF_IPV4_NAMESERVER` e `DNS_LOCALHOST`. Isto é configuração escrita,
+não evidência.
+
 Duas ressalvas que valem mais que as receitas:
 
 - **O kernel do alvo não é o kernel que boota.** A ESP do sistema instalado
@@ -152,6 +168,39 @@ Duas ressalvas que valem mais que as receitas:
 - **`bash` existir não conserta as receitas que dependem dele.** `glibc` só
   passará a declarar `bash` quando sua `DEPS` mudar — e isso muda fingerprint,
   logo obriga reconstruir glibc e reemitir canal e mídia.
+
+### Hardware amd64 real — alvo declarado, parcialmente preparado
+
+A mídia passou a ter como requisito bootar e instalar em máquina real, não só
+em hipervisor. Levantamento do que isso exige, com o que já existe:
+
+- **Mídia: já está certa.** O `xorriso` compõe com `-efi-boot-part
+  --efi-boot-image`, `--gpt_disk_guid` e `--protective-msdos-label`
+  (`minipax/src/media.rs:779`): a ESP aparece como partição GPT e um `dd` para
+  pendrive deve ser bootável por firmware UEFI. Nada a fazer aqui.
+- **Drivers: feito.** O kernel vivo cobria só máquina virtual — virtio, AHCI,
+  teclado PS/2 — e falharia do pior jeito numa máquina real: sobe e não acha
+  disco, ou sobe e não aceita tecla. Entraram builtin NVMe e VMD (sem o
+  segundo, o NVMe fica invisível nos Intel que o escondem), a pilha USB
+  (xHCI/EHCI, storage, HID — teclado de desktop e a própria mídia em
+  pendrive), MMC/SDHCI, as NICs com fio comuns (Intel `e1000e`/`igb`/`igc`,
+  Realtek `r8169`), `CPU_IDLE`/`INTEL_IDLE` (sem estados de baixa energia um
+  laptop instala quente) e o gancho de `MICROCODE`. Os críticos entraram
+  também na guarda que aborta o build se o `olddefconfig` os descartar.
+- **Particionamento: pendente, e é o que falta de verdade.** O instalador cria
+  **MBR + raiz ext2**, e o próprio código explica por quê: *"BusyBox fdisk
+  1.35 não cria GPT"* (`bootstrap/live/init:187`). Num disco real isso tem
+  dois limites: MBR não endereça acima de 2 TiB, e ext2 sem journal significa
+  `fsck` a cada desligamento sujo. A saída elegante já existe na casa — o
+  Minipax **já escreve GPT** para compor a IMG; reusar esse código no
+  particionamento do alvo mantém o caminho destrutivo no Rust auditado em vez
+  de um script guiando o `fdisk` do busybox. Para ext4 falta `e2fsprogs` na
+  mídia (o busybox só tem `mkfs.ext2`).
+- **Wi-Fi: deliberadamente fora.** `WIRELESS` continua desabilitado; exige blob
+  de firmware, que é outra decisão.
+- **Nada disso foi testado em hardware real.** Toda a evidência é QEMU e
+  VirtualBox. Um aceite em máquina física é o próximo tipo de prova que falta,
+  e nenhuma linha acima o substitui.
 
 ### `pack` v2 — a cegueira medida, e o que não mudou
 
@@ -193,7 +242,7 @@ artefato existente muda de hash. A terceira é o bug. A quarta é o conserto.
 | `explain` / `why` (proveniência) | ✅ | ✅ | ORIGIN/hash-arq; ABOUT/REPROCORR congelados no meta, com fallback literal legado sem executar receita histórica; corroboração e reprocorr. Não mostra ainda cadeia completa, aresta tipada, plan lock ou `build-residue` |
 | `--sync` (convergir ao world) | ⬜ | — | stub; SPEC-0011 |
 | Plano/plan lock e closures tipadas | ⬜ | — | `PLAN_LOCK_FORMAT=1`, `plan` e convergência por um resolvedor comum são norma-alvo da SPEC-0013 |
-| Auditoria ELF/ABI + mapa de provedores (`audit`) | ✅ | ✅ unit + cotejo com `readelf` | `AUDIT_FORMAT=1`; lê `PT_INTERP`, `DT_NEEDED`, `DT_SONAME`, `RPATH`/`RUNPATH`, `verneed`/`verdef` e shebang **sem executar nada** — parser próprio pela tabela de programa, sem `ldd`. Mapa de provedores vem dos registros, resolve usr-merge componente a componente e árvore `d:` do mundo A. Serialização canônica + `CLOSURE_SHA256`. Ainda **não é gate** de `channel emit`; `dlopen`/plugin/subprocesso continuam fora do alcance estático |
+| Auditoria ELF/ABI + mapa de provedores (`audit`) | ✅ | ✅ unit + cotejo com `readelf` | `AUDIT_FORMAT=1`; lê `PT_INTERP`, `DT_NEEDED`, `DT_SONAME`, `RPATH`/`RUNPATH`, `verneed`/`verdef` e shebang **sem executar nada** — parser próprio pela tabela de programa, sem `ldd`. Mapa de provedores vem dos registros, resolve usr-merge componente a componente e árvore `d:` do mundo A. Serialização canônica + `CLOSURE_SHA256`. **É gate de `channel emit`**: publicar payload com requisito sem provedor declarado é recusado. `dlopen`/plugin/subprocesso continuam fora do alcance estático, e a composição de mídia ainda não é gateada |
 | PATH/view de build fechado | ⬜ | — | o runner limpa o ambiente, mas ainda expõe `/usr/bin:/bin` do rootfs; ferramentas implícitas podem vazar para o build |
 | `rollback` / `unperson` / `lint` | ⬜ | — | stub |
 | Canal binário assinado | ✅ | ✅ unit + E2E offline | config HTTPS/chave minisign pinada, índice canônico v2 assinado com `RECIPE_FINGERPRINT`, cache endereçado por conteúdo, `.tar.zst` com limites e conferência do tar interno; seleção exige que a identidade autenticada coincida com a receita efetiva. `/etc/minitrue/channels/` existente é autoritativo e, vazio, desativa a seed |
@@ -547,8 +596,9 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   observável — `PT_INTERP`, `DT_NEEDED`, versões de símbolo e shebang. Não
   alcança `dlopen`, plugin, helper chamado por subprocesso, dado, serviço nem
   protocolo; para esses, o §4.1 exige aresta explícita de receita e teste de
-  integração. Ela também **não é gate** de `channel emit` nem da mídia: hoje
-  informa, não impede, e a closure publicada reprova. Só confere o payload do
+  integração. Desde 2026-07-28 ela **é gate de `channel emit`** — publicar
+  passou a exigir fechamento provado —, mas a composição de mídia ainda não é
+  gateada. Só confere o payload do
   mundo B e as árvores do mundo A já instaladas — não audita `BUILD_DEPS` nem o
   ambiente do runner, que continuam abertos (SPEC-0013 §5).
 - **ABOUTs desatualizados:** alguns descrevem dívidas já resolvidas. O valor é
