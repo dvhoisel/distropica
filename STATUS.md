@@ -162,8 +162,15 @@ DHCPv6 (`udhcpc6` + `default6.script` novo, que **acrescenta** nameserver em
 vez de reescrever o `resolv.conf` do v4) e, se ainda não houver nameserver v6,
 lê o RDNSS do Router Advertisement com `rdisc6` — o kernel faz SLAAC sozinho
 mas não expõe o RDNSS, e o busybox não sabe lê-lo. Daí a receita `ndisc6`
-1.0.8, compilada **sem** o daemon `rdnssd`: numa distro sem gerenciador de
-serviço, uma execução única é a forma certa. O kernel do alvo ganhou também
+1.0.8, que **remove do STAGE** o daemon `rdnssd`: numa distro sem gerenciador
+de serviço, uma execução única é a forma certa. Uma versão anterior deste
+documento dizia que ela era "compilada **sem** o daemon", por `--disable-rdnssd`
+— era falso, e a falsidade foi construída pela ferramenta: essa opção não
+existe no `configure` do ndisc6, o autoconf apenas avisa "unrecognized options"
+e segue, e o daemon vinha instalado. A mesma armadilha pegou o `nftables`
+(`--disable-python`, `--disable-json`). Flag inexistente é aceita em silêncio,
+e a receita passa a documentar uma decisão que nunca tomou; só o manifesto
+denuncia. O kernel do alvo ganhou também
 `IPV6_MULTIPLE_TABLES`, de que o `wg-quick` com `Table=auto` depende no lado
 v6. Nenhum aceite jamais exercitou IPv6: todos registram `DHCP_IPV4`,
 `RESOLV_CONF_IPV4_NAMESERVER` e `DNS_LOCALHOST`. Isto é configuração escrita,
@@ -267,6 +274,7 @@ artefato existente muda de hash. A terceira é o bug. A quarta é o conserto.
 | Resolução `--no-binary` / `--only-binary` | ✅ | ✅ unit + E2E offline histórico | binário de canal preserva mundo B; `--only-binary` resolve metapacotes locais sem artefato, mas exige artefato para cada dependência fonte e não expande `BUILD_DEPS` nem Zig implícito |
 | Lock de canal | ✅ | ✅ unit + E2E offline | `CHANNEL_LOCK_FORMAT=2`; seleção, chave, índice, pacote, fingerprint autenticado, caminho, hash de transporte, `reprocorr` e trust; persistido por hash em `/var/lib/minitrue/channel-locks/` e cotejado semanticamente por `verify` |
 | `channel emit` | ✅ | ✅ unit | `CHANNEL_EMIT_FORMAT=2`; reutiliza o tar autenticado do cache para registros vindos de canal e só reconstrói registros locais quando topologia, metadados e `ARTIFACT_HASH` podem ser provados; emite pool + índice sem assinatura. Release deve emitir no próprio build |
+| `channel keygen` / `channel sign` | ✅ | ✅ unit + cotejo com o `minisign` 0.12 | Assinar deixou de depender do hospedeiro. O consumidor sempre exigiu minisign, mas o produtor chamava o binário `minisign` do host — dependência de host bem no ponto da **raiz de confiança do canal**, o oposto do que o resto da árvore faz. Formato `Ed`/`ED` implementado sobre a ed25519-dalek que as attestations já traziam; `sign` confere com `minisign-verify` o que acabou de escrever, isto é, o produtor é validado pelo consumidor antes de publicar. Chave sem senha só: scrypt exigiria dependência nova e é **recusado**, não ignorado. **Equivalência medida**: para a mesma chave e a mesma mensagem, a assinatura é byte-idêntica à do `minisign` 0.12, e o binário do host valida a nossa. Falta suporte a chave com senha |
 | Gestão de canais (`add/remove/list/refresh`) | ⬜ | — | hoje a configuração é administrada por arquivos estritos; em especial, não há `channel refresh` auditável. A CLI administrativa da SPEC-0009 é gate de release |
 | Lock global por rootfs (flock) | ✅ | ✅ | rectify/memoryhole; auto-libera na saída |
 | Confinamento de caminhos destrutivos | 🟡 | ✅ unit | `openat2(RESOLVE_IN_ROOT)` em inspeção/remoção; Journal aceita usr-merge interno e recusa ancestral que resolve fora do rootfs, mas mutações do Journal ainda usam caminhos após o preflight. Converter tudo a operações fd-relative para fechar TOCTOU contra mutador concorrente é gate de release |
@@ -610,6 +618,35 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
 - **Kernel ainda não é reproduzível entre builders:** a receita gera uma nova
   chave de assinatura de módulos em cada build. A política de release precisa
   separar o artefato reprodutível da assinatura/chave operacional.
+- **O `ld` nativo exige `-rpath-link` explícito, e falhar disso responde
+  errado em vez de falhar.** O linker desta árvore não resolve sozinho a
+  dependência TRANSITIVA de uma biblioteca compartilhada em `/usr/lib`. Isso
+  já era conhecido em `elfutils`, `perl` e `gcc-pass2`; o perfil de rede
+  mostrou que o modo de falha tem três graus, e só o primeiro é seguro:
+  1. **erro de link direto** — `nftables` (a `libnftables.so` precisa da
+     `libnftnl.so`) e `e2fsprogs` (a `libblkid.so` precisa da libuuid do
+     próprio pacote). Barulhento, fácil de diagnosticar.
+  2. **erro de compilação longe da causa** — no `tcpdump`, o `configure`
+     ACHOU a libcrypto por pkg-config, mas o teste de LINK de
+     `EVP_CIPHER_CTX_new` falhou pelo `libz` transitivo; o autoconf registrou
+     `no`, o pacote compilou o próprio shim legado dessas funções, e o erro
+     apareceu como redefinição contra o `evp.h`, a setenta linhas da causa.
+  3. **binário mutilado, sem erro nenhum** — no `mtr`, a `libncursesw.so.6`
+     precisa da `libtinfo.so.6`; o teste de link falhou, o `configure`
+     concluiu que não havia curses e construiu o mtr **sem a interface de
+     tela**, que é a razão de ele existir. O build passou, o pacote instalou,
+     e o binário só sabia `--report`. Nenhum teste de build pegaria isso.
+  Quem denunciou o terceiro caso foi uma **nota** da auditoria de fechamento —
+  "DEPS declara ncurses, mas nenhum requisito estático observado o exige" —,
+  não um erro. É o argumento mais forte a favor de o `audit` reportar também o
+  que está declarado a mais, e não só o que falta.
+- **Flag inexistente de `configure` é aceita em silêncio.** O autoconf apenas
+  avisa `unrecognized options` e segue. Duas receitas afirmaram por semanas
+  desligar coisas que nunca estiveram desligadas: `ndisc6` com
+  `--disable-rdnssd` (entregando o daemon) e `nftables` com `--disable-python`
+  e `--disable-json`. O aviso se perde no meio do log; o que denuncia é o
+  manifesto. Conferir `./configure --help` ao escrever receita nova é a
+  disciplina que falta, e não há guarda automática para isso.
 - **Alcance da auditoria de fechamento:** `audit` prova o que é estaticamente
   observável — `PT_INTERP`, `DT_NEEDED`, versões de símbolo e shebang. Não
   alcança `dlopen`, plugin, helper chamado por subprocesso, dado, serviço nem
