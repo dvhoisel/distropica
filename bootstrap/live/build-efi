@@ -284,8 +284,31 @@ set_config --set-str LOCALVERSION "-distropica-live"
 set_config --disable IKCONFIG
 for symbol in SOUND NETWORK_FILESYSTEMS NFS_FS NETFILTER SECURITY_SELINUX \
     IO_URING HIBERNATION SUSPEND KEXEC KEXEC_FILE CRASH_DUMP CGROUPS \
-    PERF_EVENTS FTRACE BPF_SYSCALL NUMA CPU_FREQ CPU_IDLE WIRELESS; do
+    PERF_EVENTS FTRACE BPF_SYSCALL NUMA CPU_FREQ WIRELESS; do
     set_config --disable "$symbol"
+done
+# Hardware amd64 real. Até aqui o perfil cobria máquina virtual: virtio, AHCI
+# e teclado PS/2. Numa máquina de verdade isso não basta e falha do pior jeito
+# possível — o instalador sobe e não encontra disco, ou sobe e não aceita
+# tecla. Tudo builtin: o initramfs não leva módulo.
+#
+#   NVMe e VMD: disco de qualquer laptop/desktop moderno. Sem VMD o NVMe fica
+#     invisível nas máquinas Intel que o escondem atrás dele.
+#   USB (xHCI/EHCI, storage, HID): teclado de desktop sem PS/2 e — mais
+#     importante — a própria mídia, quando gravada em pendrive.
+#   MMC/SDHCI: armazenamento de tablets e notebooks pequenos.
+#   NICs com fio mais comuns (Intel e Realtek). Wi-Fi continua fora: exige
+#     blob de firmware, que é outra decisão.
+#   CPU_IDLE/INTEL_IDLE: sem estados de baixa energia, um laptop instala
+#     quente e com a ventoinha a plena carga.
+#   MICROCODE: sem os blobs é inócuo, mas é o gancho para carregá-los.
+for symbol in BLK_DEV_NVME NVME_CORE VMD ATA_GENERIC \
+    MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PCI \
+    USB_SUPPORT USB USB_PCI USB_XHCI_HCD USB_XHCI_PCI USB_EHCI_HCD \
+    USB_EHCI_PCI USB_STORAGE USB_UAS HID HID_GENERIC USB_HID \
+    E1000 E1000E IGB IGC R8169 \
+    CPU_IDLE INTEL_IDLE MICROCODE ACPI_BUTTON; do
+    set_config --enable "$symbol"
 done
 set_config --set-str SYSTEM_TRUSTED_KEYS ""
 set_config --set-str SYSTEM_REVOCATION_KEYS ""
@@ -333,7 +356,9 @@ for symbol in EFI EFI_STUB BLK_DEV_INITRD VIRTIO_BLK VIRTIO_NET BLK_DEV_SR \
     DRM_CLIENT_LIB DRM_CLIENT DRM_CLIENT_SETUP DRM_KMS_HELPER \
     DRM_GEM_SHMEM_HELPER FB_CORE FRAMEBUFFER_CONSOLE_DETECT_PRIMARY \
     VT_HW_CONSOLE_BINDING CRC32 INPUT_KEYBOARD KEYBOARD_ATKBD SERIO \
-    SERIO_I8042 VT VT_CONSOLE VGA_CONSOLE FONT_SUPPORT FONT_8x16; do
+    SERIO_I8042 VT VT_CONSOLE VGA_CONSOLE FONT_SUPPORT FONT_8x16 \
+    BLK_DEV_NVME USB_XHCI_HCD USB_XHCI_PCI USB_STORAGE USB_HID HID_GENERIC \
+    E1000E R8169; do
     grep -q "^CONFIG_${symbol}=y$" "$SOURCE/.config" || {
         echo "erro: kernel não fixou CONFIG_${symbol}=y" >&2; exit 1;
     }
