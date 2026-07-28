@@ -1,0 +1,26 @@
+NAME=libpcap
+VERSION=1.10.6
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc flex bison"
+ABOUT="Captura de pacote em espaço de usuário — provedor canônico único para tshark e nmap. Usa AF_PACKET com BPF clássico via SO_ATTACH_FILTER, que o kernel atual já habilita (CONFIG_PACKET=y) e que não depende de CONFIG_BPF_SYSCALL. Compilada sem D-Bus, RDMA, Bluetooth, USB e libnl: nenhum desses existe nesta árvore, e deixá-los à sorte da autodetecção tornaria o artefato dependente do que por acaso estivesse instalado no builder."
+LICENSE=BSD-3-Clause
+SRC="https://www.tcpdump.org/release/libpcap-$VERSION.tar.xz"
+SHA256=ec97d1206bdd19cb6bdd043eaa9f0037aa732262ec68e070fd7c7b5f834d5dfc
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    # Cada --disable/--without abaixo desliga uma autodetecção, não um recurso
+    # desejado: o que não está declarado na closure não pode entrar por acaso.
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-dbus \
+        --disable-rdma \
+        --disable-bluetooth \
+        --disable-usb \
+        --without-libnl
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+}

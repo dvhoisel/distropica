@@ -1,0 +1,18 @@
+NAME=libcap
+VERSION=2.78
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc"
+ABOUT="Capabilities POSIX: a biblioteca e o setcap/getcap. É o que permite dar cap_net_raw a um auxiliar de captura em vez de torná-lo SUID root. Só faz sentido junto do pack v2, que passou a carregar security.capability — antes disso, um setcap no STAGE era descartado em silêncio no empacotamento. Sem bindings Go e sem o módulo PAM: nenhum dos dois pertence a esta base."
+LICENSE="BSD-3-Clause OR GPL-2.0-only"
+SRC="https://www.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-$VERSION.tar.xz"
+SHA256=0d621e562fd932ccf67b9660fb018e468a683d7b827541df27813228c996bb11
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    # Makefile puro, sem autoconf. GOLANG=no evita procurar toolchain Go;
+    # PAM_CAP=no evita um módulo PAM que esta base não tem onde usar.
+    make -j"$JOBS" prefix=/usr lib=lib GOLANG=no PAM_CAP=no
+    make install DESTDIR="$STAGE" prefix=/usr lib=lib GOLANG=no PAM_CAP=no
+}

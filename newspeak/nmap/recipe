@@ -1,0 +1,27 @@
+NAME=nmap
+VERSION=7.99
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libpcap openssl zlib"
+BUILD_DEPS="make gcc-pass2 binutils-glibc"
+ABOUT="Varredura de rede. Mundo B por censo: o nmap.org publica .rpm para Linux, que é pacote de distro e não tarball elegível (SPEC-0001 §2, SPEC-0007). Usa a libpcap e o openssl do sistema, um provedor canônico cada; Lua e PCRE ficam nos embutidos do próprio nmap, porque esta árvore ainda não tem receita para eles e um provedor por acidente é pior que um embutido declarado. Sem zenmap (Python+GTK), sem ndiff (Python) e sem nping. Sem cap_net_raw o nmap degrada para varredura connect(), que funciona sem privilégio."
+LICENSE=NPSL
+SRC="https://nmap.org/dist/nmap-$VERSION.tar.bz2"
+SHA256=df512492ffd108e53a27a06f26d8635bbe89e0e569455dc8ffef058c035d51b2
+
+build() {
+    bunzip2 -c "$DL" | tar -x --strip-components=1
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --with-libpcap=/usr \
+        --with-openssl=/usr \
+        --with-zlib=/usr \
+        --with-liblua=included \
+        --with-libpcre=included \
+        --without-zenmap \
+        --without-ndiff \
+        --without-nping
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+}
