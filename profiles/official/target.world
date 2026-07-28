@@ -3,6 +3,7 @@
 # top-level separados.
 base
 linux
+e2fsprogs
 ripgrep
 vim
 miniplenty-buildbase

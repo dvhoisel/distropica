@@ -20,8 +20,10 @@ entra em `CACHE_SHA256` e é semeado antes do primeiro `rectify`. Ele não exist
 hoje porque endpoint e chave ainda não foram publicados; valores fictícios
 tornariam uma mídia online aparentemente pronta, mas inoperante.
 
-`INSTALL_READY=yes` declara que o world mínimo (`base` + `linux` + `ripgrep` +
-`vim` + `miniplenty-buildbase`) pode ser materializado num alvo vazio. O último
+`INSTALL_READY=yes` declara que o world mínimo (`base` + `linux` + `e2fsprogs`
++ `ripgrep` + `vim` + `miniplenty-buildbase`) pode ser materializado num alvo
+vazio. `e2fsprogs` entra porque a raiz instalada é ext4: um sistema que não
+sabe verificar nem redimensionar o próprio disco não é um sistema. O último
 item é uma receita `KIND=meta`: não contém payload, fica registrada como
 `WORLD=M` com manifesto vazio e agrega `DEPS="base make gcc-pass2"`. A closure
 de `gcc-pass2` instala ainda `linux-headers`, glibc, `mathlibs-glibc`, zlib e
