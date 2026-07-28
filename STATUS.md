@@ -1,14 +1,15 @@
 # STATUS — o que está feito, testado e futuro
 
 Fonte única da verdade sobre a maturidade. As `specs/` descrevem a **norma**;
-este arquivo descreve o **estado**. Atualizado à mão em 2026-07-23 após
+este arquivo descreve o **estado**. Atualizado à mão em 2026-07-28 após
 reconstruir a closure atual, emitir o canal local assinado, compor a ISO e
 concluir o aceite automatizado `miniplenty-v1` no VirtualBox. Vim e ripgrep
 começam instalados; jq foi instalado do binário upstream, tree foi compilado da
 fonte e a toolchain final passou nas provas C/C++/arquivo/Make, tudo offline.
 Em 2026-07-24 entrou a auditoria de fechamento de dependências (`minitrue
 audit`, SPEC-0013 §4); seu primeiro veredito sobre essa mesma closure está
-registrado abaixo, e ele **reprova**.
+registrado abaixo, e ele **reprova**. As receitas já foram corrigidas e a
+correção foi medida em simulação — falta construir.
 Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
 ## Licenciamento e publicação
@@ -88,11 +89,36 @@ naturezas — ambos reais, nenhum falso positivo:
   §4.4 proíbe: depender por acaso da dependência de outro pacote.
 
 Há ainda 5 notas de `DEPS` declarada sem requisito estático observado
-(`gcc-pass2`→`linux-headers`/`binutils-glibc`, `base`→`busybox`,
+(`gcc-pass2`→`linux-headers`/`binutils-glibc`,
 `miniplenty-buildbase`→agregação): permitidas pelo §4.4, pendentes de
-justificativa. Corrigir os erros muda `DEPS`, logo muda fingerprint, logo
-obriga a reemitir canal e mídia — a decisão de quando pagar isso é de release,
-não da ferramenta.
+justificativa.
+
+**As receitas já foram corrigidas** — falta construir. Duas decisões distintas,
+porque os dois casos não são iguais:
+
+- **A glibc deixou de entregar os cinco scripts.** `ldd`, `tzselect`, `xtrace`,
+  `sotruss` e `mtrace` não são ABI, são utilitários de shell; fazer a
+  biblioteca C depender de um shell seria a correção errada. O `ldd`, em
+  especial, é o que esta distro recusa como ferramenta de confiança — ele é o
+  loader executando o objeto sob suspeita (SPEC-0013 §4.1), e `minitrue audit`
+  faz o mesmo trabalho sem executar nada.
+- **`gcc-pass2`, `ncurses` e `vim` passaram a declarar `busybox`.** Ali os
+  scripts são legítimos e o shell é uma dependência real: o certo é declará-la,
+  não escondê-la.
+
+O efeito foi **medido**, simulando as receitas corrigidas sobre uma cópia por
+hardlink do rootfs (as claims dos cinco scripts removidas do manifesto da
+glibc, `busybox` acrescentado às três `DEPS`):
+
+```text
+antes:   11 erros, 5 notas, CLOSURE_SHA256=451d9a13…
+depois:   0 erros, 5 notas, CLOSURE_SHA256=1fe20bc8…
+          "fechamento provado: todo requisito observado tem provedor declarado"
+```
+
+Construir isso muda fingerprint de glibc, gcc-pass2, ncurses e vim, logo obriga
+a reemitir canal e mídia — a decisão de quando pagar isso é de release, não da
+ferramenta.
 
 ```text
 AUDIT_ROOT=target/direct-install-miniplenty-v2-root
@@ -107,6 +133,45 @@ NOTES=5
 CLOSURE_SHA256=451d9a137fe6770e676dde3205da1080b8a269954a39cfcc8733adf466b87dd1
 ```
 
+### Perfil de rede — receitas escritas, nada construído ainda
+
+Entraram quatro receitas e um perfil de kernel, todos **não construídos**:
+`bash` 5.3, `libmnl` 1.0.5, `libnftnl` 1.3.1 e `nftables` 1.1.6, com SHA-256
+pinado (o do bash corroborado por mirror GNU independente). O `newspeak/linux`
+passou a exigir `USER_NS`, `TUN`, `WIREGUARD` e a fatia `NF_TABLES` do
+netfilter, com guarda que aborta o build se o `olddefconfig` descartar
+qualquer um.
+
+Duas ressalvas que valem mais que as receitas:
+
+- **O kernel do alvo não é o kernel que boota.** A ESP do sistema instalado
+  recebe o `BOOTX64.EFI` da mídia, e esse kernel **desabilita `NETFILTER` de
+  propósito** (`bootstrap/live/build-efi:285`), além de não ligar `USER_NS`.
+  Enquanto o instalado não bootar o próprio kernel, ligar os knobs em
+  `newspeak/linux` não muda nada no sistema em execução.
+- **`bash` existir não conserta as receitas que dependem dele.** `glibc` só
+  passará a declarar `bash` quando sua `DEPS` mudar — e isso muda fingerprint,
+  logo obriga reconstruir glibc e reemitir canal e mídia.
+
+### `pack` v2 — a cegueira medida, e o que não mudou
+
+O v1 não capturava xattr, e a consequência era maior do que "perde capability
+na instalação": a **mesma árvore, com e sem `security.capability`, dava o
+mesmo `reprocorr`**. A raiz de confiança não distinguia binário privilegiado
+de binário comum. Medido com o minitrue anterior, ainda instalado no target,
+contra o atual:
+
+```text
+árvore SEM xattr,  minitrue anterior : 7167ce1381e4bbb982eda0253a9ae6b8c1bec132ca071cc97a31d6d64ffca099
+árvore SEM xattr,  minitrue com v2   : 7167ce1381e4bbb982eda0253a9ae6b8c1bec132ca071cc97a31d6d64ffca099  (idêntico)
+árvore COM xattr,  minitrue anterior : 7167ce1381e4bbb982eda0253a9ae6b8c1bec132ca071cc97a31d6d64ffca099  (cego)
+árvore COM xattr,  minitrue com v2   : c7de48cf4ae6e5285b1c29500806fd7f2a3967182bfe49f058081b3ef8600732
+                                       tar declara DISTROPICA.pack=2
+```
+
+A primeira e a segunda linhas são a garantia de compatibilidade: nenhum
+artefato existente muda de hash. A terceira é o bug. A quarta é o conserto.
+
 ## minitrue (a ferramenta)
 
 | Recurso | Estado | Testado | Nota |
@@ -120,7 +185,7 @@ CLOSURE_SHA256=451d9a137fe6770e676dde3205da1080b8a269954a39cfcc8733adf466b87dd1
 | `retry` de ICE | ✅ | — | usado no E2 |
 | `fingerprint` de build | ✅ | ✅ | **transitivo**; inclui `DEPS`, `BUILD_DEPS` e Zig implícito para fonte `seed`/`cross`. Snapshot de `recipe`+`files/`, e o mesmo `files/` autocontido é materializado no `WORK` (symlinks auxiliares são recusados) |
 | Supersessão provisional (`PROVISIONAL` + `SUPERSEDES=`) | ✅ | ✅ | declarativa; no mundo B a cessão volta se a instalação falha. `SUPERSEDES` fica no registro e prova cadeias provisional→provisional; mundo A e restauração ao remover sucessor ainda faltam |
-| `pack` determinístico (v1) | ✅ | ✅ | a parte mais madura; falta xattr/ACL/cap/sparse |
+| `pack` determinístico (v2) | ✅ | ✅ | a parte mais madura. O v2 captura **xattr/capability** em registro PAX por entrada, e a claim `f:` passa a prendê-los — antes um `setcap` sumia no empacotamento e o `verify` não acusava. Versão declarada = mínima exigida do leitor, então árvore sem xattr hasheia idêntico ao v1 e nenhum `REPROCORR`/`ARTIFACT_HASH` migra. Faltam ACL, `trusted.*` e sparse |
 | Manifesto v2 (conteúdo + tipo) | ✅ | ✅ | `f:` prende modo+conteúdo do regular, `l:` prende alvo, `d:` prende modo do diretório-raiz+árvore (payload A e vazios B); leitura v0/v1 mantida |
 | `verify` (presença + integridade por claim) | ✅ | ✅ unit + instalação direta + VBox atual | inspeção confinada ao rootfs; confere conteúdo/tipo/alvo/árvore, denuncia journal pendente/formato futuro e exige que toda `DEPS` de registro v2 tenha registro factual válido. Não verifica `BUILD_DEPS` nem varre regulares órfãos em /usr |
 | `cache verify` (disponibilidade sem instalação) | ✅ | ✅ unit + E2E local + VBox atual | força offline/sem TOFU, confere hashes e assinaturas dos nomes explicitamente passados e não cria registro, link ou entrada no `world`; conferiu jq, Make, tree e Zig na mídia atual. Ainda não resolve nem prova a closure completa da SPEC-0013 |
@@ -429,14 +494,19 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   regulares, alvo de links e modo+árvore de diretórios. `manifest@` é baseline
   de provisional e a exceção legado exige dono sucessor para cada claim
   removida (inclusive por sucessor provisional que registre `SUPERSEDES`).
-  Ainda não registra xattrs/ACLs/capabilities, uid/gid ou timestamps.
+  A claim `f:` passa a prender **xattr/capability** quando o arquivo os tem
+  (`pack` v2); sem xattr o hash é idêntico ao de antes, então nenhum registro
+  migra. Ainda não registra ACLs, `trusted.*`, uid/gid ou timestamps.
 - **Fidelidade de aplicação:** o mundo B sela o tar normalizado num `memfd`,
   indexa-o e copia regulares diretamente por offset; hash e instalação veem os
   mesmos bytes. Isso é Linux-only e custa RAM/swap proporcional ao artefato.
   `pack` preserva nomes não-UTF-8 e hardlinks, mas `rectify` os recusa até o
   Journal instalá-los sem mudar a topologia atestada. A aplicação reproduz
-  tipo, bytes e modo, não uid/gid/mtime/xattrs/ACLs/caps; o fallback `EXDEV`
-  também não preserva hardlinks e recusa diretórios/especiais entre mounts.
+  tipo, bytes, modo e agora xattr/capability, não uid/gid/mtime/ACLs; o
+  fallback `EXDEV` também não preserva hardlinks nem xattr e recusa
+  diretórios/especiais entre mounts. Aplicar `security.capability` exige
+  `CAP_SETFCAP`: sem ele a instalação **falha fechado e reverte**, em vez de
+  materializar um sistema que diverge do artefato atestado.
 - **Diretórios compartilhados:** claims `d:` bloqueiam sobreposição
   pai×descendente entre pacotes. Remoção mundo B usa apenas `rmdir` e preserva
   diretório que ganhou filhos; mudança de modo de diretório vazio preexistente
