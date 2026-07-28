@@ -6,8 +6,9 @@ mod fetch;
 mod install;
 mod pack;
 mod recipe;
+mod sign;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct Ctx {
     pub root: PathBuf,
@@ -101,6 +102,9 @@ uso: minitrue [--root DIR] [--offline] [--tofu] [--no-binary|--only-binary] [--j
                         confere artefatos/assinaturas já presentes, sem rede ou instalação
   channel emit --output DIR <pacote>...
                         emite tar.zst + índice v2 a partir de registros B íntegros
+  channel keygen <base>  cria par minisign (base.key 0600 + base.pub)
+  channel sign <chave> <arquivo>
+                        assina, escreve <arquivo>.minisig e confere o que escreveu
 
 chegam no Marco 0.2: rectify --sync, rollback, unperson, lint, SIGSUMS e
 OpenPGP.";
@@ -263,8 +267,29 @@ fn run() -> anyhow::Result<()> {
                 install::channel_emit(&ctx, &output, &names[1..])
             }
             Some("emit") => fail(1, "channel emit: diga ao menos um pacote"),
+            // Assinar é do produtor, e o produtor é esta árvore. Antes disto o
+            // índice saía sem assinatura e o mantenedor tinha de chamar o
+            // `minisign` do hospedeiro — uma dependência de host bem no ponto
+            // mais sensível, o da raiz de confiança do canal.
+            Some("keygen") if names.len() == 2 => {
+                let base = PathBuf::from(&names[1]);
+                sign::keygen(
+                    &names[1],
+                    &base.with_extension("key"),
+                    &base.with_extension("pub"),
+                )
+            }
+            Some("keygen") => fail(1, "channel keygen: diga o caminho-base da chave"),
+            Some("sign") if names.len() == 3 => sign::sign_file(
+                Path::new(&names[1]),
+                Path::new(&names[2]),
+                &PathBuf::from(format!("{}.minisig", &names[2])),
+                None,
+                None,
+            ),
+            Some("sign") => fail(1, "channel sign: diga <chave-secreta> <arquivo>"),
             Some(other) => fail(1, format!("channel: subcomando desconhecido {other}")),
-            None => fail(1, "channel: diga o subcomando (emit)"),
+            None => fail(1, "channel: diga o subcomando (emit, keygen, sign)"),
         },
         Some("pack") => {
             let dir = match names.first() {
