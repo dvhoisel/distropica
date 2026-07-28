@@ -1,0 +1,37 @@
+NAME=findutils
+VERSION=4.11.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc busybox"
+BUILD_DEPS="make gcc-pass2 binutils-glibc"
+SUPERSEDES="busybox"
+ABOUT="GNU find, xargs e locate. Entra por necessidade demonstrada, e a demonstração é específica: o gerador de initramfs do kernel (usr/gen_initramfs.sh) monta a lista de arquivos com 'find -printf \"%p %m %U %G\"', e o find do BusyBox não tem -printf — ele responde 'unrecognized: -printf' e devolve lista VAZIA. O kernel então embute um initramfs de 512 bytes com dois nós de dispositivo e nada mais, e a máquina boota até 'check access for rdinit=/init failed'. Sem GNU find a Distrópica não consegue construir o próprio kernel vivo, o que a tornava dependente do hospedeiro justamente para produzir a mídia. Supersede o applet do BusyBox, que fica para trás por não implementar a interface exigida. O locate não é instalado: ele pressupõe um banco atualizado por cron, que esta distro não tem."
+LICENSE=GPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/findutils/findutils-$VERSION.tar.xz"
+SHA256=bfd19cb06cc71f3352d567e90284d8cdac02ac89774bbeadf0b533b0c11432fd
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    # --without-selinux: não há política de SELinux nesta distro, e sem isto o
+    # configure liga contra libselinux se ela por acaso existir — dependência
+    # decidida pelo ambiente, não pela receita.
+    ./configure \
+        --prefix=/usr \
+        --libexecdir=/usr/lib/findutils \
+        --localstatedir=/var/lib/locate \
+        --disable-nls \
+        --without-selinux
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    # locate e updatedb pressupõem banco atualizado periodicamente; sem cron
+    # eles só sabem responder sobre um índice que nunca existiu. Sai também o
+    # /var/lib/locate, que ficaria como diretório vazio — e diretório vazio no
+    # STAGE vira claim de árvore sobre /var inteiro.
+    rm -f "$STAGE/usr/bin/locate" "$STAGE/usr/bin/updatedb" \
+          "$STAGE/usr/bin/bigram" "$STAGE/usr/bin/code" "$STAGE/usr/bin/frcode" \
+          "$STAGE/usr/share/man/man1/locate.1" \
+          "$STAGE/usr/share/man/man1/updatedb.1" \
+          "$STAGE/usr/share/man/man5/locatedb.5"
+    rm -rf "$STAGE/usr/lib/findutils" "$STAGE/var"
+    find "$STAGE" -type d -empty -delete
+}
