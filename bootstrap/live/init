@@ -174,16 +174,17 @@ partition_disk() {
     done
     disk_bytes=$((disk_sectors * 512))
     root_capacity=$((disk_bytes - root_start * logical_sector))
-    # Reserva 64 MiB além do uso aparente para metadados do ext2, crescimento
-    # durante a cópia e blocos não refletidos por `du`.
-    required_root=$((prepared_kib * 1024 + 67108864))
+    # Reserva 128 MiB além do uso aparente: metadados, o journal do ext4
+    # (que chega a 128 MiB em sistema de arquivos grande), crescimento durante
+    # a cópia e blocos não refletidos por `du`.
+    required_root=$((prepared_kib * 1024 + 134217728))
     [ "$root_capacity" -ge "$required_root" ] ||
-        rescue "disco não comporta o sistema validado e a margem de 64 MiB"
+        rescue "disco não comporta o sistema validado e a margem de 128 MiB"
     # A ESP tem 64 MiB; preserve pelo menos 4 MiB para FAT/metadados.
     [ "$efi_bytes" -le 62914560 ] ||
         rescue "BOOTX64.EFI não cabe com segurança na ESP de 64 MiB"
 
-    say "APAGANDO $disk: GPT com ESP FAT32 de 64 MiB + raiz ext2" >&2
+    say "APAGANDO $disk: GPT com ESP FAT32 de 64 MiB + raiz ext4" >&2
     # GPT pelo Minipax, não MBR pelo fdisk do BusyBox — que sequer sabe
     # escrever GPT. Em hardware real o MBR trava acima de 2 TiB e é o esquema
     # que firmware UEFI aceita por tolerância, não por norma. O Minipax já
@@ -212,7 +213,10 @@ partition_disk() {
         rescue "partição raiz ficou menor que 64 MiB"
 
     mkfs.vfat -n DISTROPICA_ESP "$esp" >&2 || rescue "mkfs.vfat falhou"
-    mkfs.ext2 -F -L DISTROPICA_ROOT -m 0 "$root" >&2 || rescue "mkfs.ext2 falhou"
+    # ext4, não ext2: sem journal, um desligamento sujo em hardware real vira
+    # verificação completa em vez de replay. O mke2fs é o estático do
+    # initramfs, com seu mke2fs.conf ao lado — o applet do busybox só faz ext2.
+    mkfs.ext4 -F -L DISTROPICA_ROOT -m 0 "$root" >&2 || rescue "mkfs.ext4 falhou"
     echo "$esp $root"
 }
 

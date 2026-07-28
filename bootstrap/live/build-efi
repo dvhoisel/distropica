@@ -11,6 +11,9 @@ LINUX_SHA256=1c63922a119675d38e3ae0f8f6ee07f15c41a786ab9ed66563749bb8c9a08e2e
 LINUX_URL=https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${LINUX_VERSION}.tar.xz
 BUSYBOX_SHA256=6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348
 BUSYBOX_URL=https://www.busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox
+E2FSPROGS_VERSION=1.47.4
+E2FSPROGS_URL=https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v${E2FSPROGS_VERSION}/e2fsprogs-${E2FSPROGS_VERSION}.tar.xz
+E2FSPROGS_SHA256=fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b
 RUST_TARGET=x86_64-unknown-linux-musl
 EPOCH=${SOURCE_DATE_EPOCH:-1704067200}
 JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)}
@@ -211,6 +214,43 @@ fi
 require_static "$MINIPAX_BIN"
 require_static "$MINITRUE_BIN"
 
+# mke2fs estático. O initramfs não tem glibc — busybox, minipax e minitrue são
+# todos estáticos —, então um mkfs.ext4 dinâmico não rodaria ali. Compilado
+# com o mesmo CC musl que já serve ao alvo Rust, e conferido pelo mesmo
+# require_static.
+#
+# Por que não o mkfs.ext2 do busybox: ext2 não tem journal. Num disco real,
+# desligamento sujo vira fsck completo em vez de replay do journal — e é
+# exatamente o tipo de sistema que se instala em hardware de verdade.
+build_static_mke2fs() {
+    E2FSPROGS_TAR=${E2FSPROGS_TAR:-$WORK/e2fsprogs-${E2FSPROGS_VERSION}.tar.xz}
+    [ -f "$E2FSPROGS_TAR" ] || fetch "$E2FSPROGS_URL" "$E2FSPROGS_TAR"
+    check_hash "$E2FSPROGS_SHA256" "$E2FSPROGS_TAR"
+    e2fs_src=$WORK/e2fsprogs-${E2FSPROGS_VERSION}
+    rm -rf -- "$e2fs_src"
+    mkdir -p "$e2fs_src"
+    tar -xJf "$E2FSPROGS_TAR" -C "$e2fs_src" --strip-components=1
+    configure_musl_cc
+    e2fs_cc=${CC_x86_64_unknown_linux_musl:-${CC:-cc}}
+    (
+        cd "$e2fs_src"
+        CC="$e2fs_cc" LDFLAGS=-static ./configure \
+            --disable-shared \
+            --enable-static \
+            --disable-nls \
+            --disable-uuidd \
+            --disable-fsck \
+            --disable-defrag \
+            --disable-testio-debug >/dev/null
+        make -j"$JOBS" >/dev/null
+    ) || { echo "erro: não compilei o mke2fs estático" >&2; exit 1; }
+    echo "$e2fs_src"
+}
+
+E2FS_SRC=$(build_static_mke2fs)
+require_static "$E2FS_SRC/misc/mke2fs"
+require_static "$E2FS_SRC/e2fsck/e2fsck"
+
 INITROOT=$WORK/initramfs
 rm -rf -- "$INITROOT"
 mkdir -p "$INITROOT/bin" "$INITROOT/dev" "$INITROOT/etc" "$INITROOT/proc" \
@@ -221,6 +261,11 @@ cp "$BUSYBOX" "$INITROOT/bin/busybox"
 cp "$MINIPAX_BIN" "$INITROOT/bin/minipax"
 cp "$MINITRUE_BIN" "$INITROOT/bin/minitrue"
 cp "$REPO/bootstrap/live/init" "$INITROOT/init"
+cp "$E2FS_SRC/misc/mke2fs" "$INITROOT/bin/mke2fs"
+cp "$E2FS_SRC/e2fsck/e2fsck" "$INITROOT/bin/e2fsck"
+# mke2fs lê os perfis de recurso daqui; sem o arquivo ele cai em defaults
+# compilados e não liga o conjunto de features do ext4.
+cp "$E2FS_SRC/misc/mke2fs.conf" "$INITROOT/etc/mke2fs.conf"
 mkdir -p "$INITROOT/usr/share/udhcpc"
 cp "$REPO/newspeak/base/files/udhcpc.script" \
     "$INITROOT/usr/share/udhcpc/default.script"
@@ -229,9 +274,17 @@ cp "$REPO/LICENSE" \
 cp "$REPO/NOTICE" "$INITROOT/usr/share/licenses/distropica/NOTICE"
 chmod 755 "$INITROOT/init" "$INITROOT/bin/busybox" \
     "$INITROOT/bin/minipax" "$INITROOT/bin/minitrue" \
+    "$INITROOT/bin/mke2fs" "$INITROOT/bin/e2fsck" \
     "$INITROOT/usr/share/udhcpc/default.script"
 chmod 644 "$INITROOT/usr/share/licenses/distropica/GPL-3.0-or-later.txt"
 chmod 644 "$INITROOT/usr/share/licenses/distropica/NOTICE"
+chmod 644 "$INITROOT/etc/mke2fs.conf"
+# Antes do laço de applets: ele só cria link para nome ainda inexistente, então
+# estes vencem os mkfs.ext2/mke2fs/e2fsck do busybox.
+for name in mkfs.ext2 mkfs.ext3 mkfs.ext4; do
+    ln -sf mke2fs "$INITROOT/bin/$name"
+done
+ln -sf e2fsck "$INITROOT/bin/fsck.ext4"
 for applet in $("$BUSYBOX" --list); do
     case "$applet" in */*) continue ;; esac
     [ -e "$INITROOT/bin/$applet" ] || ln -s busybox "$INITROOT/bin/$applet"
