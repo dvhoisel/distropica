@@ -183,13 +183,17 @@ partition_disk() {
     [ "$efi_bytes" -le 62914560 ] ||
         rescue "BOOTX64.EFI não cabe com segurança na ESP de 64 MiB"
 
-    say "APAGANDO $disk: ESP FAT32 de 64 MiB + raiz ext2" >&2
-    # BusyBox fdisk 1.35 não cria GPT. O MBR type 0xef é reconhecido pelo
-    # firmware UEFI e o ext2 é montado pelo driver ext4 do kernel vivo.
-    printf 'o\nn\np\n1\n2048\n+64M\nt\nef\nn\np\n2\n%s\n\nw\n' "$root_start" |
-        fdisk -u "$disk" >&2 ||
-        rescue "fdisk falhou em $disk"
+    say "APAGANDO $disk: GPT com ESP FAT32 de 64 MiB + raiz ext2" >&2
+    # GPT pelo Minipax, não MBR pelo fdisk do BusyBox — que sequer sabe
+    # escrever GPT. Em hardware real o MBR trava acima de 2 TiB e é o esquema
+    # que firmware UEFI aceita por tolerância, não por norma. O Minipax já
+    # escrevia GPT para compor a IMG; usar o mesmo código aqui mantém o
+    # caminho que APAGA DISCO dentro do Rust auditado.
+    /bin/minipax partition --disk "$disk" --esp-mib 64 \
+        --logical-sector "$logical_sector" >&2 ||
+        rescue "minipax partition falhou em $disk"
     partprobe "$disk" 2>/dev/null || true
+    blockdev --rereadpt "$disk" 2>/dev/null || true
     mdev -s 2>/dev/null || true
 
     esp=$(partition_path "$disk" 1)

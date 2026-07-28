@@ -11,6 +11,7 @@ const USAGE: &str = r#"minipax — o Ministério da Paz
 uso:
   minipax install --target DIR --profile DIR [opções]
   minipax install-media --source DIR --target DIR [opções]
+  minipax partition --disk DISPOSITIVO [--esp-mib N] [--logical-sector N]
   minipax media build --profile DIR --mode online|offline \
       --format img|iso --boot-efi ARQ --output ARQ [opções]
   minipax lock --profile DIR [opções]
@@ -70,6 +71,9 @@ fn run() -> Result<()> {
             run_media(args)
         }
         "lock" => run_lock(args),
+        // Particionamento GPT do alvo (SPEC-0008): o caminho destrutivo fica
+        // no Rust auditado, não num script guiando o fdisk do busybox.
+        "partition" => run_partition(args),
         other => bail!("comando desconhecido {other:?}\n\n{USAGE}"),
     }
 }
@@ -285,4 +289,41 @@ fn run_media(args: Vec<String>) -> Result<()> {
             output,
         },
     )
+}
+
+/// `minipax partition --disk /dev/sda [--esp-mib 64]`
+fn run_partition(args: Vec<String>) -> Result<()> {
+    let mut disk: Option<PathBuf> = None;
+    let mut esp_mib: u64 = 64;
+    let mut sector: u64 = minipax::partition::DEFAULT_SECTOR;
+    let mut index = 0;
+    while index < args.len() {
+        let option = args[index].clone();
+        match option.as_str() {
+            "--disk" => disk = Some(take_value(&args, &mut index, &option)?.into()),
+            "--esp-mib" => {
+                esp_mib = take_value(&args, &mut index, &option)?
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("--esp-mib exige número"))?
+            }
+            // O chamador conhece o setor lógico do disco (sysfs); presumir 512
+            // num 4Kn escreveria a tabela no endereço errado.
+            "--logical-sector" => {
+                sector = take_value(&args, &mut index, &option)?
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("--logical-sector exige número"))?
+            }
+            other => bail!("opção desconhecida {other:?}"),
+        }
+        index += 1;
+    }
+    let disk = disk.ok_or_else(|| anyhow::anyhow!("partition exige --disk"))?;
+    let ((esp_first, esp_last), (root_first, root_last)) =
+        minipax::partition::write_layout(&disk, esp_mib, sector)?;
+    // Saída legível por script: o instalador confere os setores que pediu.
+    println!("ESP_FIRST_LBA={esp_first}");
+    println!("ESP_LAST_LBA={esp_last}");
+    println!("ROOT_FIRST_LBA={root_first}");
+    println!("ROOT_LAST_LBA={root_last}");
+    Ok(())
 }

@@ -1,6 +1,7 @@
 pub mod install;
 pub mod media;
 pub mod media_install;
+pub mod partition;
 pub mod profile;
 pub mod tree;
 
