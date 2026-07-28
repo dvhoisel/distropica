@@ -15,8 +15,9 @@ recusa ciclos; escolhe canal antes de expandir dependências de build; registra
 remover pacote ainda requerido. O **fechamento por inspeção estática (§4)**
 entrou em 2026-07-24 como `minitrue audit`, com `AUDIT_FORMAT=1`: parser ELF
 próprio, mapa de provedores vindo dos registros, confronto declaração ×
-observação e `CLOSURE_SHA256` canônico. Ele ainda **informa sem impedir** — não
-é gate de `channel emit` nem da mídia. O lock tipado de closure, o PATH de
+observação e `CLOSURE_SHA256` canônico. Desde 2026-07-28 ele **impede**:
+`channel emit` recusa publicar pacote cujo payload exija provedor não
+declarado. O gate da composição de mídia, o lock tipado de closure, o PATH de
 build fechado, `cache verify --closure`, o plano somente-leitura,
 `rectify --sync` e a coleta explícita de órfãos especificados abaixo
 **continuam não implementados**.
@@ -433,7 +434,9 @@ provar que o único conjunto escolhido declara e contém tudo de que depende.
 | fingerprint transitivo | implementado |
 | seleção de canal antes de build-deps | implementado |
 | `world`, `why` básico e proteção de dependência reversa | implementado |
-| scanner ELF/ABI e mapa de provedores | implementado (`audit`, `AUDIT_FORMAT=1`), sem enforcement |
+| scanner ELF/ABI e mapa de provedores | implementado (`audit`, `AUDIT_FORMAT=1`) |
+| gate de closure em `channel emit` | implementado — recusa publicação, com teste de regressão |
+| gate de closure na composição de mídia | não implementado |
 | ambiente/PATH fechado por closure | não implementado |
 | plan lock tipado e `verify` de identidade exata da dependência | não implementado |
 | `cache verify --closure` | não implementado |

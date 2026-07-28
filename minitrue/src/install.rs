@@ -3481,6 +3481,12 @@ pub fn channel_emit(ctx: &Ctx, output: &Path, packages: &[String]) -> Result<()>
         recipe::validate_name(package)?;
         let _ = attestable_meta(ctx, package)?;
     }
+    // Gate de fechamento (SPEC-0013 §10.2): publicar é afirmar que o conjunto
+    // se fecha. Um artefato cujo payload exige provedor não declarado só
+    // funciona no computador onde por acaso já existe o que falta — publicá-lo
+    // propaga a dependência acidental para todo mundo que o instalar. Isto
+    // **recusa**, e é essa recusa que separa "auditoria informativa" de gate.
+    crate::audit::gate(ctx, packages)?;
     let parent = output
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -8602,7 +8608,11 @@ mod tests {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
         }
         let staged_payload = stage.join("etc/rc.d/rcS");
-        fs::write(&staged_payload, b"#!/bin/sh\nprintf 'canal offline\\n'\n").unwrap();
+        // Sem shebang de propósito: este teste é sobre emissão de canal, não
+        // sobre resolução de intérprete. Com `#!/bin/sh` a fixture passaria a
+        // exigir um provedor de shell que ela não declara, e o gate de
+        // fechamento a recusaria — corretamente, mas por outro assunto.
+        fs::write(&staged_payload, b"# rcS de teste do canal offline\n").unwrap();
         fs::set_permissions(&staged_payload, fs::Permissions::from_mode(0o755)).unwrap();
         fs::write(stage.join("etc/hostname"), b"distropica\n").unwrap();
         let installed_payload = root.join("usr/share/factory/etc/rc.d/rcS");

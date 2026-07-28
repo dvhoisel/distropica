@@ -112,7 +112,57 @@ impl Providers {
     }
 }
 
+/// Resultado da análise, separado do relatório para que o gate de publicação
+/// e a CLI usem exatamente o mesmo veredito.
+struct Analysis {
+    /// (nome, versão) de cada pacote auditado, na ordem em que foi pedido.
+    targets: Vec<(String, String)>,
+    findings: Vec<Finding>,
+    facts: BTreeSet<String>,
+    inspected: usize,
+    missing: usize,
+}
+
 pub fn audit(ctx: &Ctx, names: &[String], output: Option<&std::path::Path>) -> Result<()> {
+    let analysis = analyze(ctx, names)?;
+    report(&analysis, output)
+}
+
+/// Gate de publicação (SPEC-0013 §10.2). Usa a mesma análise da CLI e
+/// **recusa** a emissão quando algum requisito observado não tem provedor
+/// declarado — é a diferença entre auditar e impedir.
+pub(crate) fn gate(ctx: &Ctx, names: &[String]) -> Result<()> {
+    let analysis = analyze(ctx, names)?;
+    let erros: Vec<&Finding> = analysis
+        .findings
+        .iter()
+        .filter(|finding| finding.severity == Severity::Erro)
+        .collect();
+    if erros.is_empty() {
+        println!(
+            "  fechamento conferido: {} requisito(s) observado(s), todos com provedor declarado",
+            analysis.facts.len()
+        );
+        return Ok(());
+    }
+    for finding in &erros {
+        eprintln!(
+            "  erro: {} {} — {}",
+            finding.package, finding.file, finding.message
+        );
+    }
+    fail(
+        1,
+        format!(
+            "channel emit recusado: {} erro(s) de fechamento. \
+             Publicar isto propagaria dependência acidental; \
+             `minitrue audit` dá o relatório completo",
+            erros.len()
+        ),
+    )
+}
+
+fn analyze(ctx: &Ctx, names: &[String]) -> Result<Analysis> {
     let packages = load_packages(ctx)?;
     if packages.is_empty() {
         return fail(1, "audit: nenhum registro para auditar");
@@ -242,7 +292,16 @@ pub fn audit(ctx: &Ctx, names: &[String], output: Option<&std::path::Path>) -> R
         }
     }
 
-    report(&targets, &findings, &facts, inspected, missing, output)
+    Ok(Analysis {
+        targets: targets
+            .iter()
+            .map(|pkg| (pkg.name.clone(), pkg.version.clone()))
+            .collect(),
+        findings,
+        facts,
+        inspected,
+        missing,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -630,14 +689,14 @@ fn load_packages(ctx: &Ctx) -> Result<BTreeMap<String, Package>> {
     Ok(out)
 }
 
-fn report(
-    targets: &[&Package],
-    findings: &[Finding],
-    facts: &BTreeSet<String>,
-    inspected: usize,
-    missing: usize,
-    output: Option<&std::path::Path>,
-) -> Result<()> {
+fn report(analysis: &Analysis, output: Option<&std::path::Path>) -> Result<()> {
+    let Analysis {
+        targets,
+        findings,
+        facts,
+        inspected,
+        missing,
+    } = analysis;
     let body: String = facts
         .iter()
         .map(|f| format!("{f}\n"))
@@ -660,12 +719,10 @@ fn report(
         targets.len(),
         facts.len()
     );
-    for pkg in targets {
-        let n = findings.iter().filter(|f| f.package == pkg.name).count();
-        if n == 0 {
-            continue;
+    for (name, version) in targets {
+        if findings.iter().any(|finding| finding.package == *name) {
+            println!("  {name} {version}");
         }
-        println!("  {} {}", pkg.name, pkg.version);
     }
     for finding in findings {
         let tag = match finding.severity {
@@ -681,7 +738,7 @@ fn report(
             );
         }
     }
-    if missing > 0 {
+    if *missing > 0 {
         println!("  nota: {missing} caminho(s) do manifesto ausente(s) no rootfs — a auditoria não é completa; rode verify");
     }
     println!("AUDIT_FORMAT={AUDIT_FORMAT}");
@@ -748,6 +805,61 @@ mod tests {
             resolve_virtual(&ctx, "/bin/sh").as_deref(),
             Some("/opt/busybox/1.35.0/bin/sh")
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// O gate não é o relatório: ele **impede**. Publicar um payload que exige
+    /// provedor não declarado propaga a dependência acidental para todo mundo
+    /// que instalar o artefato.
+    #[test]
+    fn gate_recusa_publicar_requisito_sem_provedor() {
+        let root = temp_root("gate");
+        let zeros = "0".repeat(64);
+        let registros = root.join("var/lib/minitrue/records");
+        std::fs::create_dir_all(registros.join("pkg")).unwrap();
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::fs::write(root.join("usr/bin/ferramenta"), b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::write(
+            registros.join("pkg/meta"),
+            "RECORD_FORMAT=2\nNAME=pkg\nVERSION=1\nDEPS=\n",
+        )
+        .unwrap();
+        std::fs::write(
+            registros.join("pkg/manifest"),
+            format!("f:{zeros}  /usr/bin/ferramenta\n"),
+        )
+        .unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: true,
+            tofu: false,
+            jobs: 1,
+        };
+
+        let erro = gate(&ctx, &["pkg".to_string()]).unwrap_err();
+        assert!(erro.to_string().contains("recusado"), "erro: {erro}");
+
+        // Com o shell declarado — e existindo —, o mesmo pacote passa.
+        std::fs::create_dir_all(registros.join("shell")).unwrap();
+        std::fs::write(root.join("usr/bin/sh"), b"shell\n").unwrap();
+        std::os::unix::fs::symlink("usr/bin", root.join("bin")).unwrap();
+        std::fs::write(
+            registros.join("shell/meta"),
+            "RECORD_FORMAT=2\nNAME=shell\nVERSION=1\nDEPS=\n",
+        )
+        .unwrap();
+        std::fs::write(
+            registros.join("shell/manifest"),
+            format!("f:{zeros}  /usr/bin/sh\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            registros.join("pkg/meta"),
+            "RECORD_FORMAT=2\nNAME=pkg\nVERSION=1\nDEPS=shell\n",
+        )
+        .unwrap();
+        gate(&ctx, &["pkg".to_string()]).unwrap();
+
         std::fs::remove_dir_all(&root).ok();
     }
 
