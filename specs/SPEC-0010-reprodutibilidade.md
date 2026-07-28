@@ -96,9 +96,22 @@ do tar (`DISTROPICA.pack=1`) — muda quando a normalização mudar, e um leitor
 pode recusar versão que não entenda. O `pack` transmite arquivo→tar→hasher
 (sem carregar arquivo nem tar inteiro em RAM), preserva nomes não-UTF-8 e
 hardlinks, e **recusa** arquivos especiais (FIFO/dispositivo/socket).
-Limitação conhecida do v1: **não** captura xattrs, ACLs, capabilities nem
-sparse — como dois builds da mesma receita dão a mesma árvore, isso não
-quebra o determinismo, mas quebra a fidelidade e está registrado.
+O **v2** acrescenta **xattrs** — e com eles as *file capabilities*. A versão
+declarada é a **mínima exigida do leitor**, não a do escritor: árvore sem
+xattr continua sendo empacotada e hasheada como v1, byte a byte, de modo que
+nenhum `REPROCORR` pinado nem `ARTIFACT_HASH` já gravado migra. Os valores vão
+em hexadecimal num registro PAX por entrada (`DISTROPICA.xattr.<nome>`), em
+ordem canônica de nome, restritos aos namespaces `security.` e `user.`.
+
+Isso corrige uma cegueira do v1 que não era só de fidelidade: como o
+empacotamento ignorava `security.capability`, **duas árvores idênticas exceto
+por uma capability produziam o mesmo `reprocorr`**. A raiz de confiança não
+distinguia um binário privilegiado de um sem privilégio, e a attestation
+atestava os dois com o mesmo hash.
+
+Limitação que **permanece** no v2: **não** captura ACLs (`system.posix_acl_*`),
+`trusted.*` nem sparse — como dois builds da mesma receita dão a mesma árvore,
+isso não quebra o determinismo, mas quebra a fidelidade e está registrado.
 
 **O que o `reprocorr` cobre — o tar, não o `.tar.zst`.** O `reprocorr`
 (SPEC-0009 §3/§6) é o sha256 do **tar normalizado** (a saída de `pack`),

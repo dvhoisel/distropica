@@ -23,8 +23,20 @@
 //! - **recusa** arquivos especiais (FIFO, dispositivo, socket) — não são
 //!   empacotáveis e não deveriam estar num `STAGE`.
 //!
-//! Limitações conhecidas do v1 (NÃO capturadas ainda; um `STAGE` que dependa
-//! delas empacota sem elas): **xattrs, ACLs, capabilities e sparse files**.
+//! **Formato v2** ([`PACK_FORMAT_XATTR`]) acrescenta **xattrs**, e com eles as
+//! *file capabilities* (`security.capability`) de que dependem `dumpcap`,
+//! `nmap` e `mtr-packet`. Sem isso um `setcap` no `STAGE` era descartado em
+//! silêncio: o binário chegava sem privilégio e o `verify` nem reclamava,
+//! porque a claim prendia só modo e conteúdo.
+//!
+//! A versão declarada no cabeçalho global é a **mínima exigida do leitor**,
+//! não a do escritor: uma árvore sem xattr continua sendo empacotada como v1,
+//! byte a byte. Isso é deliberado — subir a versão em todo artefato mudaria o
+//! hash de todos eles e invalidaria de uma vez o `REPROCORR` pinado e cada
+//! `ARTIFACT_HASH` já gravado, sem que nada de fato tivesse mudado.
+//!
+//! Limitações que **permanecem** (um `STAGE` que dependa delas empacota sem
+//! elas): **ACLs** (`system.posix_acl_*`), `trusted.*` e **sparse files**.
 //! Como dois builds da mesma receita produzem a mesma árvore, a ausência não
 //! quebra o determinismo — mas quebra a fidelidade, e está registrada.
 
@@ -44,11 +56,38 @@ use tar::{Builder, EntryType, Header};
 /// normalização muda — um leitor pode recusar versão que não entende.
 pub const PACK_FORMAT: &str = "1";
 
+/// Versão mínima de leitor exigida por um tar que carrega xattr.
+pub const PACK_FORMAT_XATTR: &str = "2";
+
+/// Prefixo do registro PAX por entrada: `DISTROPICA.xattr.<nome>=<hex>`. O
+/// valor vai em hexadecimal porque xattr é binário — `security.capability` é
+/// uma struct, e pode conter `\n`, que arruinaria um registro PAX cru.
+pub const XATTR_PAX_PREFIX: &str = "DISTROPICA.xattr.";
+
+/// Nome fixo da entrada de cabeçalho PAX por arquivo. Constante de propósito:
+/// evita o mecanismo de nome longo do GNU tar e mantém o tar determinístico.
+pub const XATTR_HEADER_NAME: &str = "pax_extended_header";
+
+/// Namespaces capturados. `system.*` (ACL) e `trusted.*` ficam de fora: o
+/// primeiro é a limitação ainda registrada, o segundo exige privilégio para
+/// ser lido e viraria empacotamento que falha por acidente de permissão.
+const XATTR_NAMESPACES: [&str; 2] = ["security.", "user."];
+
+/// Tetos de sanidade — árvore legítima fica ordens de grandeza abaixo.
+const MAX_XATTRS_PER_FILE: usize = 64;
+const MAX_XATTR_VALUE: usize = 65_536;
+
+pub(crate) fn format_supported(value: &str) -> bool {
+    value == PACK_FORMAT || value == PACK_FORMAT_XATTR
+}
+
 struct Entry {
     abs: PathBuf,
     /// Nome armazenado no tar, em bytes crus (preserva não-UTF-8).
     name: Vec<u8>,
     md: Metadata,
+    /// xattrs capturados, ordenados por nome (ordem canônica).
+    xattrs: Vec<(String, Vec<u8>)>,
 }
 
 /// `Write` que computa o sha256 de tudo que passa e repassa a um inner.
@@ -89,7 +128,14 @@ pub fn pack_deterministic<W: Write>(dir: &Path, epoch: u64, out: W) -> Result<St
     let mut b = Builder::new(hw);
     b.follow_symlinks(false);
 
-    write_global_version(&mut b)?;
+    // A versão é a mínima exigida do leitor: sem xattr na árvore, o tar
+    // continua idêntico ao que o v1 produzia.
+    let version = if entries.iter().any(|e| !e.xattrs.is_empty()) {
+        PACK_FORMAT_XATTR
+    } else {
+        PACK_FORMAT
+    };
+    write_global_version(&mut b, version)?;
 
     // (dev, ino) -> primeiro nome armazenado, para preservar hardlinks.
     let mut seen: HashMap<(u64, u64), Vec<u8>> = HashMap::new();
@@ -98,6 +144,9 @@ pub fn pack_deterministic<W: Write>(dir: &Path, epoch: u64, out: W) -> Result<St
         let ft = e.md.file_type();
         let name = tar_path(&e.name);
         let mode = e.md.permissions().mode() & 0o7777;
+        if !e.xattrs.is_empty() {
+            write_xattr_header(&mut b, &e.xattrs)?;
+        }
         let mut h = Header::new_gnu();
         h.set_mtime(epoch);
         h.set_uid(0);
@@ -168,7 +217,7 @@ pub fn empty_deterministic_hash() -> Result<String> {
     };
     let mut builder = Builder::new(hw);
     builder.follow_symlinks(false);
-    write_global_version(&mut builder)?;
+    write_global_version(&mut builder, PACK_FORMAT)?;
     let mut hw = builder.into_inner()?;
     hw.flush()?;
     Ok(hex::encode(hw.hasher.finalize()))
@@ -187,10 +236,18 @@ fn collect(base: &Path, dir: &Path, out: &mut Vec<Entry>) -> Result<()> {
             .as_bytes()
             .to_vec();
         let is_dir = md.file_type().is_dir();
+        // Symlink não carrega capability e seus xattrs não são instaláveis;
+        // ler só de regular e diretório mantém o escopo honesto.
+        let xattrs = if md.file_type().is_symlink() {
+            Vec::new()
+        } else {
+            read_xattrs(&abs)?
+        };
         out.push(Entry {
             abs: abs.clone(),
             name,
             md,
+            xattrs,
         });
         if is_dir {
             collect(base, &abs, out)?;
@@ -204,10 +261,115 @@ fn tar_path(name: &[u8]) -> PathBuf {
     PathBuf::from(OsStr::from_bytes(name))
 }
 
+/// Lê os xattrs de `path` **sem seguir symlink**, já ordenados por nome.
+///
+/// Sistema de arquivos sem suporte a xattr não é erro de empacotamento:
+/// devolve vazio. O que seria erro é o oposto — ter xattr e não capturá-lo.
+pub fn read_xattrs(path: &Path) -> Result<Vec<(String, Vec<u8>)>> {
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+    let size = unsafe { libc::llistxattr(c_path.as_ptr(), std::ptr::null_mut(), 0) };
+    if size <= 0 {
+        return match io::Error::last_os_error().raw_os_error() {
+            _ if size == 0 => Ok(Vec::new()),
+            Some(libc::ENOTSUP) | Some(libc::ENODATA) => Ok(Vec::new()),
+            _ => Err(anyhow::anyhow!(
+                "pack: não listei xattr de {}: {}",
+                path.display(),
+                io::Error::last_os_error()
+            )),
+        };
+    }
+    let mut names = vec![0u8; size as usize];
+    let got = unsafe {
+        libc::llistxattr(
+            c_path.as_ptr(),
+            names.as_mut_ptr().cast(),
+            names.len() as libc::size_t,
+        )
+    };
+    if got < 0 {
+        bail!(
+            "pack: não listei xattr de {}: {}",
+            path.display(),
+            io::Error::last_os_error()
+        );
+    }
+    names.truncate(got as usize);
+
+    let mut out = Vec::new();
+    for raw in names.split(|byte| *byte == 0).filter(|n| !n.is_empty()) {
+        let name = std::str::from_utf8(raw)
+            .map_err(|_| anyhow::anyhow!("pack: xattr de nome não-UTF-8 em {}", path.display()))?;
+        if !XATTR_NAMESPACES.iter().any(|ns| name.starts_with(ns)) {
+            continue;
+        }
+        if out.len() >= MAX_XATTRS_PER_FILE {
+            bail!(
+                "pack: {} declara mais de {MAX_XATTRS_PER_FILE} xattrs",
+                path.display()
+            );
+        }
+        let c_name = std::ffi::CString::new(name)?;
+        let len =
+            unsafe { libc::lgetxattr(c_path.as_ptr(), c_name.as_ptr(), std::ptr::null_mut(), 0) };
+        if len < 0 {
+            bail!(
+                "pack: não li o xattr {name} de {}: {}",
+                path.display(),
+                io::Error::last_os_error()
+            );
+        }
+        if len as usize > MAX_XATTR_VALUE {
+            bail!("pack: xattr {name} de {} tem {len} bytes", path.display());
+        }
+        let mut value = vec![0u8; len as usize];
+        let got = unsafe {
+            libc::lgetxattr(
+                c_path.as_ptr(),
+                c_name.as_ptr(),
+                value.as_mut_ptr().cast(),
+                value.len() as libc::size_t,
+            )
+        };
+        if got < 0 {
+            bail!(
+                "pack: não li o xattr {name} de {}: {}",
+                path.display(),
+                io::Error::last_os_error()
+            );
+        }
+        value.truncate(got as usize);
+        out.push((name.to_string(), value));
+    }
+    // Ordem canônica por nome: o `readdir` do xattr não é ordenado.
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
+}
+
+/// Escreve o cabeçalho PAX **por entrada** com os xattrs da próxima entrada.
+fn write_xattr_header<W: Write>(b: &mut Builder<W>, xattrs: &[(String, Vec<u8>)]) -> Result<()> {
+    let mut data = Vec::new();
+    for (name, value) in xattrs {
+        data.extend_from_slice(&pax_record(
+            &format!("{XATTR_PAX_PREFIX}{name}"),
+            &hex::encode(value),
+        ));
+    }
+    let mut h = Header::new_gnu();
+    h.set_mtime(0);
+    h.set_uid(0);
+    h.set_gid(0);
+    h.set_mode(0);
+    h.set_size(data.len() as u64);
+    h.set_entry_type(EntryType::new(b'x'));
+    b.append_data(&mut h, XATTR_HEADER_NAME, &data[..])?;
+    Ok(())
+}
+
 /// Escreve o cabeçalho PAX **global** que versiona o formato. Fixo e
 /// determinístico (mtime/uid/gid/modo zerados; conteúdo constante).
-fn write_global_version<W: Write>(b: &mut Builder<W>) -> Result<()> {
-    let data = pax_record("DISTROPICA.pack", PACK_FORMAT);
+fn write_global_version<W: Write>(b: &mut Builder<W>, version: &str) -> Result<()> {
+    let data = pax_record("DISTROPICA.pack", version);
     let mut h = Header::new_gnu();
     h.set_mtime(0);
     h.set_uid(0);
@@ -279,6 +441,82 @@ mod tests {
         let mut v = Vec::new();
         pack_deterministic(dir, EPOCH, &mut v).unwrap();
         v
+    }
+
+    /// Põe um xattr `user.*` no caminho, devolvendo `false` se o sistema de
+    /// arquivos não suporta — aí o teste não tem o que provar.
+    fn set_xattr(path: &Path, name: &str, value: &[u8]) -> bool {
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        let c_name = std::ffi::CString::new(name).unwrap();
+        let rc = unsafe {
+            libc::lsetxattr(
+                c_path.as_ptr(),
+                c_name.as_ptr(),
+                value.as_ptr().cast(),
+                value.len() as libc::size_t,
+                0,
+            )
+        };
+        rc == 0
+    }
+
+    /// O xattr entra no hash e sobe a versão declarada — mas **só** quando
+    /// existe. É o que preserva todo `REPROCORR`/`ARTIFACT_HASH` já gravado.
+    #[test]
+    fn xattr_muda_o_hash_e_a_versao_declarada() {
+        let t = Tmp::new();
+        fs::create_dir_all(t.path().join("usr/bin")).unwrap();
+        let alvo = t.path().join("usr/bin/dumpcap");
+        fs::write(&alvo, b"captura").unwrap();
+
+        let sem_xattr = hash(t.path());
+        let tar_sem = bytes(t.path());
+        assert!(
+            find_subslice(&tar_sem, b"DISTROPICA.pack=1\n").is_some(),
+            "árvore sem xattr deveria continuar declarando v1"
+        );
+
+        if !set_xattr(&alvo, "user.distropica.teste", b"valor") {
+            eprintln!("sistema de arquivos sem xattr; teste sem o que provar");
+            return;
+        }
+
+        let com_xattr = hash(t.path());
+        assert_ne!(
+            sem_xattr, com_xattr,
+            "xattr precisa entrar no hash: sem isso um setcap sumiria em silêncio"
+        );
+        let tar_com = bytes(t.path());
+        assert!(find_subslice(&tar_com, b"DISTROPICA.pack=2\n").is_some());
+        assert!(find_subslice(&tar_com, b"DISTROPICA.xattr.user.distropica.teste=").is_some());
+        // Hex, não bytes crus: valor binário não pode quebrar o registro PAX.
+        assert!(find_subslice(&tar_com, &hex::encode(b"valor").into_bytes()).is_some());
+
+        // E continua determinístico.
+        assert_eq!(com_xattr, hash(t.path()));
+        assert_eq!(tar_com, bytes(t.path()));
+    }
+
+    #[test]
+    fn xattr_lido_em_ordem_canonica() {
+        let t = Tmp::new();
+        let alvo = t.path().join("arquivo");
+        fs::write(&alvo, b"x").unwrap();
+        if !set_xattr(&alvo, "user.zzz", b"\x00\x01\n\xff") || !set_xattr(&alvo, "user.aaa", b"a") {
+            eprintln!("sistema de arquivos sem xattr; teste sem o que provar");
+            return;
+        }
+        let lidos = read_xattrs(&alvo).unwrap();
+        let nomes: Vec<&str> = lidos.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(nomes, ["user.aaa", "user.zzz"], "ordem tem de ser canônica");
+        // Valor binário com `\n` e byte nulo sobrevive intacto.
+        assert_eq!(lidos[1].1, b"\x00\x01\n\xff");
+    }
+
+    fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
     }
 
     /// Uma árvore de teto com os casos difíceis.

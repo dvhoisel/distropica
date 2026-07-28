@@ -1443,6 +1443,8 @@ enum SealedStageKind {
         offset: u64,
         size: u64,
         integrity: String,
+        /// xattrs do `pack` v2, ordenados. Vazio em artefato v1.
+        xattrs: Vec<(String, Vec<u8>)>,
     },
 }
 
@@ -1475,10 +1477,96 @@ impl SealedStageEntry {
                 format!("l:{}", hex::encode(hash.finalize()))
             }
             SealedStageKind::Regular {
-                mode, integrity, ..
-            } => format!("f:{}", regular_integrity(*mode, integrity)),
+                mode,
+                integrity,
+                xattrs,
+                ..
+            } => format!("f:{}", regular_integrity_xattr(*mode, integrity, xattrs)),
         }
     }
+}
+
+/// Tetos coerentes com os do `pack`.
+const MAX_XATTRS_PER_ENTRY: usize = 64;
+const MAX_XATTR_VALUE: usize = 65_536;
+
+/// Lê os xattrs de uma entrada a partir das extensões PAX
+/// (`DISTROPICA.xattr.<nome>=<hex>`), já validando ordem, namespace e
+/// duplicidade. Registro que este leitor não entende é recusa: pode ser
+/// exatamente o privilégio que ele deveria aplicar.
+fn read_entry_xattrs<R: Read>(entry: &mut tar::Entry<'_, R>) -> Result<Vec<(String, Vec<u8>)>> {
+    let Some(extensions) = entry.pax_extensions()? else {
+        return Ok(Vec::new());
+    };
+    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+    for extension in extensions {
+        let extension = extension?;
+        let key = extension
+            .key()
+            .map_err(|_| anyhow::anyhow!("chave de extensão PAX não é UTF-8"))?;
+        let Some(name) = key.strip_prefix(crate::pack::XATTR_PAX_PREFIX) else {
+            bail!("cabeçalho PAX por entrada com chave inesperada: {key:?}");
+        };
+        if !name.starts_with("security.") && !name.starts_with("user.") {
+            bail!("artefato traz xattr fora dos namespaces admitidos: {name:?}");
+        }
+        if out.len() >= MAX_XATTRS_PER_ENTRY {
+            bail!("entrada declara mais de {MAX_XATTRS_PER_ENTRY} xattrs");
+        }
+        let value = extension
+            .value()
+            .map_err(|_| anyhow::anyhow!("valor do xattr {name} não é UTF-8"))?;
+        let value = hex::decode(value)
+            .map_err(|_| anyhow::anyhow!("valor do xattr {name} não é hexadecimal"))?;
+        if value.len() > MAX_XATTR_VALUE {
+            bail!("xattr {name} traz {} bytes", value.len());
+        }
+        // A ordem é canônica no `pack`; fora de ordem significa tar remontado
+        // por outra ferramenta, e o hash da claim não bateria.
+        if out
+            .last()
+            .is_some_and(|(previous, _)| previous.as_str() >= name)
+        {
+            bail!("xattrs fora de ordem canônica em {name}");
+        }
+        out.push((name.to_string(), value));
+    }
+    Ok(out)
+}
+
+/// Aplica xattrs no descritor já aberto do arquivo destino.
+///
+/// Falha fechado de propósito: aplicar `security.capability` exige
+/// `CAP_SETFCAP`, e instalar sem ele produziria um sistema que **diverge do
+/// artefato atestado** — exatamente o silêncio que o `pack` v2 veio eliminar.
+fn apply_xattrs(file: &fs::File, dst: &Path, xattrs: &[(String, Vec<u8>)]) -> Result<()> {
+    use std::os::unix::io::AsRawFd;
+    for (name, value) in xattrs {
+        let c_name = std::ffi::CString::new(name.as_str())?;
+        let rc = unsafe {
+            libc::fsetxattr(
+                file.as_raw_fd(),
+                c_name.as_ptr(),
+                value.as_ptr().cast(),
+                value.len() as libc::size_t,
+                0,
+            )
+        };
+        if rc != 0 {
+            let error = std::io::Error::last_os_error();
+            bail!(
+                "não apliquei o xattr {name} em {}: {error}{}",
+                dst.display(),
+                match error.raw_os_error() {
+                    Some(libc::EPERM) => " (aplicar capability exige CAP_SETFCAP)",
+                    // ENOTSUP e EOPNOTSUPP são o mesmo valor no Linux.
+                    Some(libc::ENOTSUP) => " (o sistema de arquivos do destino não suporta xattr)",
+                    _ => "",
+                }
+            );
+        }
+    }
+    Ok(())
 }
 
 fn hash_sealed_range(file: &fs::File, offset: u64, size: u64) -> Result<String> {
@@ -1507,6 +1595,7 @@ fn index_sealed_stage(file: &fs::File) -> Result<Vec<SealedStageEntry>> {
     let mut entries = Vec::new();
     let mut names = HashSet::new();
     let mut saw_pack_header = false;
+    let mut pack_version = String::new();
     let mut previous_name: Option<Vec<u8>> = None;
     for raw in archive.entries()? {
         let mut entry = raw?;
@@ -1525,11 +1614,15 @@ fn index_sealed_stage(file: &fs::File) -> Result<Vec<SealedStageEntry>> {
             let declared = std::str::from_utf8(declared)
                 .ok()
                 .and_then(|text| text.parse::<usize>().ok());
-            if declared != Some(body.len())
-                || value != format!("DISTROPICA.pack={}\n", crate::pack::PACK_FORMAT).as_bytes()
-            {
+            let version = std::str::from_utf8(value)
+                .ok()
+                .and_then(|text| text.strip_prefix("DISTROPICA.pack="))
+                .and_then(|text| text.strip_suffix('\n'))
+                .filter(|version| crate::pack::format_supported(version));
+            let Some(version) = version.filter(|_| declared == Some(body.len())) else {
                 bail!("artefato usa cabeçalho DISTROPICA.pack inválido/desconhecido");
-            }
+            };
+            pack_version = version.to_string();
             saw_pack_header = true;
             continue;
         }
@@ -1561,6 +1654,17 @@ fn index_sealed_stage(file: &fs::File) -> Result<Vec<SealedStageEntry>> {
             bail!("STAGE contém entrada duplicada: {relative}");
         }
         let mode = entry.header().mode()? & 0o7777;
+        // O cabeçalho PAX por entrada é consumido pelo próprio leitor de tar e
+        // reaparece aqui como extensão da entrada a que pertence.
+        let xattrs = read_entry_xattrs(&mut entry)?;
+        if !xattrs.is_empty() {
+            if pack_version != crate::pack::PACK_FORMAT_XATTR {
+                bail!("artefato declara pack={pack_version} mas traz xattr em {relative:?}");
+            }
+            if !entry_type.is_file() {
+                bail!("artefato declara xattr para {relative:?}, que não é arquivo regular");
+            }
+        }
         let kind = if entry_type.is_dir() {
             SealedStageKind::Directory { mode }
         } else if entry_type.is_symlink() {
@@ -1578,6 +1682,7 @@ fn index_sealed_stage(file: &fs::File) -> Result<Vec<SealedStageEntry>> {
                 offset,
                 size,
                 integrity: hash_sealed_range(file, offset, size)?,
+                xattrs,
             }
         } else if entry_type.is_hard_link() {
             bail!(
@@ -2248,6 +2353,7 @@ impl Journal {
         offset: u64,
         size: u64,
         mode: u32,
+        xattrs: &[(String, Vec<u8>)],
     ) -> Result<()> {
         if let Some(parent) = dst.parent().filter(|parent| *parent != self.root) {
             self.ensure_dir(parent, fs::Permissions::from_mode(0o755), false, false)?;
@@ -2269,6 +2375,9 @@ impl Journal {
             consumed += read as u64;
         }
         output.set_permissions(fs::Permissions::from_mode(mode))?;
+        // Antes do flush final e com o arquivo ainda sob o journal: se a
+        // capability não puder ser aplicada, a instalação inteira reverte.
+        apply_xattrs(&output, dst, xattrs)?;
         output.flush()?;
         Ok(())
     }
@@ -2891,9 +3000,13 @@ fn apply_stage(
                         jrnl.place_symlink(&factory, target)?;
                     }
                     SealedStageKind::Regular {
-                        mode, offset, size, ..
+                        mode,
+                        offset,
+                        size,
+                        xattrs,
+                        ..
                     } => {
-                        jrnl.place_sealed_file(&factory, image, *offset, *size, *mode)?;
+                        jrnl.place_sealed_file(&factory, image, *offset, *size, *mode, xattrs)?;
                     }
                     SealedStageKind::Directory { .. } => unreachable!(),
                 }
@@ -2933,9 +3046,13 @@ fn apply_stage(
                         jrnl.place_symlink(&dst, target)?;
                     }
                     SealedStageKind::Regular {
-                        mode, offset, size, ..
+                        mode,
+                        offset,
+                        size,
+                        xattrs,
+                        ..
                     } => {
-                        jrnl.place_sealed_file(&dst, image, *offset, *size, *mode)?;
+                        jrnl.place_sealed_file(&dst, image, *offset, *size, *mode, xattrs)?;
                     }
                     SealedStageKind::Directory { .. } => unreachable!(),
                 }
@@ -4740,10 +4857,34 @@ fn directory_integrity(metadata: &fs::Metadata, tree_hash: &str) -> String {
 }
 
 pub(crate) fn regular_integrity(mode: u32, content_hash: &str) -> String {
+    regular_integrity_xattr(mode, content_hash, &[])
+}
+
+/// Integridade de um regular incluindo seus xattrs (`pack` v2).
+///
+/// Sem xattr o hash é **idêntico** ao de antes: nenhum registro já gravado
+/// migra, e só o arquivo que de fato carrega capability ganha claim nova. É o
+/// que faz o `verify` acusar quem arrancar o `security.capability` de um
+/// `dumpcap` — antes isso passava batido, porque a claim prendia só modo e
+/// conteúdo.
+pub(crate) fn regular_integrity_xattr(
+    mode: u32,
+    content_hash: &str,
+    xattrs: &[(String, Vec<u8>)],
+) -> String {
     let mut hash = Sha256::new();
     hash.update(b"minitrue-regular-integrity-v2\0");
     hash.update((mode & 0o7777).to_be_bytes());
     hash.update(content_hash.as_bytes());
+    if !xattrs.is_empty() {
+        hash.update(b"minitrue-xattr-v1\0");
+        for (name, value) in xattrs {
+            hash.update((name.len() as u64).to_be_bytes());
+            hash.update(name.as_bytes());
+            hash.update((value.len() as u64).to_be_bytes());
+            hash.update(value);
+        }
+    }
     hex::encode(hash.finalize())
 }
 
@@ -6154,6 +6295,90 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static CNT: AtomicU32 = AtomicU32::new(0);
+
+    /// Ida e volta do `pack` v2: o xattr posto no STAGE atravessa o tar
+    /// selado, chega ao indexador e passa a prender a claim. Sem isso o
+    /// `setcap` de `dumpcap`/`nmap`/`mtr-packet` sumia sem ninguém notar.
+    #[test]
+    fn xattr_atravessa_o_tar_selado_e_prende_a_claim() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-xattr-{}-{n}", std::process::id()));
+        let stage = root.join("stage");
+        fs::create_dir_all(stage.join("usr/bin")).unwrap();
+        let alvo = stage.join("usr/bin/dumpcap");
+        fs::write(&alvo, b"captura").unwrap();
+
+        let pack_para = |destino: &Path| {
+            let arquivo = fs::File::create(destino).unwrap();
+            crate::pack::pack_deterministic(&stage, 1_704_067_200, arquivo).unwrap()
+        };
+
+        // Sem xattr: continua v1, e a claim é a de sempre.
+        let sem = root.join("sem.tar");
+        pack_para(&sem);
+        let entradas = index_sealed_stage(&fs::File::open(&sem).unwrap()).unwrap();
+        let claim_sem = entradas
+            .iter()
+            .find(|e| e.relative == "usr/bin/dumpcap")
+            .unwrap()
+            .integrity("vazio");
+
+        let c_path = std::ffi::CString::new(alvo.as_os_str().as_bytes()).unwrap();
+        let c_name = std::ffi::CString::new("user.distropica.cap").unwrap();
+        let posto = unsafe {
+            libc::lsetxattr(
+                c_path.as_ptr(),
+                c_name.as_ptr(),
+                b"cap_net_raw".as_ptr().cast(),
+                11,
+                0,
+            )
+        } == 0;
+        if !posto {
+            let _ = fs::remove_dir_all(&root);
+            eprintln!("sistema de arquivos sem xattr; teste sem o que provar");
+            return;
+        }
+
+        let com = root.join("com.tar");
+        pack_para(&com);
+        let entradas = index_sealed_stage(&fs::File::open(&com).unwrap()).unwrap();
+        let entrada = entradas
+            .iter()
+            .find(|e| e.relative == "usr/bin/dumpcap")
+            .unwrap();
+        match &entrada.kind {
+            SealedStageKind::Regular { xattrs, .. } => {
+                assert_eq!(xattrs.len(), 1);
+                assert_eq!(xattrs[0].0, "user.distropica.cap");
+                assert_eq!(xattrs[0].1, b"cap_net_raw");
+            }
+            outro => panic!("esperava regular com xattr, veio {outro:?}"),
+        }
+        assert_ne!(
+            claim_sem,
+            entrada.integrity("vazio"),
+            "a claim precisa prender o xattr; senão o verify não acusa quem o arrancar"
+        );
+
+        // Um artefato que se diz v1 e traz xattr está mentindo sobre o que
+        // exige do leitor: recusa, não aplica assim mesmo.
+        let mut bytes = fs::read(&com).unwrap();
+        let at = bytes
+            .windows(18)
+            .position(|w| w == b"DISTROPICA.pack=2\n")
+            .unwrap();
+        bytes[at + 16] = b'1';
+        let mentiroso = root.join("mentiroso.tar");
+        fs::write(&mentiroso, &bytes).unwrap();
+        let erro = index_sealed_stage(&fs::File::open(&mentiroso).unwrap()).unwrap_err();
+        assert!(
+            erro.to_string().contains("xattr"),
+            "erro inesperado: {erro}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn meta_only_binary_registra_intencao_sem_payload() {
