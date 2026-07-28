@@ -1,0 +1,73 @@
+#!/bin/sh
+# Companheiro IPv6 do udhcpc.script: configura somente os campos que o udhcpc6
+# entregou e que este script validou. Diferente do IPv4, ACRESCENTA nameserver
+# ao /etc/resolv.conf em vez de reescrevê-lo — o rcS roda o IPv4 primeiro, e
+# perder o DNS v4 para ganhar o v6 seria uma troca ruim.
+set -f
+
+valid_interface() {
+    case "${1:-}" in
+        ""|-*|.|..|*/*|*[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-]*)
+            return 1
+            ;;
+        *) return 0 ;;
+    esac
+}
+
+# Não é um parser de IPv6 — é uma barreira de caracteres. O risco real aqui é
+# escrever texto arbitrário dentro de /etc/resolv.conf; a forma exata do
+# endereço quem julga é o kernel, que recusa o que não entende.
+valid_ipv6_text() {
+    case "${1:-}" in
+        ""|*[!0123456789abcdefABCDEF:]*) return 1 ;;
+        *:*) ;;
+        *) return 1 ;;
+    esac
+    [ "${#1}" -le 45 ] || return 1
+    return 0
+}
+
+append_nameservers() {
+    resolv_tmp=
+    for server in $1; do
+        valid_ipv6_text "$server" || continue
+        # Já presente (do RA ou de uma renovação anterior): não duplica.
+        if [ -f /etc/resolv.conf ] &&
+            grep -q "^nameserver $server\$" /etc/resolv.conf 2>/dev/null; then
+            continue
+        fi
+        if [ -z "$resolv_tmp" ]; then
+            # Mesmo diretório do destino: o rename final é atômico.
+            resolv_tmp=$(mktemp /etc/.resolv.conf.udhcpc6.XXXXXX) || return 1
+            trap 'rm -f "$resolv_tmp"' 0 HUP INT TERM
+            [ ! -f /etc/resolv.conf ] || cat /etc/resolv.conf > "$resolv_tmp" || return 1
+        fi
+        printf 'nameserver %s\n' "$server" >> "$resolv_tmp" || return 1
+    done
+    if [ -n "$resolv_tmp" ]; then
+        chmod 0644 "$resolv_tmp" || return 1
+        mv -f "$resolv_tmp" /etc/resolv.conf || return 1
+        resolv_tmp=
+        trap - 0 HUP INT TERM
+    fi
+    return 0
+}
+
+valid_interface "${interface:-}" || exit 1
+
+case "${1:-}" in
+    deconfig)
+        [ -z "${ipv6:-}" ] || ip -6 addr del "$ipv6/128" dev "$interface" 2>/dev/null
+        ;;
+    bound|renew)
+        if [ -n "${ipv6:-}" ]; then
+            valid_ipv6_text "$ipv6" || exit 1
+            ip -6 addr add "$ipv6/128" dev "$interface" 2>/dev/null
+        fi
+        # A rota padrão v6 vem do Router Advertisement, tratada pelo kernel
+        # (SLAAC); o DHCPv6 do busybox não entrega gateway.
+        append_nameservers "${dns:-}" || exit 1
+        ;;
+esac
+
+exit 0

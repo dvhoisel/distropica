@@ -65,13 +65,17 @@ CONFIG_NFT_FIB=y
 CONFIG_NFT_FIB_INET=y
 CONFIG_NFT_FIB_IPV4=y
 CONFIG_NFT_FIB_IPV6=y
+# Tabelas multiplas de politica em IPv6: e delas que o wg-quick com
+# Table=auto depende para instalar a regra por marca no lado v6.
+CONFIG_IPV6=y
+CONFIG_IPV6_MULTIPLE_TABLES=y
 KCONFIG
     make olddefconfig
     # Guarda: o Ministério EXIGE assinatura. Aborta AQUI se um pilar caiu — em vez
     # de descobrir no boot que um .ko não-assinado teria carregado.
     for s in MODULE_SIG MODULE_SIG_FORCE MODULE_SIG_ALL SYSTEM_TRUSTED_KEYRING \
         USER_NS TUN WIREGUARD NETFILTER NF_TABLES NF_TABLES_INET NFT_CT \
-        NFT_FIB_INET NF_CONNTRACK; do
+        NFT_FIB_INET NF_CONNTRACK IPV6 IPV6_MULTIPLE_TABLES; do
         grep -q "^CONFIG_$s=y\$" .config || {
             echo "FATAL: falta CONFIG_$s=y no .config"
             grep -E 'MODULE_SIG|TRUSTED_KEYRING' .config

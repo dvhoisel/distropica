@@ -2,8 +2,8 @@ NAME=base
 VERSION=0.2
 KIND=source
 TOOLCHAIN=none
-DEPS="busybox"
-ABOUT="Config de boot da Fase B (SPEC-0006): /etc/inittab (busybox init → getty → login), rc.d/rcS (monta proc/sys/devtmpfs/tmpfs, mdev, hostname e DHCP IPv4), rc.d/rcK, hostname, motd, os-release e a licença da Distrópica. Receita de MONTAGEM: sem SRC (não baixa nada), o build() gera arquivos legíveis e instala auxiliares que fazem parte do mesmo snapshot da receita. Instala defaults de /etc via fábrica (/usr/share/factory/etc → materializa em /etc). NÃO gerencia contas: passwd/shadow são estado do admin (um futuro base-files/adduser + doas cuida disso; SPEC-0006 §5)."
+DEPS="busybox ndisc6"
+ABOUT="Config de boot da Fase B (SPEC-0006): /etc/inittab (busybox init → getty → login), rc.d/rcS (monta proc/sys/devtmpfs/tmpfs, mdev, hostname, DHCP IPv4 e, em IPv6, DHCPv6 mais o RDNSS do Router Advertisement lido de uma vez pelo rdisc6 — o kernel faz SLAAC sozinho mas ignora o RDNSS, e o busybox nao sabe le-lo), rc.d/rcK, hostname, motd, os-release e a licença da Distrópica. Receita de MONTAGEM: sem SRC (não baixa nada), o build() gera arquivos legíveis e instala auxiliares que fazem parte do mesmo snapshot da receita. Instala defaults de /etc via fábrica (/usr/share/factory/etc → materializa em /etc). NÃO gerencia contas: passwd/shadow são estado do admin (um futuro base-files/adduser + doas cuida disso; SPEC-0006 §5)."
 LICENSE="GPL-3.0-or-later"
 
 build() {
@@ -11,6 +11,8 @@ build() {
         "$STAGE/usr/share/licenses/distropica"
     install -m 0755 "$WORK/udhcpc.script" \
         "$STAGE/etc/udhcpc/default.script"
+    install -m 0755 "$WORK/udhcpc6.script" \
+        "$STAGE/etc/udhcpc/default6.script"
     install -m 0644 "$WORK/GPL-3.0-or-later.txt" \
         "$STAGE/usr/share/licenses/distropica/GPL-3.0-or-later.txt"
     install -m 0644 "$WORK/NOTICE" \
@@ -30,7 +32,7 @@ INITTAB
     cat > "$STAGE/etc/rc.d/rcS" <<'RCS'
 #!/bin/sh
 # rcS — inicializacao unica (SPEC-0006 §3): monta o basico, popula /dev,
-# configura hostname e tenta DHCP IPv4 sem tornar a rede requisito do login.
+# configura hostname e tenta rede (IPv4 e IPv6) sem torna-la requisito do login.
 BB=/bin/busybox
 $BB mount -t proc     proc /proc 2>/dev/null
 $BB mount -t sysfs    sys  /sys  2>/dev/null
@@ -53,6 +55,25 @@ for network_path in /sys/class/net/*; do
         echo "distropica: rede configurada em $interface"
     else
         echo "distropica: DHCP indisponivel em $interface; seguindo sem rede"
+    fi
+    # IPv6. Endereco e rota o kernel obtem sozinho por SLAAC ao receber o
+    # Router Advertisement; o que falta e DNS. Duas fontes, nesta ordem, ambas
+    # nao-fatais: DHCPv6, e o RDNSS do proprio RA — que o kernel nao expoe e o
+    # busybox nao le, dai o rdisc6 (uma execucao, sem daemon).
+    $BB udhcpc6 -n -q -t 2 -T 2 -i "$interface" \
+        -s /etc/udhcpc/default6.script >/dev/null 2>&1 || true
+    if ! $BB grep -q '^nameserver .*:' /etc/resolv.conf 2>/dev/null; then
+        rdisc6 -1 -n -w 3000 "$interface" 2>/dev/null |
+            $BB sed -n 's/^ *Recursive DNS server *: *//p' |
+            while read -r nameserver; do
+                case "$nameserver" in
+                    ""|*[!0123456789abcdefABCDEF:]*) continue ;;
+                    *:*) ;;
+                    *) continue ;;
+                esac
+                $BB grep -q "^nameserver $nameserver\$" /etc/resolv.conf 2>/dev/null && continue
+                printf 'nameserver %s\n' "$nameserver" >> /etc/resolv.conf
+            done
     fi
 done
 echo "distropica: rcS ok (mounts, mdev, hostname)"
