@@ -205,6 +205,72 @@ configure_musl_cc() {
     export CC_x86_64_unknown_linux_musl
 }
 
+# O CC acima serve ao alvo Rust, onde `clang` basta: o toolchain Rust traz a
+# própria musl e usa o CC apenas como driver de link. Para C isso não vale —
+# um `clang` pelado compila contra os headers e a libc do HOST. O resultado
+# passaria pelo require_static (glibc estático também não tem INTERP) e a
+# mídia levaria um mke2fs glibc dizendo-se musl. A prova é o pré-processador:
+# a musl não define __GLIBC__.
+require_musl_cc() {
+    probe=$WORK/musl-probe
+    mkdir -p "$probe"
+    cat > "$probe/probe.c" <<'EOF'
+#include <stdlib.h>
+#ifdef __GLIBC__
+#error "este compilador C é glibc, não musl"
+#endif
+int main(void) { return 0; }
+EOF
+    "$@" -static -o "$probe/probe" "$probe/probe.c" >/dev/null 2>&1 || return 1
+    program_headers=$(readelf -l "$probe/probe" 2>/dev/null) || return 1
+    printf '%s\n' "$program_headers" | grep -q 'INTERP' && return 1
+    return 0
+}
+
+# Compilador C musl para o mke2fs. Duas origens aceitas, nesta ordem:
+#
+#   musl-gcc / x86_64-linux-musl-gcc — o caminho convencional, pacote do host;
+#   zig cc -target x86_64-linux-musl — o Zig É um compilador C musl completo,
+#     traz os próprios headers, e nesta distro ele não é uma dependência nova:
+#     é a semente pinada e conferida por hash do SPEC-0005. Preferir um insumo
+#     que o projeto já verifica a um pacote que o host por acaso tenha é a
+#     mesma regra que vale para o resto da árvore.
+#
+# `clang` pelado NÃO entra: é glibc disfarçado, e é exatamente o que o probe
+# acima existe para barrar.
+select_e2fs_cc() {
+    if [ -n "${E2FS_CC:-}" ]; then
+        # shellcheck disable=SC2086
+        require_musl_cc $E2FS_CC || {
+            echo "erro: E2FS_CC='$E2FS_CC' não compila C musl estático" >&2
+            exit 1
+        }
+        echo "$E2FS_CC"
+        return 0
+    fi
+    for candidate in x86_64-linux-musl-gcc musl-gcc; do
+        command -v "$candidate" >/dev/null 2>&1 || continue
+        require_musl_cc "$candidate" && { echo "$candidate"; return 0; }
+    done
+    zig_binary=${ZIG:-$(command -v zig 2>/dev/null || true)}
+    if [ -n "$zig_binary" ] && [ -x "$zig_binary" ]; then
+        wrapper=$WORK/zig-musl-cc
+        cat > "$wrapper" <<EOF
+#!/bin/sh
+exec "$zig_binary" cc -target x86_64-linux-musl "\$@"
+EOF
+        chmod 755 "$wrapper"
+        require_musl_cc "$wrapper" && { echo "$wrapper"; return 0; }
+    fi
+    echo "erro: nenhum compilador C musl disponível para o mke2fs estático" >&2
+    echo "o initramfs não tem glibc, então um mke2fs glibc não rodaria ali" >&2
+    echo "forneça um destes:" >&2
+    echo "  musl-gcc no PATH (pacote musl-tools)" >&2
+    echo "  ZIG=/caminho/para/zig (a semente pinada desta distro serve)" >&2
+    echo "  E2FS_CC='<comando>' que compile C musl estático" >&2
+    exit 1
+}
+
 command -v readelf >/dev/null 2>&1 || { echo "erro: readelf ausente" >&2; exit 1; }
 if [ -z "$MINIPAX_BIN" ]; then MINIPAX_BIN=$(build_rust_binary minipax); fi
 if [ -z "$MINITRUE_BIN" ]; then
@@ -230,8 +296,8 @@ build_static_mke2fs() {
     rm -rf -- "$e2fs_src"
     mkdir -p "$e2fs_src"
     tar -xJf "$E2FSPROGS_TAR" -C "$e2fs_src" --strip-components=1
-    configure_musl_cc
-    e2fs_cc=${CC_x86_64_unknown_linux_musl:-${CC:-cc}}
+    e2fs_cc=$(select_e2fs_cc)
+    echo "mke2fs estático: compilando com $e2fs_cc" >&2
     (
         cd "$e2fs_src"
         CC="$e2fs_cc" LDFLAGS=-static ./configure \
@@ -335,7 +401,7 @@ set_config --disable DEBUG_INFO_BTF
 set_config --disable LOCALVERSION_AUTO
 set_config --set-str LOCALVERSION "-distropica-live"
 set_config --disable IKCONFIG
-for symbol in SOUND NETWORK_FILESYSTEMS NFS_FS NETFILTER SECURITY_SELINUX \
+for symbol in SOUND NETWORK_FILESYSTEMS NFS_FS SECURITY_SELINUX \
     IO_URING HIBERNATION SUSPEND KEXEC KEXEC_FILE CRASH_DUMP CGROUPS \
     PERF_EVENTS FTRACE BPF_SYSCALL NUMA CPU_FREQ WIRELESS; do
     set_config --disable "$symbol"
@@ -361,6 +427,19 @@ for symbol in BLK_DEV_NVME NVME_CORE VMD ATA_GENERIC \
     USB_EHCI_PCI USB_STORAGE USB_UAS HID HID_GENERIC USB_HID \
     E1000 E1000E IGB IGC R8169 \
     CPU_IDLE INTEL_IDLE MICROCODE ACPI_BUTTON; do
+    set_config --enable "$symbol"
+done
+# Perfil de rede do sistema INSTALADO. Este kernel não é só o do instalador:
+# a ESP do alvo recebe este mesmo BOOTX64.EFI, então é ele que roda depois do
+# boot. Ligar os knobs em newspeak/linux não muda nada enquanto isso for
+# verdade — e embarcar nftables e wireguard-tools contra um kernel sem
+# NETFILTER nem WIREGUARD seria distribuir userspace que não tem com o que
+# falar. Espelha o que o alvo declara; a divergência acaba quando o instalado
+# passar a bootar o próprio kernel.
+for symbol in USER_NS TUN WIREGUARD \
+    NETFILTER NETFILTER_ADVANCED NETFILTER_NETLINK NF_CONNTRACK \
+    NF_TABLES NF_TABLES_INET NFT_CT NFT_FIB NFT_FIB_INET \
+    NFT_FIB_IPV4 NFT_FIB_IPV6 IPV6 IPV6_MULTIPLE_TABLES; do
     set_config --enable "$symbol"
 done
 set_config --set-str SYSTEM_TRUSTED_KEYS ""
@@ -411,7 +490,9 @@ for symbol in EFI EFI_STUB BLK_DEV_INITRD VIRTIO_BLK VIRTIO_NET BLK_DEV_SR \
     VT_HW_CONSOLE_BINDING CRC32 INPUT_KEYBOARD KEYBOARD_ATKBD SERIO \
     SERIO_I8042 VT VT_CONSOLE VGA_CONSOLE FONT_SUPPORT FONT_8x16 \
     BLK_DEV_NVME USB_XHCI_HCD USB_XHCI_PCI USB_STORAGE USB_HID HID_GENERIC \
-    E1000E R8169; do
+    E1000E R8169 \
+    USER_NS TUN WIREGUARD NETFILTER NF_TABLES NF_TABLES_INET NFT_CT \
+    NFT_FIB_INET NF_CONNTRACK IPV6 IPV6_MULTIPLE_TABLES; do
     grep -q "^CONFIG_${symbol}=y$" "$SOURCE/.config" || {
         echo "erro: kernel não fixou CONFIG_${symbol}=y" >&2; exit 1;
     }
