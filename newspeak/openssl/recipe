@@ -27,4 +27,16 @@ build() {
     # install_sw + install_ssldirs: libs/bin/headers + os diretórios de config,
     # SEM as man pages (install_docs é lento e não é superfície da distro hoje).
     make install_sw install_ssldirs DESTDIR="$STAGE"
+    # O install_ssldirs deixa em /etc/ssl/misc dois scripts perl — CA.pl e
+    # tsget.pl — que exigem /usr/bin/perl e /usr/bin/env sem que a receita os
+    # declare. É a mesma espécie de erro que o glibc cometia com ldd e
+    # tzselect, e a resposta é a mesma: são utilitários de mantenedor, não
+    # ABI. Declarar perl em DEPS arrastaria o interpretador inteiro para a
+    # closure de RUNTIME de todo alvo que tenha openssl — e o openssl está na
+    # closure por causa do nmap e do tcpdump. O tsget é link para o tsget.pl:
+    # deixá-lo seria publicar um link pendente.
+    rm -f "$STAGE/etc/ssl/misc/CA.pl" \
+          "$STAGE/etc/ssl/misc/tsget.pl" \
+          "$STAGE/etc/ssl/misc/tsget"
+    rmdir "$STAGE/etc/ssl/misc" 2>/dev/null || true
 }

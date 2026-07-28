@@ -3,27 +3,53 @@ VERSION=1.1.6
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc libmnl libnftnl mathlibs-glibc"
-BUILD_DEPS="make gcc-pass2 binutils-glibc flex bison"
-ABOUT="Ferramenta de espaço de usuário do netfilter: é ela que carrega regra no kernel. Sem nftables a distro não tem filtragem de pacote nenhuma, e o wg-quick com 'Table = auto' não consegue instalar a regra por marca de que depende. Compilado sem CLI interativa, sem JSON e sem página de manual, para não arrastar readline, jansson e a cadeia docbook. Usa libgmp, fornecida por mathlibs-glibc."
+BUILD_DEPS="make gcc-pass2 binutils-glibc flex bison pkgconf bash"
+ABOUT="Ferramenta de espaço de usuário do netfilter: é ela que carrega regra no kernel. Sem nftables a distro não tem filtragem de pacote nenhuma, e o wg-quick com 'Table = auto' não consegue instalar a regra por marca de que depende. Compilado sem CLI interativa e sem página de manual, para não arrastar readline e a cadeia docbook; o JSON já é opt-in no upstream e fica de fora. Usa libgmp, fornecida por mathlibs-glibc."
 LICENSE=GPL-2.0-only
 SRC="https://ftp.netfilter.org/pub/nftables/nftables-$VERSION.tar.xz"
 SHA256=372931bda8556b310636a2f9020adc710f9bab66f47efe0ce90bff800ac2530c
 
 build() {
     tar -xJf "$DL" --strip-components=1
-    # Caminhos explícitos no lugar do pkg-config, como em libnftnl.
-    ./configure \
+    # -rpath-link,/usr/lib: padrão recorrente do ld nativo desta árvore (o
+    # mesmo de elfutils e openssl). O `nft` liga contra a libnftables.so, que
+    # por sua vez precisa da libnftnl.so; o ld não resolve esse dep TRANSITIVO
+    # em /usr/lib sozinho e acusa nftnl_chain_unset@LIBNFTNL_11 e companhia
+    # como indefinidos, embora a biblioteca esteja instalada e os exporte.
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # CONFIG_SHELL=bash: o config.status que este configure GERA usa um laço
+    # estilo C, que o ash do busybox — o /bin/sh desta distro — recusa com
+    # "bad for loop variable". Não é o configure que precisa de bash, é o
+    # script que ele escreve; por isso a dependência é real e está declarada
+    # em BUILD_DEPS, e por isso o bash tem de ser invocado explicitamente
+    # também como interpretador, para que o valor se propague ao config.status.
+    #
+    # As opções são só as que este configure de fato tem. Uma versão anterior
+    # desta receita passava --disable-python e --disable-json, que não existem:
+    # o autoconf apenas avisa "unrecognized options" e segue, então a receita
+    # afirmava desligar coisas que nunca esteve ligando. JSON já é opt-in
+    # (--with-json), e as ligações Python saíram do configure faz tempo.
+    CONFIG_SHELL=/usr/bin/bash /usr/bin/bash ./configure \
         --prefix=/usr \
         --libdir=/usr/lib \
         --sbindir=/usr/bin \
         --without-cli \
-        --disable-python \
         --disable-man-doc \
-        --disable-json \
         LIBMNL_CFLAGS="-I/usr/include" \
         LIBMNL_LIBS="-lmnl" \
         LIBNFTNL_CFLAGS="-I/usr/include" \
         LIBNFTNL_LIBS="-lnftnl"
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
+    # Os exemplos em share/doc trazem `#!/usr/sbin/nft -f`, caminho que NÃO
+    # existe aqui: esta receita instala o nft em /usr/bin, porque /usr/sbin é
+    # diretório real nesta árvore e fica fora do PATH. Deixá-los como estão
+    # publicaria documentação executável apontando para um binário inexistente
+    # — e a auditoria de fechamento acusa, corretamente, requisito sem
+    # provedor. Reescrever o shebang preserva os exemplos e os torna
+    # verdadeiros; apagá-los seria jogar fora documentação por um caminho.
+    for exemplo in "$STAGE"/usr/share/doc/nftables/examples/*.nft; do
+        [ -f "$exemplo" ] || continue
+        sed -i '1s|^#!/usr/sbin/nft|#!/usr/bin/nft|' "$exemplo"
+    done
 }

@@ -2,9 +2,9 @@ NAME=ndisc6
 VERSION=1.0.8
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc"
+DEPS="glibc busybox"
 BUILD_DEPS="make gcc-pass2 binutils-glibc"
-ABOUT="Ferramentas de descoberta IPv6. Entra por um motivo específico: o kernel faz SLAAC sozinho, mas ignora o RDNSS do Router Advertisement, e o busybox não sabe lê-lo — numa rede que anuncia DNS só por RA, o sistema ficaria com endereço IPv6 e sem resolver nome nenhum. O rdisc6 resolve isso em UMA execução: manda um Router Solicitation, imprime o RA e sai, sem daemon — o que importa num sistema que ainda não tem gerenciador de serviço. Traz junto ndisc6, tcptraceroute6 e traceroute6, úteis para diagnóstico. Sem os auxiliares que exigem privilégio permanente."
+ABOUT="Ferramentas de descoberta IPv6. Entra por um motivo específico: o kernel faz SLAAC sozinho, mas ignora o RDNSS do Router Advertisement, e o busybox não sabe lê-lo — numa rede que anuncia DNS só por RA, o sistema ficaria com endereço IPv6 e sem resolver nome nenhum. O rdisc6 resolve isso em UMA execução: manda um Router Solicitation, imprime o RA e sai, sem daemon — o que importa num sistema que ainda não tem gerenciador de serviço. Traz junto ndisc6, tcptraceroute6 e traceroute6, úteis para diagnóstico. O daemon rdnssd é removido do STAGE, não desligado por flag: o configure do ndisc6 não tem opção para isso."
 LICENSE=GPL-2.0-only
 SRC="https://www.remlab.net/files/ndisc6/ndisc6-$VERSION.tar.bz2"
 SHA256=1f2fb2dc1172770aa5a09d39738a44d8b753cc5e2e25e306ca78682f9fea0b4f
@@ -12,13 +12,47 @@ SHA256=1f2fb2dc1172770aa5a09d39738a44d8b753cc5e2e25e306ca78682f9fea0b4f
 build() {
     # bzip2 por um cano, como em libmnl: não se presume tar com bz2 embutido.
     bunzip2 -c "$DL" | tar -x --strip-components=1
-    # --disable-rdnssd: o daemon de RDNSS é justamente o que NÃO queremos —
-    # sem gerenciador de serviço ele não teria onde viver. O rcS usa o rdisc6
-    # de uma vez só.
+    # --sbindir=/usr/bin: a árvore é usr-merged por /sbin → usr/bin, mas NÃO
+    # existe /usr/sbin → bin. Sem isto o rdisc6 vai para /usr/sbin, fora do
+    # PATH (/usr/bin:/bin) — o rcS não o acharia e todo o motivo desta receita
+    # existir morreria em silêncio, com o manifesto parecendo correto.
+    # --sysconfdir / --localstatedir: derivados de --prefix, gravariam em
+    # /usr/etc e /usr/var, que não são lugares desta árvore.
+    # --disable-nls: sem isso o ndisc6 instala traduções em
+    # /usr/share/locale/<lingua>/LC_MESSAGES, e esses diretórios já são
+    # reivindicados como árvore pelo glibc — o minitrue acusa doublethink e
+    # recusa, corretamente. Duas saídas existiam: fatiar a claim de diretório
+    # do glibc ou não gerar as traduções. A segunda é a certa aqui, porque a
+    # distro ainda não tem política de idioma nenhuma (todo build roda sob
+    # LC_ALL=C) e traduções de uma ferramenta de diagnóstico não são
+    # superfície. É a mesma escolha já feita em outras receitas desta árvore.
     ./configure \
         --prefix=/usr \
-        --disable-rdnssd \
+        --sbindir=/usr/bin \
+        --sysconfdir=/etc \
+        --localstatedir=/var \
+        --disable-nls \
         --disable-suid-install
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
+    # O rdnssd é um DAEMON, e esta distro não tem gerenciador de serviço para
+    # supervisioná-lo; o rcS lê o RDNSS com o rdisc6 numa execução única.
+    # Não existe --disable-rdnssd no configure do ndisc6 — conferido na lista
+    # de opções, e o autoconf ignora --disable-* desconhecido em silêncio. Foi
+    # assim que uma versão anterior desta receita passou a AFIRMAR que não
+    # entregava o daemon enquanto o entregava. Remover do STAGE é a única
+    # forma de não entregá-lo que se pode conferir no manifesto.
+    # O dnssort é um script perl auxiliar de ordenação de nomes DNS. Entregá-lo
+    # obrigaria o ndisc6 a declarar perl em DEPS, arrastando o interpretador
+    # inteiro para a closure de RUNTIME por causa de um utilitário que nada
+    # nesta distro chama — o rcS usa o rdisc6, não o dnssort. Mesma decisão do
+    # CA.pl no openssl.
+    rm -f "$STAGE/usr/bin/dnssort" "$STAGE/usr/share/man/man1/dnssort.1"
+    rm -f "$STAGE/usr/bin/rdnssd" "$STAGE/usr/share/man/man8/rdnssd.8"
+    rm -rf "$STAGE/etc/rdnssd" "$STAGE/var/run/rdnssd"
+    # Os diretórios que sobram vazios precisam sair também: um diretório vazio
+    # no STAGE vira claim `d:` — ou seja, o pacote passaria a reivindicar
+    # /etc e /var INTEIROS, e o minitrue recusa, com razão, porque eles já
+    # têm dono e conteúdo.
+    rmdir "$STAGE/var/run" "$STAGE/var" "$STAGE/etc" 2>/dev/null || true
 }

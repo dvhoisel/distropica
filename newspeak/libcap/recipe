@@ -13,6 +13,19 @@ build() {
     tar -xJf "$DL" --strip-components=1
     # Makefile puro, sem autoconf. GOLANG=no evita procurar toolchain Go;
     # PAM_CAP=no evita um módulo PAM que esta base não tem onde usar.
-    make -j"$JOBS" prefix=/usr lib=lib GOLANG=no PAM_CAP=no
-    make install DESTDIR="$STAGE" prefix=/usr lib=lib GOLANG=no PAM_CAP=no
+    #
+    # USE_GPERF=no explícito: o Make.Rules do libcap decide isso por
+    # `which gperf`, o que faz a saída depender do que existe no ambiente de
+    # build em vez do que a receita declara. Hoje não há gperf nesta árvore e
+    # o resultado seria o mesmo; escrever `no` é o que impede que acrescentar
+    # gperf um dia mude este artefato sem que nenhuma receita tenha mudado.
+    # sbin=bin: o Make.Rules monta SBINDIR a partir da variável `sbin`, que
+    # vale `sbin` por padrão — e setcap/getcap/capsh iriam para /usr/sbin, que
+    # nesta árvore é diretório real e está fora do PATH. lib=lib pelo mesmo
+    # motivo, e por um segundo: o valor padrão de `lib` sai de um `ldd
+    # /usr/bin/ld`, e esta distro deixou de entregar o ldd de propósito.
+    make -j"$JOBS" prefix=/usr lib=lib sbin=bin GOLANG=no PAM_CAP=no \
+        USE_GPERF=no
+    make install DESTDIR="$STAGE" prefix=/usr lib=lib sbin=bin GOLANG=no \
+        PAM_CAP=no USE_GPERF=no
 }

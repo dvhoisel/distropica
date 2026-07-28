@@ -2,7 +2,7 @@ NAME=bash
 VERSION=5.3
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc ncurses"
+DEPS="glibc ncurses busybox"
 BUILD_DEPS="make gcc-pass2 binutils-glibc"
 ABOUT="GNU Bash 5.3. Entra por necessidade demonstrada, não por gosto: a auditoria de fechamento (SPEC-0013 §4) revelou que a base não tinha shell bash algum, e há software que exige exatamente ele no shebang — o wg-quick do wireguard-tools é o caso concreto. Não é dependência da base: quem precisa dele declara em DEPS. NÃO assume /bin/sh, que continua sendo o ash do busybox; bash fica só em /usr/bin/bash, para quem o pede pelo shebang. Depende de ncurses por causa do termcap do readline."
 LICENSE=GPL-3.0-or-later
@@ -13,8 +13,15 @@ build() {
     tar -xzf "$DL" --strip-components=1
     # --without-bash-malloc: o alocador interno do bash é mais antigo que o da
     # glibc e não é o que se quer numa base que já tem uma libc canônica.
+    # --disable-nls: o bash traz 41 traduções e as instala em
+    # /usr/share/locale/<lingua>/LC_MESSAGES — diretórios que o glibc já
+    # reivindica como árvore, o que o minitrue acusa como doublethink e
+    # recusa. A distro não tem política de idioma (tudo roda sob LC_ALL=C),
+    # então não há o que perder; é a mesma escolha feita em ndisc6 e
+    # e2fsprogs. Dos onze pacotes deste perfil, o bash é o único com .po.
     ./configure \
         --prefix=/usr \
+        --disable-nls \
         --without-bash-malloc \
         --with-curses
     make -j"$JOBS"

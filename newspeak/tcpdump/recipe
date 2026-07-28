@@ -3,7 +3,7 @@ VERSION=4.99.6
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc libpcap openssl"
-BUILD_DEPS="make gcc-pass2 binutils-glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf"
 ABOUT="Captura e leitura de pacote na linha de comando, do mesmo projeto da libpcap. Entra porque o tshark ainda não é alcançável: o Wireshark exige CMake, GLib e libgcrypt, e a GLib se constrói com Meson — nove receitas de corrente. O tcpdump usa a libpcap que já está aqui e o openssl para descriptografar ESP; nada de novo no ferramental de build. Grava .pcap para analisar noutro lugar, que é o fluxo que este perfil escolheu quando recusou arrastar Qt para dentro da distro. Sem cap_net_raw ele exige root, como qualquer captura."
 LICENSE=BSD-3-Clause
 SRC="https://www.tcpdump.org/release/tcpdump-$VERSION.tar.xz"
@@ -11,6 +11,15 @@ SHA256=40a8cefd45f0d2a06827e6658efb830d484868c449ad80f7efb33516af44f3da
 
 build() {
     tar -xJf "$DL" --strip-components=1
+    # -rpath-link,/usr/lib: mesma causa de nftables e nmap, e aqui ela falha do
+    # jeito mais traiçoeiro. O configure ACHA a libcrypto por pkg-config, mas o
+    # teste de LINK de EVP_CIPHER_CTX_new falha — o ld não resolve o libz.so.1
+    # de que a libcrypto depende — e o autoconf registra "no". O tcpdump então
+    # compila o próprio shim legado dessas funções, que colide com a declaração
+    # real do evp.h. O erro aparece como redefinição, a 70 linhas de distância
+    # da causa. Teste de link que falha por biblioteca transitiva não dá erro:
+    # dá resposta errada.
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
     # --disable-smb: o dissecador SMB é desabilitado pelo próprio upstream por
     # histórico de vulnerabilidade; não se liga o que o autor desaconselha.
     ./configure \

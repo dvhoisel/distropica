@@ -2,7 +2,7 @@ NAME=e2fsprogs
 VERSION=1.47.4
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc"
+DEPS="glibc busybox"
 BUILD_DEPS="make gcc-pass2 binutils-glibc"
 SUPERSEDES="busybox"
 ABOUT="Ferramentas do ext2/3/4 no sistema instalado: e2fsck, mke2fs, tune2fs, resize2fs, dumpe2fs. A raiz passou a ser ext4, e um sistema que não sabe verificar nem redimensionar o próprio disco não é um sistema — é uma demonstração. Supersede os applets equivalentes do busybox, que só fazem ext2. Constrói as próprias libuuid/libblkid porque esta árvore ainda não tem util-linux; sem o wrapper genérico fsck e sem uuidd, que exigiria um daemon. O instalador NÃO usa este pacote: a mídia leva um mke2fs estático próprio, porque o initramfs não tem glibc."
@@ -12,14 +12,41 @@ SHA256=fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b
 
 build() {
     tar -xJf "$DL" --strip-components=1
+    # -rpath-link: quinta ocorrência do mesmo padrão nesta árvore (nftables,
+    # nmap, tcpdump, mtr), e a única em que a biblioteca transitiva é do
+    # PRÓPRIO pacote: o e2fsprogs constrói libuuid e libblkid em lib/, e a
+    # libblkid.so tem NEEDED libuuid.so.1. Ao ligar o e2image o ld avisa
+    # "libuuid.so.1, needed by ../lib/libblkid.so, not found (try using -rpath
+    # or -rpath-link)" e falha com símbolos indefinidos. ../lib cobre os
+    # programas em subdiretório de primeiro nível, que são todos.
+    export LDFLAGS="-Wl,-rpath-link,../lib -Wl,-rpath-link,/usr/lib"
     # --sbindir=/usr/bin: a árvore é usr-merged e /sbin é link para usr/bin.
     # --disable-fsck evita colidir com o wrapper do busybox por um binário que
     # não acrescenta nada; os fsck.ext* específicos continuam vindo daqui.
+    # --enable-libuuid/--enable-libblkid EXPLÍCITOS, e o motivo é sério: sem
+    # eles o e2fsprogs decide em tempo de configure se usa bibliotecas "do
+    # sistema" ou constrói as próprias. Como esta árvore não tem util-linux,
+    # quem instala libuuid/libblkid é ele mesmo — então a partir da SEGUNDA
+    # construção ele encontra a própria instalação anterior, conclui que o
+    # sistema já as fornece, e não constrói nem instala nada. Foi o que
+    # aconteceu: a primeira construção entregou libblkid, libuuid, o programa
+    # blkid e seus .pc, e o busybox cedeu /usr/bin/blkid; a segunda não
+    # entregou nada disso, e o caminho cedido ficou órfão — o rectify recusou
+    # a reconstrução seguinte com "cessão provisional incoerente", que é o
+    # sintoma, não a doença.
+    #
+    # A mesma receita produzindo dois pacotes diferentes conforme o que já
+    # está instalado é exatamente a não-hermeticidade que a SPEC-0013 §5
+    # aponta como aberta (o runner ainda expõe /usr/bin:/bin do rootfs).
+    # Enquanto a view de build não for fechada, declarar explicitamente é a
+    # defesa disponível.
     ./configure \
         --prefix=/usr \
         --libdir=/usr/lib \
         --sbindir=/usr/bin \
         --enable-elf-shlibs \
+        --enable-libuuid \
+        --enable-libblkid \
         --disable-nls \
         --disable-fsck \
         --disable-uuidd \
@@ -27,4 +54,64 @@ build() {
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
     make install-libs DESTDIR="$STAGE"
+
+    # O e2fsprogs cria seus apelidos por HARDLINK, e o rectify os recusa: o
+    # manifesto mundo-B não representa grupos de hardlink, e materializar um
+    # arquivo por caminho mudaria a topologia que foi atestada. Duas saídas
+    # existiam. Quebrar em cópias independentes, como faz o perl aqui, custaria
+    # cerca de 40 MB — o e2fsck sozinho aparece quatro vezes. Converter em
+    # symlink custa nada e preserva o despacho por argv[0], de que o mkfs.ext4
+    # e o fsck.ext4 dependem para escolher o tipo de sistema de arquivos: o
+    # nome usado na invocação é o que chega ao programa, não o do alvo.
+    alias_to() {
+        directory=$1
+        target=$2
+        shift 2
+        for alias_name do
+            rm -f "$STAGE/$directory/$alias_name"
+            ln -s "$target" "$STAGE/$directory/$alias_name"
+        done
+    }
+    alias_to usr/bin e2fsck   fsck.ext2 fsck.ext3 fsck.ext4
+    alias_to usr/bin mke2fs   mkfs.ext2 mkfs.ext3 mkfs.ext4
+    alias_to usr/bin tune2fs  e2label findfs
+    alias_to usr/bin dumpe2fs e2mmpstatus
+    alias_to usr/share/man/man8 e2fsck.8 fsck.ext2.8 fsck.ext3.8 fsck.ext4.8
+    alias_to usr/share/man/man8 mke2fs.8 mkfs.ext2.8 mkfs.ext3.8 mkfs.ext4.8
+    alias_to usr/share/man/man5 ext2.5 ext3.5 ext4.5
+    alias_to usr/share/man/man3 uuid_generate.3 \
+        uuid_generate_random.3 uuid_generate_time.3
+    alias_to usr/include/et ../com_err.h com_err.h
+
+    # e2scrub e e2scrub_all fazem verificação ONLINE por snapshot de LVM — o
+    # próprio e2scrub_all diz "can't find lvcreate --- is lvm2 installed?".
+    # Esta distro não tem LVM, então os dois só saberiam imprimir esse erro; e
+    # são scripts `#!/bin/bash`, o que faria o e2fsprogs declarar bash em DEPS
+    # para entregar algo que nunca funcionaria aqui. Mesma decisão do ldd no
+    # glibc e do CA.pl no openssl: não é ABI, não entra.
+    rm -f "$STAGE/usr/bin/e2scrub" "$STAGE/usr/bin/e2scrub_all" \
+          "$STAGE/usr/bin/e2scrub_all_cron" \
+          "$STAGE/usr/share/man/man8/e2scrub.8" \
+          "$STAGE/usr/share/man/man8/e2scrub_all.8"
+    rm -rf "$STAGE/etc/e2scrub.conf" "$STAGE/usr/lib/systemd" "$STAGE/usr/etc"
+
+    # No mundo B, diretório VAZIO no STAGE vira claim `d:` — o pacote passa a
+    # reivindicar a árvore inteira sob aquele caminho. O `make install` do
+    # e2fsprogs cria /usr/share/info vazio (não há info a instalar), e essa
+    # claim engoliria o as.info do binutils-glibc; o minitrue acusa doublethink
+    # e recusa. Nenhum diretório vazio aqui é intencional, então podar todos é
+    # o certo — o que esta receita quer possuir, ela possui por ter posto
+    # arquivo dentro.
+    find "$STAGE" -type d -empty -delete
+
+    # Guarda: se uma versão futura acrescentar um apelido por hardlink, a
+    # receita falha AQUI, com o caminho na mão, em vez de o rectify falhar
+    # depois com a mesma causa e menos contexto — que é exatamente como este
+    # problema apareceu da primeira vez.
+    remaining=$(find "$STAGE" -type f -links +1 2>/dev/null || true)
+    if [ -n "$remaining" ]; then
+        echo "FATAL: restou hardlink no STAGE do e2fsprogs:"
+        echo "$remaining"
+        exit 1
+    fi
 }

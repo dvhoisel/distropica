@@ -3,7 +3,7 @@ VERSION=0.96
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc ncurses libcap"
-BUILD_DEPS="make gcc-pass2 binutils-glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf"
 ABOUT="traceroute e ping contínuos numa tela só, em curses. Separa o privilégio num auxiliar (mtr-packet), que é quem abre o socket cru: com o pack v2 esse auxiliar pode receber cap_net_raw de verdade, em vez de SUID root. Sem a interface GTK — este perfil não tem GTK, e a versão de terminal é a útil num instalador."
 LICENSE=GPL-2.0-only
 SRC="https://www.bitwizard.nl/mtr/files/mtr-$VERSION.tar.gz"
@@ -11,9 +11,30 @@ SHA256=ffd19a9f8d5f616c1ea2f0da9fbf9d1239bcecdf5a68912e831966d20929037a
 
 build() {
     tar -xzf "$DL" --strip-components=1
+    # -rpath-link,/usr/lib: a mesma causa de nftables, nmap e tcpdump, e aqui
+    # ela se manifesta do pior jeito possível — SEM ERRO NENHUM. A
+    # libncursesw.so.6 desta árvore precisa da libtinfo.so.6; o teste de link
+    # do configure falha por não resolver esse dep transitivo, o autoconf
+    # conclui que não há curses e o mtr é construído SEM a interface de tela,
+    # que é a razão de ele existir. O build "passa", o pacote instala, e o
+    # binário resultante só sabe --report. Foi a auditoria de fechamento que
+    # denunciou, e por uma NOTA, não por um erro: "DEPS declara ncurses, mas
+    # nenhum requisito estático observado o exige".
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # --sbindir=/usr/bin: o mtr declara `sbin_PROGRAMS = mtr mtr-packet`, e
+    # nesta árvore /usr/sbin é diretório real — só /sbin é link para usr/bin.
+    # Sem isto os dois binários ficam fora do PATH (/usr/bin:/bin) e o pacote
+    # se instala com sucesso entregando nada que se possa executar.
+    # LIBS=-ltinfo: a receita do ncurses desta árvore usa --with-termlib=tinfo,
+    # que separa a camada de terminfo numa libtinfo própria. O mtr referencia
+    # `stdscr` DIRETAMENTE, e para símbolo referenciado direto o ld exige a
+    # biblioteca na linha de comando — "DSO missing from command line" —, não
+    # bastando o -rpath-link, que só serve para resolver o dep transitivo.
     ./configure \
         --prefix=/usr \
-        --without-gtk
+        --sbindir=/usr/bin \
+        --without-gtk \
+        LIBS="-ltinfo"
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
 }
