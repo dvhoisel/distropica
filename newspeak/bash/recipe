@@ -1,0 +1,22 @@
+NAME=bash
+VERSION=5.3
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc ncurses"
+BUILD_DEPS="make gcc-pass2 binutils-glibc"
+ABOUT="GNU Bash 5.3. Entra por necessidade demonstrada, não por gosto: a auditoria de fechamento (SPEC-0013 §4) revelou que a base não tinha shell bash algum, e há software que exige exatamente ele no shebang — o wg-quick do wireguard-tools é o caso concreto. Não é dependência da base: quem precisa dele declara em DEPS. NÃO assume /bin/sh, que continua sendo o ash do busybox; bash fica só em /usr/bin/bash, para quem o pede pelo shebang. Depende de ncurses por causa do termcap do readline."
+LICENSE=GPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/bash/bash-$VERSION.tar.gz"
+SHA256=0d5cd86965f869a26cf64f4b71be7b96f90a3ba8b3d74e27e8e9d9d5550f31ba
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    # --without-bash-malloc: o alocador interno do bash é mais antigo que o da
+    # glibc e não é o que se quer numa base que já tem uma libc canônica.
+    ./configure \
+        --prefix=/usr \
+        --without-bash-malloc \
+        --with-curses
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+}

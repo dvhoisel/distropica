@@ -1,0 +1,19 @@
+NAME=libmnl
+VERSION=1.0.5
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc"
+ABOUT="Biblioteca mínima de netlink do projeto netfilter. É a base sobre a qual libnftnl e nftables falam com o kernel; não tem utilidade isolada e não é desejo top-level. Upstream assina o tarball (.sig OpenPGP); a receita pina o SHA-256 até o minitrue verificar OpenPGP (SPEC-0004 §5)."
+LICENSE=LGPL-2.1-or-later
+SRC="https://ftp.netfilter.org/pub/libmnl/libmnl-$VERSION.tar.bz2"
+SHA256=274b9b919ef3152bfb3da3a13c950dd60d6e2bcd54230ffeca298d03b40d0525
+
+build() {
+    # bzip2 por um cano: não se assume que o tar do rootfs saiba descomprimir
+    # bz2 sozinho, e o applet bunzip2 do busybox está sempre presente.
+    bunzip2 -c "$DL" | tar -x --strip-components=1
+    ./configure --prefix=/usr --libdir=/usr/lib
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+}

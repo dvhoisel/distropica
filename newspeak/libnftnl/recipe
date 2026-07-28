@@ -1,0 +1,24 @@
+NAME=libnftnl
+VERSION=1.3.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libmnl"
+BUILD_DEPS="make gcc-pass2 binutils-glibc"
+ABOUT="Biblioteca de baixo nível da API nftables do kernel, sobre libmnl. Dependência do nftables, não desejo top-level. Upstream assina o tarball (.sig OpenPGP); a receita pina o SHA-256 até o minitrue verificar OpenPGP (SPEC-0004 §5)."
+LICENSE=GPL-2.0-or-later
+SRC="https://ftp.netfilter.org/pub/libnftnl/libnftnl-$VERSION.tar.xz"
+SHA256=607da28dba66fbdeccf8ef1395dded9077e8d19f2995f9a4d45a9c2f0bcffba8
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    # Não há pkg-config nesta árvore ainda; o autoconf aceita os caminhos
+    # explícitos e dispensa a busca. Quando o perfil gráfico trouxer pkgconf,
+    # isto pode voltar ao caminho normal.
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        LIBMNL_CFLAGS="-I/usr/include" \
+        LIBMNL_LIBS="-lmnl"
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+}

@@ -39,9 +39,39 @@ build() {
     make olddefconfig
     sed -i 's/^# CONFIG_MODULE_SIG_FORCE is not set/CONFIG_MODULE_SIG_FORCE=y/' .config
     make olddefconfig
+    # Perfil de rede e confinamento do alvo. Anexar e reconciliar é mais
+    # robusto que sed sobre "# CONFIG_X is not set": símbolo cuja dependência
+    # ainda não estava satisfeita sequer aparece nessa forma no defconfig.
+    #
+    # USER_NS: sem namespace de usuário o sandbox de conteúdo do navegador
+    #   degrada, e o Chromium passa a exigir auxiliar SUID — exatamente o que
+    #   esta distro evita.
+    # WIREGUARD: o datapath é o kernel; ele seleciona sozinho Curve25519 e
+    #   ChaCha20Poly1305, então não há criptografia a ligar à mão.
+    # NF_TABLES e companhia: sem netfilter não existe filtro de pacote nenhum,
+    #   e o `wg-quick` com Table=auto depende de regra por marca (fib+ct).
+    cat >> .config <<'KCONFIG'
+CONFIG_USER_NS=y
+CONFIG_TUN=y
+CONFIG_WIREGUARD=y
+CONFIG_NETFILTER=y
+CONFIG_NETFILTER_ADVANCED=y
+CONFIG_NETFILTER_NETLINK=y
+CONFIG_NF_CONNTRACK=y
+CONFIG_NF_TABLES=y
+CONFIG_NF_TABLES_INET=y
+CONFIG_NFT_CT=y
+CONFIG_NFT_FIB=y
+CONFIG_NFT_FIB_INET=y
+CONFIG_NFT_FIB_IPV4=y
+CONFIG_NFT_FIB_IPV6=y
+KCONFIG
+    make olddefconfig
     # Guarda: o Ministério EXIGE assinatura. Aborta AQUI se um pilar caiu — em vez
     # de descobrir no boot que um .ko não-assinado teria carregado.
-    for s in MODULE_SIG MODULE_SIG_FORCE MODULE_SIG_ALL SYSTEM_TRUSTED_KEYRING; do
+    for s in MODULE_SIG MODULE_SIG_FORCE MODULE_SIG_ALL SYSTEM_TRUSTED_KEYRING \
+        USER_NS TUN WIREGUARD NETFILTER NF_TABLES NF_TABLES_INET NFT_CT \
+        NFT_FIB_INET NF_CONNTRACK; do
         grep -q "^CONFIG_$s=y\$" .config || {
             echo "FATAL: falta CONFIG_$s=y no .config"
             grep -E 'MODULE_SIG|TRUSTED_KEYRING' .config
