@@ -19,6 +19,8 @@ EPOCH=${SOURCE_DATE_EPOCH:-1704067200}
 JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)}
 OUTPUT=
 WORK=
+ROOTFS=${DISTROPICA_ROOTFS:-}
+SOURCE_INNER=
 KEEP_WORK=no
 INSTALL_DEVICE=
 REMOVE_WORK=no
@@ -33,6 +35,9 @@ usage() {
 uso: bootstrap/live/build-efi --output BOOTX64.EFI [opções]
 
   --work DIR          workspace novo ou já marcado pelo script (default: temporário)
+  --rootfs DIR        compila o kernel DENTRO deste rootfs Distrópica, por bwrap,
+                      em vez de usar flex/bison/pkg-config/libelf do hospedeiro;
+                      exige que --work esteja sob ele
   --keep-work         preserva o diretório temporário
   --linux-tar ARQ     linux-7.1.4.tar.xz já baixado
   --busybox ARQ       BusyBox x86_64-musl estático já baixado
@@ -50,6 +55,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --output) OUTPUT=${2:?}; shift 2 ;;
         --work) WORK=${2:?}; shift 2 ;;
+        --rootfs) ROOTFS=${2:?}; shift 2 ;;
         --keep-work) KEEP_WORK=yes; shift ;;
         --linux-tar) LINUX_TAR=${2:?}; shift 2 ;;
         --busybox) BUSYBOX=${2:?}; shift 2 ;;
@@ -98,6 +104,59 @@ else
         exit 1
     }
 fi
+
+# Kernel construído DENTRO do rootfs Distrópica.
+#
+# O kernel exige flex, bison, pkg-config e libelf. Pegá-los do hospedeiro
+# significaria que a mídia depende do que a máquina do mantenedor por acaso
+# tem instalado — e esta distro não depende de hospedeiro. Ela já constrói um
+# kernel com as próprias ferramentas: é o que a receita newspeak/linux faz.
+# Aqui é o mesmo, para o kernel VIVO.
+#
+# O `--work` precisa estar sob o rootfs porque o bwrap monta o rootfs como /:
+# um caminho de fora simplesmente não existe lá dentro. Guardamos a forma
+# interna para passar ao make.
+if [ -n "$ROOTFS" ]; then
+    command -v bwrap >/dev/null 2>&1 || {
+        echo "erro: --rootfs exige bwrap" >&2; exit 1;
+    }
+    [ -d "$ROOTFS" ] && [ ! -L "$ROOTFS" ] || {
+        echo "erro: --rootfs precisa ser diretório real: $ROOTFS" >&2; exit 1;
+    }
+    ROOTFS=$(CDPATH= cd -- "$ROOTFS" && pwd -P)
+    case "$WORK" in
+        "$ROOTFS"/?*) ;;
+        *)
+            echo "erro: com --rootfs, o --work precisa estar dentro dele" >&2
+            echo "  rootfs: $ROOTFS" >&2
+            echo "  work:  $WORK" >&2
+            exit 1
+            ;;
+    esac
+    WORK_INNER=${WORK#"$ROOTFS"}
+fi
+
+# make do kernel, no hospedeiro ou dentro do rootfs conforme --rootfs.
+#
+# HOSTLDFLAGS com -rpath-link: dentro do rootfs, o objtool liga contra a
+# libelf, que por sua vez precisa da libz — e o ld nativo desta árvore não
+# resolve dependência transitiva sozinho. É o mesmo tratamento que a receita
+# newspeak/linux já aplica pelo mesmo motivo. No hospedeiro isso é inócuo,
+# porque /usr/lib já está no caminho padrão do ld de lá.
+kmake() {
+    if [ -n "$ROOTFS" ]; then
+        bwrap --bind "$ROOTFS" / --proc /proc --dev /dev \
+            --unshare-pid --die-with-parent --clearenv \
+            --setenv PATH /usr/bin:/bin \
+            --setenv HOME /tmp \
+            --setenv LC_ALL C --setenv LANG C --setenv TZ UTC \
+            --setenv SOURCE_DATE_EPOCH "$EPOCH" \
+            make -C "$SOURCE_INNER" \
+            HOSTLDFLAGS="-Wl,-rpath-link,/usr/lib" "$@"
+    else
+        make -C "$SOURCE" "$@"
+    fi
+}
 
 cleanup() {
     if [ -n "$PUBLISH_TMP" ]; then
@@ -300,9 +359,20 @@ build_static_mke2fs() {
     echo "mke2fs estático: compilando com $e2fs_cc" >&2
     (
         cd "$e2fs_src"
-        CC="$e2fs_cc" LDFLAGS=-static ./configure \
-            --disable-shared \
-            --enable-static \
+        # Quem torna o binário estático é o LDFLAGS=-static, e só ele. Uma
+        # versão anterior desta linha passava também --disable-shared e
+        # --enable-static, que o configure do e2fsprogs NÃO tem: o autoconf
+        # avisava "unrecognized options" e seguia. Saíram porque flag que não
+        # existe é pior que flag ausente — ela faz o script afirmar uma
+        # decisão que nunca tomou, e é a mesma armadilha que já custou duas
+        # receitas nesta árvore.
+        # -s (strip no link): sem ele o mke2fs e o e2fsck vão com símbolos de
+        # depuração e somam 9 dos 16 MB do initramfs — medido. Isso incha o
+        # BOOTX64.EFI de ~11 para ~19 MB, e o preço aparece em três lugares:
+        # tempo de carga pelo firmware (que chegou a estourar o timeout de
+        # boot do aceite), RAM ocupada no boot, e espaço na ESP de 64 MiB. Os
+        # binários Rust já saem stripped pelo perfil de release do Cargo.
+        CC="$e2fs_cc" LDFLAGS="-static -s" ./configure \
             --disable-nls \
             --disable-uuidd \
             --disable-fsck \
@@ -370,6 +440,7 @@ if [ -n "$INSTALL_DEVICE" ]; then
 fi
 
 SOURCE=$WORK/linux-source
+if [ -n "$ROOTFS" ]; then SOURCE_INNER=$WORK_INNER/linux-source; fi
 rm -rf -- "$SOURCE"
 mkdir -p "$SOURCE"
 tar -xJf "$LINUX_TAR" -C "$SOURCE" --strip-components=1
@@ -381,16 +452,31 @@ printf '%s\n' \
 find "$SOURCE/distropica-initramfs" -exec touch -h -d "@$EPOCH" {} +
 touch -d "@$EPOCH" "$SOURCE/distropica-devices.list"
 
-command -v make >/dev/null 2>&1 || { echo "erro: make ausente" >&2; exit 1; }
-command -v gcc >/dev/null 2>&1 || { echo "erro: gcc ausente" >&2; exit 1; }
-command -v flex >/dev/null 2>&1 || { echo "erro: flex ausente" >&2; exit 1; }
-command -v bison >/dev/null 2>&1 || { echo "erro: bison ausente" >&2; exit 1; }
-command -v pkg-config >/dev/null 2>&1 || { echo "erro: pkg-config ausente" >&2; exit 1; }
-pkg-config --exists libelf || {
-    echo "erro: headers/biblioteca libelf ausentes (pkg-config libelf)" >&2; exit 1;
-}
+# Estas ferramentas o kernel exige de quem o constrói. Com --rootfs quem
+# constrói é a Distrópica, e a conferência é lá dentro: exigi-las do
+# hospedeiro seria pedir ao mantenedor que instale flex e bison para produzir
+# uma distro que já os tem.
+if [ -n "$ROOTFS" ]; then
+    for ferramenta in make gcc flex bison pkg-config bc perl; do
+        [ -e "$ROOTFS/usr/bin/$ferramenta" ] || {
+            echo "erro: $ferramenta ausente no rootfs $ROOTFS" >&2; exit 1;
+        }
+    done
+    [ -e "$ROOTFS/usr/lib/pkgconfig/libelf.pc" ] || {
+        echo "erro: libelf ausente no rootfs (pkgconfig/libelf.pc)" >&2; exit 1;
+    }
+else
+    command -v make >/dev/null 2>&1 || { echo "erro: make ausente" >&2; exit 1; }
+    command -v gcc >/dev/null 2>&1 || { echo "erro: gcc ausente" >&2; exit 1; }
+    command -v flex >/dev/null 2>&1 || { echo "erro: flex ausente" >&2; exit 1; }
+    command -v bison >/dev/null 2>&1 || { echo "erro: bison ausente" >&2; exit 1; }
+    command -v pkg-config >/dev/null 2>&1 || { echo "erro: pkg-config ausente" >&2; exit 1; }
+    pkg-config --exists libelf || {
+        echo "erro: headers/biblioteca libelf ausentes (pkg-config libelf)" >&2; exit 1;
+    }
+fi
 
-make -C "$SOURCE" defconfig
+kmake defconfig
 CONFIG=$SOURCE/scripts/config
 set_config() {
     "$CONFIG" --file "$SOURCE/.config" "$@"
@@ -461,7 +547,7 @@ for symbol in EFI EFI_STUB BLK_DEV_INITRD DEVTMPFS DEVTMPFS_MOUNT TMPFS \
     VGA_CONSOLE FONT_SUPPORT FONT_8x16; do
     set_config --enable "$symbol"
 done
-make -C "$SOURCE" olddefconfig
+kmake olddefconfig
 grep -q '^CONFIG_CMDLINE_BOOL=y$' "$SOURCE/.config" || {
     echo "erro: kernel descartou CONFIG_CMDLINE_BOOL=y" >&2; exit 1;
 }
@@ -499,13 +585,20 @@ for symbol in EFI EFI_STUB BLK_DEV_INITRD VIRTIO_BLK VIRTIO_NET BLK_DEV_SR \
 done
 
 BUILD_TIMESTAMP=$(date -u -d "@$EPOCH" '+%a %b %e %T UTC %Y')
-make -C "$SOURCE" -j"$JOBS" \
+# O -fdebug-prefix-map precisa usar o caminho que o COMPILADOR enxerga: com
+# --rootfs ele compila dentro do bwrap e vê o caminho interno, não o do
+# hospedeiro. Mapear o caminho errado deixaria o de verdade embutido no
+# binário — e o caminho do workspace do mantenedor é justamente o que a
+# reprodutibilidade não pode depender.
+MAP_SOURCE=$SOURCE
+if [ -n "$ROOTFS" ]; then MAP_SOURCE=$SOURCE_INNER; fi
+kmake -j"$JOBS" \
     SOURCE_DATE_EPOCH="$EPOCH" \
     KBUILD_BUILD_TIMESTAMP="$BUILD_TIMESTAMP" \
     KBUILD_BUILD_USER=distropica KBUILD_BUILD_HOST=builder \
     KBUILD_BUILD_VERSION=1 \
-    KCFLAGS="-fdebug-prefix-map=$SOURCE=/usr/src/linux" \
-    HOSTCFLAGS="-fdebug-prefix-map=$SOURCE=/usr/src/linux" bzImage
+    KCFLAGS="-fdebug-prefix-map=$MAP_SOURCE=/usr/src/linux" \
+    HOSTCFLAGS="-fdebug-prefix-map=$MAP_SOURCE=/usr/src/linux" bzImage
 
 BUILT=$SOURCE/arch/x86/boot/bzImage
 file "$BUILT" | grep -q 'Linux kernel x86 boot executable' || {
