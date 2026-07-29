@@ -1,0 +1,29 @@
+NAME=libffi
+VERSION=3.7.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc"
+ABOUT="Interface de chamada estrangeira: permite montar uma chamada de função em tempo de execução, sem conhecer a assinatura na compilação. Entra por dois caminhos ao mesmo tempo — o ctypes do Python e a GObject Introspection da glib, ou seja, ela está embaixo tanto do interpretador quanto da pilha gráfica inteira. É o ativo de release do upstream, não o git archive: o release traz o configure gerado, e esta árvore não tem autoconf para regenerá-lo. O tarball de git archive da mesma tag foi conferido à parte e bate com o que o Arch pina, o que corrobora o conteúdo da tag."
+LICENSE=MIT
+SRC="https://github.com/libffi/libffi/releases/download/v$VERSION/libffi-$VERSION.tar.gz"
+SHA256=d5e9a6638ddbd2513ddb54518eb67e4bbe6fa707bcc01c10f6212f0a088d819d
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    # --disable-multi-os-directory: sem isto a libffi se instala em
+    # /usr/lib64 ou /usr/lib/../lib64 conforme adivinha o triplet, e esta
+    # árvore é usr-merged com /usr/lib64 como link para lib.
+    # --disable-exec-static-tramp: os trampolins estáticos executáveis exigem
+    # uma página W+X, e o kernel desta distro reporta "no W+X pages found" no
+    # boot; não se liga o que o sistema anuncia não ter.
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-multi-os-directory \
+        --disable-exec-static-tramp \
+        --disable-docs
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    find "$STAGE" -type d -empty -delete
+}

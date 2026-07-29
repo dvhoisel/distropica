@@ -1,0 +1,20 @@
+NAME=ninja
+VERSION=1.13.2
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2"
+BUILD_DEPS="make gcc-pass2 binutils-glibc python"
+ABOUT="Executor de build do Meson, e a primeira receita do E4b — a pilha gráfica. Nada acima dela se constrói sem ela: glib, cairo, pango, wayland, libdrm, mesa e GTK usam Meson, e Meson gera arquivos de build para o Ninja. Não há binário upstream elegível: o projeto publica apenas fonte e um zip para Windows. Constrói-se por bootstrap com o próprio configure.py em Python, sem depender de um ninja ou de um cmake preexistente — o que é a propriedade que importa numa distro que não tem nenhum dos dois. Depende de gcc-pass2 em runtime por causa da libstdc++: é C++."
+LICENSE=Apache-2.0
+SRC="https://github.com/ninja-build/ninja/archive/refs/tags/v$VERSION.tar.gz"
+SHA256=974d6b2f4eeefa25625d34da3cb36bdcebe7fbce40f4c16ac0835fd1c0cbae17
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    # --bootstrap compila o ninja com o compilador direto, sem precisar de um
+    # ninja anterior nem de cmake. É o único caminho viável na primeira vez.
+    python3 configure.py --bootstrap
+    install -Dm755 ninja "$STAGE/usr/bin/ninja"
+    install -Dm644 misc/bash-completion "$STAGE/usr/share/bash-completion/completions/ninja"
+    install -Dm644 doc/manual.asciidoc "$STAGE/usr/share/doc/ninja/manual.asciidoc"
+}

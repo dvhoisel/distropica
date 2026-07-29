@@ -1,0 +1,26 @@
+NAME=meson
+VERSION=1.11.2
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc python ninja"
+BUILD_DEPS="python"
+ABOUT="Sistema de build da pilha gráfica. Do E4b para cima quase tudo o usa: glib, cairo, pango, wayland, libdrm, mesa e GTK. É Python puro — não há o que compilar, e a receita apenas coloca o pacote no lugar. Instalado SEM pip e SEM setuptools, copiando mesonbuild/ para site-packages e o meson.py como /usr/bin/meson: esta distro não tem instalador de pacotes Python, e introduzir um só para uma ferramenta de build seria trazer um segundo gerenciador para dentro de uma distro cuja premissa é não ter nem o primeiro. Declara ninja em DEPS porque sozinho ele não constrói nada: gera arquivos de build que o ninja executa."
+LICENSE=Apache-2.0
+SRC="https://github.com/mesonbuild/meson/releases/download/$VERSION/meson-$VERSION.tar.gz"
+SHA256=698feae069cef3ecd4d7aaf281d7df359bdfcf555a9a1564383d3b913fa8a736
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    # O caminho de site-packages é derivado do próprio interpretador, não
+    # fixado: quando o python subir de versão, a receita acompanha em vez de
+    # instalar num diretório que ninguém importa.
+    sitedir=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+    install -dm755 "$STAGE$sitedir"
+    cp -a mesonbuild "$STAGE$sitedir/"
+    # __pycache__ guarda o caminho absoluto e o mtime do .py dentro do .pyc:
+    # deixá-lo entrar tornaria o artefato dependente de onde foi construído.
+    find "$STAGE$sitedir/mesonbuild" -type d -name __pycache__ -exec rm -rf {} +
+    install -Dm755 meson.py "$STAGE/usr/bin/meson"
+    install -Dm644 data/shell-completions/bash/meson \
+        "$STAGE/usr/share/bash-completion/completions/meson"
+}
