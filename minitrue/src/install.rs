@@ -2778,7 +2778,17 @@ fn install_sealed_source(
     let directory_claims = all_directory_claims(ctx)?;
     let all_claim_index = index_manifest_claims(&claims, None);
     let external_claim_index = index_manifest_claims(&claims, Some(&r.name));
-    let external_directory_index = index_directory_claims(&directory_claims, &r.name);
+    // Donos cujos diretórios esta receita pode tomar: provisional declarado em
+    // SUPERSEDES, exatamente as mesmas duas condições que o
+    // adopt_provisional_path exige para ceder um arquivo.
+    let mut ceded_directory_owners = std::collections::HashSet::new();
+    for candidate in &r.supersedes {
+        if is_provisional(ctx, candidate) {
+            ceded_directory_owners.insert(candidate.clone());
+        }
+    }
+    let external_directory_index =
+        index_directory_claims(&directory_claims, &r.name, &ceded_directory_owners);
     let mut stage_dirs_with_children = HashSet::new();
     for entry in &entries {
         let mut parent = Path::new(&entry.relative).parent();
@@ -2812,6 +2822,21 @@ fn install_sealed_source(
         } else {
             indexed_claim_at_or_above(&external_claim_index, &virt, false)
                 .or_else(|| indexed_descendant(&external_claim_index, &virt))
+        };
+        // Diretório de um cedente provisional declarado não bloqueia: ele é
+        // cedido junto com o conteúdo, do mesmo modo que arquivo e link já
+        // eram pelo eligible_takeover logo abaixo. Sem esta exceção a
+        // sucessão fica pela metade — o sucessor toma os arquivos mas esbarra
+        // no diretório que os contém.
+        // Claim de um cedente provisional declarado não bloqueia, seja ela o
+        // próprio diretório ou a árvore ACIMA de um arquivo que vai dentro
+        // dele. Vale para entrada de qualquer tipo: um diretório do cedente
+        // cobre tudo o que está sob ele, e é justamente isso que o sucessor
+        // precisa ocupar. As duas condições de sempre continuam valendo, e
+        // colisão em caminho exato ainda passa pelo eligible_takeover abaixo.
+        let overlap = match overlap {
+            Some((owner, _, _)) if ceded_directory_owners.contains(owner) => None,
+            outro => outro,
         };
         if let Some((owner, version, path)) = overlap {
             return fail(
@@ -5750,13 +5775,23 @@ fn index_manifest_claims<'a>(
     index
 }
 
+/// Índice de claims de diretório para o check de colisão.
+///
+/// `ceded` são os donos cujos diretórios NÃO bloqueiam: um predecessor
+/// PROVISIONAL que esta receita declarou superseder. Sem isso a sucessão fica
+/// assimétrica — o `adopt_provisional_path` cede arquivo e link, mas um
+/// diretório do cedente barra o sucessor para sempre. Foi o que aconteceu com
+/// o python semente, que reivindica `lib-dynload` como árvore justamente por
+/// estar VAZIO (não tem módulo de extensão nenhum) e assim impedia o
+/// python-glibc, cuja razão de existir é encher esse diretório.
 fn index_directory_claims<'a>(
     claims: &'a [(String, String, String)],
     exclude_owner: &str,
+    ceded: &std::collections::HashSet<String>,
 ) -> IndexedClaims<'a> {
     let mut index = BTreeMap::new();
     for (owner, version, path) in claims {
-        if owner == exclude_owner {
+        if owner == exclude_owner || ceded.contains(owner) {
             continue;
         }
         index
@@ -6301,6 +6336,53 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static CNT: AtomicU32 = AtomicU32::new(0);
+
+    /// Sucessão provisional cobre DIRETÓRIO, não só arquivo e link.
+    ///
+    /// O `adopt_provisional_path` sempre cedeu arquivos, mas a checagem de
+    /// colisão de diretório não consultava `SUPERSEDES` — então um diretório
+    /// do cedente barrava o sucessor para sempre. O caso real: o python
+    /// semente reivindica `lib-dynload` como árvore PORQUE está vazio (não
+    /// tem módulo de extensão nenhum), e isso impedia o python-glibc, cuja
+    /// razão de existir é justamente encher esse diretório.
+    ///
+    /// As duas condições do adopt continuam valendo: só cede quem é
+    /// PROVISIONAL **e** foi declarado em SUPERSEDES.
+    #[test]
+    fn diretorio_de_provisional_declarado_e_cedido_e_o_resto_nao() {
+        let claims = vec![
+            (
+                "semente".to_string(),
+                "1".to_string(),
+                "/usr/lib/coisa".to_string(),
+            ),
+            (
+                "alheio".to_string(),
+                "1".to_string(),
+                "/usr/lib/outra".to_string(),
+            ),
+        ];
+
+        // Sem cessão declarada, os dois diretórios bloqueiam.
+        let nenhum = std::collections::HashSet::new();
+        let index = index_directory_claims(&claims, "sucessor", &nenhum);
+        assert!(index.contains_key("/usr/lib/coisa"));
+        assert!(index.contains_key("/usr/lib/outra"));
+
+        // Com a semente cedida, só ela sai do índice: o diretório de um
+        // pacote não declarado continua sendo doublethink.
+        let mut cedidos = std::collections::HashSet::new();
+        cedidos.insert("semente".to_string());
+        let index = index_directory_claims(&claims, "sucessor", &cedidos);
+        assert!(
+            !index.contains_key("/usr/lib/coisa"),
+            "diretório de provisional declarado deveria ter sido cedido"
+        );
+        assert!(
+            index.contains_key("/usr/lib/outra"),
+            "diretório de pacote NÃO declarado não pode ser cedido"
+        );
+    }
 
     /// Ida e volta do `pack` v2: o xattr posto no STAGE atravessa o tar
     /// selado, chega ao indexador e passa a prender a claim. Sem isso o
