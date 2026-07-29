@@ -1,0 +1,43 @@
+NAME=glib
+VERSION=2.88.2
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libffi pcre2 zlib"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc"
+ABOUT="A base do GNOME e o degrau do qual a pilha gráfica inteira depende: GObject, GIO e as estruturas de dados que pango, gdk-pixbuf, GTK e o próprio Wireshark usam. É o primeiro pacote desta árvore construído com Meson, e por isso o primeiro teste real de que ninja, meson e o python-glibc funcionam juntos. Sem NLS, sem libmount (não há util-linux) e sem SELinux, que não tem política nesta distro. Sem introspection: ela geraria bindings para linguagens que aqui não existem e exigiria rodar o binário recém-construído sob emulação de si mesmo."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/glib/2.88/glib-$VERSION.tar.xz"
+SHA256=cf3f215a640c8a4257f14317586b8f1fdd25a10a93cb4bdda147c0f9ad88e74f
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    # -rpath-link,/usr/lib: padrão recorrente desta toolchain — a libpcre2 e a
+    # libz aparecem como dependência transitiva ao ligar as ferramentas da
+    # própria glib, e o ld nativo não as resolve sozinho.
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dnls=disabled \
+        -Dlibmount=disabled \
+        -Dselinux=disabled \
+        -Dintrospection=disabled \
+        -Dman-pages=disabled \
+        -Ddocumentation=false \
+        -Dtests=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    # Guarda: a glib existe aqui para que pango e GTK tenham em que se apoiar.
+    # Se o Meson decidir em silêncio que uma delas não vai, o build "passa" e
+    # o erro só aparece três receitas adiante.
+    for biblioteca in libglib-2.0.so libgobject-2.0.so libgio-2.0.so libgmodule-2.0.so; do
+        ls "$STAGE/usr/lib/$biblioteca"* >/dev/null 2>&1 || {
+            echo "FATAL: $biblioteca não foi construída"
+            ls "$STAGE/usr/lib/" 2>/dev/null | head -20
+            exit 1
+        }
+    done
+    find "$STAGE" -type d -name __pycache__ -exec rm -rf {} +
+    find "$STAGE" -type d -empty -delete
+}
