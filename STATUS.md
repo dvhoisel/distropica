@@ -30,7 +30,7 @@ Os hashes QEMU final-v10 e VirtualBox network-v1 abaixo são evidência históri
 anterior à mudança de licença do pacote `base` (revisão funcional `7148ebd`).
 Não são pinos de uma mídia recomposta a partir da árvore licenciada atual.
 
-## Evidência integrada atual — `rede-v2`
+## Evidência integrada atual — `rede-v3`
 
 A closure foi reconstruída com o perfil de rede e emitida num canal local
 assinado com **24 artefatos** (eram 11). A instalação direta
@@ -46,17 +46,25 @@ raiz **ext4** montada com `ordered data mode` — o journal que motivou a troca 
 e o **IPv6**.
 
 ```text
-ISO=target/distropica-rede-v2.iso
-ISO_SHA256=04ae93590a65ee7f123ee457d9929112a8226e6f7230536410b7c0fe7294a96c
-BOOT_EFI_SHA256=cd6097035503ddc8f1b1431bbe73b25deb3d2c34c01145859b8a856e4fb0f4d0
+ISO=target/distropica-rede-v3.iso
+ISO_SHA256=a709d6007aa22c6a494195c0c4e458cc48fe52318bfd426420c13d1a00602a38
+BOOT_EFI_SHA256=c539482dda41abb05f82c86a5c3dffae734ff79890ce8b4a7b8eb696c276c072
 PROFILE_CONTENT_SHA256=e3a8ab28d7e2ae52a329320b2ebd49d4277b460bf58d0f965dcd87863f93cdc5
 CHANNEL_INDEX_SHA256=16825a68eb372d72169067186a977b5976caa0d795490442a636b1e1732d4aa2
-ACCEPTANCE_META=target/vbox-rede-v2/evidence/acceptance.meta
-ACCEPTANCE_META_SHA256=0e692c2b2ea9ca1e0911a80b8270509f162929e538ffd12f2f589c92928e1b9b
-DISK_SHA256=1dc5f4f77eaa31c85ed4340f33ff26e7670b52731dcc33f56f60a22e413cbb71
+ACCEPTANCE_META=target/vbox-rede-v3/evidence/acceptance.meta
+ACCEPTANCE_META_SHA256=0b75af8a499f44ce6b4354d9a11d5cb7bdc5bfa539ccf163467c0b0d1cfdeb8c
+DISK_SHA256=9da2b6141fc32cdb8dab1c08ad539d855a8dd7837c6fdcc0a41241cf95d21631
 MEMORY_MIB=3072
 FINAL_RESULT=passed
 ```
+
+O `BOOTX64.EFI` desta revisão tem 16,1 MB, contra 19,4 MB da anterior: o
+`mke2fs` e o `e2fsck` passaram a ser linkados com `-s`. O ganho bruto nos
+binários foi de 7,4 MB (4,0→0,7 e 5,0→0,9), mas o initramfs é comprimido com
+gzip dentro do kernel e símbolo de depuração comprime bem, então o efeito no
+artefato final foi 3,3 MB. A `rede-v2` — mesma closure, EFI sem strip — também
+passou; as duas execuções estão registradas porque a diferença entre elas é o
+tamanho do EFI, e ele é o que faz o firmware demorar a carregar.
 
 ### IPv6 — a primeira medição
 

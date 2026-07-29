@@ -628,7 +628,14 @@ vm_info > "$RUN_DIR/evidence/offline-running-passed-vm-info.txt"
 grep -Fq 'cableconnected1="off"' \
     "$RUN_DIR/evidence/offline-running-passed-vm-info.txt" ||
     fail "o cabo virtual foi conectado antes de terminar o aceite offline"
-type_text 'sync; echo VBOX_OFFLINE_POWEROFF_OK >/dev/ttyS0; /bin/busybox poweroff -f'
+# O `sleep 1` entre o marcador e o poweroff não é superstição: o kernel e o
+# userspace escrevem no MESMO /dev/ttyS0, e o printk de desligamento
+# ("Synchronizing SCSI cache") já partiu o marcador ao meio —
+# "VBOX_OFFLINE_POW[  343.98] sd 0:0:0:0 …EROFF_OK" —, fazendo o grep pela
+# string inteira falhar num aceite em que o sistema tinha feito tudo certo.
+# A pausa garante que a linha do userspace saia inteira antes de o kernel
+# começar a falar.
+type_text 'sync; echo VBOX_OFFLINE_POWEROFF_OK >/dev/ttyS0; sleep 1; /bin/busybox poweroff -f'
 press_enter
 wait_for_log 'VBOX_OFFLINE_POWEROFF_OK' 1 30
 wait_for_state poweroff 60
@@ -715,7 +722,7 @@ press_enter
 sleep 3
 require_screen_text 'THIRD_BOOT_SCREEN_OK' terceiro-boot-root 30
 vm_info > "$RUN_DIR/evidence/running-passed-vm-info.txt"
-type_text 'sync; echo VBOX_THIRD_BOOT_SYNC_OK >/dev/ttyS0; /bin/busybox poweroff -f'
+type_text 'sync; echo VBOX_THIRD_BOOT_SYNC_OK >/dev/ttyS0; sleep 1; /bin/busybox poweroff -f'
 press_enter
 wait_for_log 'VBOX_THIRD_BOOT_SYNC_OK' 1 30
 wait_for_state poweroff 60
