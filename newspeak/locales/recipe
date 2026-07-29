@@ -1,0 +1,55 @@
+NAME=locales
+VERSION=2.42
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="glibc"
+ABOUT="Os locales compilados da distro. Receita de MONTAGEM, sem SRC, como a base: não baixa nada — compila com localedef as definições que o próprio glibc já instalou em /usr/share/i18n. Por isso a versão acompanha a do glibc: a entrada vem de lá, e é a impressão digital do glibc que prende esta saída. Antes disso a árvore tinha as 369 definições de locale e o localedef, mas nenhum locale COMPILADO — /usr/lib/locale estava vazio, e por isso nem o comando locale rodava; qualquer programa que chamasse setlocale caía silenciosamente para o C. Gera dois: pt_BR.UTF-8, que é o pedido, e C.UTF-8, que é o C de sempre mas capaz de UTF-8 — sem ele, um programa em ambiente neutro trunca acento. Usa --no-archive de propósito: o padrão do localedef é acumular tudo num único /usr/lib/locale/locale-archive, arquivo mutável e compartilhado que dois pacotes escreveriam por cima um do outro e que nenhum manifesto consegue reivindicar honestamente. Em diretórios separados, cada arquivo tem dono e hash. A saída é determinística: duas execuções dão bytes idênticos, verificado antes de escrever esta receita."
+LICENSE="LGPL-2.1-or-later"
+
+build() {
+    install -dm755 "$STAGE/usr/lib/locale"
+    for spec in "pt_BR UTF-8 pt_BR.UTF-8" "C UTF-8 C.UTF-8"; do
+        # shellcheck disable=SC2086
+        set -- $spec
+        # O aviso "failed to set locale" é o próprio localedef não achando um
+        # locale para si mesmo, o que é esperado quando ainda não há nenhum.
+        localedef --prefix="$STAGE" --no-archive -i "$1" -f "$2" "$3" 2>&1 \
+            | grep -v 'failed to set locale' || true
+    done
+
+    # O localedef liga por HARDLINK o que sai idêntico entre locales — aqui o
+    # LC_CTYPE, que é o mesmo para C.UTF-8 e pt_BR.UTF-8 porque a classificação
+    # de caracteres UTF-8 não muda com o idioma, mais os minúsculos
+    # LC_MEASUREMENT e LC_PAPER. O manifesto do mundo B não representa grupo de
+    # hardlink, e o rectify recusa. Ao contrário do e2fsprogs, que virou os
+    # dele em symlink por serem apelidos de comando, estes são DADOS: quebra-se
+    # em cópias independentes, e custa 359 KB.
+    find "$STAGE" -type f -links +1 -exec sh -c '
+        for f; do cp -a "$f" "$f.unlink" && mv -f "$f.unlink" "$f"; done
+    ' _ {} +
+
+    for l in pt_BR.utf8 C.utf8; do
+        [ -e "$STAGE/usr/lib/locale/$l/LC_CTYPE" ] || {
+            echo "locales: $l não foi compilado" >&2
+            exit 1
+        }
+    done
+    # locale-archive é justamente o que --no-archive evita; se aparecer, a
+    # premissa da receita caiu.
+    if [ -e "$STAGE/usr/lib/locale/locale-archive" ]; then
+        echo "locales: locale-archive foi gerado apesar de --no-archive" >&2
+        exit 1
+    fi
+    # Guarda, no espírito da do e2fsprogs: se uma versão futura do localedef
+    # ligar outro arquivo, falha AQUI com o caminho na mão, em vez de o rectify
+    # falhar depois com a mesma causa e menos contexto — que foi exatamente
+    # como este problema apareceu.
+    remaining=$(find "$STAGE" -type f -links +1 2>/dev/null || true)
+    if [ -n "$remaining" ]; then
+        echo "FATAL: restou hardlink no STAGE do locales:" >&2
+        echo "$remaining" >&2
+        exit 1
+    fi
+    find "$STAGE" -type d -empty -delete
+}

@@ -1,0 +1,35 @@
+NAME=adwaita-icon-theme
+VERSION=40.1.1
+KIND=source
+TOOLCHAIN=native
+DEPS="hicolor-icon-theme"
+BUILD_DEPS="make"
+ABOUT="Os ícones de verdade: o tema padrão do GTK, o que o gtk-icon-theme-name aponta quando ninguém mexe. Sem ele o GTK abre, mas cada ícone da interface vira o retângulo de imagem quebrada. A versão é 40.1.1 e a escolha não é por conservadorismo — é por evidência. O Adwaita moderno (49.x) é quase inteiramente SVG simbólico, e renderizar SVG no GTK depende do carregador do librsvg, que é escrito em Rust e traria o toolchain inteiro para dentro de uma árvore que decidiu não ter Rust nem para a Mesa. Um Adwaita só de SVG aqui seria um tema de ícones invisíveis. Contei os arquivos antes de decidir: a 40.1.1 traz 2042 PNGs pré-renderizados além de 745 SVGs, então os ícones aparecem sem librsvg nenhum. O preço é ficar numa versão de 2021 e não ter os símbolos novos; a alternativa era Rust, e não paga. Corroborado pelo Alpine 3.15-stable, que é o branch daquela época — as distribuições atuais já não pinam esta versão."
+LICENSE="CC-BY-SA-3.0 OR LGPL-3.0-or-later"
+SRC="https://download.gnome.org/sources/adwaita-icon-theme/40/adwaita-icon-theme-$VERSION.tar.xz"
+SHA256=0b6c436ed6ad9887a88ada1f72a0197b1eb73b020d8d344abab4c7fa7250f8f6
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    ./configure --prefix=/usr --datadir=/usr/share
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+
+    # icon-theme.cache é gerado por gtk-update-icon-cache e reflete o que está
+    # instalado na máquina — estado, não payload. O GTK varre o diretório
+    # quando o cache não existe, então removê-lo custa desempenho no primeiro
+    # acesso e nada mais.
+    find "$STAGE" -name 'icon-theme.cache' -delete
+
+    [ -e "$STAGE/usr/share/icons/Adwaita/index.theme" ] || {
+        echo "adwaita-icon-theme: index.theme não foi instalado" >&2
+        exit 1
+    }
+    # A razão de ser desta versão é haver PNG; se um dia sumir, o tema fica
+    # invisível sem librsvg e é melhor falhar aqui do que descobrir na tela.
+    n=$(find "$STAGE/usr/share/icons/Adwaita" -name '*.png' | wc -l)
+    [ "$n" -gt 1000 ] || {
+        echo "adwaita-icon-theme: só $n PNGs; sem librsvg o tema ficaria invisível" >&2
+        exit 1
+    }
+}

@@ -1,0 +1,27 @@
+NAME=hicolor-icon-theme
+VERSION=0.18
+KIND=source
+TOOLCHAIN=native
+DEPS=""
+BUILD_DEPS="meson ninja"
+ABOUT="O tema de ícones de última instância. Não contém ícone nenhum: contém a ÁRVORE DE DIRETÓRIOS onde qualquer aplicação deposita os seus, e o index.theme que descreve essa árvore. Toda implementação da especificação de ícones do freedesktop cai aqui quando o tema escolhido não tem o ícone pedido, e o GTK reclama em voz alta se ele não existir. Reparo importante para quem for mexer nesta receita: o payload são 676 diretórios VAZIOS, criados por install_emptydir. Isso é o oposto do padrão do resto da árvore, onde diretório vazio é resto de build e sai com find -type d -empty -delete — aqui, apagá-los apagaria o pacote inteiro. Cada um vira uma claim de diretório no manifesto."
+LICENSE=GPL-2.0-or-later
+SRC="https://icon-theme.freedesktop.org/releases/hicolor-icon-theme-$VERSION.tar.xz"
+SHA256=db0e50a80aa3bf64bb45cbca5cf9f75efd9348cf2ac690b907435238c3cf81d7
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release
+    DESTDIR="$STAGE" ninja -C build install
+
+    # Sem find -type d -empty -delete, deliberadamente: ver o ABOUT.
+    [ -e "$STAGE/usr/share/icons/hicolor/index.theme" ] || {
+        echo "hicolor-icon-theme: index.theme não foi instalado" >&2
+        exit 1
+    }
+    n=$(find "$STAGE/usr/share/icons/hicolor" -type d | wc -l)
+    [ "$n" -gt 600 ] || {
+        echo "hicolor-icon-theme: só $n diretórios; a árvore do tema não foi criada" >&2
+        exit 1
+    }
+}

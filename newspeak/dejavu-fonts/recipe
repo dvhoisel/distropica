@@ -1,0 +1,34 @@
+NAME=dejavu-fonts
+VERSION=2.37
+KIND=source
+TOOLCHAIN=native
+DEPS="fontconfig"
+BUILD_DEPS=""
+ABOUT="As fontes da distro. Entram porque sem nenhuma fonte instalada o fontconfig não encontra nada, o pango não consegue escolher tipo e uma janela GTK abre sem desenhar uma única letra — o que separa 'a pilha gráfica compila' de 'a pilha gráfica mostra alguma coisa'. DejaVu por três razões: cobertura ampla de Unicode, incluindo tudo que o português precisa e muito além; licença permissiva derivada da Bitstream Vera, sem cláusula de nome reservado que complique redistribuição; e as três famílias que o mundo espera encontrar — Sans, Serif e Mono — o que faz o padrão sans-serif/serif/monospace do fontconfig resolver para algo real em vez de falhar. Não há o que compilar: são arquivos TTF. Os .conf que acompanham vão para o diretório de configuração disponível do fontconfig e ficam ligados por symlink no conf.d, que é como o fontconfig espera receber regras de terceiros — sem o 57-dejavu-sans.conf, pedir 'sans-serif' não resolveria para a DejaVu Sans."
+LICENSE="Bitstream-Vera AND Public-Domain"
+SRC="https://sourceforge.net/projects/dejavu/files/dejavu/$VERSION/dejavu-fonts-ttf-$VERSION.tar.bz2/download"
+SHA256=fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7
+
+build() {
+    tar -xjf "$DL" --strip-components=1
+    install -dm755 "$STAGE/usr/share/fonts/dejavu"
+    install -m644 ttf/*.ttf "$STAGE/usr/share/fonts/dejavu/"
+
+    # O fontconfig lê o conf.d, e a convenção é que ele contenha symlinks para
+    # o conf.avail — assim a regra pode ser desativada removendo o link sem
+    # tocar no arquivo que o pacote instalou.
+    install -dm755 "$STAGE/etc/fonts/conf.avail" "$STAGE/etc/fonts/conf.d"
+    for c in fontconfig/*.conf; do
+        n=$(basename "$c")
+        install -m644 "$c" "$STAGE/etc/fonts/conf.avail/$n"
+        ln -sf "../conf.avail/$n" "$STAGE/etc/fonts/conf.d/$n"
+    done
+
+    install -Dm644 LICENSE "$STAGE/usr/share/licenses/dejavu-fonts/LICENSE"
+
+    # Um cache do fontconfig é estado de máquina: depende de quais fontes estão
+    # instaladas no momento e é reconstruído por fc-cache. Não pode entrar no
+    # manifesto, pelo mesmo motivo do hwdb.bin do eudev.
+    rm -rf "$STAGE/var/cache/fontconfig"
+    find "$STAGE" -type d -empty -delete
+}
