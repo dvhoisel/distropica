@@ -1,0 +1,49 @@
+NAME=python-glibc
+VERSION=3.14.6
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc zlib openssl ncurses libffi"
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf"
+SUPERSEDES="python"
+ABOUT="O Python de verdade da distro, sucessor do interpretador-semente. O python semente é BUILD_DEPS do glibc: ele precisa existir ANTES da libc, então é compilado com o toolchain-semente musl do Zig, estático e sem nenhum módulo de extensão C — sem zlib, sem ssl, sem hashlib, sem ctypes. Isso basta para os scripts de build do glibc e para nada mais; o Meson, por exemplo, importa gzip e morre. Um Python nativo não pode ocupar o lugar do semente, porque seria circular. Daí a sucessão provisional, o mesmo padrão de gcc→gcc-pass2 e binutils→binutils-glibc: o semente cede os caminhos quando este chega. Continuam ausentes _bz2, _lzma, _sqlite3 e readline — não há bzip2, xz, sqlite nem readline nesta árvore, e cada um é uma decisão própria. SEM pip, deliberadamente: uma distro cuja premissa é não ter gerenciador de pacotes não ganha um segundo pela porta dos fundos."
+LICENSE=Python-2.0.1
+SRC="https://www.python.org/ftp/python/$VERSION/Python-$VERSION.tar.xz"
+SHA256=143b1dddefaec3bd2e21e3b839b34a2b7fb9842272883c576420d605e9f30c63
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    # Ao contrário do semente, aqui os módulos de extensão são .so em
+    # lib-dynload: é o que faz `import zlib` funcionar. Sem MODULE_BUILDTYPE.
+    #
+    # -rpath-link,/usr/lib: padrão recorrente desta toolchain. A libcrypto
+    # precisa da libz, a libncursesw precisa da libtinfo, e o ld nativo não
+    # resolve dependência transitiva sozinho — sem isto os testes de link do
+    # configure respondem "não" e os módulos somem em silêncio, que é
+    # exatamente o modo de falha que trouxe esta receita à existência.
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --with-openssl=/usr \
+        --with-system-ffi \
+        --without-ensurepip \
+        --with-ensurepip=no \
+        --disable-test-modules \
+        --enable-optimizations=no
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    # Guarda: esta receita existe para que os módulos de extensão existam.
+    # Se o configure decidir em silêncio que zlib ou ssl não estão lá, o
+    # build "passa" e entrega o mesmo Python inútil de antes.
+    for modulo in zlib _ssl _hashlib _ctypes _curses; do
+        ls "$STAGE"/usr/lib/python*/lib-dynload/"$modulo"*.so >/dev/null 2>&1 || {
+            echo "FATAL: módulo $modulo não foi construído"
+            echo "lib-dynload contém:"
+            ls "$STAGE"/usr/lib/python*/lib-dynload/ 2>/dev/null | head -30
+            exit 1
+        }
+    done
+    # __pycache__ prende caminho absoluto e mtime dentro do .pyc.
+    find "$STAGE" -type d -name __pycache__ -exec rm -rf {} +
+    find "$STAGE" -type d -empty -delete
+}

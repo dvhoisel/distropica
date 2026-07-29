@@ -2,7 +2,8 @@ NAME=python
 VERSION=3.14.6
 KIND=source
 BUILD_DEPS=binutils
-ABOUT="interpretador Python; prereq de build da glibc (scripts .py do build). python.org não publica binário Linux (SPEC-0007) — daí a ironia de ter que compilá-lo antes da glibc. Build mínimo: sem shared, pip, módulos de teste ou bindings externos de OpenSSL/zlib; a glibc só usa Python básico"
+PROVISIONAL=1
+ABOUT="interpretador Python SEMENTE; prereq de build da glibc (scripts .py do build). PROVISIONAL: cede os caminhos ao python-glibc, que é o interpretador de verdade — este aqui não tem nenhum módulo de extensão C e existe só para a glibc conseguir se construir. python.org não publica binário Linux (SPEC-0007) — daí a ironia de ter que compilá-lo antes da glibc. Build mínimo: sem shared, pip, módulos de teste ou bindings externos de OpenSSL/zlib; a glibc só usa Python básico"
 LICENSE=Python-2.0.1
 SRC="https://www.python.org/ftp/python/$VERSION/Python-$VERSION.tar.xz"
 SHA256=143b1dddefaec3bd2e21e3b839b34a2b7fb9842272883c576420d605e9f30c63
@@ -22,7 +23,16 @@ _ssl
 _hashlib
 zlib
 SETUP
-    MODULE_BUILDTYPE=static ./configure --prefix=/usr --disable-shared \
+    # PKG_CONFIG=/bin/false: este interpretador tem de ser CEGO ao rootfs.
+    # Ele compila com zig/musl, mas o configure inspeciona o ambiente — e no
+    # dia em que o pkgconf entrou na árvore (por causa do netfilter, sem
+    # nenhuma relação com Python), o check de zlib passou a responder "sim",
+    # o USE_ZLIB_CRC32 foi ligado e o binascii falhou procurando zlib.h que o
+    # sysroot musl não tem. Acrescentar uma ferramenta de build mudou a
+    # configuração de um pacote sem relação com ela: é a não-hermeticidade da
+    # SPEC-0013 §5. Enquanto a view de build não for fechada, declarar a
+    # cegueira é a defesa disponível.
+    MODULE_BUILDTYPE=static PKG_CONFIG=/bin/false ./configure --prefix=/usr --disable-shared \
         --without-ensurepip --with-ensurepip=no --disable-test-modules \
         CFLAGS="-Wno-error=date-time -Wno-error"
     make -j"$JOBS"
