@@ -1,0 +1,35 @@
+NAME=python-markupsafe
+VERSION=3.0.3
+KIND=source
+TOOLCHAIN=native
+DEPS="python-glibc"
+BUILD_DEPS="python-glibc"
+ABOUT="Escapa texto para marcação sem escapar duas vezes o que já é seguro. Entra na árvore por uma razão só: o Mako a exige, e o Mako é exigência dura da Mesa. Traz um acelerador em C, _speedups.c, que NÃO é compilado aqui — construí-lo pediria setuptools, e esta árvore não tem instalador de pacotes Python por decisão, não por esquecimento. O __init__.py tenta importar o _speedups e cai no _native puro quando não acha, então a ausência é suportada pelo próprio pacote e não uma mutilação; para um motor de template que roda no build e não em produção, a diferença de velocidade não paga o custo de um segundo gerenciador."
+LICENSE=BSD-3-Clause
+SRC="https://pypi.org/packages/source/M/MarkupSafe/markupsafe-$VERSION.tar.gz"
+SHA256=722695808f4b6457b320fdc131280796bdceb04ab50fe1795cd540799ebe1698
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    sitedir=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+    install -dm755 "$STAGE$sitedir"
+    cp -a src/markupsafe "$STAGE$sitedir/"
+    # Fonte do acelerador e stub de tipos não são payload de runtime: um só
+    # serve para compilar o que aqui não se compila, o outro só ao verificador
+    # de tipos.
+    rm -f "$STAGE$sitedir/markupsafe/_speedups.c" \
+          "$STAGE$sitedir/markupsafe/_speedups.pyi"
+    find "$STAGE$sitedir/markupsafe" -type d -name __pycache__ -exec rm -rf {} +
+    # Quem escreveria o .dist-info seria o instalador, que aqui não existe.
+    # Sem ele importlib.metadata.version() levanta PackageNotFoundError — e
+    # este pacote consulta a si mesmo assim no seu __version__, de modo que
+    # copiar só o diretório do módulo entrega algo que importa mas não se
+    # reconhece. O mínimo da PEP 566 resolve.
+    install -dm755 "$STAGE$sitedir/markupsafe-$VERSION.dist-info"
+    cat > "$STAGE$sitedir/markupsafe-$VERSION.dist-info/METADATA" <<EOF
+Metadata-Version: 2.1
+Name: markupsafe
+Version: $VERSION
+EOF
+    chmod 644 "$STAGE$sitedir/markupsafe-$VERSION.dist-info/METADATA"
+}

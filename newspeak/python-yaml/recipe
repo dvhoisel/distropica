@@ -1,0 +1,30 @@
+NAME=python-yaml
+VERSION=6.0.3
+KIND=source
+TOOLCHAIN=native
+DEPS="python-glibc"
+BUILD_DEPS="python-glibc"
+ABOUT="Leitor e escritor de YAML. Entra por imposição e não por uso: o meson.build da Mesa faz import yaml e aborta se falhar, sem condicionar a verificação aos drivers escolhidos — quem precisa de YAML de fato são os geradores do freedreno e do panfrost, que esta árvore não constrói. Pagar uma dependência por uma checagem que não se aplica é feio, mas contornar seria remendar o meson.build da Mesa, e um patch nosso num arquivo de configuração alheio é dívida pior que um pacote a mais. O acelerador em C sobre a libyaml não é compilado, pelo mesmo motivo do markupsafe; o __init__.py resolve isso sozinho com __with_libyaml__ = False e usa o analisador puro. É o archive do GitHub, e não o sdist do PyPI, porque é o do GitHub que o Alpine pina — e assim a conferência do hash tem duas fontes independentes."
+LICENSE=MIT
+SRC="https://github.com/yaml/pyyaml/archive/$VERSION.tar.gz"
+SHA256=c7b45011e052458ae79015d5eea3046c37d099023d4b253dde26ee1c29ea2f36
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    sitedir=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+    install -dm755 "$STAGE$sitedir"
+    cp -a lib/yaml "$STAGE$sitedir/"
+    # lib/_yaml é o nome legado de topo: um __init__.py que reexporta
+    # yaml._yaml, a extensão C. Sem a extensão ele só sabe levantar ImportError,
+    # então instalá-lo seria plantar um pacote que só serve para quebrar.
+    find "$STAGE$sitedir/yaml" -type d -name __pycache__ -exec rm -rf {} +
+    # Ver a nota do python-markupsafe: sem instalador ninguém escreve o
+    # .dist-info, e a consulta de metadados falha para quem perguntar.
+    install -dm755 "$STAGE$sitedir/pyyaml-$VERSION.dist-info"
+    cat > "$STAGE$sitedir/pyyaml-$VERSION.dist-info/METADATA" <<EOF
+Metadata-Version: 2.1
+Name: PyYAML
+Version: $VERSION
+EOF
+    chmod 644 "$STAGE$sitedir/pyyaml-$VERSION.dist-info/METADATA"
+}

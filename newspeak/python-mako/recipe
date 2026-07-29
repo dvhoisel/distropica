@@ -1,0 +1,37 @@
+NAME=python-mako
+VERSION=1.3.12
+KIND=source
+TOOLCHAIN=native
+DEPS="python-glibc python-markupsafe"
+BUILD_DEPS="python-glibc"
+ABOUT="Motor de template que compila o template para código Python antes de executá-lo. Está aqui porque a Mesa não é só C: boa parte do que ela compila é gerada no build a partir de templates — tabelas de despacho de GL, tabelas de formato de pixel, os wrappers da API. Sem o Mako o meson da Mesa para na configuração com erro explícito, não é opcional nem contornável por flag. Python puro; a única dependência é o markupsafe, que veio junto por isso e por nada mais."
+LICENSE=MIT
+SRC="https://pypi.org/packages/source/M/Mako/mako-$VERSION.tar.gz"
+SHA256=9f778e93289bd410bb35daadeb4fc66d95a746f0b75777b942088b7fd7af550a
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    sitedir=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+    install -dm755 "$STAGE$sitedir"
+    cp -a mako "$STAGE$sitedir/"
+    find "$STAGE$sitedir/mako" -type d -name __pycache__ -exec rm -rf {} +
+    # O pacote publica o comando mako-render (console_scripts do setup.cfg).
+    # A Mesa não o usa, mas ele é o pacote sendo ele mesmo; escrito à mão
+    # porque quem geraria o wrapper seria o setuptools, ausente por decisão.
+    install -dm755 "$STAGE/usr/bin"
+    cat > "$STAGE/usr/bin/mako-render" <<'EOF'
+#!/usr/bin/python3
+from mako.cmd import cmdline
+cmdline()
+EOF
+    chmod 755 "$STAGE/usr/bin/mako-render"
+    # Ver a nota do python-markupsafe: sem instalador ninguém escreve o
+    # .dist-info, e a consulta de metadados falha para quem perguntar.
+    install -dm755 "$STAGE$sitedir/mako-$VERSION.dist-info"
+    cat > "$STAGE$sitedir/mako-$VERSION.dist-info/METADATA" <<EOF
+Metadata-Version: 2.1
+Name: Mako
+Version: $VERSION
+EOF
+    chmod 644 "$STAGE$sitedir/mako-$VERSION.dist-info/METADATA"
+}

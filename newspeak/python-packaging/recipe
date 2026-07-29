@@ -1,0 +1,27 @@
+NAME=python-packaging
+VERSION=26.2
+KIND=source
+TOOLCHAIN=native
+DEPS="python-glibc"
+BUILD_DEPS="python-glibc"
+ABOUT="Compara versões, nomes e marcadores de ambiente segundo as normas de empacotamento do Python. Entra por um detalhe do meson.build da Mesa: para conferir se o Mako é recente o bastante ele tenta packaging.version.Version e, se falhar, distutils.version.StrictVersion — mas o distutils foi removido do Python em 3.12, e o interpretador desta árvore é 3.14. O caminho de fallback não existe mais, então o que era alternativa virou obrigação, e a ausência dá erro fatal de configuração e não uma degradação silenciosa. Python puro, sem dependências próprias."
+LICENSE="Apache-2.0 OR BSD-2-Clause"
+SRC="https://pypi.org/packages/source/p/packaging/packaging-$VERSION.tar.gz"
+SHA256=ff452ff5a3e828ce110190feff1178bb1f2ea2281fa2075aadb987c2fb221661
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    sitedir=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+    install -dm755 "$STAGE$sitedir"
+    cp -a src/packaging "$STAGE$sitedir/"
+    find "$STAGE$sitedir/packaging" -type d -name __pycache__ -exec rm -rf {} +
+    # Ver a nota do python-markupsafe: sem instalador ninguém escreve o
+    # .dist-info, e a consulta de metadados falha para quem perguntar.
+    install -dm755 "$STAGE$sitedir/packaging-$VERSION.dist-info"
+    cat > "$STAGE$sitedir/packaging-$VERSION.dist-info/METADATA" <<EOF
+Metadata-Version: 2.1
+Name: packaging
+Version: $VERSION
+EOF
+    chmod 644 "$STAGE$sitedir/packaging-$VERSION.dist-info/METADATA"
+}
