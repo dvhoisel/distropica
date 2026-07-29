@@ -3,7 +3,7 @@ VERSION=3.14.6
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc zlib openssl ncurses libffi"
-BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf"
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf busybox"
 SUPERSEDES="python"
 ABOUT="O Python de verdade da distro, sucessor do interpretador-semente. O python semente é BUILD_DEPS do glibc: ele precisa existir ANTES da libc, então é compilado com o toolchain-semente musl do Zig, estático e sem nenhum módulo de extensão C — sem zlib, sem ssl, sem hashlib, sem ctypes. Isso basta para os scripts de build do glibc e para nada mais; o Meson, por exemplo, importa gzip e morre. Um Python nativo não pode ocupar o lugar do semente, porque seria circular. Daí a sucessão provisional, o mesmo padrão de gcc→gcc-pass2 e binutils→binutils-glibc: o semente cede os caminhos quando este chega. Continuam ausentes _bz2, _lzma, _sqlite3 e readline — não há bzip2, xz, sqlite nem readline nesta árvore, e cada um é uma decisão própria. SEM pip, deliberadamente: uma distro cuja premissa é não ter gerenciador de pacotes não ganha um segundo pela porta dos fundos."
 LICENSE=Python-2.0.1
@@ -12,6 +12,21 @@ SHA256=143b1dddefaec3bd2e21e3b839b34a2b7fb9842272883c576420d605e9f30c63
 
 build() {
     tar -xJf "$DL" --strip-components=1
+    # O CPython 3.14.6 não compila contra o OpenSSL 4.0: o _ssl referencia
+    # TLSv1_method, TLSv1_1_method e SSLv3_method, que o OpenSSL 4 removeu, e
+    # o módulo falha ao importar com "undefined symbol". Sem o _ssl a guarda
+    # abaixo aborta — e um Python sem ssl é o mesmo problema que esta receita
+    # existe para resolver.
+    #
+    # É o conserto do PRÓPRIO upstream, e é temporário por construção: PR
+    # #146403 do CPython, o backport para o ramo 3.14 de gh-146207, assinado
+    # por Victor Stinner em 2026-03-25. Sai daqui quando houver uma 3.14.7 —
+    # a 3.14.6 é a última publicada e o diretório da 3.15.0 ainda responde 404.
+    #
+    # É o segundo patch de fonte da árvore, e pelo mesmo motivo do primeiro (o
+    # nmap): o OpenSSL 4.0 mudou API e o mundo ainda não alcançou. O conteúdo
+    # entra no FINGERPRINT pelo snapshot de files/.
+    patch -p1 < "$WORK/openssl4.patch"
     # Ao contrário do semente, aqui os módulos de extensão são .so em
     # lib-dynload: é o que faz `import zlib` funcionar. Sem MODULE_BUILDTYPE.
     #
