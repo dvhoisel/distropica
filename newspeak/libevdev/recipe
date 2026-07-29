@@ -1,0 +1,24 @@
+NAME=libevdev
+VERSION=1.13.6
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc"
+ABOUT="Casca sobre a interface evdev do kernel: lê os eventos crus de teclado, mouse e touchpad de /dev/input e os entrega já normalizados, com o estado do dispositivo mantido entre leituras. O libinput é construído em cima dela. Usa python no build para gerar tabelas a partir dos cabeçalhos do kernel — e é o primeiro pacote da árvore a exigir o interpretador COMPLETO, não o semente."
+LICENSE=MIT
+SRC="https://www.freedesktop.org/software/libevdev/libevdev-$VERSION.tar.xz"
+SHA256=73f215eccbd8233f414737ac06bca2687e67c44b97d2d7576091aa9718551110
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Ddocumentation=disabled \
+        -Dtests=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    find "$STAGE" -type d -empty -delete
+}
