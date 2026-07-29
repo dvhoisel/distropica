@@ -1,0 +1,19 @@
+NAME=gperf
+VERSION=3.3
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2"
+BUILD_DEPS="make gcc-pass2 binutils-glibc"
+ABOUT="Gerador de funções de hash perfeito: recebe uma lista fixa de palavras e emite um reconhecedor em C sem colisão. Ferramenta de build, não superfície. Entra porque o fontconfig gera fcobjshash.h com ele e não constrói sem — o tarball não traz o arquivo pronto. Vale registrar a ironia: a receita do libcap desabilita a detecção de gperf com USE_GPERF=no justamente porque ele não existia nesta árvore, e a decisão continua certa lá (o libcap só o usa se o achar, e saída de build não pode depender do que o ambiente por acaso tem). Aqui é o contrário: é exigência declarada. Depende de gcc-pass2 em runtime pela libstdc++, por ser C++."
+LICENSE=GPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/gperf/gperf-$VERSION.tar.gz"
+SHA256=fd87e0aba7e43ae054837afd6cd4db03a3f2693deb3619085e6ed9d8d9604ad8
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure --prefix=/usr --docdir=/usr/share/doc/gperf
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    find "$STAGE" -type d -empty -delete
+}
