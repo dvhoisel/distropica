@@ -69,6 +69,28 @@ build() {
         rm -f "$STAGE/usr/bin/$auxiliar"
     done
 
+    # A glibc cria /usr/share/locale/<idioma>/LC_MESSAGES para as próprias
+    # traduções, mas não há msgfmt disponível quando ela é construída — e não
+    # pode haver: o gettext precisa do gcc-pass2, que precisa da glibc. Sobram
+    # 39 diretórios VAZIOS, um por idioma.
+    #
+    # Isso não é sujeira inofensiva. Diretório vazio no mundo B vira claim de
+    # ÁRVORE: prende o caminho e tudo abaixo dele. Como
+    # /usr/share/locale/<idioma>/LC_MESSAGES é precisamente onde TODO pacote
+    # deposita tradução, a glibc estava confiscando o diretório de traduções do
+    # sistema inteiro — gettext, glib, atk, gdk-pixbuf e GTK batiam todos em
+    # doublethink ali, e o pt_BR era um dos 39 confiscados.
+    #
+    # A regra é não reivindicar o que não se preenche. O /usr/share/locale em
+    # si permanece, porque locale.alias é arquivo de verdade da glibc.
+    find "$STAGE/usr/share/locale" -mindepth 1 -type d -empty -delete
+    remaining_locale_dir=$(find "$STAGE/usr/share/locale" -mindepth 1 -type d 2>/dev/null || true)
+    if [ -n "$remaining_locale_dir" ]; then
+        echo "FATAL: a glibc ainda reivindica diretório sob /usr/share/locale:" >&2
+        echo "$remaining_locale_dir" >&2
+        exit 1
+    fi
+
     # getconf e seus nomes de ABI são instalados como hardlinks. O manifesto
     # mundo-B ainda não representa esses grupos; normalize-os para arquivos
     # regulares independentes antes de selar o payload.
