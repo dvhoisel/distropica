@@ -1,0 +1,24 @@
+NAME=libpng
+VERSION=1.6.58
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc zlib"
+BUILD_DEPS="make gcc-pass2 binutils-glibc"
+ABOUT="Leitura e escrita de PNG. Está embaixo do cairo, do gdk-pixbuf e dos ícones do GTK — praticamente todo pixel que a pilha gráfica desenha a partir de arquivo passa por aqui. Depende da zlib porque o PNG é, na prática, um contêiner de fluxos deflate. É o tarball .tar.gz e não o .tar.xz por um motivo simples: é o que o Alpine pina, e assim a conferência é direta em vez de depender de eu afirmar que os dois contêm o mesmo."
+LICENSE=Libpng
+SRC="https://downloads.sourceforge.net/libpng/libpng-$VERSION.tar.gz"
+SHA256=8c9b05b675ca7301a458df2c2e46f26e1d41ff36b8863f8c33530bc58c2e6225
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    # -rpath-link: a libpng liga contra a libz, e as ferramentas do próprio
+    # pacote a puxam como transitiva ao ligar.
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-static
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    find "$STAGE" -type d -empty -delete
+}

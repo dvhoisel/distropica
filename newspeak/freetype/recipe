@@ -1,0 +1,30 @@
+NAME=freetype
+VERSION=2.14.3
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc zlib libpng"
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf"
+ABOUT="Rasterizador de fontes: transforma contorno vetorial em pixel. Toda letra que a distro desenhar na tela passa por aqui — fontconfig, cairo, pango e GTK estão todos em cima dele. Construído SEM harfbuzz de propósito: os dois se referenciam mutuamente (o autohinter do FreeType usa harfbuzz para agrupar glifos, e o harfbuzz precisa do FreeType), e quebrar o ciclo pelo lado do FreeType é o caminho padrão. A consequência é autohinting um pouco pior em escritas complexas; a alternativa seria construir FreeType duas vezes, o que fica para quando houver motivo medido."
+LICENSE="FTL OR GPL-2.0-or-later"
+SRC="https://downloads.sourceforge.net/freetype/freetype-$VERSION.tar.xz"
+SHA256=36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # --with-harfbuzz=no quebra o ciclo freetype↔harfbuzz. --with-brotli=no
+    # porque não há brotli nesta árvore: sem ele o FreeType apenas não
+    # descomprime fontes WOFF2, que é formato de web, não de sistema.
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-static \
+        --with-harfbuzz=no \
+        --with-brotli=no \
+        --with-bzip2=no \
+        --with-zlib=yes \
+        --with-png=yes
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    find "$STAGE" -type d -empty -delete
+}
