@@ -1,0 +1,29 @@
+NAME=libdrm
+VERSION=2.4.134
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf"
+ABOUT="Camada fina sobre os ioctl do Direct Rendering Manager do kernel. É por aqui que Mesa e compositor falam com o dispositivo gráfico — mesmo sem aceleração, o KMS (modeset, framebuffer, page flip) passa por ela. Sem os drivers de fabricante (intel, amdgpu, nouveau): este perfil pretende usar Mesa com softpipe, que rasteriza na CPU e não precisa deles; ligá-los seria compilar suporte a hardware que a distro não sabe usar. É o tarball de archive do GitLab do freedesktop, que é o que o Alpine pina — o diretório dri.freedesktop.org/libdrm ainda existe mas responde HTML para esta versão."
+LICENSE=MIT
+SRC="https://gitlab.freedesktop.org/mesa/libdrm/-/archive/libdrm-$VERSION/libdrm-libdrm-$VERSION.tar.gz"
+SHA256=28af861f62e7a2c3a48c5ff2ad4d01cf440a419f7f877de5caa7f73d3afa5367
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dintel=disabled \
+        -Dradeon=disabled \
+        -Damdgpu=disabled \
+        -Dnouveau=disabled \
+        -Dvmwgfx=disabled \
+        -Dman-pages=disabled \
+        -Dtests=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    find "$STAGE" -type d -empty -delete
+}
