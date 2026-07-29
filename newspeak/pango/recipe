@@ -11,7 +11,19 @@ SHA256=e65d6d117080dc3aeeb7d8b4b3b518f7383aa2e6cfce23117c623cd624764c2f
 
 build() {
     tar -xJf "$DL" --strip-components=1
-    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # O segundo -rpath-link aponta para o diretório de BUILD, não para o
+    # instalado, e é obrigatório aqui. O libpangocairo depende do libpangoft2,
+    # que este mesmo build acabou de produzir em build/pango; ao linkar os
+    # utilitários, o ld precisa resolver essa dependência e não tem onde
+    # procurar: /usr/lib ainda não tem pango nenhum, e o -rpath que o meson
+    # passa usa $ORIGIN, que não é expandido em tempo de link.
+    #
+    # Nas outras distros isso passa despercebido porque elas compilam pango
+    # com um pango ANTIGO já instalado, e o ld acha o libpangoft2 velho. Esta
+    # árvore constrói pango pela primeira vez, sem versão anterior para
+    # mascarar — o mesmo motivo pelo qual o build do kernel só revelou a falta
+    # do find -printf depois que a muleta do hospedeiro saiu.
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib -Wl,-rpath-link,$PWD/build/pango"
     meson setup build \
         --prefix=/usr \
         --libdir=lib \
