@@ -3,16 +3,21 @@
 > Uma distribuição Linux distópica. Não instala pacotes: **retifica registros**.
 
 **[Site oficial](https://distropica.com.br/)** ·
-**[Baixar a ISO de desenvolvimento (334 MiB)](https://distropica.com.br/releases/distropica-miniplenty-v2.iso)** ·
-**[SHA-256](https://distropica.com.br/releases/distropica-miniplenty-v2.iso.sha256)** ·
-**[Manifesto](https://distropica.com.br/releases/distropica-miniplenty-v2.iso.manifest)** ·
-**[Fontes correspondentes (544 MiB)](https://distropica.com.br/releases/distropica-miniplenty-v2-corresponding-sources.tar.zst)** ·
-**[SHA das fontes](https://distropica.com.br/releases/distropica-miniplenty-v2-corresponding-sources.tar.zst.sha256)** ·
-**[Inventário das fontes](https://distropica.com.br/releases/distropica-miniplenty-v2-sources.tsv)**
+**[Baixar a ISO de desenvolvimento (378 MiB)](https://distropica.com.br/releases/distropica-rede-v3.iso)** ·
+**[SHA-256](https://distropica.com.br/releases/distropica-rede-v3.iso.sha256)** ·
+**[Manifesto](https://distropica.com.br/releases/distropica-rede-v3.iso.manifest)** ·
+**[Fontes correspondentes](https://distropica.com.br/releases/distropica-rede-v3-corresponding-sources.tar.zst)** ·
+**[SHA das fontes](https://distropica.com.br/releases/distropica-rede-v3-corresponding-sources.tar.zst.sha256)** ·
+**[Inventário das fontes](https://distropica.com.br/releases/distropica-rede-v3-sources.tsv)**
 
-> **Atenção:** `miniplenty-v2` é uma imagem de desenvolvimento para VM UEFI.
+> **Atenção:** `rede-v3` é uma imagem de desenvolvimento para VM UEFI **64 bits**.
 > O instalador apaga integralmente o dispositivo escolhido. Use um disco virtual
 > descartável e confira o SHA-256 antes do boot.
+>
+> Requisitos da VM: firmware **EFI de 64 bits** (no VirtualBox, `--firmware efi64`;
+> o EFI de 32 bits não carrega o `BOOTX64.EFI` e reporta "no bootable medium"),
+> **3 GiB de RAM** — com menos, o instalador é morto pelo OOM killer ao validar a
+> closure em memória — e disco de pelo menos 4 GiB.
 
 A Distrópica parte de uma observação desconfortável sobre o mundo atual: os
 projetos novos (Zig, Go, Rust, os aplicativos das corporações) distribuem
@@ -49,8 +54,8 @@ nas combinações efetivamente distribuídas.
 Cada ISO, EFI, cache ou canal binário publicado deve vir acompanhado de acesso
 equivalente ao seu bundle de fontes correspondentes: revisão da Distrópica,
 crates Rust vendorizadas, fontes upstream exatas, configurações, patches,
-scripts, licenças e inventário. A imagem custom `miniplenty-v2` atende essa
-regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-miniplenty-v2-corresponding-sources.tar.zst),
+scripts, licenças e inventário. A imagem custom `rede-v3` atende essa
+regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-rede-v3-corresponding-sources.tar.zst),
 preso à revisão `941383e` e ao SHA-256 da ISO. O repositório público é a fonte
 do desenvolvimento, mas não substitui sozinho esse conjunto por artefato.
 Gerar uma imagem para uso privado não exige publicá-la; redistribuí-la
@@ -319,7 +324,7 @@ foram exercitadas numa cópia do target: os hashes conferiram, as versões
 executaram e `verify` terminou limpo. Sem rede, ambas falham fechado em vez de
 consumir o cache da mídia.
 
-A composição `target/distropica-miniplenty-v2.iso` incorpora essas receitas e
+A composição `target/distropica-rede-v3.iso` incorpora essas receitas e
 reutiliza exatamente o EFI, o canal e o cache da mídia aceita anteriormente. A
 recomposição levou cerca de 10 segundos e produziu SHA-256
 `06be0ed021a3916c76b8e823d1e3a7846246eaccf38f00a49f7e5190c5e07a13`.

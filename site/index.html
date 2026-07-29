@@ -165,12 +165,12 @@
         <h1>DISTRÓPICA</h1>
         <p class="lead">Uma distribuição Linux distópica. Não instala pacotes: <strong>retifica registros</strong>. Binário do mantenedor primeiro; depois, binário da Distrópica; fonte quando ninguém publica um.</p>
         <div class="actions">
-          <a class="button primary" href="/releases/distropica-miniplenty-v2.iso">Baixar ISO · 334 MiB</a>
-          <a class="button" href="/releases/distropica-miniplenty-v2-corresponding-sources.tar.zst">Fontes · 544 MiB</a>
+          <a class="button primary" href="/releases/distropica-rede-v3.iso">Baixar ISO · 378 MiB</a>
+          <a class="button" href="/releases/distropica-rede-v3-corresponding-sources.tar.zst">Fontes correspondentes</a>
           <a class="button" href="https://github.com/dvhoisel/distropica">Examinar o código</a>
         </div>
         <div class="facts" aria-label="Características da imagem">
-          <div class="fact"><b>miniplenty-v2</b><small>imagem de desenvolvimento</small></div>
+          <div class="fact"><b>rede-v3</b><small>imagem de desenvolvimento</small></div>
           <div class="fact"><b>Linux 7.1.4</b><small>kernel da mídia</small></div>
           <div class="fact"><b>GCC 15.3</b><small>toolchain nativa</small></div>
           <div class="fact"><b>GPL-3.0+</b><small>código próprio</small></div>
@@ -207,16 +207,16 @@
         <div class="download">
           <div>
             <h3>ISO UEFI para VirtualBox</h3>
-            <p>A imagem instala um sistema mínimo com Vim, ripgrep, Make, GCC/G++ e o Minitrue. Ela também leva receitas online para instalar yq como binário upstream e compilar GNU nano da fonte.</p>
+            <p>A imagem instala um sistema mínimo com Vim, ripgrep, Make, GCC/G++ e o Minitrue, mais um perfil de rede: nftables, WireGuard, nmap, mtr, tcpdump e bash. A raiz é ext4 em tabela GPT. Ela também leva receitas online para instalar yq como binário upstream e compilar GNU nano da fonte.</p>
             <div class="actions">
-              <a class="button primary" href="/releases/distropica-miniplenty-v2.iso">Baixar a ISO</a>
-              <a class="button" href="/releases/distropica-miniplenty-v2.iso.sha256">SHA-256</a>
-              <a class="button" href="/releases/distropica-miniplenty-v2.iso.manifest">Manifesto</a>
-              <a class="button" href="/releases/distropica-miniplenty-v2-corresponding-sources.tar.zst">Fontes correspondentes</a>
-              <a class="button" href="/releases/distropica-miniplenty-v2-corresponding-sources.tar.zst.sha256">SHA das fontes</a>
-              <a class="button" href="/releases/distropica-miniplenty-v2-sources.tsv">Inventário</a>
+              <a class="button primary" href="/releases/distropica-rede-v3.iso">Baixar a ISO</a>
+              <a class="button" href="/releases/distropica-rede-v3.iso.sha256">SHA-256</a>
+              <a class="button" href="/releases/distropica-rede-v3.iso.manifest">Manifesto</a>
+              <a class="button" href="/releases/distropica-rede-v3-corresponding-sources.tar.zst">Fontes correspondentes</a>
+              <a class="button" href="/releases/distropica-rede-v3-corresponding-sources.tar.zst.sha256">SHA das fontes</a>
+              <a class="button" href="/releases/distropica-rede-v3-sources.tsv">Inventário</a>
             </div>
-            <p class="hash"><strong>SHA-256</strong><br>06be0ed021a3916c76b8e823d1e3a7846246eaccf38f00a49f7e5190c5e07a13</p>
+            <p class="hash"><strong>SHA-256</strong><br>a709d6007aa22c6a494195c0c4e458cc48fe52318bfd426420c13d1a00602a38</p>
             <p class="hash"><strong>SHA-256 das fontes</strong><br>9e9ea4e8baaf247353f64ebce5eff41851a1a0034a4f57d44fab835a68fd7651</p>
           </div>
           <div>
@@ -225,6 +225,7 @@
               <li>Crie uma VM x86_64 com UEFI.</li>
               <li>Monte a ISO como unidade óptica.</li>
               <li>Use um disco virtual descartável de pelo menos 4 GiB.</li>
+              <li>Reserve pelo menos 3 GiB de RAM: o instalador valida a closure inteira em memória antes de tocar no disco.</li>
               <li>Depois de instalar, remova a ISO antes do reboot.</li>
             </ol>
             <pre><code>minitrue rectify yq

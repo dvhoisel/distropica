@@ -49,10 +49,10 @@ correspondentes àquele artefato. Esse conjunto deve incluir, conforme o caso:
 
 Uma receita com URL e hash é rastreabilidade, mas não substitui a retenção
 durável exigida de quem redistribui o binário. A imagem custom de
-desenvolvimento `miniplenty-v2` é acompanhada por um
-[bundle de fontes correspondentes](https://distropica.com.br/releases/distropica-miniplenty-v2-corresponding-sources.tar.zst),
-seu [hash](https://distropica.com.br/releases/distropica-miniplenty-v2-corresponding-sources.tar.zst.sha256)
-e um [inventário legível por máquina](https://distropica.com.br/releases/distropica-miniplenty-v2-sources.tsv).
+desenvolvimento `rede-v3` é acompanhada por um
+[bundle de fontes correspondentes](https://distropica.com.br/releases/distropica-rede-v3-corresponding-sources.tar.zst),
+seu [hash](https://distropica.com.br/releases/distropica-rede-v3-corresponding-sources.tar.zst.sha256)
+e um [inventário legível por máquina](https://distropica.com.br/releases/distropica-rede-v3-sources.tsv).
 Isso não promove a imagem a release oficial: o SBOM arquivo a arquivo e o
 inventário conclusivo de licenças continuam sendo gates dessa futura
 publicação.
