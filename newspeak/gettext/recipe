@@ -1,0 +1,36 @@
+NAME=gettext
+VERSION=1.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc ncurses"
+BUILD_DEPS="make gcc-pass2 binutils-glibc"
+ABOUT="As ferramentas de tradução do GNU. O que importa aqui é o msgfmt, que compila o .po legível do tradutor no .mo binário que o programa carrega em tempo de execução. Sua ausência era um erro silencioso e caro: o módulo i18n do Meson, quando não acha o msgfmt, apenas AVISA e descarta todos os alvos de tradução — glib, pango, gdk-pixbuf e GTK foram construídos assim e ficaram monolíngues sem que nada falhasse. É o tipo de defeito que só aparece na tela, meses depois. As funções de runtime (gettext, dgettext, setlocale) vêm do glibc, não daqui; este pacote é sobretudo ferramenta de build. Sem Java, sem C# e sem Emacs, que são back-ends de outras linguagens e um modo de editor — nada disso existe nesta árvore."
+LICENSE=GPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/gettext/gettext-$VERSION.tar.xz"
+SHA256=71132a3fb71e68245b8f2ac4e9e97137d3e5c02f415636eb508ae607bc01add7
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --sysconfdir=/etc \
+        --disable-static \
+        --disable-java \
+        --disable-csharp \
+        --disable-openmp \
+        --without-emacs \
+        --with-included-libunistring \
+        --with-included-libxml
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+
+    # A razão de existir do pacote. Se o msgfmt não sair, as traduções voltam
+    # a ser descartadas em silêncio no próximo build do GTK.
+    [ -x "$STAGE/usr/bin/msgfmt" ] || {
+        echo "gettext: msgfmt não foi produzido" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

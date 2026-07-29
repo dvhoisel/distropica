@@ -1,0 +1,44 @@
+NAME=pango
+VERSION=1.57.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib harfbuzz fribidi cairo fontconfig freetype"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc"
+ABOUT="Camada de layout de texto: recebe um parágrafo, escolhe as fontes, chama o harfbuzz para moldar cada trecho, resolve a ordem bidirecional com o fribidi, quebra as linhas e manda o cairo desenhar. É o que está entre 'uma string' e 'texto na tela', e o GTK3 não desenha uma letra sem ele. Amarra quase toda a camada de tipografia desta árvore de uma vez — fontconfig para achar as fontes, freetype para lê-las, harfbuzz para moldar, fribidi para ordenar, cairo para pintar. Sem xft, que é o caminho do X11; sem libthai, que é quebra de linha específica do tailandês e uma dependência a mais por um idioma que ninguém aqui pediu; sem sysprof, que é instrumentação de perfil."
+LICENSE=LGPL-2.0-or-later
+SRC="https://download.gnome.org/sources/pango/1.57/pango-$VERSION.tar.xz"
+SHA256=e65d6d117080dc3aeeb7d8b4b3b518f7383aa2e6cfce23117c623cd624764c2f
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dfontconfig=enabled \
+        -Dfreetype=enabled \
+        -Dcairo=enabled \
+        -Dxft=disabled \
+        -Dlibthai=disabled \
+        -Dsysprof=disabled \
+        -Dintrospection=disabled \
+        -Ddocumentation=false \
+        -Dgtk_doc=false \
+        -Dman-pages=false \
+        -Dbuild-testsuite=false \
+        -Dbuild-examples=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    # O GTK3 pede pangocairo e pangoft2 por nome, não só pango; se o cairo ou
+    # o freetype não tivessem sido achados o build passaria em silêncio e só o
+    # GTK reprovaria, três passos adiante — foi assim com o mtr e o curses.
+    for pc in pango.pc pangocairo.pc pangoft2.pc; do
+        [ -e "$STAGE/usr/lib/pkgconfig/$pc" ] || {
+            echo "pango: $pc não foi produzido" >&2
+            exit 1
+        }
+    done
+    find "$STAGE" -type d -empty -delete
+}

@@ -1,0 +1,46 @@
+NAME=gdk-pixbuf
+VERSION=2.42.12
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib libpng"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc gettext"
+ABOUT="Carregador de imagens do GTK: lê PNG, GIF e afins do disco e entrega um buffer de pixels que o cairo desenha. É por aqui que passam todos os ícones da interface. Sem JPEG e sem TIFF, que exigiriam libjpeg e libtiff — nenhuma das duas existe nesta árvore, e cada uma é uma decisão própria a tomar quando algo de fato as pedir; o GTK não pede. Os carregadores de PNG e GIF são compilados PARA DENTRO da biblioteca (builtin_loaders) em vez de virarem módulos .so carregados por um cache. Isso é deliberado: o mecanismo de módulos exige rodar gdk-pixbuf-query-loaders depois da instalação para gerar loaders.cache, e esse arquivo é estado de máquina, não payload — teria o mesmo problema do hwdb.bin do eudev, que também é gerado no primeiro boot e não pode entrar no manifesto. Compilando para dentro, o problema não existe. Sem gio_sniffing: essa opção manda o gdk-pixbuf identificar o tipo do arquivo pela base de MIME do GIO, o que exige o shared-mime-info — e ele traria libxml2 e itstool atrás, três pacotes para decidir se um arquivo é PNG. Desligado, ele usa a própria detecção por bytes mágicos, que é o que sempre fez e basta para os ícones da interface."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/gdk-pixbuf/2.42/gdk-pixbuf-$VERSION.tar.xz"
+SHA256=b9505b3445b9a7e48ced34760c3bcb73e966df3ac94c95a148cb669ab748e3c7
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dpng=enabled \
+        -Dgif=enabled \
+        -Djpeg=disabled \
+        -Dtiff=disabled \
+        -Dothers=disabled \
+        -Dbuiltin_loaders=png,gif \
+        -Dintrospection=disabled \
+        -Dgtk_doc=false \
+        -Ddocs=false \
+        -Dman=false \
+        -Dtests=false \
+        -Dinstalled_tests=false \
+        -Drelocatable=false \
+        -Dgio_sniffing=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    # Cache de módulos é estado de máquina e não pode entrar no manifesto. Com
+    # os carregadores compilados para dentro ele não deveria nem existir; se
+    # existir, é porque algum módulo virou .so e a premissa acima caiu.
+    rm -f "$STAGE/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
+    if [ -d "$STAGE/usr/lib/gdk-pixbuf-2.0" ] && \
+       find "$STAGE/usr/lib/gdk-pixbuf-2.0" -name '*.so' | grep -q .; then
+        echo "gdk-pixbuf: carregador virou módulo .so; o cache voltaria a ser necessário" >&2
+        exit 1
+    fi
+    find "$STAGE" -type d -empty -delete
+}

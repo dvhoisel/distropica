@@ -1,0 +1,24 @@
+NAME=atk
+VERSION=2.38.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf gettext"
+ABOUT="Camada de acessibilidade do GTK: as interfaces que um widget implementa para se descrever a um leitor de tela — que é um botão, que texto tem, se está marcado. O GTK3 a exige como dependência dura, e não há como desligá-la. Entra sozinha, sem o at-spi2, porque a PONTE de acessibilidade (atk-bridge) só é exigida pelo backend X11 do GTK, que aqui está desligado — verificado no meson.build dele, onde o atk-bridge-2.0 aparece dentro do bloco guardado por x11_enabled. Isso poupa o dbus e o at-spi2-core inteiros. O resultado é que as interfaces de acessibilidade existem e os widgets as implementam, mas nada as consome ainda: sem a ponte, um leitor de tela não enxerga esta árvore. É uma limitação real, e consertá-la é trazer dbus e at-spi2 quando alguém precisar. Última versão avulsa do ATK: da 2.46 em diante ele foi absorvido pelo at-spi2-core, e por isso Alpine, Void, Arch e Fedora não o empacotam mais — a corroboração do hash aqui é o Gentoo mais o sha256sum publicado pelo GNOME, e não duas distribuições independentes como no resto da árvore."
+LICENSE=LGPL-2.0-or-later
+SRC="https://download.gnome.org/sources/atk/2.38/atk-$VERSION.tar.xz"
+SHA256=ac4de2a4ef4bd5665052952fe169657e65e895c5057dffb3c2a810f6191a0c36
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Ddocs=false \
+        -Dintrospection=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    find "$STAGE" -type d -empty -delete
+}

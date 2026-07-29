@@ -1,0 +1,59 @@
+NAME=gtk3
+VERSION=3.24.52
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib cairo pango gdk-pixbuf atk libepoxy fribidi wayland wayland-protocols libxkbcommon mesa fontconfig freetype harfbuzz"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc wayland-protocols gettext"
+ABOUT="O toolkit gráfico — janelas, botões, campos de texto, o desenho e o tratamento de evento. É o topo da pilha E4b e o motivo pelo qual tudo abaixo dele foi construído. Só o backend Wayland: x11, broadway, win32 e quartz desligados. Desligar o X11 não é só remover código morto — é o que dispensa o atk-bridge, e com ele o dbus e o at-spi2-core inteiros, porque no meson.build do GTK a dependência do atk-bridge-2.0 mora dentro do bloco guardado por x11_enabled. Sem introspection, que serviria a ligações para outras linguagens e exigiria o gobject-introspection; sem colord, que é gestão de perfil de cor; sem tracker3, que é indexação de arquivos para o diálogo de busca; sem cloudproviders, que integra armazenamento remoto por dbus. O único backend de impressão é o de arquivo: os outros exigiriam CUPS. Falta ainda o compositor — o GTK fala o protocolo Wayland, mas sem alguém do outro lado da linha ele não abre janela nenhuma."
+LICENSE=LGPL-2.0-or-later
+SRC="https://download.gnome.org/sources/gtk/3.24/gtk-$VERSION.tar.xz"
+SHA256=80931fa472a77b9a164f6740e3c0b444fac6770054632d35a7ff9d679e5e7b9f
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dwayland_backend=true \
+        -Dx11_backend=false \
+        -Dbroadway_backend=false \
+        -Dwin32_backend=false \
+        -Dquartz_backend=false \
+        -Dxinerama=no \
+        -Dcolord=no \
+        -Dcloudproviders=false \
+        -Dtracker3=false \
+        -Dprofiler=false \
+        -Dprint_backends=file \
+        -Dintrospection=false \
+        -Dgtk_doc=false \
+        -Dman=false \
+        -Ddemos=false \
+        -Dexamples=false \
+        -Dtests=false \
+        -Dinstalled_tests=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    # O que importa é o que o Firefox e qualquer aplicação GTK vão procurar.
+    # A Mesa ensinou que conferir a intenção da opção não basta: assertam-se
+    # os artefatos.
+    [ -e "$STAGE/usr/lib/pkgconfig/gtk+-3.0.pc" ] || {
+        echo "gtk3: gtk+-3.0.pc não foi produzido" >&2
+        exit 1
+    }
+    [ -e "$STAGE/usr/lib/pkgconfig/gtk+-wayland-3.0.pc" ] || {
+        echo "gtk3: backend Wayland não foi produzido" >&2
+        exit 1
+    }
+    if [ -e "$STAGE/usr/lib/pkgconfig/gtk+-x11-3.0.pc" ]; then
+        echo "gtk3: backend X11 apareceu, e não deveria" >&2
+        exit 1
+    fi
+    # Estado de máquina não entra no manifesto: o cache de módulos de entrada
+    # é gerado por gtk-query-immodules-3.0 e depende do que está instalado.
+    rm -f "$STAGE/usr/lib/gtk-3.0/3.0.0/immodules.cache"
+    find "$STAGE" -type d -empty -delete
+}

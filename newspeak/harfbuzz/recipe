@@ -1,0 +1,35 @@
+NAME=harfbuzz
+VERSION=14.2.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2 glib freetype"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf"
+ABOUT="Motor de moldagem de texto: recebe uma sequência de caracteres e uma fonte e devolve quais glifos desenhar, onde e com que ligaduras. É o que transforma 'fi' em um glifo só e o que faz o árabe e o devanágari serem escritos corretamente em vez de letra a letra. O Pango o exige, e por isso o GTK também. Escrito em C++, daí o gcc-pass2 em DEPS — quem é dono da libstdc++ nesta árvore é ele. Sem ICU, sem graphite2 e sem cairo: o primeiro traria uma base Unicode gigante que o glib já cobre para o nosso uso, o segundo é um motor de moldagem alternativo que ninguém aqui pede, e o terceiro só serve ao hb-view, que é utilitário de depuração e está desligado junto. Sem essas três, o harfbuzz usa o glib como provedor de propriedades Unicode."
+LICENSE=MIT
+SRC="https://github.com/harfbuzz/harfbuzz/releases/download/$VERSION/harfbuzz-$VERSION.tar.xz"
+SHA256=a54a5d8e9380a41fbb762ce367bcbf7704792dfca0d93f1bbca86c5a57902e0e
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dglib=enabled \
+        -Dgobject=enabled \
+        -Dfreetype=enabled \
+        -Dcairo=disabled \
+        -Dchafa=disabled \
+        -Dpng=disabled \
+        -Dicu=disabled \
+        -Dgraphite2=disabled \
+        -Dtests=disabled \
+        -Ddocs=disabled \
+        -Dutilities=disabled \
+        -Dbenchmark=disabled \
+        -Dintrospection=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    find "$STAGE" -type d -empty -delete
+}

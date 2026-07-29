@@ -1,0 +1,25 @@
+NAME=fribidi
+VERSION=1.0.16
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf"
+ABOUT="Implementação do algoritmo bidirecional do Unicode: decide a ordem visual de um texto que mistura escrita da esquerda para a direita com árabe ou hebraico. Não é enfeite de internacionalização — o Pango a exige como dependência dura, e sem ela não há GTK. Pacote pequeno e antigo, do tipo que faz uma coisa só; a única decisão aqui é não construir a documentação, que pediria c2man."
+LICENSE=LGPL-2.1-or-later
+SRC="https://github.com/fribidi/fribidi/releases/download/v$VERSION/fribidi-$VERSION.tar.xz"
+SHA256=1b1cde5b235d40479e91be2f0e88a309e3214c8ab470ec8a2744d82a5a9ea05c
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Ddocs=false \
+        -Dbin=true \
+        -Dtests=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    find "$STAGE" -type d -empty -delete
+}
