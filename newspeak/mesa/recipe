@@ -1,0 +1,78 @@
+NAME=mesa
+VERSION=26.1.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2 libdrm wayland expat zlib"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf flex bison wayland-protocols python-glibc python-mako python-markupsafe python-packaging python-yaml"
+ABOUT="A implementação de OpenGL e EGL da árvore, e a razão de existir da camada gráfica: sem ela não há GTK e não há Firefox. Construída SÓ com o softpipe, o rasterizador por software mais simples do Gallium, e com llvm=disabled. Essa é a decisão central da receita e vale explicá-la: o llvmpipe é várias vezes mais rápido porque compila os shaders em tempo de execução, mas para isso arrasta o LLVM inteiro — sozinho maior que tudo o que esta distro construiu até aqui somado, e com um build que se mede em horas. O softpipe interpreta os shaders em vez de compilá-los; é lento, e é honesto quanto a isso. Numa distro sem driver de GPU nenhum, o que se ganharia com o LLVM seria velocidade de software rendering, não aceleração — e o preço não paga. Sem Rust: ele só seria exigido pelo rusticl, pelo Vulkan do nouveau e pelo virtgpu, todos fora. Sem GLX e sem glvnd, porque não há X11 aqui — o que significa que NÃO existe libGL.so nesta árvore. O OpenGL de mesa continua inteiro e disponível, mas por eglBindAPI(EGL_OPENGL_API), não pela ABI do GLX; software que linke libGL diretamente não roda, software que fale EGL roda. É isso que Wayland-only quer dizer quando se desce ao nível da biblioteca. Uma não-hermeticidade conhecida e sem conserto limpo: a Mesa detecta libelf, libudev e OpenMP sozinha e não expõe chave para nenhuma das três, então define USE_LIBELF, HAVE_LIBUDEV e HAVE_OPENMP porque elfutils, eudev e libgomp existem nesta árvore. Nenhuma delas entra no link com estas opções — conferido no build.ninja — de modo que DEPS não muda; mas o binário seria diferente numa árvore sem elas, com a MESMA receita e o mesmo fingerprint. Quem for auditar isso deve olhar o link, não os defines. O DEPS saiu do que os binários prontos exigem, medido pela auditoria, e não do que a receita parecia precisar: a primeira escrita declarava libstdcxx e mathlibs-glibc, e ambos estavam errados — nesta árvore libstdc++.so.6 e libgcc_s.so.1 pertencem ao gcc-pass2, e libm.so.6 ao próprio glibc."
+LICENSE=MIT
+SRC="https://archive.mesa3d.org/mesa-$VERSION.tar.xz"
+SHA256=8bd36c031cc6d0edfec04617527609454ee3a09ad53bdf983b45fc2c1e129b2e
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # video-codecs vazio: os decodificadores só servem a driver de vídeo de
+    # hardware, e não há nenhum. display-info e zstd desligados para não
+    # introduzir dependência por conveniência de opção automática — o meson
+    # os pegaria do sistema se existissem, e amanhã existirão.
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dgallium-drivers=softpipe \
+        -Dvulkan-drivers= \
+        -Dplatforms=wayland \
+        -Dvideo-codecs= \
+        -Dllvm=disabled \
+        -Dglx=disabled \
+        -Dglvnd=disabled \
+        -Degl=enabled \
+        -Dgbm=enabled \
+        -Dopengl=true \
+        -Dgles1=disabled \
+        -Dgles2=enabled \
+        -Dshared-glapi=enabled \
+        -Dxmlconfig=enabled \
+        -Dzstd=disabled \
+        -Ddisplay-info=disabled \
+        -Dlibunwind=disabled \
+        -Dvalgrind=disabled \
+        -Dlmsensors=disabled \
+        -Dgallium-va=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    # O mtr ensinou que uma opção aceita não prova a biblioteca produzida: ele
+    # configurou sem curses e instalou um binário mutilado que só a auditoria
+    # pegou, três passos depois. Aqui o que importa é exatamente o que o GTK e
+    # o Firefox vão procurar, então se confere a existência e não a intenção.
+    for lib in libEGL.so libGLESv2.so libgbm.so; do
+        [ -e "$STAGE/usr/lib/$lib" ] || {
+            echo "mesa: $lib não foi produzida" >&2
+            exit 1
+        }
+    done
+    for pc in egl.pc gbm.pc; do
+        [ -e "$STAGE/usr/lib/pkgconfig/$pc" ] || {
+            echo "mesa: $pc não foi produzido" >&2
+            exit 1
+        }
+    done
+    # Sem driver Gallium instalado o libEGL carrega e falha na primeira
+    # eglInitialize; o .so da biblioteca existir não prova que há o que rodar.
+    # A Mesa 26 não usa mais /usr/lib/dri com um .so por driver: os alvos
+    # Gallium foram unificados num único libgallium-<versão>.so, e o backend
+    # do GBM saiu para /usr/lib/gbm. Confere-se o layout desta versão, não o
+    # histórico — a primeira escrita desta receita assertou /usr/lib/dri e
+    # reprovou um build que estava certo.
+    [ -e "$STAGE/usr/lib/libgallium-$VERSION.so" ] || {
+        echo "mesa: libgallium-$VERSION.so não foi produzida" >&2
+        exit 1
+    }
+    [ -e "$STAGE/usr/lib/gbm/dri_gbm.so" ] || {
+        echo "mesa: backend gbm dri_gbm.so não foi produzido" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}
