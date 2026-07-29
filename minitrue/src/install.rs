@@ -3047,6 +3047,19 @@ fn apply_stage(
             if entry.is_dir() {
                 let empty = !dirs_with_children.contains(rel);
                 let virt = canonical_virtual_path(&ctx.root, &virt_path(rel))?;
+                // Cessão de DIRETÓRIO. O adopt_provisional_path casa por
+                // caminho, então serve para claim de qualquer espécie — só
+                // não era chamado aqui, e por isso o cedente entregava os
+                // arquivos mas continuava reivindicando a árvore que os
+                // contém. O registro dele ficava "provisional incoerente" na
+                // operação seguinte: soltava o conteúdo e segurava o
+                // continente. As duas condições de sempre valem dentro da
+                // função — PROVISIONAL e declarado em SUPERSEDES.
+                if let Some(prov) =
+                    adopt_provisional_path(ctx, &virt, &r.name, &r.supersedes, Some(jrnl))?
+                {
+                    eprintln!("  {virt}: assume o diretório de {prov} (provisório)");
+                }
                 let owned = old_manifest.iter().any(|line| {
                     canonical_virtual_path(&ctx.root, manifest_path(line))
                         .is_ok_and(|path| path == virt)
@@ -4729,12 +4742,25 @@ fn provisional_manifest_coherent(
         .filter(|path| !active_by_path.contains_key(*path))
     {
         let canonical_removed = canonical_virtual_path(&ctx.root, removed)?;
+        // Claim de DIRETÓRIO se prova de outro jeito. Exigir que o sucessor
+        // reivindique o mesmo caminho é impossível para diretório: ele é
+        // cedido exatamente porque o sucessor o ENCHE de arquivos, e um
+        // diretório com conteúdo não gera claim `d:`. Então, para diretório,
+        // a prova é alguém reivindicar algo DENTRO dele. Para arquivo e link
+        // a regra continua sendo o caminho exato.
+        let removed_is_directory = baseline_by_path
+            .get(*removed)
+            .and_then(|line| manifest_integrity(line))
+            .is_some_and(|tag| tag.starts_with("d:"));
+        let prefix = format!("{canonical_removed}/");
         let mut proved = false;
         for (owner, _, claims) in &owners {
-            if owner != name
-                && claims.contains(&canonical_removed)
-                && successor_authorizes_cession(ctx, owner, name)?
-            {
+            if owner == name || !successor_authorizes_cession(ctx, owner, name)? {
+                continue;
+            }
+            let claims_it = claims.contains(&canonical_removed)
+                || (removed_is_directory && claims.iter().any(|c| c.starts_with(&prefix)));
+            if claims_it {
                 proved = true;
                 break;
             }
@@ -8459,6 +8485,63 @@ mod tests {
             license_of(&rec, &invalid),
             None,
             "campo factual inválido não pode ser mascarado pelo fallback"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Claim de DIRETÓRIO de um cedente provisional também é solta.
+    ///
+    /// O adopt_provisional_path casa por caminho, então sempre soube remover
+    /// uma linha `d:`; o que faltava era ser chamado no ramo de diretório do
+    /// apply_stage. Sem isso o cedente entregava os arquivos e continuava
+    /// reivindicando a árvore que os contém — soltava o conteúdo e segurava o
+    /// continente —, e o registro dele ficava "provisional incoerente" na
+    /// operação seguinte. É o caso real do python semente, que reivindica
+    /// lib-dynload como árvore justamente por estar vazio.
+    #[test]
+    fn diretorio_do_cedente_provisional_sai_do_manifesto() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-provdir-{}-{n}", std::process::id()));
+        let recs = root.join("var/lib/minitrue/records");
+        fs::create_dir_all(recs.join("semente")).unwrap();
+        fs::write(
+            recs.join("semente/meta"),
+            "NAME=semente\nVERSION=1\nPROVISIONAL=1\n",
+        )
+        .unwrap();
+        // uma claim de arquivo e uma de DIRETÓRIO
+        fs::write(
+            recs.join("semente/manifest"),
+            "f:aa  /usr/lib/coisa/arquivo\nd:bb  /usr/lib/coisa/vazio\n",
+        )
+        .unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: true,
+            tofu: false,
+            jobs: 1,
+        };
+        let sup = vec!["semente".to_string()];
+
+        let owner =
+            adopt_provisional_path(&ctx, "/usr/lib/coisa/vazio", "sucessor", &sup, None).unwrap();
+        assert_eq!(
+            owner.as_deref(),
+            Some("semente"),
+            "a claim de diretório precisa ser cedida como a de arquivo"
+        );
+        let restante = read_manifest(&recs.join("semente"));
+        assert!(
+            !restante
+                .iter()
+                .any(|line| manifest_path(line) == "/usr/lib/coisa/vazio"),
+            "o cedente não pode continuar reivindicando o diretório"
+        );
+        assert!(
+            restante
+                .iter()
+                .any(|line| manifest_path(line) == "/usr/lib/coisa/arquivo"),
+            "as demais claims do cedente ficam"
         );
         let _ = fs::remove_dir_all(&root);
     }
