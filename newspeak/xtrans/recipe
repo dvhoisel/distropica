@@ -1,0 +1,26 @@
+NAME=xtrans
+VERSION=1.6.0
+KIND=source
+TOOLCHAIN=native
+DEPS=""
+BUILD_DEPS="make pkgconf util-macros"
+ABOUT="A camada de transporte do X11, distribuída como CÓDIGO-FONTE em cabeçalhos e não como biblioteca. O libX11 a compila para dentro de si; por isso não há .so nenhum aqui e por isso ela é BUILD_DEPS de lá e DEPS de ninguém. É o que decide se a conexão vai por socket UNIX, TCP ou memória compartilhada — irrelevante nesta distro, onde nunca haverá servidor X para conectar, mas o libX11 não compila sem ela."
+LICENSE=MIT
+SRC="https://www.x.org/releases/individual/lib/xtrans-$VERSION.tar.xz"
+SHA256=faafea166bf2451a173d9d593352940ec6404145c5d1da5c213423ce4d359e92
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    ./configure --prefix=/usr
+    make DESTDIR="$STAGE" install
+
+    [ -e "$STAGE/usr/include/X11/Xtrans/Xtrans.h" ] || {
+        echo "xtrans: Xtrans.h não foi instalado" >&2
+        exit 1
+    }
+    [ -e "$STAGE/usr/share/pkgconfig/xtrans.pc" ] || {
+        echo "xtrans: xtrans.pc não foi instalado" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

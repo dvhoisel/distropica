@@ -1,0 +1,24 @@
+NAME=libxdmcp
+VERSION=1.1.5
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf util-macros xorgproto"
+ABOUT="O protocolo de gerência de display do X — o que um terminal burro usava nos anos 90 para pedir sessão a uma máquina remota. Absolutamente morto nesta distro. Entra porque o libxcb o exige no link, e o libxcb é NEEDED do libxul.so do Firefox. O configure procura arc4random_buf para gerar as chaves; a glibc 2.42 tem, então nada de bsd-compat aqui."
+LICENSE=MIT
+SRC="https://www.x.org/releases/individual/lib/libXdmcp-$VERSION.tar.xz"
+SHA256=d8a5222828c3adab70adf69a5583f1d32eb5ece04304f7f8392b6a353aa2228c
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure --prefix=/usr --libdir=/usr/lib --disable-static
+    make -j"$JOBS"
+    make DESTDIR="$STAGE" install
+
+    [ -e "$STAGE/usr/lib/libXdmcp.so.6" ] || {
+        echo "libxdmcp: libXdmcp.so.6 não foi produzida" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

@@ -1,0 +1,24 @@
+NAME=libxcomposite
+VERSION=0.4.7
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libx11 libxcb libxau libxdmcp"
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf util-macros xorgproto glibc libx11 libxfixes"
+ABOUT="A extensão Composite: redireciona janelas para buffers fora da tela, que é o que permitiu compositor no X. No Wayland compor é a premissa e não uma extensão — o weston já nasce assim. Entra pelo NEEDED do libxul.so."
+LICENSE=MIT
+SRC="https://www.x.org/releases/individual/lib/libXcomposite-$VERSION.tar.xz"
+SHA256=8bdf310967f484503fa51714cf97bff0723d9b673e0eecbf92b3f97c060c8ccb
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure --prefix=/usr --libdir=/usr/lib --disable-static
+    make -j"$JOBS"
+    make DESTDIR="$STAGE" install
+
+    [ -e "$STAGE/usr/lib/libXcomposite.so.1" ] || {
+        echo "libxcomposite: libXcomposite.so.1 não foi produzida" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

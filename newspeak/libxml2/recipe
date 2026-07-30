@@ -1,0 +1,36 @@
+NAME=libxml2
+VERSION=2.13.9
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc zlib busybox"
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf zlib"
+ABOUT="Leitor e escritor de XML em C. Entra por uma via só: o at-spi2-core o exige (libxml-2.0 >= 2.9.1, dependência dura no meson.build dele), e o at-spi2-core entra porque o backend X11 do GTK3 exige a ponte de acessibilidade — corrente que existe porque o libxul.so do Firefox referencia vinte e um símbolos gdk_x11_*. A versão é a 2.13.9 e não a 2.15, que é a mais recente: o Alpine e o Void pinam a série 2.13 por causa de quebras de ABI nas seguintes, e aqui isso vira corroboração dupla de hash em vez de aventura. Construído sem Python, sem ICU, sem LZMA e sem HTTP: o at-spi2 só analisa os arquivos de definição de interface D-Bus, que são XML local e pequeno. O zlib fica porque a descompressão de documento é barata e já está na árvore."
+LICENSE=MIT
+SRC="https://download.gnome.org/sources/libxml2/2.13/libxml2-$VERSION.tar.xz"
+SHA256=a2c9ae7b770da34860050c309f903221c67830c86e4a7e760692b803df95143a
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure --prefix=/usr --libdir=/usr/lib --disable-static \
+        --without-python --without-icu --without-lzma --without-http \
+        --with-zlib
+    make -j"$JOBS"
+    make DESTDIR="$STAGE" install
+
+    [ -e "$STAGE/usr/lib/libxml2.so.2" ] || {
+        echo "libxml2: libxml2.so.2 não foi produzida" >&2
+        exit 1
+    }
+    [ -e "$STAGE/usr/lib/pkgconfig/libxml-2.0.pc" ] || {
+        echo "libxml2: libxml-2.0.pc não foi produzido" >&2
+        exit 1
+    }
+    # O --without-python evita a extensão, mas o build ainda instala scripts
+    # auxiliares; nenhum deles deve trazer dependência de python para cá.
+    ! grep -rlq "^#!.*python" "$STAGE/usr/bin" 2>/dev/null || {
+        echo "libxml2: sobrou script python no /usr/bin apesar de --without-python" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

@@ -2,9 +2,9 @@ NAME=libepoxy
 VERSION=1.5.10
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc mesa"
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc"
-ABOUT="Despachante de ponteiros de função de OpenGL. Existe por um detalhe feio da história do GL: a biblioteca não expõe as funções modernas como símbolos, e cada programa precisava resolvê-las em tempo de execução, uma a uma, com o código repetido em toda parte. O epoxy faz isso uma vez e apresenta as funções como se fossem símbolos normais. O GTK3 o exige e é através dele que o GTK fala com a Mesa. Sem GLX, porque não há X11 aqui — só EGL, que é o caminho do Wayland. Resolve as funções por dlopen em tempo de execução, então o link com a Mesa é frouxo; ainda assim ela vai em DEPS, porque sem uma libEGL para abrir o epoxy não serve para nada."
+DEPS="glibc mesa libx11"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc libx11 xorgproto"
+ABOUT="Despachante de ponteiros de função de OpenGL. Existe por um detalhe feio da história do GL: a biblioteca não expõe as funções modernas como símbolos, e cada programa precisava resolvê-las em tempo de execução, uma a uma, com o código repetido em toda parte. O epoxy faz isso uma vez e apresenta as funções como se fossem símbolos normais. O GTK3 o exige e é através dele que o GTK fala com a Mesa. COM GLX, e isso é uma reversão consciente: a primeira versão desta receita desligava GLX e X11 porque a árvore era Wayland-only, e isso deixou de ser possível quando o backend X11 do GTK3 passou a ser obrigatório para carregar o libxul.so do Firefox — o gdkglcontext-x11.c do GTK inclui epoxy/glx.h e não compila sem ele. Importante para quem for auditar: ligar o GLX aqui NÃO traz a libGL da Mesa, que continua não existindo nesta árvore. O epoxy gera os próprios cabeçalhos de GLX a partir do registro XML que ele mesmo distribui e resolve os símbolos por dlopen em tempo de execução — se alguém tentasse criar um contexto GLX, falharia ali, e ninguém tenta, porque a sessão é Wayland. O que se compila é a capacidade, e o que não existe é o servidor para exercê-la."
 LICENSE=MIT
 SRC="https://github.com/anholt/libepoxy/archive/refs/tags/$VERSION.tar.gz"
 SHA256=a7ced37f4102b745ac86d6a70a9da399cc139ff168ba6b8002b4d8d43c900c15
@@ -17,11 +17,22 @@ build() {
         --libdir=lib \
         --buildtype=release \
         -Ddocs=false \
-        -Dglx=no \
+        -Dglx=yes \
         -Degl=yes \
-        -Dx11=false \
+        -Dx11=true \
         -Dtests=false
     ninja -C build -j"$JOBS"
     DESTDIR="$STAGE" ninja -C build install
+
+    # O cabeçalho de GLX é o que o GTK3 inclui; sem ele o build de lá falha na
+    # compilação e não na configuração, que é bem mais difícil de ler.
+    [ -e "$STAGE/usr/include/epoxy/glx.h" ] || {
+        echo "libepoxy: epoxy/glx.h não foi gerado (-Dglx=yes)" >&2
+        exit 1
+    }
+    [ -e "$STAGE/usr/include/epoxy/egl.h" ] || {
+        echo "libepoxy: epoxy/egl.h não foi gerado" >&2
+        exit 1
+    }
     find "$STAGE" -type d -empty -delete
 }

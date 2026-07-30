@@ -1,0 +1,28 @@
+NAME=xcb-proto
+VERSION=1.17.0
+KIND=source
+TOOLCHAIN=native
+DEPS=""
+BUILD_DEPS="python-glibc make pkgconf"
+ABOUT="A descrição do protocolo X11 em XML, mais o gerador em Python que a transforma em C. O libxcb não traz o código das suas funções: ele o GERA na hora do build a partir destes XMLs, chamando o c_client.py daqui. Por isso é BUILD_DEPS lá e não DEPS — o resultado já está compilado dentro do libxcb.so. Instala também o xcbgen, módulo Python que o gerador importa; é a razão de python-glibc estar nas dependências de construção."
+LICENSE=MIT
+SRC="https://xcb.freedesktop.org/dist/xcb-proto-$VERSION.tar.xz"
+SHA256=2c1bacd2110f4799f74de6ebb714b94cf6f80fb112316b1219480fd22562148c
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    ./configure --prefix=/usr --libdir=/usr/lib
+    make DESTDIR="$STAGE" install
+
+    [ -e "$STAGE/usr/share/xcb/xproto.xml" ] || {
+        echo "xcb-proto: xproto.xml não foi instalado" >&2
+        exit 1
+    }
+    # O xcbgen é o módulo que o c_client.py do libxcb importa. Se ele não for
+    # instalado, o build de lá falha no meio da geração e não na configuração.
+    find "$STAGE" -name "__init__.py" -path "*xcbgen*" | grep -q . || {
+        echo "xcb-proto: o módulo xcbgen não foi instalado" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}
