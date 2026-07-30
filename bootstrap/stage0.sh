@@ -47,7 +47,9 @@ export CARGO_TARGET_DIR="$REPO/target"
 # confia no git de onde clonou confia neste número; quem não confia, reconstrói
 # com bootstrap/build-minitrue.sh e compara — o build é reprodutível byte a
 # byte entre máquinas, então os dois caminhos devem convergir no mesmo valor.
-MINITRUE_CHANNEL=${MINITRUE_CHANNEL:-https://distropica.com.br/canal/minitrue}
+# Base do canal, SEM o nome do binário: os arquivos são $MINITRUE_CHANNEL/minitrue
+# e $MINITRUE_CHANNEL/minitrue-musl.
+MINITRUE_CHANNEL=${MINITRUE_CHANNEL:-https://distropica.com.br/canal}
 MINITRUE_SHA256=7c96b0179c00ef5a9422425b9f71928f3b8fa31a5e4c8e4e449f6c6c8bcfe860
 # O estático musl, que roda DENTRO do rootfs. Construído com o zig como CC
 # (SPEC-0003 §10) e o mesmo --remap-path-prefix, e por isso também reprodutível.
