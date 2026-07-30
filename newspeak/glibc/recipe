@@ -21,7 +21,8 @@ build() {
         --host=x86_64-distropica-linux-gnu --build="$(../scripts/config.guess)" \
         CC="x86_64-distropica-linux-gnu-gcc -fno-use-linker-plugin" BUILD_CC=cc \
         --enable-kernel=5.4 --with-headers="$ROOT/usr/include" \
-        --disable-nscd libc_cv_slibdir=/usr/lib
+        --disable-nscd libc_cv_slibdir=/usr/lib \
+        MSGFMT=:
     # retry: o gcc-passada-1 é flaky (ICE aleatório na math); cada tentativa
     # do make incremental resume de onde parou até fechar (SPEC-0005/0010).
     retry make -j"$JOBS"
@@ -83,11 +84,29 @@ build() {
     #
     # A regra é não reivindicar o que não se preenche. O /usr/share/locale em
     # si permanece, porque locale.alias é arquivo de verdade da glibc.
+    # MSGFMT=: no configure acima é o que torna isto determinístico, e a razão
+    # merece ficar escrita. A glibc NÃO PODE depender do gettext: o gettext
+    # precisa do gcc-pass2, que precisa da glibc — declarar seria ciclo. Mas o
+    # build dela não é hermético: ele procura msgfmt no ambiente e, no dia em
+    # que o gettext entrou na árvore por causa do GTK, a glibc passou a compilar
+    # 39 catálogos libc.mo que nunca compilava antes. Mesma receita, mesmo
+    # fingerprint, payload diferente — decidido por acidente de ordem de build.
+    #
+    # ':' é o valor que o próprio configure.ac da glibc usa quando não acha a
+    # ferramenta (linha 569), então isto não inventa um estado novo: fixa o
+    # estado que sempre valeu aqui. Quem compila os catálogos da glibc é o
+    # pacote locales, que já depende dela e PODE depender do gettext.
+    mo_indevido=$(find "$STAGE/usr/share/locale" -name '*.mo' 2>/dev/null || true)
+    if [ -n "$mo_indevido" ]; then
+        echo "FATAL: a glibc gerou catálogo .mo; MSGFMT não foi pinado:" >&2
+        echo "$mo_indevido" >&2
+        exit 1
+    fi
     find "$STAGE/usr/share/locale" -mindepth 1 -type d -empty -delete
-    remaining_locale_dir=$(find "$STAGE/usr/share/locale" -mindepth 1 -type d 2>/dev/null || true)
-    if [ -n "$remaining_locale_dir" ]; then
-        echo "FATAL: a glibc ainda reivindica diretório sob /usr/share/locale:" >&2
-        echo "$remaining_locale_dir" >&2
+    vazio=$(find "$STAGE/usr/share/locale" -mindepth 1 -type d -empty 2>/dev/null || true)
+    if [ -n "$vazio" ]; then
+        echo "FATAL: sobrou diretório vazio sob /usr/share/locale:" >&2
+        echo "$vazio" >&2
         exit 1
     fi
 
