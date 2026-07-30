@@ -27,26 +27,23 @@ install_pkg() {
         exit 1
     }
 
-    # A GUARDA QUE IMPORTA. Todo NEEDED do libxul.so que o próprio Firefox não
-    # traz tem que existir em /usr/lib AGORA, no build, e não na tela do
-    # usuário. O modo de falha sem isto é o pior possível: a ISO fecha, instala,
-    # o weston sobe, e o Firefox não abre — sem log em lugar nenhum além de um
-    # 'cannot open shared object file' que ninguém vê, porque não há terminal
-    # gráfico rodando quando o lançador é o painel do shell. A Mozilla acrescenta
-    # e remove dependências entre versões (o libXt saiu na 121, o libasound
-    # continua); esta guarda transforma isso em erro de build.
-    falta=""
-    for lib in $(readelf -d "$PREFIX/libxul.so" \
-                 | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p'); do
-        # As que vêm dentro do próprio pacote e as do carregador não contam.
-        [ -e "$PREFIX/$lib" ] && continue
-        case "$lib" in ld-linux-*) continue ;; esac
-        [ -e "/usr/lib/$lib" ] || [ -e "/lib/$lib" ] || falta="$falta $lib"
-    done
-    [ -z "$falta" ] || {
-        echo "firefox: bibliotecas do NEEDED do libxul.so ausentes na árvore:$falta" >&2
-        exit 1
-    }
+    # NÃO há guarda de NEEDED aqui, e a ausência é deliberada.
+    #
+    # A primeira versão desta receita conferia, neste ponto, se cada biblioteca
+    # do NEEDED do libxul.so existia em /usr/lib. Parecia a guarda mais
+    # importante do pacote e era, na verdade, um erro de categoria: no Mundo A
+    # não existe etapa de build separada — o install_pkg roda NA MÁQUINA DO
+    # USUÁRIO, durante a instalação, num ponto em que a árvore ainda está sendo
+    # montada. Numa raiz de desenvolvimento que já tem tudo instalado a guarda
+    # passava e parecia funcionar; numa instalação limpa ela reprovava até a
+    # libc.so.6, e a mídia inteira era recusada.
+    #
+    # Onde a verificação mora agora: na AUDITORIA DE FECHAMENTO do minitrue,
+    # que desde 2026-07-30 expande as claims de árvore `d:` e lê os ELF do
+    # /opt com o mesmo parser do Mundo B. Ela vê os 321 requisitos deste
+    # payload, confronta cada um com o DEPS declarado acima, e é gate de
+    # `channel emit`. É automática, roda contra a árvore montada, e não
+    # depende de ordem de instalação.
 
     # O pt-BR é o motivo de este tarball e não o en-US; se o omni.ja do locale
     # não veio, baixamos o pacote errado e ninguém perceberia até a primeira tela.
