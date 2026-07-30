@@ -4,6 +4,11 @@ KIND=source
 # Semente musl (zig): scaffolding do Estágio 2. Cede /usr/lib/libgmp* ao
 # rebuild glibc (mathlibs-glibc) sem doublethink — SPEC-0003 §3, SPEC-0005 §4.
 PROVISIONAL=1
+# NOTA: esta correção só tem efeito em bootstrap NOVO. Numa árvore onde a
+# semente já cedeu caminhos ao sucessor, o minitrue recusa reconstruí-la
+# ("provisório X já cedeu caminhos; baseline preservado") — e com razão:
+# reconstruir retomaria os arquivos do sucessor. Os erros de auditoria que
+# ela resolve permanecem na árvore atual como dívida de bootstrap.
 BUILD_DEPS="m4 binutils"
 ABOUT="aritmética de inteiros/racionais de precisão arbitrária; dependência de build do gcc (usada in-tree pelo gcc, mas verificável como pacote isolado). Precisa de m4 (asm) e do nm do binutils (configure)"
 LICENSE="LGPL-3.0-or-later OR GPL-2.0-or-later"
@@ -14,7 +19,16 @@ build() {
     tar -xJf "$DL" --strip-components=1
     # zig cc é clang: a detecção de CPU->asm da gmp costuma casar, mas se o
     # assembler embutido reclamar, --host=none-linux-gnu força o fallback C.
-    ./configure --prefix=/usr --enable-cxx --disable-dependency-tracking
+    #
+    # SEM --enable-cxx, e a razão é a cessão. Esta semente cede /usr/lib/libgmp*
+    # ao mathlibs-glibc, que por decisão própria e documentada NÃO constrói o
+    # wrapper C++: habilitá-lo exigiria um g++ funcional, e ele é construído
+    # antes do libstdcxx. Com --enable-cxx aqui, a semente produzia também o
+    # libgmpxx, cedia o libgmp e FICAVA com o libgmpxx órfão — uma biblioteca
+    # de ninguém, ligada ao libgmp.so.10 de outro pacote, que a auditoria de
+    # fechamento acusava. E que ninguém usa: quem consome gmp nesta árvore é o
+    # gcc, pela API C.
+    ./configure --prefix=/usr --disable-cxx --disable-dependency-tracking
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
 }

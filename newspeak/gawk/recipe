@@ -1,6 +1,7 @@
 NAME=gawk
 VERSION=5.3.2
 KIND=source
+DEPS="busybox"
 # Toma o applet homônimo do busybox (awk) — SPEC-0003 §7.
 SUPERSEDES="busybox"
 BUILD_DEPS=binutils
@@ -26,4 +27,21 @@ build() {
     [ ! -e "$copy" ] && [ ! -L "$copy" ]
     cp -p "$versioned" "$copy"
     mv -f "$copy" "$versioned"
+
+    # Os 12 módulos de extensão de /usr/lib/gawk NÃO são entregues, e a razão
+    # é dupla. Primeiro: este gawk é ESTÁTICO — construído com o toolchain
+    # semente, sem interpretador dinâmico — e binário estático não faz dlopen.
+    # Carregar qualquer um deles responde literalmente
+    # "gawk: fatal: load_ext: Dynamic loading not supported". Segundo: eles
+    # saíram malformados, com DT_NEEDED em "libc.so", que nesta árvore é o
+    # SCRIPT do GNU ld em texto e não uma biblioteca — nenhum objeto
+    # compartilhado deveria pedir isso.
+    #
+    # A auditoria acusava 12 erros aqui, um por módulo, e a leitura ingênua
+    # seria declarar glibc em DEPS. Isso seria errado duas vezes: mascararia
+    # módulos que não carregam de todo modo, e criaria ciclo, porque o gawk é
+    # BUILD_DEPS da própria glibc. A regra é a mesma que a glibc aplica ao
+    # largar ldd e tzselect: não entregar o que não funciona.
+    rm -rf "$STAGE/usr/lib/gawk"
+    find "$STAGE" -type d -empty -delete
 }

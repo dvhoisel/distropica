@@ -3,6 +3,11 @@ VERSION=3.14.6
 KIND=source
 BUILD_DEPS=binutils
 PROVISIONAL=1
+# NOTA: esta correção só tem efeito em bootstrap NOVO. Numa árvore onde a
+# semente já cedeu caminhos ao sucessor, o minitrue recusa reconstruí-la
+# ("provisório X já cedeu caminhos; baseline preservado") — e com razão:
+# reconstruir retomaria os arquivos do sucessor. Os erros de auditoria que
+# ela resolve permanecem na árvore atual como dívida de bootstrap.
 ABOUT="interpretador Python SEMENTE; prereq de build da glibc (scripts .py do build). PROVISIONAL: cede os caminhos ao python-glibc, que é o interpretador de verdade — este aqui não tem nenhum módulo de extensão C e existe só para a glibc conseguir se construir. python.org não publica binário Linux (SPEC-0007) — daí a ironia de ter que compilá-lo antes da glibc. Build mínimo: sem shared, pip, módulos de teste ou bindings externos de OpenSSL/zlib; a glibc só usa Python básico"
 LICENSE=Python-2.0.1
 SRC="https://www.python.org/ftp/python/$VERSION/Python-$VERSION.tar.xz"
@@ -37,4 +42,19 @@ SETUP
         CFLAGS="-Wno-error=date-time -Wno-error"
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
+
+    # config-3.14/ é a configuração de build de MÓDULOS DE EXTENSÃO C, e este
+    # interpretador é estático e não tem nenhum — os módulos da stdlib estão
+    # embutidos nele (MODULE_BUILDTYPE=static, acima). Nada aqui pode usar
+    # aquilo, e o diretório trazia três defeitos que a auditoria acusou:
+    # makesetup e install-sh com '#!/bin/sh', que a semente não fornece, e um
+    # python-config.py com '#!/usr/bin/python3.14' — um interpretador que ela
+    # NÃO É e não instala, porque quem o instala é o sucessor python-glibc.
+    #
+    # O sucessor tem o próprio config-3.14-x86_64-linux-gnu/, em caminho
+    # DIFERENTE, então não havia cessão possível: esta cópia era peso morto
+    # apontando para quem veio depois. Mesmo princípio do glibc largando ldd e
+    # tzselect — não entregar o que não é seu nem funciona.
+    rm -rf "$STAGE/usr/lib/python3.14/config-3.14"
+    find "$STAGE" -type d -empty -delete
 }

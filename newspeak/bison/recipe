@@ -1,7 +1,7 @@
 NAME=bison
 VERSION=3.8
 KIND=source
-DEPS=m4
+DEPS="m4 busybox"
 BUILD_DEPS=binutils
 ABOUT="gerador de parsers LALR; a glibc precisa dele no build. Invoca m4 em runtime"
 LICENSE=GPL-3.0-or-later
