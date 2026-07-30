@@ -1,0 +1,216 @@
+#!/bin/sh
+# Monta o cache offline de uma mídia a partir de um canal emitido.
+#
+# Existe porque montar isso à mão custou uma dezena de tentativas de ISO, cada
+# uma descobrindo UM item faltando: o artefato do jq, o do make, a assinatura
+# do Zig, o channel-config, o sidecar sob nome derivado. Cada falta só aparece
+# no aceite, depois de compor uma ISO de centenas de MB e bootá-la — e a
+# mensagem aponta para o pacote, não para o passo da montagem que esqueceu
+# dele. Script existe para que a lista de itens seja UMA, escrita aqui, e não
+# a memória de quem digitou o comando.
+#
+# O layout produzido:
+#   channel-config/<canal>          configuração do canal (URL, chave, trust)
+#   channels/<canal>/index          índice canônico v2
+#   channels/<canal>/index.minisig  assinatura do índice
+#   pool/<pacote>-<versão>-<arch>.tar.zst
+#   <sha256>                        artefatos upstream do Mundo A
+#   <sha256>.minisig                assinatura sob o hash do ARTEFATO
+#   <derivado>.minisig              assinatura sob sha256(hash+chave+URL),
+#                                   que é como o minitrue de fato a procura
+#                                   (ver signature_cache_name em fetch.rs)
+set -eu
+umask 022
+LC_ALL=C
+export LC_ALL
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+EMITTED=
+OUTPUT=
+CHANNEL_CONFIG=
+SECRET_KEY=
+CHANNEL=oficial
+SOURCE_CACHE=
+MINITRUE_ROOT=
+
+usage() {
+    cat <<'EOF'
+uso: bootstrap/cache-from-channel --emitted DIR --output NOVO-DIR \
+       --channel-config ARQ --secret-key ARQ --minitrue-root ROOTFS \
+       [--channel NOME] [--source-cache DIR]...
+
+  --emitted DIR        saída de `minitrue channel emit` (index + pool/)
+  --output DIR         cache a criar; precisa não existir
+  --channel-config ARQ arquivo channel-config/<canal> a copiar
+  --secret-key ARQ     chave minisign para assinar o índice (dentro do rootfs)
+  --minitrue-root DIR  rootfs Distrópica de onde rodar o `minitrue channel sign`
+  --channel NOME       default: oficial
+  --source-cache DIR   onde procurar artefatos do Mundo A; repetível.
+                       Sempre inclui <rootfs>/var/cache/minitrue.
+
+Os pacotes do Mundo A (KIND=binary) e os de cache.world não entram no índice
+do canal: eles viajam como o ARQUIVO UPSTREAM, endereçado pelo sha256 da
+receita. Este script lê os SHA256 direto das receitas em newspeak/, de modo
+que acrescentar um pacote binário ao perfil não exige lembrar de mais nada.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --emitted) EMITTED=${2:?}; shift 2 ;;
+        --output) OUTPUT=${2:?}; shift 2 ;;
+        --channel-config) CHANNEL_CONFIG=${2:?}; shift 2 ;;
+        --secret-key) SECRET_KEY=${2:?}; shift 2 ;;
+        --minitrue-root) MINITRUE_ROOT=${2:?}; shift 2 ;;
+        --channel) CHANNEL=${2:?}; shift 2 ;;
+        --source-cache) SOURCE_CACHE="$SOURCE_CACHE ${2:?}"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "erro: opção desconhecida: $1" >&2; usage >&2; exit 1 ;;
+    esac
+done
+
+for required in EMITTED OUTPUT CHANNEL_CONFIG SECRET_KEY MINITRUE_ROOT; do
+    eval "value=\$$required"
+    [ -n "$value" ] || { echo "erro: --$(echo "$required" | tr 'A-Z_' 'a-z-') é obrigatório" >&2; exit 1; }
+done
+[ -d "$EMITTED/pool" ] || { echo "erro: $EMITTED não parece um canal emitido (sem pool/)" >&2; exit 1; }
+[ -f "$EMITTED/index" ] || { echo "erro: $EMITTED não tem index" >&2; exit 1; }
+[ ! -e "$OUTPUT" ] || { echo "erro: saída já existe: $OUTPUT" >&2; exit 1; }
+[ -f "$CHANNEL_CONFIG" ] || { echo "erro: channel-config não existe: $CHANNEL_CONFIG" >&2; exit 1; }
+[ -d "$MINITRUE_ROOT" ] || { echo "erro: rootfs não existe: $MINITRUE_ROOT" >&2; exit 1; }
+
+SOURCE_CACHE="$SOURCE_CACHE $MINITRUE_ROOT/var/cache/minitrue"
+
+cp -a "$EMITTED" "$OUTPUT"
+rm -f "$OUTPUT/emit.meta"
+mkdir -p "$OUTPUT/channel-config" "$OUTPUT/channels/$CHANNEL"
+cp "$CHANNEL_CONFIG" "$OUTPUT/channel-config/$CHANNEL"
+mv "$OUTPUT/index" "$OUTPUT/channels/$CHANNEL/index"
+
+# O CACHE OFFLINE NÃO TEM pool/. Essa é a diferença entre os dois layouts, e
+# ela custou uma tentativa de ISO: `channel emit` produz a árvore do
+# REPOSITÓRIO HTTP, onde o artefato mora em pool/<nome>-<versão>-<arch>.tar.zst
+# e o índice aponta para lá. O cache que a mídia carrega é endereçado por
+# CONTEÚDO: cada artefato vira um arquivo com o nome do seu sha256, na raiz.
+# Deixar o pool/ e não achatar faz o minipax compor a mídia sem reclamar e o
+# instalador recusá-la no boot com "artefato ausente/inválido no cache",
+# apontando para uma URL — e não para o passo que esqueceu de achatar.
+#
+# O campo 6 de cada linha do índice é o sha256 do artefato; o campo 5 é o
+# caminho no pool. A conferência é explícita porque um pool corrompido daria
+# um cache que só falha na máquina do usuário.
+achatados=0
+while read -r name version arch fingerprint path artifact rest; do
+    [ -n "$artifact" ] || continue
+    [ -e "$OUTPUT/$path" ] || {
+        echo "erro: índice cita $path, que não está no pool emitido" >&2
+        rm -rf "$OUTPUT"
+        exit 1
+    }
+    observado=$(sha256sum "$OUTPUT/$path" | cut -d' ' -f1)
+    [ "$observado" = "$artifact" ] || {
+        echo "erro: $path tem sha256 $observado, índice diz $artifact" >&2
+        rm -rf "$OUTPUT"
+        exit 1
+    }
+    mv "$OUTPUT/$path" "$OUTPUT/$artifact"
+    achatados=$((achatados + 1))
+done < "$OUTPUT/channels/$CHANNEL/index"
+rmdir "$OUTPUT/pool" 2>/dev/null || {
+    echo "erro: sobrou coisa no pool/ depois de achatar" >&2
+    ls "$OUTPUT/pool" >&2
+    rm -rf "$OUTPUT"
+    exit 1
+}
+
+# Artefatos UPSTREAM que viajam fora do índice. São dois conjuntos, e confundir
+# um com o outro custou uma tentativa de ISO:
+#
+#  (a) todo KIND=binary — o Mundo A não tem artefato de canal, o payload É o
+#      arquivo publicado pelo upstream;
+#  (b) todo pacote nomeado em cache.world, INDEPENDENTE do KIND — ali estão as
+#      "fontes de reconstrução obrigatórias na mídia offline", e o make e o
+#      tree são KIND=source: o que a mídia carrega é o TARBALL DE FONTE deles,
+#      para que o sistema instalado possa recompilá-los sem rede.
+#
+# A primeira versão deste script só olhava (a), e o instalador parou com
+# "artefato ausente do cache: https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz".
+copiados=0
+faltando=
+wanted=$(
+    for recipe in "$REPO"/newspeak/*/recipe; do
+        grep -q '^KIND=binary' "$recipe" && basename "$(dirname "$recipe")"
+    done
+    for world in "$REPO"/profiles/*/cache.world; do
+        [ -e "$world" ] || continue
+        sed -e 's/#.*//' -e '/^[[:space:]]*$/d' -e 's/[[:space:]]//g' "$world"
+    done
+    )
+wanted=$(printf '%s\n' $wanted | sort -u)
+
+for name in $wanted; do
+    recipe=$REPO/newspeak/$name/recipe
+    [ -e "$recipe" ] || {
+        echo "erro: cache.world cita '$name', que não tem receita" >&2
+        rm -rf "$OUTPUT"
+        exit 1
+    }
+    hash=$(sed -n 's/^SHA256=//p' "$recipe" | head -1)
+    [ -n "$hash" ] || continue
+    achou=no
+    for source in $SOURCE_CACHE; do
+        [ -e "$source/$hash" ] || continue
+        cp "$source/$hash" "$OUTPUT/$hash"
+        # TODAS as assinaturas associadas, e não só a de nome óbvio. O minitrue
+        # indexa o sidecar por sha256(hash_do_artefato + chave + URL) — ver
+        # signature_cache_name em minitrue/src/fetch.rs — e NÃO pelo hash do
+        # artefato. Copiar só "<hash>.minisig" deixa o cache passar na
+        # composição e falhar no boot, com "assinatura ausente/inválida".
+        # Por isso se varre o diretório inteiro por .minisig e se copia o que
+        # ainda não existe no destino: é barato e não erra.
+        for sidecar in "$source"/*.minisig; do
+            [ -e "$sidecar" ] || continue
+            base=$(basename "$sidecar")
+            [ -e "$OUTPUT/$base" ] || cp "$sidecar" "$OUTPUT/$base"
+        done
+        achou=yes
+        copiados=$((copiados + 1))
+        break
+    done
+    [ "$achou" = yes ] || faltando="$faltando $name"
+done
+
+[ -z "$faltando" ] || {
+    echo "erro: artefatos do Mundo A ausentes em todos os caches:$faltando" >&2
+    echo "  procurei em:$SOURCE_CACHE" >&2
+    rm -rf "$OUTPUT"
+    exit 1
+}
+
+# Assinar o índice DENTRO do rootfs, com o minitrue de lá: a chave e o binário
+# vivem no mesmo mundo, e o hospedeiro não precisa ter minisign.
+staging=$MINITRUE_ROOT/tmp/cache-from-channel.$$
+rm -rf "$staging"
+cp -a "$OUTPUT" "$staging"
+"$REPO/bootstrap/enter.sh" "$MINITRUE_ROOT" \
+    "minitrue channel sign ${SECRET_KEY} /tmp/$(basename "$staging")/channels/$CHANNEL/index" >/dev/null
+cp "$staging/channels/$CHANNEL/index.minisig" "$OUTPUT/channels/$CHANNEL/index.minisig"
+rm -rf "$staging"
+
+# O que o `minipax media build --mode offline` exige existir; se faltar
+# qualquer um, ele recusa a mídia — mas só depois de compor, e a mensagem não
+# aponta para cá.
+for required in "channel-config/$CHANNEL" "channels/$CHANNEL/index" \
+                "channels/$CHANNEL/index.minisig"; do
+    [ -e "$OUTPUT/$required" ] || {
+        echo "erro: cache incompleto, falta $required" >&2
+        exit 1
+    }
+done
+
+echo "cache: $OUTPUT"
+echo "  $(wc -l < "$OUTPUT/channels/$CHANNEL/index") pacotes no índice"
+echo "  $achatados artefatos do canal achatados por sha256"
+echo "  $copiados artefatos do Mundo A"
+echo "  $(ls "$OUTPUT"/*.minisig 2>/dev/null | wc -l) assinaturas"
+echo "  $(du -sm "$OUTPUT" | cut -f1) MB"

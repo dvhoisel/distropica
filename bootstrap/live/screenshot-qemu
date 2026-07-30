@@ -1,0 +1,168 @@
+#!/bin/sh
+# Fotografa a tela de um sistema Distrópica já instalado, bootando o disco no
+# QEMU e pedindo um screendump pelo monitor.
+#
+# Existe porque o accept-qemu prova o boot lendo o SERIAL, e modo gráfico não
+# aparece no serial: a sessão roda na tty1, o compositor desenha no KMS, e um
+# `distropica login:` na ttyS0 não diz absolutamente nada sobre haver ou não
+# uma janela na tela. A única evidência honesta de que o compositor subiu é a
+# imagem.
+#
+# O dispositivo de vídeo é virtio-gpu e não a VGA padrão: o kernel desta distro
+# tem CONFIG_DRM_VIRTIO_GPU=y e NÃO tem bochs, simpledrm nem cirrus. Com a VGA
+# padrão não existe /dev/dri/card0, o /etc/rc.d/session cai no getty de
+# propósito, e a foto mostraria um console — sem nada ter quebrado.
+set -eu
+umask 022
+LC_ALL=C
+export LC_ALL
+
+DISK=
+OUTPUT=
+LOG_DIR=
+OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
+OVMF_VARS=/usr/share/OVMF/OVMF_VARS_4M.fd
+QEMU=qemu-system-x86_64
+MEMORY_MIB=4096
+SETTLE=90
+ACCEL=kvm
+CLICK=
+SETTLE_AFTER=60
+
+usage() {
+    cat <<'EOF'
+uso: bootstrap/live/screenshot-qemu --disk INSTALADO.raw --output TELA.ppm \
+       --log-dir NOVO-DIR [opções]
+
+  --disk ARQ         disco raw JÁ instalado (não é modificado: snapshot)
+  --output ARQ       arquivo .ppm a criar; não é sobrescrito
+  --log-dir DIR      diretório novo para serial, OVMF_VARS e o socket
+  --settle N         segundos de espera antes da foto (default: 90)
+  --click X,Y        clica nessa coordenada antes de fotografar, movendo o
+                     ponteiro pelo monitor do QEMU. Serve para provar que um
+                     aplicativo ABRE, e não só que o compositor subiu: sem
+                     isso a foto mostra a área de trabalho vazia, que é
+                     compatível tanto com um Firefox instalado quanto com um
+                     Firefox que não roda.
+  --settle-after N   segundos entre o clique e a foto (default: 60). O
+                     Firefox sobre softpipe leva bem mais que um segundo.
+  --memory-mib N     default: 4096
+  --accel tcg|kvm    default: kvm
+  --ovmf-code ARQ / --ovmf-vars ARQ / --qemu ARQ
+
+O disco é aberto em modo snapshot: o boot não escreve nele.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --disk) DISK=${2:?}; shift 2 ;;
+        --output) OUTPUT=${2:?}; shift 2 ;;
+        --log-dir) LOG_DIR=${2:?}; shift 2 ;;
+        --settle) SETTLE=${2:?}; shift 2 ;;
+        --click) CLICK=${2:?}; shift 2 ;;
+        --settle-after) SETTLE_AFTER=${2:?}; shift 2 ;;
+        --memory-mib) MEMORY_MIB=${2:?}; shift 2 ;;
+        --accel) ACCEL=${2:?}; shift 2 ;;
+        --ovmf-code) OVMF_CODE=${2:?}; shift 2 ;;
+        --ovmf-vars) OVMF_VARS=${2:?}; shift 2 ;;
+        --qemu) QEMU=${2:?}; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "erro: opção desconhecida: $1" >&2; usage >&2; exit 1 ;;
+    esac
+done
+
+[ -n "$DISK" ] || { echo "erro: --disk é obrigatório" >&2; exit 1; }
+[ -n "$OUTPUT" ] || { echo "erro: --output é obrigatório" >&2; exit 1; }
+[ -n "$LOG_DIR" ] || { echo "erro: --log-dir é obrigatório" >&2; exit 1; }
+[ -f "$DISK" ] || { echo "erro: disco não existe: $DISK" >&2; exit 1; }
+[ ! -e "$OUTPUT" ] || { echo "erro: saída já existe: $OUTPUT" >&2; exit 1; }
+[ ! -e "$LOG_DIR" ] || { echo "erro: log-dir já existe: $LOG_DIR" >&2; exit 1; }
+case "$ACCEL" in tcg|kvm) ;; *) echo "erro: --accel inválido" >&2; exit 1 ;; esac
+[ "$ACCEL" != kvm ] || [ -r /dev/kvm ] || {
+    echo "erro: --accel kvm exige /dev/kvm legível" >&2; exit 1;
+}
+
+mkdir -p "$LOG_DIR"
+LOG_DIR=$(CDPATH= cd -- "$LOG_DIR" && pwd -P)
+cp "$OVMF_VARS" "$LOG_DIR/OVMF_VARS.fd"
+chmod u+w "$LOG_DIR/OVMF_VARS.fd"
+MONITOR=$LOG_DIR/monitor.sock
+SERIAL=$LOG_DIR/serial.log
+SHOT=$LOG_DIR/tela.ppm
+
+# snapshot=on: o boot não persiste nada no disco, então fotografar não estraga
+# a evidência do aceite nem impede repetir.
+"$QEMU" \
+    -machine "q35,accel=$ACCEL" \
+    -m "$MEMORY_MIB" \
+    -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE" \
+    -drive "if=pflash,format=raw,file=$LOG_DIR/OVMF_VARS.fd" \
+    -drive "file=$DISK,format=raw,if=none,id=target,snapshot=on" \
+    -device virtio-blk-pci,drive=target,bootindex=1 \
+    -device virtio-gpu-pci \
+    -nic none \
+    -display none \
+    -serial "file:$SERIAL" \
+    -monitor "unix:$MONITOR,server,nowait" \
+    -no-reboot &
+QEMU_PID=$!
+
+# Mata o QEMU em qualquer saída, inclusive erro — um emulador órfão segurando
+# /dev/kvm atrapalha a próxima execução.
+trap 'kill "$QEMU_PID" 2>/dev/null || true' EXIT INT TERM
+
+n=0
+while [ ! -S "$MONITOR" ] && [ "$n" -lt 100 ]; do
+    n=$((n + 1))
+    sleep 0.1
+done
+[ -S "$MONITOR" ] || { echo "erro: monitor do QEMU não apareceu" >&2; exit 1; }
+
+echo "esperando ${SETTLE}s pelo boot e pela sessão gráfica"
+sleep "$SETTLE"
+
+# O socat é a forma de falar com o monitor sem terminal interativo.
+command -v socat >/dev/null 2>&1 || {
+    echo "erro: socat é necessário para falar com o monitor do QEMU" >&2
+    exit 1
+}
+if [ -n "$CLICK" ]; then
+    x=${CLICK%,*}
+    y=${CLICK#*,}
+    case "$x$y" in *[!0-9]*) echo "erro: --click precisa ser X,Y numérico" >&2; exit 1 ;; esac
+    # O mouse emulado é PS/2, que reporta movimento RELATIVO — não há como
+    # dizer "vá para (17,16)". E o protocolo PS/2 codifica o deslocamento em
+    # NOVE BITS COM SINAL: qualquer valor fora de -256..255 é truncado. Um
+    # único 'mouse_move -4000 -4000' não leva o ponteiro ao canto, leva-o 256
+    # pixels e para ali — foi assim que o primeiro clique caiu no vazio, sem
+    # erro nenhum em lugar nenhum. Por isso o estacionamento é feito em muitos
+    # passos pequenos.
+    {
+        i=0
+        while [ "$i" -lt 20 ]; do
+            printf 'mouse_move -100 -100\n'
+            i=$((i + 1))
+        done
+        printf 'mouse_move %s %s\n' "$x" "$y"
+        printf 'mouse_button 1\n'
+        printf 'mouse_button 0\n'
+    } | socat - "UNIX-CONNECT:$MONITOR" >/dev/null 2>&1 || true
+    echo "clicou em ($x,$y); esperando ${SETTLE_AFTER}s pelo aplicativo"
+    sleep "$SETTLE_AFTER"
+fi
+
+printf 'screendump %s\nquit\n' "$SHOT" | socat - "UNIX-CONNECT:$MONITOR" >/dev/null 2>&1 || true
+
+n=0
+while [ ! -s "$SHOT" ] && [ "$n" -lt 100 ]; do
+    n=$((n + 1))
+    sleep 0.2
+done
+wait "$QEMU_PID" 2>/dev/null || true
+trap - EXIT INT TERM
+
+[ -s "$SHOT" ] || { echo "erro: o screendump saiu vazio" >&2; exit 1; }
+cp "$SHOT" "$OUTPUT"
+echo "tela: $OUTPUT ($(wc -c < "$OUTPUT") bytes)"
+echo "serial: $SERIAL"
