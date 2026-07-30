@@ -1,0 +1,96 @@
+NAME=weston
+VERSION=14.0.2
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc wayland libxkbcommon pixman libinput libevdev libdrm mesa seatd libdisplay-info eudev cairo pango glib libpng fontconfig"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf wayland-protocols"
+ABOUT="O COMPOSITOR. Sem ele a pilha gráfica inteira é inerte: o GTK abre o socket Wayland, não encontra ninguém do outro lado e nenhuma janela aparece. É o weston porque ele é a implementação de referência do próprio Wayland — o que reduz a chance de a distro estar depurando o compositor em vez do aplicativo — e porque suas dependências obrigatórias (xkbcommon, wayland, pixman, libinput, libevdev, libdrm) já estavam todas construídas aqui. Backend DRM apenas: desenha direto no KMS, sem servidor por baixo. Sem X11, sem XWayland, sem RDP, sem VNC, sem pipewire, sem systemd. Sem image-jpeg e image-webp, que seriam decodificadores de papel de parede e arrastariam libjpeg — travada porque o libjpeg-turbo 3.x só constrói com cmake, que esta árvore não tem. O renderizador GL é COMPILADO mas não é o que roda: o weston.ini do pacote 'desktop' escolhe o pixman, que compõe direto no buffer dumb do KMS sem EGL e sem GBM. O motivo está lá; em resumo, com Mesa softpipe o GL não acelera nada e ainda acrescenta a chance de o gbm não achar driver. Fica construído porque é barato e porque quem tiver GPU de verdade um dia troca uma linha. O -Dtools=terminal não é conveniência: o weston-terminal é o ÚNICO emulador de terminal desta árvore, e sem ele o modo gráfico tem o Firefox e nenhuma forma de rodar um comando. O glib e o pango entraram em DEPS por medição e não por leitura da receita — o weston-terminal e o weston-keyboard os exigem, e a auditoria de fechamento recusou o canal até que estivessem declarados."
+LICENSE=MIT
+SRC="https://gitlab.freedesktop.org/wayland/weston/-/releases/$VERSION/downloads/weston-$VERSION.tar.xz"
+SHA256=b47216b3530da76d02a3a1acbf1846a9cd41d24caa86448f9c46f78f20b6e0ac
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dbackend-drm=true \
+        -Dbackend-default=drm \
+        -Dbackend-drm-screencast-vaapi=false \
+        -Dbackend-headless=false \
+        -Dbackend-pipewire=false \
+        -Dbackend-rdp=false \
+        -Dbackend-vnc=false \
+        -Dbackend-wayland=false \
+        -Dbackend-x11=false \
+        -Drenderer-gl=true \
+        -Dxwayland=false \
+        -Dsystemd=false \
+        -Dremoting=false \
+        -Dpipewire=false \
+        -Dscreenshare=false \
+        -Dshell-desktop=true \
+        -Dshell-fullscreen=false \
+        -Dshell-ivi=false \
+        -Dshell-kiosk=true \
+        -Dcolor-management-lcms=false \
+        -Dimage-jpeg=false \
+        -Dimage-webp=false \
+        -Dtools=terminal \
+        -Ddemo-clients=false \
+        -Dsimple-clients=[] \
+        -Dwcap-decode=false \
+        -Dtests=false \
+        -Ddoc=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    # O que faz diferença na tela, não a intenção da opção — lição da Mesa.
+    [ -x "$STAGE/usr/bin/weston" ] || {
+        echo "weston: o binário não foi produzido" >&2
+        exit 1
+    }
+    # Sem o backend DRM o compositor sobe e não acha saída de vídeo; sem o
+    # renderizador GL ele não consegue desenhar cliente nenhum.
+    [ -e "$STAGE/usr/lib/libweston-14/drm-backend.so" ] || {
+        echo "weston: backend DRM não foi produzido" >&2
+        exit 1
+    }
+    [ -e "$STAGE/usr/lib/libweston-14/gl-renderer.so" ] || {
+        echo "weston: renderizador GL não foi produzido" >&2
+        exit 1
+    }
+    # O desktop-shell são DUAS peças, e conferir só uma engana. O PLUGIN
+    # (desktop-shell.so) é carregado dentro do compositor e mora em
+    # /usr/lib/weston, achado pelo RPATH do binário — não em libweston-14/,
+    # onde ficam backend e renderizador. O CLIENTE (weston-desktop-shell) é um
+    # processo à parte que desenha o fundo e a barra. Sem o plugin o weston
+    # sobe sem shell nenhum; sem o cliente ele sobe numa tela preta sem nada
+    # com que interagir.
+    [ -e "$STAGE/usr/lib/weston/desktop-shell.so" ] || {
+        echo "weston: o plugin desktop-shell.so não foi produzido" >&2
+        exit 1
+    }
+    [ -x "$STAGE/usr/libexec/weston-desktop-shell" ] || \
+    [ -x "$STAGE/usr/bin/weston-desktop-shell" ] || {
+        echo "weston: o cliente weston-desktop-shell não foi produzido" >&2
+        exit 1
+    }
+    # A libexec_weston é o que o binário do weston liga por RPATH; se ela
+    # sair do lugar, o compositor não carrega e a mensagem do ld.so não
+    # aponta para esta receita.
+    [ -e "$STAGE/usr/lib/weston/libexec_weston.so.0" ] || {
+        echo "weston: libexec_weston.so.0 não está em /usr/lib/weston" >&2
+        exit 1
+    }
+    # O weston-terminal é o ÚNICO emulador de terminal desta árvore. Sem ele o
+    # modo gráfico tem o Firefox e nada mais — nenhuma forma de rodar um
+    # comando sem voltar para a tty. Por isso é guarda e não conveniência.
+    [ -x "$STAGE/usr/bin/weston-terminal" ] || {
+        echo "weston: weston-terminal não foi produzido (-Dtools=terminal)" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

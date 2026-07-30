@@ -1,0 +1,57 @@
+NAME=firefox
+VERSION=153.0.1
+KIND=binary
+DEPS="glibc gcc-pass2 gtk3 glib pango cairo gdk-pixbuf at-spi2-core fontconfig freetype dbus alsa-lib libx11 libxcb libxext libxrender libxrandr libxfixes libxcomposite libxdamage libxcursor libxi"
+ABOUT="O navegador, em português do Brasil. Binário oficial da Mozilla, do Mundo A, instalado em /opt — não compilado. A razão é medida e não preguiça: construir o Firefox da fonte exige Rust, clang, cbindgen, nodejs, NASM e uma árvore de build que sozinha é maior que tudo o que esta distro construiu somada. Ele é a razão de o GTK3 existir aqui e de as onze bibliotecas cliente do X11 terem sido escritas: o libxul.so declara libX11, libxcb, libXext, libXrandr, libXcomposite, libXdamage, libXfixes, libXrender, libXcursor, libXi e libasound no NEEDED — ligação dura, não dlopen — e o carregador dinâmico recusa o binário se qualquer uma faltar, antes de rodar uma linha. Em execução ele não usa nenhuma delas: com WAYLAND_DISPLAY no ambiente o GTK3 escolhe o backend Wayland sozinho desde a versão 121, e o caminho X11 fica morto. Isso é o preço declarado de embarcar um binário de terceiro numa árvore Wayland-only, e está aqui escrito em vez de escondido no DEPS. A variante pt-BR é escolhida no download e não configurada depois: a Mozilla publica um tarball por idioma, com o locale já embutido. O DEPS acima foi MEDIDO — cada biblioteca do NEEDED do libxul.so mapeada ao pacote que a instala — e não deduzido, e ele existe por uma falha real: a alsa-lib estava construída na árvore e NÃO ENTROU na mídia, porque nada a puxava. O Firefox instalou, o compositor subiu, e o navegador morreu com 'libasound.so.2: cannot open shared object file'. Essa falha expôs uma cegueira do minitrue que JÁ FOI CORRIGIDA: a auditoria de fechamento lia apenas claims 'f:', e como o payload do Mundo A é UMA claim de árvore 'd:', o comando 'minitrue audit firefox' inspecionava zero arquivos. Agora ele lê 30 arquivos e 321 requisitos, e o DEPS acima tem verificação automática atrás. ACHADO QUE SOBROU, e que é da Mozilla e não nosso: o libonnxruntime.so declara RUNPATH literalmente igual a '$' — uma expansão de \$ORIGIN que saiu truncada do build deles. A auditoria o recusa, com razão: RUNPATH relativo faz o carregador procurar biblioteca a partir do diretório de trabalho do processo, que é imprevisível e, no limite, controlável por terceiros. Não dá para consertar sem tocar no payload, e tocar no payload obrigaria a remover a marca. Fica como erro visível em vez de exceção silenciosa."
+# O bundle oficial é MPL-2.0 no código, mas agrega NSS, NSPR, libvpx, dav1d,
+# ffvpx e mais uma dúzia de componentes sob licenças próprias, além da MARCA
+# Firefox — que não é software livre. A redistribuição do binário OFICIAL sem
+# modificação é permitida pela política de distribuição da Mozilla; qualquer
+# alteração no payload exigiria remover a marca. Por isso install_pkg extrai e
+# não toca em nada. Rotular só como MPL-2.0 seria falso; segue o precedente do
+# jq e do zig até existir SBOM.
+LICENSE=NOASSERTION
+SRC="https://download-installer.cdn.mozilla.net/pub/firefox/releases/$VERSION/linux-x86_64/pt-BR/firefox-$VERSION.tar.xz"
+SHA256=d8a3e7b48b3f3b1f29cc3faf3a71ccb10fbea86e47685f9cb558584813f7e7e4
+LINKS="firefox=firefox"
+
+install_pkg() {
+    tar -xJf "$DL" --strip-components=1 -C "$PREFIX"
+
+    [ -x "$PREFIX/firefox" ] || {
+        echo "firefox: o lançador não veio no tarball" >&2
+        exit 1
+    }
+    [ -e "$PREFIX/libxul.so" ] || {
+        echo "firefox: libxul.so não veio no tarball" >&2
+        exit 1
+    }
+
+    # A GUARDA QUE IMPORTA. Todo NEEDED do libxul.so que o próprio Firefox não
+    # traz tem que existir em /usr/lib AGORA, no build, e não na tela do
+    # usuário. O modo de falha sem isto é o pior possível: a ISO fecha, instala,
+    # o weston sobe, e o Firefox não abre — sem log em lugar nenhum além de um
+    # 'cannot open shared object file' que ninguém vê, porque não há terminal
+    # gráfico rodando quando o lançador é o painel do shell. A Mozilla acrescenta
+    # e remove dependências entre versões (o libXt saiu na 121, o libasound
+    # continua); esta guarda transforma isso em erro de build.
+    falta=""
+    for lib in $(readelf -d "$PREFIX/libxul.so" \
+                 | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p'); do
+        # As que vêm dentro do próprio pacote e as do carregador não contam.
+        [ -e "$PREFIX/$lib" ] && continue
+        case "$lib" in ld-linux-*) continue ;; esac
+        [ -e "/usr/lib/$lib" ] || [ -e "/lib/$lib" ] || falta="$falta $lib"
+    done
+    [ -z "$falta" ] || {
+        echo "firefox: bibliotecas do NEEDED do libxul.so ausentes na árvore:$falta" >&2
+        exit 1
+    }
+
+    # O pt-BR é o motivo de este tarball e não o en-US; se o omni.ja do locale
+    # não veio, baixamos o pacote errado e ninguém perceberia até a primeira tela.
+    [ -e "$PREFIX/browser/omni.ja" ] || {
+        echo "firefox: browser/omni.ja ausente; o pacote de idioma não veio" >&2
+        exit 1
+    }
+}

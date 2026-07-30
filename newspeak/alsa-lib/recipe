@@ -1,0 +1,32 @@
+NAME=alsa-lib
+VERSION=1.2.16.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf"
+ABOUT="O som. É a biblioteca cliente da ALSA, a interface de áudio do próprio kernel — não um servidor como PulseAudio ou PipeWire, que ficam de fora. Fala direto com /dev/snd, o que significa um aplicativo por vez com a placa: sem mixagem entre programas. Para um sistema com um navegador e mais nada isso basta, e a alternativa custaria um daemon, D-Bus de sessão e uma dúzia de dependências. libasound.so.2 está no NEEDED do libxul.so, então sem esta biblioteca o Firefox nem carrega — a diferença entre 'roda sem som' e 'não roda' é exatamente ela. Sem --with-pythonlibs e sem os utilitários alsactl/alsamixer, que vêm no alsa-utils e são outro pacote. O /usr/share/alsa que ela instala são as definições de PCM (default, dmix, hw) que a biblioteca lê em tempo de execução; sem eles o dispositivo 'default' não existe e a abertura falha."
+LICENSE=LGPL-2.1-or-later
+SRC="https://www.alsa-project.org/files/pub/lib/alsa-lib-$VERSION.tar.bz2"
+SHA256=f740db7f488255944ffd4428416ee3390a96742856916433df468c281436480e
+
+build() {
+    tar -xjf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure --prefix=/usr --libdir=/usr/lib --disable-static \
+        --disable-python --disable-topology --disable-ucm
+    make -j"$JOBS"
+    make DESTDIR="$STAGE" install
+
+    [ -e "$STAGE/usr/lib/libasound.so.2" ] || {
+        echo "alsa-lib: libasound.so.2 não foi produzida" >&2
+        exit 1
+    }
+    # A configuração é dado de tempo de execução, não de build: sem
+    # alsa.conf o snd_pcm_open("default") devolve -ENOENT e o áudio some
+    # sem que nada tenha falhado aqui.
+    [ -e "$STAGE/usr/share/alsa/alsa.conf" ] || {
+        echo "alsa-lib: alsa.conf não foi instalado; o dispositivo default não existiria" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

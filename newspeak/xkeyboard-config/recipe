@@ -1,0 +1,46 @@
+NAME=xkeyboard-config
+VERSION=2.48
+KIND=source
+TOOLCHAIN=native
+DEPS=""
+BUILD_DEPS="meson ninja pkgconf python-glibc"
+ABOUT="Os DADOS de teclado. Não é biblioteca nem programa: é a descrição, em texto, de o que cada tecla física significa em cada layout do mundo — 'br', 'us', 'de' — mais os modelos de teclado, as variantes e as regras que combinam os três. A libxkbcommon é o código que interpreta esses arquivos, e ela não os carrega junto: procura-os em tempo de execução no caminho fixado no build dela. Sem eles, a libxkbcommon compila, linka, e falha na primeira tentativa de montar um mapa. Entrou porque foi exatamente isso que aconteceu: o weston subiu inteiro — leu a configuração, abriu a placa, obteve o assento, achou teclado e mouse pelo udev — e morreu com 'failed to compile global XKB keymap / tried rules evdev, model pc105, layout br'. Uma tela preta por falta de arquivo de texto. É dependência de RUNTIME e invisível para a auditoria, que lê ELF e shebang: nenhum binário aponta para estes arquivos, o caminho é uma string dentro da libxkbcommon. Por isso está declarada em DEPS de lá mesmo sabendo que a auditoria vai anotá-la como não observada — a anotação é o preço de declarar uma verdade que a análise estática não alcança, e o silêncio seria pior. Conferência: o Alpine distribui o archive .tar.gz do GitLab e este é o .tar.xz do x.org; baixei os dois, extraí e comparei as árvores com diff -r — idênticas — o que corrobora este arquivo pelo hash que o Alpine publica."
+LICENSE=MIT
+SRC="https://www.x.org/releases/individual/data/xkeyboard-config/xkeyboard-config-$VERSION.tar.xz"
+SHA256=b77041324f0109f77161ee43743fe04baa485866af8460d31e476ad3f7648fd5
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    # Nada de -Dxkb-base: essa opção NÃO existe (o build falha com "Unknown
+    # option"). A partir da série 2.x o upstream instala em
+    # /usr/share/xkeyboard-config-<major>, e o antigo /usr/share/X11/xkb só
+    # aparece com -Dxorg-rules-symlinks=true. Aqui não se pede o symlink: quem
+    # aponta para o caminho novo é o -Dxkb-config-root do libxkbcommon, o que
+    # evita uma árvore de links no manifesto para servir a um servidor X que
+    # esta distro não tem.
+    meson setup build --prefix=/usr --buildtype=release \
+        -Dxorg-rules-symlinks=false \
+        -Dcompat-rules=false \
+        -Dnls=false
+    DESTDIR="$STAGE" ninja -C build install
+
+    # O caminho exato que a libxkbcommon procura. Se o upstream mudar o layout
+    # de instalação, a biblioteca não avisa: ela só falha ao compilar o mapa,
+    # e o sintoma é o compositor morrer sem tela.
+    [ -e "$STAGE/usr/share/xkeyboard-config-2/rules/evdev" ] || {
+        echo "xkeyboard-config: regras 'evdev' não foram instaladas" >&2
+        exit 1
+    }
+    # O layout brasileiro é o que o weston.ini desta distro pede. Conferir a
+    # existência das regras não bastaria: um pacote com as regras e sem o
+    # símbolo 'br' falharia só na máquina do usuário brasileiro.
+    [ -e "$STAGE/usr/share/xkeyboard-config-2/symbols/br" ] || {
+        echo "xkeyboard-config: símbolos do layout 'br' não foram instalados" >&2
+        exit 1
+    }
+    [ -e "$STAGE/usr/share/xkeyboard-config-2/keycodes/evdev" ] || {
+        echo "xkeyboard-config: keycodes 'evdev' não foram instalados" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

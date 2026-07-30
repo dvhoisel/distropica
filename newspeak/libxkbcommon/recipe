@@ -2,9 +2,9 @@ NAME=libxkbcommon
 VERSION=1.13.2
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc"
+DEPS="glibc xkeyboard-config"
 BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf bison"
-ABOUT="Tradução de código de tecla em símbolo, com layout, modificador e compose. No Wayland o compositor manda o teclado como um keymap XKB e o cliente o interpreta com esta biblioteca — sem ela o GTK recebe tecla e não sabe que letra é. Substitui a parte do X11 que fazia isso, e é uma das poucas peças do mundo X que sobrevive num sistema Wayland-only. Sem o backend X11 e sem as ferramentas de linha de comando, que servem para depurar layout à mão. É o tarball de tag do GitHub, que é o que o Alpine pina: o site xkbcommon.org responde HTML para o caminho de download desta versão."
+ABOUT="Tradução de código de tecla em símbolo, com layout, modificador e compose. No Wayland o compositor manda o teclado como um keymap XKB e o cliente o interpreta com esta biblioteca — sem ela o GTK recebe tecla e não sabe que letra é. Substitui a parte do X11 que fazia isso, e é uma das poucas peças do mundo X que sobrevive num sistema Wayland-only. Sem o backend X11 e sem as ferramentas de linha de comando, que servem para depurar layout à mão. É o tarball de tag do GitHub, que é o que o Alpine pina: o site xkbcommon.org responde HTML para o caminho de download desta versão. O xkeyboard-config está em DEPS e a auditoria vai anotá-lo como não observado, porque nenhum ELF aponta para ele: esta biblioteca é o CÓDIGO que interpreta mapas de teclado, e os DADOS — layouts, modelos, regras — moram num diretório que ela procura por uma string embutida no build. Sem eles ela compila, linka e falha no primeiro mapa, com 'failed to compile global XKB keymap'; foi assim que o weston morreu de tela preta depois de ter feito todo o resto certo. O -Dxkb-config-root aponta para /usr/share/xkeyboard-config-2, que é onde o upstream de lá passou a instalar a partir da versão 2.x — o antigo /usr/share/X11/xkb só existe se for pedido symlink, e apontar direto evita uma árvore de links no manifesto. Declarar a dependência e aceitar a anotação é melhor que a análise estática ficar limpa e o teclado não existir."
 LICENSE=MIT
 SRC="https://github.com/xkbcommon/libxkbcommon/archive/refs/tags/xkbcommon-$VERSION.tar.gz"
 SHA256=acc4d5f7c3cbba5f9f8d08d8bdbeede84ecede46792f47929aa9321873385528
@@ -26,7 +26,8 @@ build() {
         -Denable-wayland=true \
         -Denable-docs=false \
         -Denable-tools=false \
-        -Denable-bash-completion=false
+        -Denable-bash-completion=false \
+        -Dxkb-config-root=/usr/share/xkeyboard-config-2
     ninja -C build -j"$JOBS"
     DESTDIR="$STAGE" ninja -C build install
     find "$STAGE" -type d -empty -delete

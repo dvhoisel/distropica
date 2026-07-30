@@ -1,0 +1,45 @@
+NAME=hwdata-pnp
+VERSION=0.409
+KIND=source
+TOOLCHAIN=none
+DEPS=""
+BUILD_DEPS=""
+ABOUT="A tabela de fabricantes de monitor, e SÓ ela. O nome do pacote diz o recorte de propósito, como em linux-firmware-wifi: o hwdata upstream traz pci.ids, usb.ids, oui.txt e iab.txt além do pnp.ids, e aqui entra apenas o último. Motivo: o pnp.ids é dependência de CONSTRUÇÃO da libdisplay-info, que compila a tabela para dentro do binário; os outros quatro só teriam serventia para lspci e lsusb, que esta árvore não tem — seriam 8 MB de texto que ninguém leria. Para que serve: o EDID de um monitor identifica o fabricante por três letras ('DEL', 'SAM'), e é esta tabela que as traduz para 'Dell Inc.' O que se perde sem ela é o nome legível no log do compositor; o que se perde sem o ARQUIVO é o build da libdisplay-info, que chama files('/usr/share/hwdata/pnp.ids') e falha na configuração se ele não existir — por isso é pacote e não um detalhe do build de lá. Instala o hwdata.pc porque é assim que a libdisplay-info localiza o diretório: com o .pc presente ela pergunta ao pkg-config e não recorre ao caminho absoluto embutido. Receita sem TOOLCHAIN: não compila nada, copia dois arquivos."
+LICENSE="GPL-2.0-or-later AND MIT"
+SRC="https://github.com/vcrhonek/hwdata/archive/refs/tags/v$VERSION.tar.gz"
+SHA256=23006accc0f931dd5187d0307a57d0744e2b8feb85e73c37bc0f5229fb31eadd
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+
+    install -Dm644 pnp.ids "$STAGE/usr/share/hwdata/pnp.ids"
+
+    # O hwdata.pc.in é um template do ./configure do upstream, que não se roda
+    # aqui porque ele instalaria a árvore inteira. As três substituições são as
+    # únicas que o arquivo tem; o pc_sysrootdir é do pkg-config e fica literal.
+    install -d "$STAGE/usr/share/pkgconfig"
+    sed -e 's|@prefix@|/usr|' \
+        -e 's|@datadir@|/usr/share|' \
+        -e 's|@pkgdatadir@|/usr/share/hwdata|' \
+        -e 's|@NAME@|hwdata|' \
+        -e "s|@VERSION@|$VERSION|" \
+        hwdata.pc.in > "$STAGE/usr/share/pkgconfig/hwdata.pc"
+
+    install -Dm644 COPYING "$STAGE/usr/share/licenses/hwdata-pnp/COPYING"
+    install -Dm644 LICENSE "$STAGE/usr/share/licenses/hwdata-pnp/LICENSE"
+
+    # Nenhum @ pode sobrar: um template mal substituído produz um .pc que o
+    # pkg-config aceita e devolve o caminho literal '@pkgdatadir@', e aí a
+    # libdisplay-info compila uma tabela vazia sem ninguém errar em voz alta.
+    ! grep -q '@' "$STAGE/usr/share/pkgconfig/hwdata.pc" || {
+        echo "hwdata-pnp: sobrou placeholder não substituído no hwdata.pc" >&2
+        exit 1
+    }
+    # A tabela tem que ter conteúdo de verdade, não só existir.
+    n=$(wc -l < "$STAGE/usr/share/hwdata/pnp.ids")
+    [ "$n" -gt 2000 ] || {
+        echo "hwdata-pnp: pnp.ids com só $n linhas; o upstream mudou o formato" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

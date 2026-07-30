@@ -1,0 +1,215 @@
+NAME=desktop
+VERSION=0.1
+KIND=source
+TOOLCHAIN=none
+DEPS="weston seatd eudev dbus firefox dejavu-fonts adwaita-icon-theme hicolor-icon-theme gtk3 mesa locales busybox"
+ABOUT="A COLA. Tudo o que faz a pilha gráfica virar uma tela em vez de um monte de bibliotecas instaladas: quem sobe o compositor, onde ele acha a configuração, e o que aparece na barra. Receita de montagem, sem SRC — só gera arquivos legíveis. Três peças. (1) /usr/bin/distropica-desktop, o lançador: cria o XDG_RUNTIME_DIR, que o protocolo Wayland exige e sem o qual o weston sai com 'XDG_RUNTIME_DIR not set' e nada mais; sobe o seatd se ninguém o subiu; e exec no weston. (2) dois drop-ins em /etc/rc.d/rcS.d, que é como um pacote acrescenta trabalho de inicialização sem ser dono do /etc/inittab, que é do base: o 05-udevd.sh e o 10-seatd.sh, nesta ordem. O udevd NÃO é redundante com o mdev, e essa foi a causa da primeira tela preta: o mdev cria os NÓS de dispositivo, mas quem enumera dispositivo de entrada é a libinput, e ela pergunta à libudev — cujo udev_enumerate_scan_devices filtra tudo que não tem entrada na base em /run/udev. Sem udevd, a lista volta vazia com /dev/input/event0 legível ali na frente, e o weston morre com 'no input devices on entering Weston'. (3) /etc/xdg/weston/weston.ini, a configuração do compositor, com o painel e os dois lançadores. O renderizador é o PIXMAN e não o GL, e essa é a decisão que merece explicação: o renderizador GL exige EGL sobre GBM, o que numa árvore com Mesa softpipe significa rasterizar por software e ainda assim depender do gbm achar um driver para a placa — em bochs-drm, virtio ou qualquer máquina sem driver 3D, isso é uma superfície de falha grande em troca de nada, porque o softpipe já é software. O pixman compõe direto no buffer dumb do KMS, sem EGL, sem GBM, e funciona onde o KMS funciona. A Mesa continua instalada e útil: é dela que o GTK e o Firefox tiram GL quando pedem. O terminal é o weston-terminal, único emulador desta árvore."
+LICENSE="GPL-3.0-or-later"
+
+build() {
+    install -d "$STAGE/usr/bin" "$STAGE/etc/rc.d/rcS.d" "$STAGE/etc/xdg/weston"
+
+    cat > "$STAGE/usr/bin/distropica-desktop" <<'LAUNCHER'
+#!/bin/sh
+# distropica-desktop — sobe o modo gráfico. Legível de cabo a rabo, como o
+# resto do boot desta distro: nada aqui é mágico e nada roda escondido.
+set -eu
+
+# O Wayland EXIGE XDG_RUNTIME_DIR: é onde o socket do compositor é criado.
+# Sem ele o weston recusa a subir com uma linha só de erro. Não há systemd
+# aqui para criá-lo, então é este script quem cria. Modo 0700 é requisito do
+# protocolo, não zelo: o weston avisa e segue se for mais permissivo, mas
+# qualquer cliente pode então falar com o compositor.
+: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
+export XDG_RUNTIME_DIR
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 0700 "$XDG_RUNTIME_DIR"
+
+# O seatd entrega ao compositor os descritores de /dev/dri e /dev/input. O
+# rcS.d já deveria tê-lo subido; se não subiu — boot manual, ou o gancho não
+# existe neste sistema — sobe agora. Se nem isso der, a libseat cai no backend
+# 'builtin', que faz a mesma coisa dentro do processo quando ele é root; por
+# isso a falha aqui não é fatal.
+if [ ! -S /run/seatd.sock ]; then
+    seatd >/dev/null 2>&1 &
+    n=0
+    while [ ! -S /run/seatd.sock ] && [ "$n" -lt 30 ]; do
+        n=$((n + 1))
+        sleep 0.1 2>/dev/null || sleep 1
+    done
+fi
+
+# O idioma da sessão. O locales instala pt_BR.UTF-8; se ele não estiver
+# presente a variável aponta para um locale inexistente e as bibliotecas caem
+# em C sozinhas, sem quebrar nada.
+: "${LANG:=pt_BR.UTF-8}"
+export LANG
+
+# --log e o que torna a proxima falha diagnosticavel. Sem ele o weston escreve
+# em stderr, que na tty1 significa: a mensagem aparece por um instante, o
+# compositor toma a tela, morre, e nao sobra nada. Diagnosticar a primeira
+# falha desta pilha exigiu injetar um script na imagem do disco e ler o ext4
+# com debugfs; com o log em arquivo, basta abrir /var/log/weston.log.
+exec weston --log=/var/log/weston.log "$@"
+LAUNCHER
+    chmod 0755 "$STAGE/usr/bin/distropica-desktop"
+
+    cat > "$STAGE/etc/rc.d/rcS.d/01-machine-id.sh" <<'MACHINEID'
+# Drop-in de inicializacao: o identificador da maquina.
+#
+# O D-Bus recusa iniciar um barramento sem /etc/machine-id, e o Firefox tenta
+# falar com o barramento de acessibilidade na partida. Sem o arquivo ele
+# imprime, em toda execucao:
+#   Cannot spawn a message bus without a machine-id: Unable to load
+#   /var/lib/dbus/machine-id or /etc/machine-id
+# Nao e fatal — o navegador abre e funciona — mas e ruido em cada partida e
+# quebraria qualquer coisa que dependesse do D-Bus de verdade.
+#
+# Gerado no PRIMEIRO boot e nao no pacote, e isso e requisito e nao preguica:
+# o machine-id tem que ser UNICO por instalacao. Se viesse no payload, todas
+# as maquinas instaladas da mesma midia teriam o mesmo identificador — que e
+# exatamente o que a especificacao proibe.
+if [ ! -s /etc/machine-id ] && [ -x /usr/bin/dbus-uuidgen ]; then
+    /usr/bin/dbus-uuidgen > /etc/machine-id 2>/dev/null
+    mkdir -p /var/lib/dbus
+    cp /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null
+    echo "distropica: machine-id gerado"
+fi
+MACHINEID
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/01-machine-id.sh"
+
+    cat > "$STAGE/etc/rc.d/rcS.d/05-udevd.sh" <<'UDEVD'
+# Drop-in de inicializacao: o udevd. Sourced pelo rcS do base, ANTES do seatd.
+#
+# ISTO NAO E REDUNDANCIA COM O mdev. O mdev do BusyBox cria os NOS de
+# dispositivo e resolve /dev; o que ele nao faz e popular a BASE DO UDEV em
+# /run/udev. E a libinput nao enumera dispositivo lendo /dev — ela pergunta a
+# libudev, e o udev_enumerate_scan_devices FILTRA dispositivos que nao foram
+# "inicializados", isto e, que nao tem entrada nessa base. Sem udevd, a lista
+# volta vazia mesmo com /dev/input/event0 ali, legivel, na frente.
+#
+# O sintoma, medido e nao suposto: o weston sobe, encontra a placa, carrega o
+# renderizador, e morre com
+#   "no input devices on entering Weston" -> "failed to create input devices"
+#   -> "fatal: failed to create compositor backend"
+# e a tela fica preta. Nada falha no boot, nada falha no build.
+#
+# O 'settle' e obrigatorio: o trigger e assincrono, e sem esperar a fila o
+# weston pode subir antes de os dispositivos estarem na base — a mesma falha,
+# de forma intermitente, que e pior.
+if [ -x /usr/bin/udevd ] && [ ! -d /run/udev/data ]; then
+    /usr/bin/udevd --daemon >/dev/null 2>&1
+    /usr/bin/udevadm trigger --action=add >/dev/null 2>&1
+    /usr/bin/udevadm settle --timeout=10 >/dev/null 2>&1
+    echo "distropica: udevd iniciado"
+fi
+UDEVD
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/05-udevd.sh"
+
+    cat > "$STAGE/etc/rc.d/rcS.d/10-seatd.sh" <<'SEATD'
+# Drop-in de inicialização: o daemon de assentos. Sourced pelo rcS do base.
+# Sem -g: o seatd resolve o grupo com getgrnam e SAI COM ERRO se ele nao
+# existir, e esta arvore so tem o grupo root — as contas sao estado do admin e
+# o base nao as gerencia. Sem -g o socket fica so para o root, que e
+# exatamente quem roda o compositor hoje. O grupo entra junto com o login
+# grafico de usuario comum, quando ele existir.
+if [ -x /usr/bin/seatd ] && [ ! -S /run/seatd.sock ]; then
+    /usr/bin/seatd >/dev/null 2>&1 &
+    echo "distropica: seatd iniciado"
+fi
+SEATD
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/10-seatd.sh"
+
+    cat > "$STAGE/etc/xdg/weston/weston.ini" <<'WESTONINI'
+# weston.ini — configuração do compositor. Ver o ABOUT da receita 'desktop'
+# para o porquê de cada escolha.
+
+[core]
+# Pixman e não GL: compõe direto no buffer do KMS, sem EGL e sem GBM. Numa
+# árvore com Mesa softpipe o GL não aceleraria nada e acrescentaria a
+# possibilidade de o gbm não achar driver para a placa.
+renderer=pixman
+idle-time=0
+xwayland=false
+
+[shell]
+# Sem papel de parede em arquivo: o decodificador de imagem do weston
+# precisaria de libjpeg, que esta árvore não tem (o libjpeg-turbo 3.x só
+# constrói com cmake). Cor sólida resolve e não mente sobre o motivo.
+background-color=0xff1a1a1a
+panel-position=top
+locking=false
+animation=zoom
+
+# O painel do weston lê CAMINHO LITERAL de arquivo PNG; ele não sabe procurar
+# num tema de ícones nem renderizar SVG. Por isso os dois caminhos abaixo são
+# absolutos e foram conferidos contra o que os pacotes realmente instalam — o
+# do Firefox vem do próprio /opt, e o do terminal vem do subdiretório 'legacy'
+# do Adwaita, que é onde os PNG rasterizados sobreviveram quando o tema migrou
+# para SVG simbólico.
+#
+# COMENTÁRIO AQUI É '#', NUNCA ';'. O parser do weston (shared/config-parser.c)
+# só reconhece '#'; uma linha com ';' não é ignorada, é MALFORMADA — e o weston
+# então descarta o ARQUIVO INTEIRO e sobe com "Starting with no config file".
+# Isso já aconteceu: o compositor subiu com o renderizador GL em vez do pixman,
+# sem painel e sem lançadores, e a única pista era uma linha de aviso perdida
+# no meio do log.
+
+[launcher]
+icon=/opt/firefox/current/browser/chrome/icons/default/default48.png
+path=/usr/bin/firefox
+
+[launcher]
+icon=/usr/share/icons/Adwaita/48x48/legacy/utilities-terminal.png
+path=/usr/bin/weston-terminal
+
+[keyboard]
+keymap_layout=br
+
+[libinput]
+enable-tap=true
+WESTONINI
+    chmod 0644 "$STAGE/etc/xdg/weston/weston.ini"
+
+    # Os ícones do painel são conferidos AQUI, contra a árvore instalada, e
+    # não contra o STAGE: eles pertencem a outros pacotes (firefox e
+    # adwaita-icon-theme, ambos em DEPS). A primeira versão desta receita
+    # apontava para /usr/share/icons/hicolor/24x24/apps/firefox.png e
+    # .../utilities-terminal.png — NENHUM dos dois existe nesta árvore. O
+    # weston teria desenhado dois quadrados vazios e ninguém saberia por quê.
+    # A falha é cosmética, e por isso a guarda avisa em vez de abortar: um
+    # lançador sem ícone continua clicável, e derrubar o build do modo gráfico
+    # por um PNG seria desproporcional.
+    for icone in /opt/firefox/current/browser/chrome/icons/default/default48.png \
+                 /usr/share/icons/Adwaita/48x48/legacy/utilities-terminal.png; do
+        [ -e "$icone" ] || echo "desktop: aviso — ícone ausente: $icone" >&2
+    done
+
+    [ -x "$STAGE/usr/bin/distropica-desktop" ] || {
+        echo "desktop: o lançador não foi instalado" >&2
+        exit 1
+    }
+    # O weston.ini sem a seção [core] faria o compositor subir com o
+    # renderizador GL por default, que é justamente o que esta receita evita.
+    grep -q "^renderer=pixman" "$STAGE/etc/xdg/weston/weston.ini" || {
+        echo "desktop: weston.ini sem renderer=pixman" >&2
+        exit 1
+    }
+    # O parser do weston trata linha iniciada por ';' como MALFORMADA e
+    # descarta o arquivo inteiro, subindo com "Starting with no config file".
+    # Um comentário no estilo errado apaga toda a configuração em silêncio.
+    ! grep -q "^[[:space:]]*;" "$STAGE/etc/xdg/weston/weston.ini" || {
+        echo "desktop: weston.ini tem comentário com ';'; use '#'" >&2
+        exit 1
+    }
+    [ -e "$STAGE/etc/rc.d/rcS.d/01-machine-id.sh" ] || {
+        echo "desktop: falta o drop-in do machine-id" >&2
+        exit 1
+    }
+    # O udevd tem que estar no drop-in ANTES do seatd: a libinput enumera
+    # dispositivo pela libudev, que só enxerga o que está na base do udev.
+    [ -e "$STAGE/etc/rc.d/rcS.d/05-udevd.sh" ] || {
+        echo "desktop: falta o drop-in do udevd" >&2
+        exit 1
+    }
+}

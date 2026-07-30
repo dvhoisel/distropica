@@ -3,7 +3,7 @@ VERSION=0.2
 KIND=source
 TOOLCHAIN=none
 DEPS="busybox ndisc6"
-ABOUT="Config de boot da Fase B (SPEC-0006): /etc/inittab (busybox init → getty → login), rc.d/rcS (monta proc/sys/devtmpfs/tmpfs, mdev, hostname, DHCP IPv4 e, em IPv6, DHCPv6 mais o RDNSS do Router Advertisement lido de uma vez pelo rdisc6 — o kernel faz SLAAC sozinho mas ignora o RDNSS, e o busybox nao sabe le-lo), rc.d/rcK, hostname, motd, os-release e a licença da Distrópica. Receita de MONTAGEM: sem SRC (não baixa nada), o build() gera arquivos legíveis e instala auxiliares que fazem parte do mesmo snapshot da receita. Instala defaults de /etc via fábrica (/usr/share/factory/etc → materializa em /etc). NÃO gerencia contas: passwd/shadow são estado do admin (um futuro base-files/adduser + doas cuida disso; SPEC-0006 §5)."
+ABOUT="Config de boot da Fase B (SPEC-0006): /etc/inittab (busybox init → getty → login), rc.d/rcS (monta proc/sys/devtmpfs/tmpfs, mdev, hostname, DHCP IPv4 e, em IPv6, DHCPv6 mais o RDNSS do Router Advertisement lido de uma vez pelo rdisc6 — o kernel faz SLAAC sozinho mas ignora o RDNSS, e o busybox nao sabe le-lo), rc.d/rcK, hostname, motd, os-release e a licença da Distrópica. Duas peças existem por causa da separação de propriedade do manifesto, e não por gosto de indireção: o /etc/rc.d/session, despachante da tty1, e o laço de drop-ins /etc/rc.d/rcS.d/*.sh no fim do rcS. O /etc/inittab e o rcS pertencem a ESTE pacote; um pacote que precise subir daemon no boot ou tomar a tty1 — o 'desktop', com o seatd e o weston, é o primeiro — não pode reescrevê-los sem colidir. Então o base pergunta em vez de saber: se /usr/bin/distropica-desktop existir, a tty1 vira sessão gráfica; se não existir, vira getty como sempre. Note que o base NÃO cria /etc/rc.d/rcS.d: diretório vazio vira claim de árvore no manifesto v2 e bloquearia o pacote que fosse depositar o drop-in ali — foi assim que a glibc confiscou o /usr/share/locale. Receita de MONTAGEM: sem SRC (não baixa nada), o build() gera arquivos legíveis e instala auxiliares que fazem parte do mesmo snapshot da receita. Instala defaults de /etc via fábrica (/usr/share/factory/etc → materializa em /etc). NÃO gerencia contas: passwd/shadow são estado do admin (um futuro base-files/adduser + doas cuida disso; SPEC-0006 §5)."
 LICENSE="GPL-3.0-or-later"
 
 build() {
@@ -22,12 +22,79 @@ build() {
 # /etc/inittab — busybox init (SPEC-0006 Fase B). Legivel de cabo a rabo:
 # `cat /etc/inittab` responde "o que roda no boot?".
 ::sysinit:/etc/rc.d/rcS
-# console serial (QEMU/serial) e VGA tty1 — getty -> login
+# console serial (QEMU/serial) — getty -> login
 ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100
-tty1::respawn:/sbin/getty 38400 tty1
+# tty1 e o console primario: sessao grafica se houver, getty se nao houver.
+# Quem decide e o /etc/rc.d/session, e nao esta linha, porque o /etc/inittab
+# pertence ao pacote base e o modo grafico pertence ao pacote desktop — um nao
+# pode reescrever o arquivo do outro sem colidir no manifesto.
+tty1::respawn:/etc/rc.d/session
+# tty2 e a saida de emergencia: getty puro, sempre. Se a sessao grafica
+# entrar em ciclo de respawn na tty1, ainda ha onde logar com Alt+F2.
+tty2::respawn:/sbin/getty 38400 tty2
 ::ctrlaltdel:/sbin/reboot
 ::shutdown:/etc/rc.d/rcK
 INITTAB
+
+    cat > "$STAGE/etc/rc.d/session" <<'SESSION'
+#!/bin/sh
+# session — o que roda na tty1. Uma pergunta e tres respostas.
+#
+# Se o pacote desktop estiver instalado E houver placa de video com KMS, sobe
+# o modo grafico; senao, sobe um getty como sempre. O teste e a EXISTENCIA do
+# lancador, nao um arquivo de configuracao, porque instalar o pacote e a unica
+# acao que o usuario tomou e nao faz sentido pedir uma segunda.
+#
+# O teste do /dev/dri nao e zelo: o inittab marca esta linha como respawn, e um
+# compositor que morre por falta de placa seria reiniciado para sempre. Numa
+# maquina sem driver KMS — QEMU com VGA padrao, por exemplo — o resultado seria
+# um laco em vez de um console. Melhor um getty honesto.
+if [ -x /usr/bin/distropica-desktop ]; then
+    for card in /dev/dri/card*; do
+        [ -e "$card" ] || continue
+        # Se o compositor sair sozinho (o usuario encerrou a sessao), cai no
+        # getty em vez de reabrir a sessao grafica; quem quiser de volta usa
+        # `distropica-desktop`.
+        /usr/bin/distropica-desktop
+        echo "distropica: sessao grafica encerrada; console na tty1"
+        break
+    done
+fi
+exec /sbin/getty 38400 tty1
+SESSION
+    chmod 755 "$STAGE/etc/rc.d/session"
+
+    cat > "$STAGE/etc/mdev.conf" <<'MDEV'
+# /etc/mdev.conf — onde o mdev cria cada no de dispositivo.
+#
+# Existe por um detalhe que so aparece quando alguem tenta usar a placa de
+# video: o mdev do BusyBox cria TUDO achatado em /dev, e nao em subdiretorios.
+# Sem as regras abaixo, a placa vira /dev/card0 e o teclado vira /dev/event0 —
+# enquanto a libdrm procura /dev/dri/card0 e a libinput procura
+# /dev/input/event0. Nada falha em voz alta: o compositor sobe, nao acha saida
+# de video nem teclado, e morre. O `=dri/` e o `=input/` movem o no para o
+# diretorio certo, criando-o se preciso.
+#
+# Dono root:root em tudo, e isso e deliberado. O mdev do BusyBox resolve o
+# nome do grupo com getgrnam e ABORTA se ele nao existir — nao avisa, nao cai
+# para um default: para de criar nos de dispositivo. Escrever 'root:video'
+# aqui acoplaria ESTE pacote a um grupo que ele nao cria e que so existe no
+# overlay de um perfil; quem instalasse o base sem esse overlay ficaria sem
+# /dev. Como hoje quem abre a placa e o compositor rodando como root, root:root
+# descreve a realidade. Quando houver login grafico de usuario comum, o grupo
+# e a mudanca deste modo vem juntos, e nao antes.
+#
+# Sem placa de video instalada, as linhas do dri nao casam com nada e sao
+# inertes.
+card[0-9]*      root:root 0660 =dri/
+renderD[0-9]*   root:root 0660 =dri/
+event[0-9]*     root:root 0640 =input/
+mouse[0-9]*     root:root 0640 =input/
+mice            root:root 0640 =input/
+js[0-9]*        root:root 0640 =input/
+# O resto segue o default do mdev.
+.*              root:root 0660
+MDEV
 
     cat > "$STAGE/etc/rc.d/rcS" <<'RCS'
 #!/bin/sh
@@ -75,6 +142,15 @@ for network_path in /sys/class/net/*; do
                 printf 'nameserver %s\n' "$nameserver" >> /etc/resolv.conf
             done
     fi
+done
+# Ganchos de inicializacao dos outros pacotes. Existe porque o /etc/inittab e
+# este proprio rcS pertencem ao base, e um pacote que precise subir um daemon
+# no boot — o seatd do modo grafico e o primeiro — nao pode reescrever arquivo
+# de outro pacote sem colidir no manifesto. Sao SOURCED e nao executados, para
+# que o drop-in possa exportar variavel e nao precise de bit de execucao.
+for dropin in /etc/rc.d/rcS.d/*.sh; do
+    [ -e "$dropin" ] || continue
+    . "$dropin"
 done
 echo "distropica: rcS ok (mounts, mdev, hostname)"
 RCS

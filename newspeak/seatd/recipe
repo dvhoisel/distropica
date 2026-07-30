@@ -1,0 +1,33 @@
+NAME=seatd
+VERSION=0.9.3
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf"
+ABOUT="Quem entrega ao compositor o controle do teclado, do mouse e da placa de vídeo. Um compositor Wayland precisa abrir /dev/dri e /dev/input, que são de root, e a resposta antiga era rodar tudo como root ou pôr SUID no binário. O seatd é um daemon minúsculo que faz só isso — abre o dispositivo e passa o descritor — e o resto roda sem privilégio. Não é opcional para o weston: o backend DRM pede libseat >= 0.4 como dependência dura, porque o weston-launch com SUID que existia antes foi removido pelo upstream. Sem systemd e sem elogind, que são as outras implementações da mesma interface e trariam muito mais junto. Vão os DOIS backends, e a razão importa numa distro sem gerenciador de serviços: o 'seatd' fala com o daemon por socket e serve a usuário sem privilégio, o 'builtin' faz a mesma gestão dentro do próprio processo quando ele já é root e não há daemon nenhum ouvindo. A libseat tenta na ordem e cai para o segundo sozinha, então o compositor sobe mesmo que o daemon não tenha sido iniciado — o que, com o busybox init e sem supervisão, é a diferença entre uma tela gráfica e uma mensagem de erro."
+LICENSE=MIT
+SRC="https://git.sr.ht/~kennylevinsen/seatd/archive/$VERSION.tar.gz"
+SHA256=302564d54d8e28191fadfd734f2675ecb0c9e0615a58011b89ef15dfa4dbaa96
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dlibseat-logind=disabled \
+        -Dlibseat-seatd=enabled \
+        -Dlibseat-builtin=enabled \
+        -Dserver=enabled \
+        -Dexamples=disabled \
+        -Dman-pages=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    [ -e "$STAGE/usr/lib/pkgconfig/libseat.pc" ] || {
+        echo "seatd: libseat.pc não foi produzido" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

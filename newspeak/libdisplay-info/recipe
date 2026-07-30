@@ -1,0 +1,43 @@
+NAME=libdisplay-info
+VERSION=0.2.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf hwdata-pnp python-glibc"
+ABOUT="Quem lê o EDID do monitor. Todo painel responde, pelo cabo, um bloco de 128 bytes que diz resolução nativa, taxa de atualização, tamanho físico e fabricante; alguém tem que decodificá-lo, e desde a versão 13 o weston delegou essa tarefa a esta biblioteca em vez de fazê-la à mão. É dependência OBRIGATÓRIA do backend DRM — não opcional, com not_found_message: 'Required by DRM-backend.' — de modo que sem ela o compositor não tem como saber em que modo pôr a tela. A faixa de versão é imposta pelo weston 14, que pede >= 0.1.1 e < 0.3.0; a 0.3.0 já existe e NÃO serve, então esta não é a versão mais recente por escolha. Conferência: o tarball de release é ASSINADO em PGP pelo Simon Ser, autor do projeto, com a chave 34FF9526CFEF0E97A340E2E40FDE7BE0E88F5E48 — a mesma que o Arch pina — e a assinatura foi verificada. Preferi isso a um segundo hash de distro porque o Void baixa o archive automático .tar.gz do GitLab, que é outro arquivo: corrobora a versão, não o mesmo byte."
+LICENSE=MIT
+SRC="https://gitlab.freedesktop.org/emersion/libdisplay-info/-/releases/$VERSION/downloads/libdisplay-info-$VERSION.tar.xz"
+SHA256=5a2f002a16f42dd3540c8846f80a90b8f4bdcd067a94b9d2087bc2feae974176
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # Sem -Dtests: este projeto não tem meson_options.txt nenhum, e passar uma
+    # opção inexistente é erro duro no meson. A suíte de testes se configura
+    # sempre, mas o edid-decode que ela usaria como referência é
+    # 'required: false' — configura, não roda, não falha. Só o werror sai, que
+    # é opção embutida do meson e não do projeto.
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dwerror=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    [ -e "$STAGE/usr/lib/pkgconfig/libdisplay-info.pc" ] || {
+        echo "libdisplay-info: o .pc não foi produzido" >&2
+        exit 1
+    }
+    # A tabela de fabricantes é COMPILADA para dentro da .so a partir do
+    # pnp.ids. Se o hwdata-pnp não estivesse instalado, o meson cairia no
+    # caminho absoluto e falharia — mas se um dia o upstream tornar isso
+    # tolerante, a biblioteca sairia daqui funcional e muda, sem erro nenhum.
+    # 'Dell' é um fabricante que existe no pnp.ids desde sempre.
+    grep -qa 'Dell' "$STAGE/usr/lib/libdisplay-info.so.$VERSION" 2>/dev/null || \
+    grep -qa 'Dell' "$STAGE"/usr/lib/libdisplay-info.so.* 2>/dev/null || {
+        echo "libdisplay-info: a tabela do pnp.ids não entrou na biblioteca" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}
