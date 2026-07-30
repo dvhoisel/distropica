@@ -1,0 +1,9 @@
+# Fontes vendorizadas: o build do minitrue e do minipax não consulta a rede.
+# Isso serve a três coisas de uma vez — reprodutibilidade entre builders
+# (SPEC-0010), bootstrap sem crates.io no ar, e a possibilidade de qualquer
+# pessoa reconstruir o binário publicado e comparar bytes.
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"

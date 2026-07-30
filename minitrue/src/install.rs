@@ -2,7 +2,6 @@ use crate::channel;
 use crate::recipe::{self, Kind, Recipe, Toolchain};
 use crate::{fail, fetch, iso_now, Ctx};
 use anyhow::{bail, Result};
-use fs2::FileExt;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::{CString, OsStr};
@@ -120,7 +119,7 @@ impl Drop for RootLock {
         // Explicita a fronteira inclusive em retornos antecipados. O close do
         // File também liberaria o flock, mas o unlock evita que temporários de
         // erro/postergamento de drop tornem um relock sequencial intermitente.
-        let _ = fs2::FileExt::unlock(&self.0);
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
     }
 }
 
@@ -137,10 +136,18 @@ fn acquire_lock(ctx: &Ctx) -> Result<RootLock> {
     if !f.metadata()?.file_type().is_file() {
         bail!("lock do minitrue precisa ser arquivo regular");
     }
-    f.try_lock_exclusive().map_err(|_| crate::Fail {
-        code: 1,
-        msg: "outro minitrue já opera este sistema (lock em var/lib/minitrue/lock)".into(),
-    })?;
+    // flock direto pelo libc, e não pela crate fs2, de propósito: a fs2 existe
+    // para abstrair travamento entre Unix e Windows, e esta é uma ferramenta
+    // Linux. O preço da abstração não era teórico — a fs2 arrastava a winapi,
+    // que sozinha respondia por 106 dos 295 MB das crates vendorizadas, um
+    // terço da árvore, para duas chamadas que o libc já exposto aqui faz.
+    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(crate::Fail {
+            code: 1,
+            msg: "outro minitrue já opera este sistema (lock em var/lib/minitrue/lock)".into(),
+        }
+        .into());
+    }
     Ok(RootLock(f))
 }
 

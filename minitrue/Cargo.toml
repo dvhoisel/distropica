@@ -11,7 +11,6 @@ anyhow = "1"
 base64 = "0.22"
 blake2 = "0.10"
 ed25519-dalek = "2"
-fs2 = "0.4"
 getrandom = "0.2"
 hex = "0.4"
 libc = "0.2"
@@ -25,3 +24,9 @@ url = "2"
 [profile.release]
 lto = true
 strip = true
+# A reprodutibilidade ENTRE MÁQUINAS depende de remapear o caminho do fonte,
+# que senão é embutido no binário — havia 139 ocorrências do caminho absoluto
+# aqui dentro. Isso NÃO é feito por `trim-paths` porque a opção ainda não está
+# estabilizada (cargo 1.94 recusa o manifesto inteiro); é feito por
+# --remap-path-prefix em bootstrap/build-minitrue.sh, que é o único caminho
+# suportado de construir este binário de forma verificável.

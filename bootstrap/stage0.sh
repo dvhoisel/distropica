@@ -1,12 +1,57 @@
 #!/bin/sh
 # stage0: monta o rootfs E0 da Distrópica (SPEC-0005 §2) usando o minitrue.
-# Uso: bootstrap/stage0.sh [dir-do-rootfs]   (padrão: ./rootfs na raiz do repo)
+#
+# Uso: bootstrap/stage0.sh [--from-source] [dir-do-rootfs]
+#
+# O minitrue vem do CANAL BINÁRIO por padrão, e é compilado só com
+# --from-source. A razão é a P2 da SPEC-0001 — "se existir binário elegível, a
+# receita DEVE usá-lo; o que não tem binário upstream, a Distrópica compila uma
+# vez e publica como binário do próprio projeto". O minitrue é exatamente esse
+# caso, e até aqui a distro violava a própria regra no ponto mais crítico dela:
+# exigia binário para todo o resto e mandava cada pessoa compilar do zero a
+# ferramenta que decide o que é confiável.
+#
+# Isso também remove a dependência de Rust no hospedeiro. A SPEC-0005 §1.1
+# rejeitou o gcc do host como semente porque "só construível sobre o Ubuntu é
+# dependência permanente do Ubuntu"; exigir cargo era a mesma dependência, num
+# lugar onde ninguém tinha olhado.
+#
+# O binário publicado é verificável por reconstrução: o build é reprodutível
+# byte a byte entre máquinas e diretórios (bootstrap/build-minitrue.sh), então
+# quem tiver cargo confere em vez de confiar.
 set -eu
 umask 022
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-ROOTFS=${1:-"$REPO/rootfs"}
+FROM_SOURCE=
+ROOTFS=
+while [ $# -gt 0 ]; do
+    case $1 in
+        --from-source) FROM_SOURCE=1 ;;
+        *) ROOTFS=$1 ;;
+    esac
+    shift
+done
+ROOTFS=${ROOTFS:-"$REPO/rootfs"}
 export CARGO_TARGET_DIR="$REPO/target"
+
+# Onde o canal publica o minitrue, e o hash que ele DEVE ter.
+#
+# A conferência é por hash pinado no REPOSITÓRIO, não por assinatura, e a razão
+# é dura: verificar assinatura exige um verificador, e o nosso mora dentro do
+# binário que se quer verificar. Exigir o minisign do hospedeiro reintroduziria
+# justamente a dependência de host que este caminho existe para eliminar.
+#
+# Hash pinado é o mesmo mecanismo que toda receita da árvore usa no seu
+# SHA256=, e a âncora de confiança é a mesma: o clone do repositório. Quem
+# confia no git de onde clonou confia neste número; quem não confia, reconstrói
+# com bootstrap/build-minitrue.sh e compara — o build é reprodutível byte a
+# byte entre máquinas, então os dois caminhos devem convergir no mesmo valor.
+MINITRUE_CHANNEL=${MINITRUE_CHANNEL:-https://distropica.com.br/canal/minitrue}
+MINITRUE_SHA256=7c96b0179c00ef5a9422425b9f71928f3b8fa31a5e4c8e4e449f6c6c8bcfe860
+# O estático musl, que roda DENTRO do rootfs. Construído com o zig como CC
+# (SPEC-0003 §10) e o mesmo --remap-path-prefix, e por isso também reprodutível.
+MINITRUE_MUSL_SHA256=bde43212f60b11113d55d44aeccdd10058987e35b3ff5c7033361e1ba5abf30c
 
 # O runner mundo-B entra no rootfs por bwrap e precisa que todos os caminhos
 # de trabalho derivados daqui continuem válidos depois do chroot. Aceitar um
@@ -16,12 +61,42 @@ mkdir -p "$ROOTFS"
 ROOTFS=$(CDPATH= cd -- "$ROOTFS" && pwd -P)
 
 echo "== distrópica stage0 → $ROOTFS =="
-command -v cargo >/dev/null 2>&1 || { echo "erro: cargo ausente (instale via rustup.rs)"; exit 1; }
 command -v bwrap >/dev/null 2>&1 || echo "aviso: bwrap ausente — a entrada rootless (enter.sh) não vai funcionar"
 
-echo "-- [1/6] minitrue do host --"
-cargo build --release --quiet --manifest-path "$REPO/minitrue/Cargo.toml"
+echo "-- [1/6] minitrue --"
 MT="$CARGO_TARGET_DIR/release/minitrue"
+if [ -n "$FROM_SOURCE" ]; then
+    command -v cargo >/dev/null 2>&1 || {
+        echo "erro: --from-source exige cargo (instale via rustup.rs)" >&2; exit 1; }
+    echo "   compilando do fonte (reprodutível)"
+    "$REPO/bootstrap/build-minitrue.sh"
+else
+    mkdir -p "$CARGO_TARGET_DIR/release"
+    tmp=$CARGO_TARGET_DIR/release/.minitrue.download
+    echo "   baixando do canal: $MINITRUE_CHANNEL"
+    if ! curl -fsSL -o "$tmp" "$MINITRUE_CHANNEL/minitrue"; then
+        rm -f "$tmp"
+        echo "erro: não consegui baixar o minitrue do canal." >&2
+        echo "      Se o canal ainda não foi publicado, compile do fonte:" >&2
+        echo "        bootstrap/stage0.sh --from-source $ROOTFS" >&2
+        exit 1
+    fi
+    got=$(sha256sum "$tmp" | cut -d' ' -f1)
+    # Sem escape por flag: este é o binário que vai auditar todo o resto do
+    # sistema. Hash diferente do pinado = para aqui.
+    if [ "$got" != "$MINITRUE_SHA256" ]; then
+        rm -f "$tmp"
+        echo "erro: hash do minitrue NÃO confere — download recusado." >&2
+        echo "      esperado: $MINITRUE_SHA256" >&2
+        echo "      obtido:   $got" >&2
+        exit 1
+    fi
+    chmod 0755 "$tmp"
+    mv -f "$tmp" "$MT"
+    echo "   hash confere: $got"
+    echo "   para conferir por reconstrução: bootstrap/build-minitrue.sh"
+fi
+[ -x "$MT" ] || { echo "erro: minitrue indisponível em $MT" >&2; exit 1; }
 
 echo "-- [2/6] esqueleto FHS (usr-merge) --"
 mkdir -p "$ROOTFS/usr/bin" "$ROOTFS/usr/lib" "$ROOTFS/usr/share" \
@@ -76,7 +151,23 @@ echo "-- [4/6] rectify busybox zig + make (make é a ferramenta essencial do E1)
 "$MT" --root "$ROOTFS" rectify make
 
 echo "-- [5/6] minitrue musl estático (para dentro do rootfs) --"
-if rustup target list --installed 2>/dev/null | grep -q '^x86_64-unknown-linux-musl$'; then
+# Mesmo raciocínio do passo [1/6]: por padrão vem do canal, com hash pinado
+# aqui, e só é compilado com --from-source. Este é o minitrue que roda DENTRO
+# do rootfs, então precisa ser estático — o rootfs recém-criado não tem libc.
+if [ -z "$FROM_SOURCE" ] && curl -fsSL -o "$CARGO_TARGET_DIR/.minitrue-musl.download" \
+        "$MINITRUE_CHANNEL/minitrue-musl" 2>/dev/null; then
+    got=$(sha256sum "$CARGO_TARGET_DIR/.minitrue-musl.download" | cut -d' ' -f1)
+    if [ "$got" != "$MINITRUE_MUSL_SHA256" ]; then
+        rm -f "$CARGO_TARGET_DIR/.minitrue-musl.download"
+        echo "erro: hash do minitrue-musl NÃO confere — download recusado." >&2
+        echo "      esperado: $MINITRUE_MUSL_SHA256" >&2
+        echo "      obtido:   $got" >&2
+        exit 1
+    fi
+    install -m0755 "$CARGO_TARGET_DIR/.minitrue-musl.download" "$ROOTFS/usr/bin/minitrue"
+    rm -f "$CARGO_TARGET_DIR/.minitrue-musl.download"
+    echo "minitrue estático instalado do canal (hash confere)"
+elif rustup target list --installed 2>/dev/null | grep -q '^x86_64-unknown-linux-musl$'; then
     SHIMS="$CARGO_TARGET_DIR/shims"
     mkdir -p "$SHIMS"
     cat > "$SHIMS/zcc" <<EOF

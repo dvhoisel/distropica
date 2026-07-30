@@ -5,3 +5,14 @@
 /rootfs/
 /rootfs-clean/
 *.log
+
+# Crates vendorizadas (182 MB). NÃO versionadas de propósito: são cópia
+# verbatim do que o Cargo.lock já pina, com .cargo-checksum.json por crate, e
+# versioná-las tornaria todo clone permanentemente pesado sem acrescentar
+# informação. Regenere com o comando abaixo — a saída é determinística dado o
+# mesmo lock, que é o que permite reconstruir o minitrue publicado e comparar:
+#
+#   cargo vendor --manifest-path minitrue/Cargo.toml -s minipax/Cargo.toml vendor
+#
+# O bundle de fontes correspondentes (LICENSING.md) as inclui, geradas assim.
+/vendor/
