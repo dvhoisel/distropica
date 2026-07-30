@@ -127,6 +127,28 @@ CONFIG_RTW89=m
 CONFIG_RTW89_8852AE=m
 CONFIG_RTW89_8852BE=m
 CONFIG_RTW89_8852CE=m
+# --- Console de video -------------------------------------------------------
+# ISTO NAO E ENFEITE: sem FRAMEBUFFER_CONSOLE o kernel escreve num terminal
+# virtual que NAO TEM lastro visivel numa maquina com KMS. O sintoma medido: a
+# midia interativa boota, o instalador imprime a lista de discos e espera o
+# usuario digitar — e a tela fica no logo do firmware, preta. Os gettys da
+# tty1 e da tty2 do sistema instalado tem o mesmo destino. A sessao grafica
+# funciona mesmo assim, porque o weston fala DRM direto e nao passa por
+# console; e por isso que o defeito passou despercebido enquanto so se
+# testava o modo grafico e o serial.
+CONFIG_DRM_FBDEV_EMULATION=y
+CONFIG_FRAMEBUFFER_CONSOLE=y
+CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY=y
+# O framebuffer que a UEFI ja deixou ligado, usado ANTES de qualquer driver
+# nativo assumir — e o unico numa maquina cujo driver DRM nao esta embutido
+# aqui. Sem ele nao ha o que o fbcon pinte nos primeiros segundos de boot.
+CONFIG_SYSFB_SIMPLEFB=y
+CONFIG_DRM_SIMPLEDRM=y
+# A VGA padrao do QEMU. Entra porque a maioria de quem testar esta distro vai
+# faze-lo numa VM, e sem este driver o -vga std nao produz /dev/dri/card0: o
+# /etc/rc.d/session cai no getty de proposito, e a pessoa conclui que o modo
+# grafico nao existe. Custa um driver pequeno e evita uma conclusao falsa.
+CONFIG_DRM_BOCHS=y
 KCONFIG
     make olddefconfig
     # Guarda: o Ministério EXIGE assinatura. Aborta AQUI se um pilar caiu — em vez
@@ -136,7 +158,8 @@ KCONFIG
         NFT_FIB_INET NF_CONNTRACK IPV6 IPV6_MULTIPLE_TABLES \
         WLAN CFG80211 MAC80211 RFKILL \
         CRYPTO_USER_API_HASH CRYPTO_USER_API_SKCIPHER CRYPTO_CMAC \
-        CRYPTO_CTR CRYPTO_MD5 CRYPTO_SHA512 KEY_DH_OPERATIONS; do
+        CRYPTO_CTR CRYPTO_MD5 CRYPTO_SHA512 KEY_DH_OPERATIONS \
+        FRAMEBUFFER_CONSOLE SYSFB_SIMPLEFB DRM_SIMPLEDRM DRM_BOCHS; do
         grep -q "^CONFIG_$s=y\$" .config || {
             echo "FATAL: falta CONFIG_$s=y no .config"
             grep -E 'MODULE_SIG|TRUSTED_KEYRING' .config
