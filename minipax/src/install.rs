@@ -310,6 +310,35 @@ fn temporary_sibling(path: &Path) -> Result<PathBuf> {
     Ok(path.with_file_name(format!(".{name}.minipax-new-{}", std::process::id())))
 }
 
+/// O destino já tem exatamente este conteúdo? Compara em blocos para que o
+/// caso `RegularAt` não desfaça o streaming justamente na conferência.
+fn same_content(destination: &Path, kind: &EntryKind) -> Result<bool> {
+    match kind {
+        EntryKind::Regular(content) => Ok(fs::read(destination)? == *content),
+        EntryKind::RegularAt { source, len } => {
+            let existing = fs::metadata(destination)?;
+            if existing.len() != *len {
+                return Ok(false);
+            }
+            let mut left = std::io::BufReader::new(fs::File::open(destination)?);
+            let mut right = std::io::BufReader::new(fs::File::open(source)?);
+            let mut a = [0u8; 64 * 1024];
+            let mut b = [0u8; 64 * 1024];
+            loop {
+                let read = std::io::Read::read(&mut left, &mut a)?;
+                if read == 0 {
+                    return Ok(true);
+                }
+                right.read_exact(&mut b[..read])?;
+                if a[..read] != b[..read] {
+                    return Ok(false);
+                }
+            }
+        }
+        _ => Ok(false),
+    }
+}
+
 fn apply_entries(root: &Path, entries: &[Entry], replace: bool) -> Result<()> {
     for entry in entries {
         let destination = ensure_real_ancestors(root, &entry.relative)?;
@@ -317,14 +346,20 @@ fn apply_entries(root: &Path, entries: &[Entry], replace: bool) -> Result<()> {
             EntryKind::Directory => {
                 ensure_dir(&destination, entry.mode)?;
             }
-            EntryKind::Regular(content) => {
+            // Os dois casos regulares fazem a MESMA coisa; só muda de onde
+            // vêm os bytes. O `RegularAt` chega quando a árvore foi coletada
+            // com `TreePolicy::Cache`, que não lê arquivo nenhum para a
+            // memória — e essa política é usada tanto ao compor mídia quanto
+            // ao aplicar um cache já no disco, motivo pelo qual este braço
+            // precisa copiar de verdade e não recusar.
+            EntryKind::Regular(_) | EntryKind::RegularAt { .. } => {
                 if let Ok(metadata) = fs::symlink_metadata(&destination) {
                     if !metadata.file_type().is_file() {
                         bail!("colisão ao aplicar árvore: {}", destination.display());
                     }
                     if !replace {
                         let same_mode = metadata.permissions().mode() & 0o7777 == entry.mode;
-                        if same_mode && fs::read(&destination)? == *content {
+                        if same_mode && same_content(&destination, &entry.kind)? {
                             continue;
                         }
                         bail!("colisão ao aplicar árvore: {}", destination.display());
@@ -339,7 +374,24 @@ fn apply_entries(root: &Path, entries: &[Entry], replace: bool) -> Result<()> {
                     .create_new(true)
                     .mode(entry.mode)
                     .open(&temporary)?;
-                file.write_all(content)?;
+                match &entry.kind {
+                    EntryKind::Regular(content) => file.write_all(content)?,
+                    EntryKind::RegularAt { source, len } => {
+                        let mut input = fs::File::open(source)
+                            .with_context(|| format!("origem sumiu: {}", source.display()))?
+                            .take(*len);
+                        let copied = std::io::copy(&mut input, &mut file)?;
+                        if copied != *len {
+                            bail!(
+                                "origem encolheu ao aplicar: {} ({} de {} bytes)",
+                                source.display(),
+                                copied,
+                                len
+                            );
+                        }
+                    }
+                    _ => unreachable!("braço cobre apenas regulares"),
+                }
                 file.sync_all()?;
                 fs::set_permissions(&temporary, fs::Permissions::from_mode(entry.mode))?;
                 fs::rename(&temporary, &destination)?;

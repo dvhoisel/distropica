@@ -8,7 +8,22 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
 const MAX_TREE_BYTES: u64 = 128 * 1024 * 1024;
-const MAX_CACHE_TREE_BYTES: u64 = 384 * 1024 * 1024;
+/// O teto do cache não é mais um limite de MEMÓRIA, e a diferença importa.
+///
+/// Até 2026-07-30 ele era 384 MiB porque `collect` lia todo arquivo para um
+/// `Vec<u8>` e o `pack` montava o tar inteiro em outro: compor uma mídia
+/// custava duas cópias do payload na RAM, e o teto era o que impedia isso de
+/// virar um OOM. A mensagem de erro dizia "streaming é gate de release", e
+/// este é o commit em que o streaming existe: para `TreePolicy::Cache` os
+/// arquivos regulares entram na árvore como REFERÊNCIA (`RegularAt`), o tar é
+/// escrito direto num `Write`, e o payload vai do disco para a mídia sem
+/// passar inteiro pela memória.
+///
+/// O número que ficou é 4 GiB menos um, e ele é REAL e não arbitrário: o
+/// `cache.tar` é UM arquivo dentro de um sistema FAT32, e FAT32 não representa
+/// arquivo de 4 GiB ou mais. Passar disto não é desperdício de RAM, é uma
+/// mídia que não se monta.
+const MAX_CACHE_TREE_BYTES: u64 = 4 * 1024 * 1024 * 1024 - 1;
 const MAX_TREE_ENTRIES: usize = 50_000;
 
 #[derive(Default)]
@@ -34,8 +49,28 @@ pub(crate) const fn max_tree_bytes(policy: TreePolicy) -> u64 {
 #[derive(Clone, Debug)]
 pub enum EntryKind {
     Directory,
+    /// Conteúdo em memória. É o que as árvores pequenas (newspeak, overlay)
+    /// usam, e o que sai de `decode_archive` ao ler um tar já pronto.
     Regular(Vec<u8>),
+    /// Conteúdo POR REFERÊNCIA: o arquivo fica no disco e só é lido enquanto
+    /// se escreve o tar ou a mídia. É o que `TreePolicy::Cache` produz, e é o
+    /// que permite um cache de centenas de MiB sem custo de memória
+    /// proporcional. O tamanho é gravado no `collect` para que o orçamento e
+    /// o cabeçalho do tar não precisem reabrir o arquivo.
+    RegularAt { source: PathBuf, len: u64 },
     Symlink(PathBuf),
+}
+
+impl EntryKind {
+    /// Tamanho do conteúdo, sem lê-lo. Diretório e link simbólico ocupam zero
+    /// bytes de dados no tar — o alvo do link mora no cabeçalho.
+    pub fn content_len(&self) -> u64 {
+        match self {
+            EntryKind::Regular(content) => content.len() as u64,
+            EntryKind::RegularAt { len, .. } => *len,
+            EntryKind::Directory | EntryKind::Symlink(_) => 0,
+        }
+    }
 }
 
 fn valid_channel_name(name: &str) -> bool {
@@ -73,13 +108,15 @@ pub fn validate_channel_bootstrap(entries: &[Entry]) -> Result<()> {
             .collect::<Result<Vec<_>>>()?;
         match (parts.as_slice(), &entry.kind) {
             (["channel-config"], EntryKind::Directory) | (["channels"], EntryKind::Directory) => {}
-            (["channel-config", name], EntryKind::Regular(_)) if valid_channel_name(name) => {
+            (["channel-config", name], EntryKind::Regular(_) | EntryKind::RegularAt { .. })
+                if valid_channel_name(name) =>
+            {
                 configs.insert((*name).to_string());
             }
             (["channels", name], EntryKind::Directory) if valid_channel_name(name) => {
                 snapshots.entry((*name).to_string()).or_default();
             }
-            (["channels", name, file], EntryKind::Regular(_))
+            (["channels", name, file], EntryKind::Regular(_) | EntryKind::RegularAt { .. })
                 if valid_channel_name(name) && matches!(*file, "index" | "index.minisig") =>
             {
                 snapshots
@@ -288,18 +325,39 @@ fn collect_dir(
             }
             let limit = max_tree_bytes(policy);
             let remaining = limit.saturating_sub(budget.bytes);
-            let mut content = Vec::new();
-            fs::File::open(&path)?
-                .take(remaining + 1)
-                .read_to_end(&mut content)?;
-            if content.len() as u64 > remaining {
-                bail!(
-                    "árvore excede o limite de desenvolvimento de {} MiB; streaming é gate de release",
-                    limit / 1024 / 1024
-                );
+            if policy == TreePolicy::Cache {
+                // Streaming: nada é lido aqui. O tamanho vem do metadata, que
+                // já está em mãos, e o conteúdo só será tocado ao escrever o
+                // tar ou a mídia. Um arquivo trocado entre este ponto e a
+                // escrita mudaria o payload sem mudar o tamanho — por isso
+                // `pack_into` confere, ao terminar cada entrada, que leu
+                // exatamente o número de bytes que prometeu no cabeçalho.
+                let len = metadata.len();
+                if len > remaining {
+                    bail!(
+                        "árvore de cache excede o limite de {} MiB (FAT32 não representa arquivo de 4 GiB)",
+                        limit / 1024 / 1024
+                    );
+                }
+                budget.bytes += len;
+                EntryKind::RegularAt {
+                    source: path.clone(),
+                    len,
+                }
+            } else {
+                let mut content = Vec::new();
+                fs::File::open(&path)?
+                    .take(remaining + 1)
+                    .read_to_end(&mut content)?;
+                if content.len() as u64 > remaining {
+                    bail!(
+                        "árvore excede o limite de {} MiB",
+                        limit / 1024 / 1024
+                    );
+                }
+                budget.bytes += content.len() as u64;
+                EntryKind::Regular(content)
             }
-            budget.bytes += content.len() as u64;
-            EntryKind::Regular(content)
         } else if metadata.file_type().is_symlink() {
             let target = fs::read_link(&path)?;
             validate_symlink(&relative, &target, policy)?;
@@ -330,41 +388,87 @@ pub fn collect(root: &Path, policy: TreePolicy) -> Result<Vec<Entry>> {
     Ok(entries)
 }
 
-pub fn pack(entries: &[Entry], epoch: u64) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    {
-        let mut builder = tar::Builder::new(&mut bytes);
-        builder.mode(tar::HeaderMode::Deterministic);
-        for entry in entries {
-            let mut header = tar::Header::new_gnu();
-            header.set_uid(0);
-            header.set_gid(0);
-            header.set_mtime(epoch);
-            header.set_mode(entry.mode);
-            match &entry.kind {
-                EntryKind::Directory => {
-                    header.set_entry_type(tar::EntryType::Directory);
-                    header.set_size(0);
-                    header.set_cksum();
-                    builder.append_data(&mut header, &entry.relative, std::io::empty())?;
-                }
-                EntryKind::Regular(content) => {
-                    header.set_entry_type(tar::EntryType::Regular);
-                    header.set_size(content.len() as u64);
-                    header.set_cksum();
-                    builder.append_data(&mut header, &entry.relative, Cursor::new(content))?;
-                }
-                EntryKind::Symlink(target) => {
-                    header.set_entry_type(tar::EntryType::Symlink);
-                    header.set_size(0);
-                    header.set_link_name(target)?;
-                    header.set_cksum();
-                    builder.append_data(&mut header, &entry.relative, std::io::empty())?;
+/// Escreve o tar direto no destino, sem montá-lo em memória. É por aqui que
+/// um cache de centenas de MiB vira `cache.tar` gastando um buffer e não uma
+/// cópia inteira.
+pub fn pack_into<W: std::io::Write>(entries: &[Entry], epoch: u64, sink: W) -> Result<()> {
+    let mut builder = tar::Builder::new(sink);
+    builder.mode(tar::HeaderMode::Deterministic);
+    for entry in entries {
+        let mut header = tar::Header::new_gnu();
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(epoch);
+        header.set_mode(entry.mode);
+        match &entry.kind {
+            EntryKind::Directory => {
+                header.set_entry_type(tar::EntryType::Directory);
+                header.set_size(0);
+                header.set_cksum();
+                builder.append_data(&mut header, &entry.relative, std::io::empty())?;
+            }
+            EntryKind::Regular(content) => {
+                header.set_entry_type(tar::EntryType::Regular);
+                header.set_size(content.len() as u64);
+                header.set_cksum();
+                builder.append_data(&mut header, &entry.relative, Cursor::new(content))?;
+            }
+            EntryKind::RegularAt { source, len } => {
+                // O tamanho foi lido no `collect` e vai no cabeçalho; se o
+                // arquivo tiver mudado de tamanho desde então, o tar sairia
+                // truncado ou com lixo e NINGUÉM saberia até tentar
+                // desempacotar na máquina do usuário. `take(len)` garante que
+                // não se escreve demais, e a conferência do total garante que
+                // não se escreveu de menos.
+                let file = fs::File::open(source)
+                    .with_context(|| format!("cache: {} sumiu durante a composição", source.display()))?;
+                let mut limited = file.take(*len);
+                header.set_entry_type(tar::EntryType::Regular);
+                header.set_size(*len);
+                header.set_cksum();
+                let mut counter = CountingReader {
+                    inner: &mut limited,
+                    read: 0,
+                };
+                builder.append_data(&mut header, &entry.relative, &mut counter)?;
+                if counter.read != *len {
+                    bail!(
+                        "cache: {} encolheu durante a composição ({} de {} bytes)",
+                        source.display(),
+                        counter.read,
+                        len
+                    );
                 }
             }
+            EntryKind::Symlink(target) => {
+                header.set_entry_type(tar::EntryType::Symlink);
+                header.set_size(0);
+                header.set_link_name(target)?;
+                header.set_cksum();
+                builder.append_data(&mut header, &entry.relative, std::io::empty())?;
+            }
         }
-        builder.finish()?;
     }
+    builder.finish()?;
+    Ok(())
+}
+
+struct CountingReader<R> {
+    inner: R,
+    read: u64,
+}
+
+impl<R: Read> Read for CountingReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buffer)?;
+        self.read += n as u64;
+        Ok(n)
+    }
+}
+
+pub fn pack(entries: &[Entry], epoch: u64) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    pack_into(entries, epoch, &mut bytes)?;
     Ok(bytes)
 }
 
@@ -384,7 +488,55 @@ mod tests {
     fn cache_tem_orcamento_maior_sem_relaxar_newspeak_e_overlay() {
         assert_eq!(max_tree_bytes(TreePolicy::Newspeak), 128 * 1024 * 1024);
         assert_eq!(max_tree_bytes(TreePolicy::Overlay), 128 * 1024 * 1024);
-        assert_eq!(max_tree_bytes(TreePolicy::Cache), 384 * 1024 * 1024);
+        // O teto do cache é o limite do FAT32 para um arquivo, e não mais um
+        // limite de memória: `cache.tar` é um arquivo só dentro do FAT.
+        assert_eq!(
+            max_tree_bytes(TreePolicy::Cache),
+            4 * 1024 * 1024 * 1024 - 1
+        );
+    }
+
+    /// A garantia que o streaming precisa dar: coletar uma árvore de cache não
+    /// pode ler conteúdo para a memória. Se alguém reverter o `collect` para
+    /// `Regular`, este teste cai — e cai apontando o motivo, em vez de o
+    /// sintoma aparecer como uso de RAM numa mídia grande.
+    #[test]
+    fn cache_coleta_por_referencia_e_newspeak_por_conteudo() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(temp.path().join("channel-config")).unwrap();
+        fs::write(temp.path().join("channel-config/oficial"), b"URL=x\n").unwrap();
+
+        let cache = collect(temp.path(), TreePolicy::Cache).unwrap();
+        let regular = cache
+            .iter()
+            .find(|entry| entry.relative.ends_with("oficial"))
+            .expect("a entrada do channel-config foi coletada");
+        match &regular.kind {
+            EntryKind::RegularAt { len, .. } => assert_eq!(*len, 6),
+            other => panic!("cache deveria coletar por referência, veio {other:?}"),
+        }
+
+        // E o tar sai idêntico ao que sairia com o conteúdo em memória: é isso
+        // que garante que trocar a política não muda o payload nem o hash.
+        let por_referencia = pack(&cache, 1704067200).unwrap();
+        let em_memoria = pack(
+            &cache
+                .iter()
+                .map(|entry| Entry {
+                    relative: entry.relative.clone(),
+                    mode: entry.mode,
+                    kind: match &entry.kind {
+                        EntryKind::RegularAt { source, .. } => {
+                            EntryKind::Regular(fs::read(source).unwrap())
+                        }
+                        other => other.clone(),
+                    },
+                })
+                .collect::<Vec<_>>(),
+            1704067200,
+        )
+        .unwrap();
+        assert_eq!(por_referencia, em_memoria);
     }
 
     #[test]

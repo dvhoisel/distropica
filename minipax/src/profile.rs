@@ -58,10 +58,59 @@ pub struct ProfileArtifacts {
     pub newspeak_entries: Vec<Entry>,
     pub newspeak_tar: Vec<u8>,
     pub cache_entries: Vec<Entry>,
-    pub cache_tar: Option<Vec<u8>>,
+    /// O `cache.tar` mora em DISCO, não em memória: é o único artefato do
+    /// perfil que pode ter centenas de MiB. O temporário é apagado quando este
+    /// `ProfileArtifacts` morre, o que dá exatamente a vida útil certa — a
+    /// composição da mídia acontece com ele vivo, e nada sobra depois.
+    pub cache_tar: Option<CacheArchive>,
     pub lock: String,
     pub lock_hash: String,
     pub class: String,
+}
+
+/// O `cache.tar` escrito em disco, com o hash já calculado.
+///
+/// O tar é montado UMA vez, direto no arquivo temporário, e o sha256 sai do
+/// mesmo fluxo — não há segunda passada nem segunda cópia. `NamedTempFile`
+/// apaga o arquivo no `Drop`, então quem segurar este valor segura o payload.
+pub struct CacheArchive {
+    file: tempfile::NamedTempFile,
+    len: u64,
+    hash: String,
+}
+
+impl CacheArchive {
+    pub fn path(&self) -> &Path {
+        self.file.path()
+    }
+
+    pub fn len(&self) -> u64 {
+        self.len
+    }
+
+    pub fn hash(&self) -> &str {
+        &self.hash
+    }
+}
+
+/// Um `Write` que repassa os bytes adiante e vai somando o sha256 no caminho.
+struct HashingWriter<W> {
+    inner: W,
+    hasher: Sha256,
+    written: u64,
+}
+
+impl<W: std::io::Write> std::io::Write for HashingWriter<W> {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buffer)?;
+        self.hasher.update(&buffer[..n]);
+        self.written += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -318,8 +367,34 @@ impl ResolvedProfile {
             tree::snapshot(&self.newspeak_path, TreePolicy::Newspeak, self.epoch)?;
         let (cache_entries, cache_tar) = match &self.cache_path {
             Some(path) => {
-                let (entries, archive) = tree::snapshot(path, TreePolicy::Cache, self.epoch)?;
-                (entries, Some(archive))
+                // Streaming: `collect` devolve os arquivos regulares do cache
+                // por REFERÊNCIA, e `pack_into` os copia direto para o
+                // temporário enquanto o hash se forma. Em nenhum momento o
+                // payload inteiro existe na memória.
+                let entries = tree::collect(path, TreePolicy::Cache)?;
+                let mut sink = HashingWriter {
+                    inner: std::io::BufWriter::new(tempfile::NamedTempFile::new()?),
+                    hasher: Sha256::new(),
+                    written: 0,
+                };
+                tree::pack_into(&entries, self.epoch, &mut sink)?;
+                let HashingWriter {
+                    inner,
+                    hasher,
+                    written,
+                } = sink;
+                let file = inner.into_inner().map_err(|error| {
+                    anyhow::anyhow!("não terminei de escrever o cache.tar: {error}")
+                })?;
+                file.as_file().sync_all()?;
+                (
+                    entries,
+                    Some(CacheArchive {
+                        file,
+                        len: written,
+                        hash: hex::encode(hasher.finalize()),
+                    }),
+                )
             }
             None => (Vec::new(), None),
         };
@@ -329,8 +404,8 @@ impl ResolvedProfile {
         let overlay_hash = sha256(&overlay_tar);
         let newspeak_hash = sha256(&newspeak_tar);
         let cache_hash = cache_tar
-            .as_deref()
-            .map(sha256)
+            .as_ref()
+            .map(|archive| archive.hash().to_string())
             .unwrap_or_else(|| "-".into());
         let content = format!(
             "PROFILE_CONTENT_FORMAT=2\nPROFILE_NAME={}\nARCH={}\nSOURCE_DATE_EPOCH={}\nMEDIA_SIZE_MIB={}\nINSTALL_READY={}\nTARGET_WORLD_SHA256={target_world_hash}\nLIVE_WORLD_SHA256={live_world_hash}\nCACHE_WORLD_SHA256={cache_world_hash}\nOVERLAY_SHA256={overlay_hash}\nNEWSPEAK_SHA256={newspeak_hash}\nCACHE_SHA256={cache_hash}\n",

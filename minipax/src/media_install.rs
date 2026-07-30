@@ -14,7 +14,12 @@ use std::path::{Component, Path, PathBuf};
 
 const MAX_CONTROL_BYTES: u64 = 1024 * 1024;
 const MAX_ARCHIVE_BYTES: u64 = 192 * 1024 * 1024;
-const MAX_CACHE_ARCHIVE_BYTES: u64 = 416 * 1024 * 1024;
+/// Teto do `cache.tar` NA MÍDIA. Não é mais um limite de memória: desde o
+/// streaming, o instalador nunca segura o arquivo inteiro — ele o valida numa
+/// passada que só lê cabeçalhos e o extrai numa segunda, arquivo a arquivo. O
+/// número é o mesmo do `tree.rs`, o limite do FAT32 para um arquivo, porque é
+/// nesse sistema que o `cache.tar` viaja quando a mídia é uma imagem.
+const MAX_CACHE_ARCHIVE_BYTES: u64 = 4 * 1024 * 1024 * 1024 - 1;
 const MAX_BOOT_EFI_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_TREE_ENTRIES: usize = 50_000;
 
@@ -75,7 +80,9 @@ struct MediaSnapshot {
     cache_world: Vec<u8>,
     overlay: Vec<u8>,
     newspeak: Vec<u8>,
-    cache: Option<Vec<u8>>,
+    /// Caminho do `cache.tar` NA MÍDIA, não o seu conteúdo: ele é lido em
+    /// fluxo, nunca inteiro.
+    cache: Option<PathBuf>,
     metadata: BTreeMap<String, String>,
     lock_fields: BTreeMap<String, String>,
     mode: DeclaredMode,
@@ -86,8 +93,24 @@ struct MediaSnapshot {
 #[derive(Debug)]
 enum DecodedKind {
     Directory,
+    /// Conteúdo lido para a memória. É o que os arquivos pequenos
+    /// (newspeak.tar, overlay.tar) usam.
     Regular(Vec<u8>),
+    /// Só o TAMANHO: o conteúdo fica no tar e é escrito numa segunda passada.
+    /// É como o `cache.tar` é tratado — ele pode ter centenas de MiB e roda na
+    /// máquina do usuário, onde uma cópia inteira na RAM é a diferença entre
+    /// instalar e não instalar.
+    RegularSized(u64),
     Symlink(PathBuf),
+}
+
+/// Ler o conteúdo, ou só medir e seguir? A primeira passada de um arquivo
+/// grande usa `Skip`: valida caminho, modo, tipo, duplicata e ancestral sem
+/// guardar um byte.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ContentPolicy {
+    Keep,
+    Skip,
 }
 
 #[derive(Debug)]
@@ -128,6 +151,47 @@ fn read_regular(path: &Path, what: &str, limit: u64) -> Result<Vec<u8>> {
         bail!("{what} cresceu além de {limit} bytes durante a leitura");
     }
     Ok(bytes)
+}
+
+/// As mesmas exigências de `read_regular` — arquivo regular real, sem
+/// hardlink, dentro do teto — mas SEM ler o conteúdo. É o que permite tratar
+/// um payload de centenas de MiB com o mesmo rigor e sem o mesmo custo.
+fn check_regular(path: &Path, what: &str, limit: u64) -> Result<u64> {
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NONBLOCK,
+        rustix::fs::Mode::empty(),
+    )
+    .with_context(|| format!("não abri {what}: {}", path.display()))?;
+    let file = File::from(descriptor);
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file() || metadata.nlink() != 1 {
+        bail!(
+            "{what} precisa ser arquivo regular real sem hardlinks: {}",
+            path.display()
+        );
+    }
+    if metadata.len() > limit {
+        bail!("{what} excede {limit} bytes: {}", path.display());
+    }
+    Ok(metadata.len())
+}
+
+/// sha256 sem carregar o arquivo.
+fn sha256_stream(path: &Path) -> Result<String> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 128 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(hex::encode(hasher.finalize()));
+        }
+        hasher.update(&buffer[..read]);
+    }
 }
 
 fn parse_fields(bytes: &[u8], what: &str, allowed: &[&str]) -> Result<BTreeMap<String, String>> {
@@ -263,15 +327,30 @@ fn load_media(source: &Path) -> Result<MediaSnapshot> {
     // Offline: objetos fechados. Online: somente bootstrap de canal, validado
     // estruturalmente depois da extração. Nos dois casos o tar está preso por
     // CACHE_SHA256 no profile.lock antes de qualquer escrita no target.
-    let cache = Some(read_regular(
-        &cache_path,
-        "cache.tar",
-        MAX_CACHE_ARCHIVE_BYTES,
-    )?);
+    // Em fluxo: confere que é regular, sem hardlink e dentro do teto, e
+    // guarda o CAMINHO. O conteúdo será lido duas vezes — uma para validar a
+    // estrutura, outra para extrair — e nunca inteiro de uma vez.
+    check_regular(&cache_path, "cache.tar", MAX_CACHE_ARCHIVE_BYTES)?;
+    let cache = Some(cache_path.clone());
     if (cache.is_some() && lock_fields["CACHE_SHA256"] == "-")
         || (cache.is_none() && lock_fields["CACHE_SHA256"] != "-")
     {
         bail!("presença de cache.tar diverge de CACHE_SHA256 no lock");
+    }
+    // O hash do tar da mídia é conferido AQUI, contra o lock, e não só depois
+    // pela reempacotagem do diretório extraído. São duas verificações do mesmo
+    // fato e ambas valem: esta pega uma mídia corrompida antes de gastar a
+    // extração inteira — e, num payload de centenas de MiB lidos de um
+    // CD-ROM, essa diferença se mede em minutos. A comparação é possível
+    // porque `pack_into` é determinístico: o cache.tar da mídia é byte a byte
+    // o que o `profile::artifacts` computou ao compor.
+    if lock_fields["CACHE_SHA256"] != "-" {
+        let observado = sha256_stream(&cache_path)?;
+        if observado != lock_fields["CACHE_SHA256"] {
+            bail!(
+                "cache.tar da mídia não confere com CACHE_SHA256 do lock ({observado})"
+            );
+        }
     }
 
     Ok(MediaSnapshot {
@@ -397,7 +476,16 @@ fn validate_symlink(path: &Path, target: &Path, policy: TreePolicy) -> Result<()
 }
 
 fn decode_archive(bytes: &[u8], policy: TreePolicy, what: &str) -> Result<Vec<DecodedEntry>> {
-    let mut archive = tar::Archive::new(bytes);
+    decode_entries(bytes, policy, what, ContentPolicy::Keep)
+}
+
+fn decode_entries<R: Read>(
+    source: R,
+    policy: TreePolicy,
+    what: &str,
+    content_policy: ContentPolicy,
+) -> Result<Vec<DecodedEntry>> {
+    let mut archive = tar::Archive::new(source);
     let mut decoded = Vec::new();
     let mut paths = BTreeMap::new();
     let mut content_bytes = 0u64;
@@ -437,16 +525,32 @@ fn decode_archive(bytes: &[u8], policy: TreePolicy, what: &str) -> Result<Vec<De
             if declared_size > remaining {
                 bail!("{what} excede {} MiB", limit / 1024 / 1024);
             }
-            let mut content = Vec::with_capacity(declared_size as usize);
-            (&mut item).take(remaining + 1).read_to_end(&mut content)?;
-            if content.len() as u64 != declared_size || content.len() as u64 > remaining {
-                bail!(
-                    "conteúdo truncado ou excessivo em {what}: {}",
-                    path.display()
-                );
+            if content_policy == ContentPolicy::Skip {
+                // Só confere que o tar entrega o que o cabeçalho promete; os
+                // bytes seguem para o /dev/null do io::copy. É esta passada
+                // que garante que a validação é COMPLETA antes de qualquer
+                // escrita, sem custo de memória.
+                let lidos = std::io::copy(&mut (&mut item).take(declared_size), &mut std::io::sink())?;
+                if lidos != declared_size {
+                    bail!(
+                        "conteúdo truncado em {what}: {}",
+                        path.display()
+                    );
+                }
+                content_bytes += declared_size;
+                DecodedKind::RegularSized(declared_size)
+            } else {
+                let mut content = Vec::with_capacity(declared_size as usize);
+                (&mut item).take(remaining + 1).read_to_end(&mut content)?;
+                if content.len() as u64 != declared_size || content.len() as u64 > remaining {
+                    bail!(
+                        "conteúdo truncado ou excessivo em {what}: {}",
+                        path.display()
+                    );
+                }
+                content_bytes += content.len() as u64;
+                DecodedKind::Regular(content)
             }
-            content_bytes += content.len() as u64;
-            DecodedKind::Regular(content)
         } else if entry_type == tar::EntryType::Symlink {
             if item.size() != 0 {
                 bail!("symlink com conteúdo em {what}: {}", path.display());
@@ -488,7 +592,33 @@ fn materialize_archive(
     policy: TreePolicy,
     what: &str,
 ) -> Result<()> {
-    let mut entries = decode_archive(bytes, policy, what)?;
+    let entries = decode_archive(bytes, policy, what)?;
+    write_entries(entries, destination, None, what)
+}
+
+/// Extrai um tar GRANDE do disco em DUAS passadas.
+///
+/// A primeira lê só cabeçalhos e valida a árvore inteira — caminhos, modos,
+/// tipos, duplicatas, ancestrais, limites — sem guardar conteúdo e sem criar
+/// nada. A segunda escreve. A ordem importa: é ela que preserva a promessa de
+/// validar o payload por completo ANTES de escrever, que é a mesma razão de o
+/// instalador nunca tocar no disco antes de aceitar a mídia.
+fn materialize_archive_from_file(
+    source: &Path,
+    destination: &Path,
+    policy: TreePolicy,
+    what: &str,
+) -> Result<()> {
+    let entries = decode_entries(File::open(source)?, policy, what, ContentPolicy::Skip)?;
+    write_entries(entries, destination, Some(source), what)
+}
+
+fn write_entries(
+    mut entries: Vec<DecodedEntry>,
+    destination: &Path,
+    stream_from: Option<&Path>,
+    what: &str,
+) -> Result<()> {
     fs::create_dir(destination)?;
     entries.sort_by(|left, right| {
         left.path
@@ -519,25 +649,73 @@ fn materialize_archive(
             Err(error) => return Err(error.into()),
         }
     }
-    for entry in entries
-        .iter()
-        .filter(|entry| matches!(entry.kind, DecodedKind::Regular(_)))
-    {
+    for entry in entries.iter().filter(|entry| {
+        matches!(
+            entry.kind,
+            DecodedKind::Regular(_) | DecodedKind::RegularSized(_)
+        )
+    }) {
         let path = destination.join(&entry.path);
         let parent = path.parent().unwrap();
         fs::create_dir_all(parent)?;
         crate::ensure_real_dir(parent, "pai de arquivo extraído")?;
-        let DecodedKind::Regular(content) = &entry.kind else {
-            unreachable!()
-        };
-        let mut output = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)?;
-        output.write_all(content)?;
-        output.set_permissions(fs::Permissions::from_mode(entry.mode))?;
+        if let DecodedKind::Regular(content) = &entry.kind {
+            let mut output = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)?;
+            output.write_all(content)?;
+            output.set_permissions(fs::Permissions::from_mode(entry.mode))?;
+        }
     }
+    // Segunda passada: os conteúdos que a primeira só mediu. Percorre o tar
+    // em ordem de arquivo e escreve cada regular direto no destino. Os
+    // caminhos JÁ foram validados; aqui só se confere que o tar continua o
+    // mesmo, entrada por entrada — se ele tiver mudado no disco entre as duas
+    // passadas, isso vira erro em vez de payload silenciosamente diferente.
+    if let Some(source) = stream_from {
+        let mut esperados: BTreeMap<&Path, (u32, u64)> = BTreeMap::new();
+        for entry in &entries {
+            if let DecodedKind::RegularSized(len) = entry.kind {
+                esperados.insert(entry.path.as_path(), (entry.mode, len));
+            }
+        }
+        let mut archive = tar::Archive::new(File::open(source)?);
+        for item in archive.entries()? {
+            let mut item = item?;
+            if item.header().entry_type() != tar::EntryType::Regular {
+                continue;
+            }
+            let path = item.path()?.into_owned();
+            let (mode, len) = *esperados.get(path.as_path()).ok_or_else(|| {
+                anyhow::anyhow!("{what} mudou entre as passadas: {}", path.display())
+            })?;
+            if item.size() != len {
+                bail!("{what} mudou de tamanho entre as passadas: {}", path.display());
+            }
+            let destino = destination.join(&path);
+            let mut output = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&destino)?;
+            let escritos = std::io::copy(&mut item, &mut output)?;
+            if escritos != len {
+                bail!("{what} truncado ao extrair: {}", path.display());
+            }
+            output.set_permissions(fs::Permissions::from_mode(mode))?;
+        }
+        // Toda entrada prometida foi escrita? Um tar que perdesse uma entrada
+        // na segunda passada deixaria um cache incompleto que só falharia bem
+        // depois, ao instalar um pacote.
+        for (path, _) in &esperados {
+            if !destination.join(path).exists() {
+                bail!("{what} não entregou {} na extração", path.display());
+            }
+        }
+    }
+    let _ = &mut entries;
     for entry in entries
         .iter()
         .filter(|entry| matches!(entry.kind, DecodedKind::Symlink(_)))
@@ -597,7 +775,7 @@ fn resolved_from_media(snapshot: &MediaSnapshot, workspace: &Path) -> Result<Res
         "overlay.tar",
     )?;
     if let Some(cache) = &snapshot.cache {
-        materialize_archive(cache, &cache_dir, TreePolicy::Cache, "cache.tar")?;
+        materialize_archive_from_file(cache, &cache_dir, TreePolicy::Cache, "cache.tar")?;
     }
 
     let mut profile = ResolvedProfile::load(
@@ -820,9 +998,11 @@ mod tests {
         .unwrap();
         fs::write(payload.join("overlay.tar"), &artifacts.overlay_tar).unwrap();
         fs::write(payload.join("newspeak.tar"), &artifacts.newspeak_tar).unwrap();
-        fs::write(
+        // O cache.tar agora vive em disco (streaming), então o teste copia o
+        // temporário em vez de escrever um Vec.
+        fs::copy(
+            artifacts.cache_tar.as_ref().unwrap().path(),
             payload.join("cache.tar"),
-            artifacts.cache_tar.as_ref().unwrap(),
         )
         .unwrap();
         fs::write(payload.join("media.meta"), meta).unwrap();

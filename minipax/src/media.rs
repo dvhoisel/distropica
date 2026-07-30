@@ -82,10 +82,65 @@ pub struct MediaOptions {
     pub output: PathBuf,
 }
 
+/// De onde vêm os bytes de um arquivo do payload.
+///
+/// O `cache.tar` chega aqui como `OnDisk` porque pode ter centenas de MiB: ele
+/// é escrito num temporário pelo `profile::artifacts` e daqui em diante só é
+/// LIDO — para o hash, para a árvore da ISO e para o FAT da imagem. Todo o
+/// resto (BOOTX64.EFI, os worlds, o lock, os tars pequenos) continua em
+/// memória, onde já estava e onde não incomoda.
+#[derive(Clone)]
+enum PayloadBody {
+    Inline(Vec<u8>),
+    OnDisk { source: PathBuf, len: u64 },
+}
+
 #[derive(Clone)]
 struct PayloadFile {
     path: String,
-    bytes: Vec<u8>,
+    body: PayloadBody,
+}
+
+impl PayloadFile {
+    fn inline(path: impl Into<String>, bytes: Vec<u8>) -> Self {
+        Self {
+            path: path.into(),
+            body: PayloadBody::Inline(bytes),
+        }
+    }
+
+    fn len(&self) -> u64 {
+        match &self.body {
+            PayloadBody::Inline(bytes) => bytes.len() as u64,
+            PayloadBody::OnDisk { len, .. } => *len,
+        }
+    }
+
+    /// Um leitor sobre o conteúdo, seja ele memória ou disco. Quem consome
+    /// escreve em blocos e nunca segura o arquivo inteiro.
+    fn reader(&self) -> Result<Box<dyn Read + '_>> {
+        Ok(match &self.body {
+            PayloadBody::Inline(bytes) => Box::new(&bytes[..]),
+            PayloadBody::OnDisk { source, len } => Box::new(File::open(source)
+                .with_context(|| format!("payload: não abri {}", source.display()))?
+                .take(*len)),
+        })
+    }
+}
+
+/// Copia um `Read` para um `Write` com buffer fixo. O ponto é o buffer ser
+/// fixo: é ele que faz a memória não crescer com o tamanho do payload.
+fn stream_copy<R: Read + ?Sized, W: Write + ?Sized>(source: &mut R, sink: &mut W) -> Result<u64> {
+    let mut buffer = [0u8; 128 * 1024];
+    let mut total = 0u64;
+    loop {
+        let read = source.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(total);
+        }
+        sink.write_all(&buffer[..read])?;
+        total += read as u64;
+    }
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -106,16 +161,30 @@ fn sha256_file(path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn payload_hash(files: &[PayloadFile]) -> String {
+/// O hash do payload, calculado em fluxo. A serialização é EXATAMENTE a mesma
+/// de antes — caminho, NUL, tamanho em little-endian, conteúdo — de modo que
+/// uma mídia composta com a versão que segurava tudo em memória e outra
+/// composta com esta produzem o mesmo `payload_hash`. Isso não é detalhe: o
+/// GUID do GPT, o volume id do FAT e a identidade da mídia derivam dele.
+fn payload_hash(files: &[PayloadFile]) -> Result<String> {
     let mut hasher = Sha256::new();
     hasher.update(b"MINIPAX-PAYLOAD-V1\0");
     for file in files {
         hasher.update(file.path.as_bytes());
         hasher.update(b"\0");
-        hasher.update((file.bytes.len() as u64).to_le_bytes());
-        hasher.update(&file.bytes);
+        hasher.update(file.len().to_le_bytes());
+        let mut reader = file.reader()?;
+        let written = stream_copy(&mut *reader, &mut hasher)?;
+        if written != file.len() {
+            bail!(
+                "payload: {} mudou de tamanho durante a composição ({} de {} bytes)",
+                file.path,
+                written,
+                file.len()
+            );
+        }
     }
-    hex::encode(hasher.finalize())
+    Ok(hex::encode(hasher.finalize()))
 }
 
 pub(crate) fn validate_boot_efi(bytes: &[u8]) -> Result<()> {
@@ -226,7 +295,14 @@ pub(crate) fn canonical_profile(profile: &ResolvedProfile) -> Vec<u8> {
 fn payload(
     profile: &ResolvedProfile,
     options: &MediaOptions,
-) -> Result<(Vec<PayloadFile>, String, String, String, String)> {
+) -> Result<(
+    Vec<PayloadFile>,
+    String,
+    String,
+    String,
+    String,
+    Option<crate::profile::CacheArchive>,
+)> {
     crate::ensure_real_file(&options.boot_efi, "BOOTX64.EFI")?;
     let mut boot = Vec::new();
     File::open(&options.boot_efi)?
@@ -278,47 +354,38 @@ fn payload(
         options.mode,
     );
     let mut files = vec![
-        PayloadFile {
-            path: "EFI/BOOT/BOOTX64.EFI".into(),
-            bytes: boot,
-        },
-        PayloadFile {
-            path: "distropica/profile.lock".into(),
-            bytes: artifacts.lock.as_bytes().to_vec(),
-        },
-        PayloadFile {
-            path: "distropica/profile".into(),
-            bytes: profile_config,
-        },
-        PayloadFile {
-            path: "distropica/live.world".into(),
-            bytes: artifacts.live_world.into_bytes(),
-        },
-        PayloadFile {
-            path: "distropica/target.world".into(),
-            bytes: artifacts.target_world.into_bytes(),
-        },
-        PayloadFile {
-            path: "distropica/cache.world".into(),
-            bytes: artifacts.cache_world.into_bytes(),
-        },
-        PayloadFile {
-            path: "distropica/overlay.tar".into(),
-            bytes: artifacts.overlay_tar,
-        },
-        PayloadFile {
-            path: "distropica/newspeak.tar".into(),
-            bytes: artifacts.newspeak_tar,
-        },
-        PayloadFile {
-            path: "distropica/media.meta".into(),
-            bytes: meta.into_bytes(),
-        },
+        PayloadFile::inline("EFI/BOOT/BOOTX64.EFI", boot),
+        PayloadFile::inline(
+            "distropica/profile.lock",
+            artifacts.lock.as_bytes().to_vec(),
+        ),
+        PayloadFile::inline("distropica/profile", profile_config),
+        PayloadFile::inline("distropica/live.world", artifacts.live_world.into_bytes()),
+        PayloadFile::inline(
+            "distropica/target.world",
+            artifacts.target_world.into_bytes(),
+        ),
+        PayloadFile::inline("distropica/cache.world", artifacts.cache_world.into_bytes()),
+        PayloadFile::inline("distropica/overlay.tar", artifacts.overlay_tar),
+        PayloadFile::inline("distropica/newspeak.tar", artifacts.newspeak_tar),
+        PayloadFile::inline("distropica/media.meta", meta.into_bytes()),
     ];
-    if let Some(cache) = artifacts.cache_tar {
+    // O cache é o único que vem do disco: ele é o que pode ter centenas de
+    // MiB, e o `profile::artifacts` já o deixou escrito num temporário cuja
+    // vida dura até o fim desta composição.
+    // O `CacheArchive` sai junto com os arquivos, e não por acidente: ele é
+    // dono de um `NamedTempFile` que se APAGA no Drop. Se ficasse aqui dentro,
+    // o payload sairia apontando para um caminho que já não existe — foi
+    // exatamente assim que o teste da ISO falhou com "não abri /tmp/.tmpdOrz4c".
+    // Quem compõe a mídia segura este valor até o fim.
+    let cache_archive = artifacts.cache_tar;
+    if let Some(cache) = &cache_archive {
         files.push(PayloadFile {
             path: "distropica/cache.tar".into(),
-            bytes: cache,
+            body: PayloadBody::OnDisk {
+                source: cache.path().to_path_buf(),
+                len: cache.len(),
+            },
         });
     }
     files.sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
@@ -328,6 +395,7 @@ fn payload(
         artifacts.lock_hash,
         profile_class,
         media_class,
+        cache_archive,
     ))
 }
 
@@ -587,7 +655,8 @@ fn populate_fat<T: Read + Write + Seek>(
         }
         let mut destination = root.create_file(&payload.path)?;
         destination.truncate()?;
-        destination.write_all(&payload.bytes)?;
+        let mut reader = payload.reader()?;
+        stream_copy(&mut *reader, &mut destination)?;
         destination.flush()?;
     }
     Ok(())
@@ -630,7 +699,7 @@ fn create_img(
         .media_size_mib
         .checked_mul(1024 * 1024)
         .ok_or_else(|| anyhow::anyhow!("MEDIA_SIZE_MIB excede o limite"))?;
-    let payload_size: u64 = files.iter().map(|file| file.bytes.len() as u64).sum();
+    let payload_size: u64 = files.iter().map(PayloadFile::len).sum();
     if payload_size + 16 * 1024 * 1024 > bytes.saturating_sub(PARTITION_START_LBA * SECTOR_SIZE) {
         bail!(
             "payload de {} bytes não cabe em MEDIA_SIZE_MIB={}",
@@ -655,7 +724,7 @@ fn create_plain_esp(
     payload_hash: &str,
     epoch: u64,
 ) -> Result<()> {
-    let payload_size: u64 = files.iter().map(|file| file.bytes.len() as u64).sum();
+    let payload_size: u64 = files.iter().map(PayloadFile::len).sum();
     let size = (payload_size + 16 * 1024 * 1024)
         .max(64 * 1024 * 1024)
         .next_multiple_of(1024 * 1024);
@@ -674,7 +743,23 @@ fn write_payload_tree(root: &Path, files: &[PayloadFile]) -> Result<()> {
         let destination = root.join(&file.path);
         let parent = destination.parent().unwrap();
         fs::create_dir_all(parent)?;
-        write_new(&destination, &file.bytes)?;
+        // Em fluxo, e não com `write_new`, porque o `cache.tar` passa por aqui
+        // a caminho da árvore que o xorriso vai empacotar. O create_new
+        // preserva a regra de `write_new`: saída nunca é sobrescrita.
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .open(&destination)
+            .with_context(|| {
+                format!(
+                    "não criei {} (saídas nunca são sobrescritas)",
+                    destination.display()
+                )
+            })?;
+        let mut reader = file.reader()?;
+        stream_copy(&mut *reader, &mut output)?;
+        output.sync_all()?;
     }
     Ok(())
 }
@@ -875,8 +960,9 @@ pub fn build(profile: &ResolvedProfile, options: &MediaOptions) -> Result<()> {
             );
         }
     }
-    let (files, lock, lock_hash, profile_class, media_class) = payload(profile, options)?;
-    let payload_hash = payload_hash(&files);
+    let (files, lock, lock_hash, profile_class, media_class, _cache_archive) =
+        payload(profile, options)?;
+    let payload_hash = payload_hash(&files)?;
     let mut temporary = TemporaryOutput::new(temp_output(&output)?);
     if fs::symlink_metadata(&temporary.path).is_ok() {
         bail!(
@@ -893,11 +979,15 @@ pub fn build(profile: &ResolvedProfile, options: &MediaOptions) -> Result<()> {
     };
     let image_hash = sha256_file(&temporary.path)?;
     let minipax_hash = sha256_file(&std::env::current_exe()?)?;
-    let boot_hash = files
-        .iter()
-        .find(|file| file.path == "EFI/BOOT/BOOTX64.EFI")
-        .map(|file| sha256(&file.bytes))
-        .unwrap();
+    let boot_hash = {
+        let boot = files
+            .iter()
+            .find(|file| file.path == "EFI/BOOT/BOOTX64.EFI")
+            .expect("BOOTX64.EFI está sempre no payload");
+        let mut hasher = Sha256::new();
+        stream_copy(&mut *boot.reader()?, &mut hasher)?;
+        hex::encode(hasher.finalize())
+    };
     let manifest = format!(
         "MEDIA_MANIFEST_FORMAT=1\nMEDIA_SHA256={image_hash}\nMEDIA_INPUT_SHA256={payload_hash}\nPROFILE_LOCK_SHA256={lock_hash}\nPROFILE_NAME={}\nPROFILE_CLASS={}\nMEDIA_CLASS={}\nARCH={}\nMODE={}\nFORMAT={}\nBOOT_EFI_SHA256={boot_hash}\nMINIPAX_EXECUTABLE_SHA256={minipax_hash}\nTOOL={}\n",
         profile.name,
@@ -1176,14 +1266,14 @@ mod tests {
             boot_efi: efi.clone(),
             output: temp.path().join("ignored.img"),
         };
-        let (_, _, _, profile_class, media_class) = payload(&release, &options).unwrap();
+        let (_, _, _, profile_class, media_class, _cache) = payload(&release, &options).unwrap();
         assert_eq!(profile_class, "official-inputs");
         assert_eq!(media_class, "official-inputs");
 
         let mut other = fake_efi();
         other[511] = 1;
         fs::write(&efi, other).unwrap();
-        let (_, _, _, profile_class, media_class) = payload(&release, &options).unwrap();
+        let (_, _, _, profile_class, media_class, _cache) = payload(&release, &options).unwrap();
         assert_eq!(profile_class, "official-inputs");
         assert_eq!(media_class, "custom");
     }
