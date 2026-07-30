@@ -1,0 +1,38 @@
+NAME=readline
+VERSION=8.3
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc ncurses"
+BUILD_DEPS="make gcc-pass2 binutils-glibc"
+ABOUT="Edição de linha e histórico para programas interativos: setas, Ctrl-R, completação. Entra por exigência dura do iwd, cujo configure recusa prosseguir sem ela — e a alternativa, --disable-client, seria erro grave nesta árvore: sem compositor, o iwgtk não roda, e o iwctl é a ÚNICA forma de conectar a uma rede. Um Wi-Fi sem interface alguma não serve para nada. Liga-se ao ncurses para saber a capacidade do terminal, o que já existe aqui pelo vim. Sem os patches oficiais do GNU: o 8.3 é a base, e o que o Alpine chama de 8.3.3 é revisão de empacotamento, não nível de patch — verificado no source= deles, que só acrescenta um ajuste próprio de linkagem e um inputrc."
+LICENSE=GPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/readline/readline-$VERSION.tar.gz"
+SHA256=fe5383204467828cd495ee8d1d3c037a7eba1389c22bc6a041f627976f9061cc
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # A readline historicamente não linka o ncurses explicitamente e conta com
+    # quem a usa fazê-lo — é o que a distro-alvo chama de underlinking. Com
+    # SHLIB_LIBS a libreadline.so declara a dependência ela mesma, que é o que
+    # o iwd espera ao pedir -lreadline sem mais nada.
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-static \
+        --with-curses
+    make -j"$JOBS" SHLIB_LIBS="-lncursesw"
+    make install DESTDIR="$STAGE" SHLIB_LIBS="-lncursesw"
+
+    [ -e "$STAGE/usr/lib/libreadline.so" ] || {
+        echo "readline: libreadline.so não foi produzida" >&2
+        exit 1
+    }
+    # Guarda do underlinking: se a biblioteca não declarar o ncurses, quem a
+    # consumir falha no link com símbolos de terminal indefinidos, longe daqui.
+    if ! readelf -d "$STAGE/usr/lib/libreadline.so"* 2>/dev/null | grep -q 'NEEDED.*ncurses'; then
+        echo "readline: libreadline.so não declara o ncurses (underlinking)" >&2
+        exit 1
+    fi
+    find "$STAGE" -type d -empty -delete
+}

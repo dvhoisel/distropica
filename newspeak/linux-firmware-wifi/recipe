@@ -14,39 +14,96 @@ build() {
     dst="$STAGE/usr/lib/firmware"
     install -dm755 "$dst"
 
-    # Intel fica na raiz do repositório como iwlwifi-*.ucode; as demais em
-    # diretórios por driver. Copiar só o que os drivers habilitados no kernel
-    # sabem carregar.
-    for f in iwlwifi-*.ucode; do
-        [ -e "$f" ] && install -m644 "$f" "$dst/"
+    # A Intel vive em intel/iwlwifi/ no repositório, mas o driver a pede na
+    # RAIZ de /lib/firmware — o iwl-drv.c monta o nome com
+    # snprintf("%s-" FW_API_FMT ".ucode", fw_name_pre, ...), e fw_name_pre é
+    # "iwlwifi-sc-a0-gf-a0" e afins, sem diretório nenhum. Confirmado lendo o
+    # fonte do kernel desta árvore; o único lugar que prefixa "intel/" é o
+    # IWL_FSEQ_FILE, que é outro tipo de arquivo. Por isso se ACHATA aqui, em
+    # vez de copiar a árvore: copiar intel/iwlwifi/ preservando o caminho daria
+    # 191 arquivos que o driver nunca encontraria.
+    # Guarda as DUAS versões de API mais altas de cada dispositivo, e não todas.
+    # O upstream entrega até 13 versões do mesmo firmware
+    # (iwlwifi-ty-a0-gf-a0-77 até -90) e isso são 266 MB só de Intel, o que faz
+    # o `minipax media build` recusar a mídia com "árvore excede o limite de
+    # desenvolvimento de 384 MiB" — o streaming ainda é gate de release.
+    #
+    # Duas e não uma: o upstream publica firmware À FRENTE do kernel. O
+    # gl-c0-fm-c0 vem em API 101 e o UCODE_API_MAX deste kernel é 100; o driver
+    # tenta da SUA máxima para baixo e nunca pediria a 101, então guardar só a
+    # mais alta deixaria o dispositivo sem firmware carregável com o arquivo
+    # ali. Duas cobrem o kernel estar uma geração atrás, que é o normal.
+    #
+    # A seleção é por `sort -V` sobre o nome inteiro, e não por extrair o
+    # número com sed: a API nem sempre é numérica — existe
+    # iwlwifi-sc-a0-wh-b0-c103.ucode, e um sed de [0-9]* devolvia o caminho
+    # inteiro e montava um nome inexistente.
+    for dev in $(ls intel/iwlwifi/*.ucode 2>/dev/null \
+                 | sed 's|.*/iwlwifi-||; s|-[^-]*\.ucode$||' | sort -u); do
+        ls intel/iwlwifi/iwlwifi-"$dev"-*.ucode 2>/dev/null | sort -V | tail -2 \
+        | while IFS= read -r f; do
+            install -m644 "$f" "$dst/"
+        done
     done
-    for d in ath9k_htc ath10k ath11k rtw88 rtw89 rtlwifi; do
+    # As demais famílias o driver pede COM o diretório (ath10k/QCA988X/...),
+    # então essas se copiam preservando a estrutura.
+    #
+    # SEM ath11k e SEM rtw89, e isto é restrição de MÍDIA, não decisão sobre
+    # hardware: juntas somam 96 MB e fazem o `minipax media build` recusar a
+    # árvore com "excede o limite de desenvolvimento de 384 MiB". O limite é do
+    # minipax materializar tudo em memória, e o streaming ainda é gate de
+    # release — quando ele existir, estas duas voltam. Os drivers continuam no
+    # kernel; o que falta é o firmware, então essas placas são reconhecidas e
+    # não inicializam. Cobertas: Intel (a maioria dos laptops), Atheros até
+    # ath10k, e Realtek até rtw88.
+    for d in ath9k_htc ath10k rtw88 rtlwifi; do
         [ -d "$d" ] && cp -a "$d" "$dst/"
     done
+
+    # PENDÊNCIA CONHECIDA: a base regulatória (regulatory.db) NÃO vem daqui.
+    # O aceite mostrou "Direct firmware load for regulatory.db failed with
+    # error -2" no boot, e a correção óbvia — copiá-la deste tarball — não
+    # funciona: ela é do projeto wireless-regdb, publicado à parte no
+    # kernel.org. Sem ela o rádio funciona, mas o cfg80211 fica no domínio
+    # mundial restritivo, que corta canais legais no país do usuário. Falta uma
+    # receita wireless-regdb; são poucos KB e não bloqueia a mídia.
 
     # WHENCE é o índice de proveniência e licença de CADA arquivo: é o
     # documento que torna a redistribuição defensável, e sem ele o pacote seria
     # um monte de bytes sem origem declarada. As LICENCE.* das famílias que
     # entram vão junto.
     install -Dm644 WHENCE "$STAGE/usr/share/licenses/linux-firmware-wifi/WHENCE"
+    # As licenças migraram para LICENSES/ no upstream; copiar as das famílias
+    # que entram. O laço é por nome porque a pasta tem centenas de arquivos de
+    # fabricantes que não embarcamos.
     for l in LICENCE.iwlwifi_firmware LICENSE.QualcommAtheros_ath10k \
              LICENCE.atheros_firmware LICENCE.rtlwifi_firmware.txt \
-             LICENCE.IntcSST2 GPL-2 LICENCE.ath10k; do
-        [ -e "$l" ] && install -m644 "$l" "$STAGE/usr/share/licenses/linux-firmware-wifi/"
+             LICENCE.QualcommAtheros_ar3k GPL-2; do
+        [ -e "LICENSES/$l" ] && install -m644 "LICENSES/$l" \
+            "$STAGE/usr/share/licenses/linux-firmware-wifi/"
     done
 
-    # Guardas. A primeira pega o caso em que o layout do upstream mudou e os
-    # laços acima copiaram nada — falha silenciosa que só apareceria com a
-    # placa não inicializando na máquina do usuário.
+    # Guarda POR FAMÍLIA, e não por contagem total. A primeira versão desta
+    # receita conferia só "mais de 100 arquivos" e passou com 199 — sem UM
+    # arquivo da Intel, porque o upstream tinha movido tudo para intel/iwlwifi/
+    # e o glob da raiz não achava nada. Contagem agregada não pega família
+    # inteira faltando; o sintoma seria a placa mais comum de laptop não
+    # inicializar, na máquina do usuário, sem nada ter falhado aqui.
+    for fam in "iwlwifi-*.ucode" "ath10k" "ath9k_htc" "rtw88" "rtlwifi"; do
+        # shellcheck disable=SC2086
+        n=$(find "$dst" -path "$dst/$fam*" 2>/dev/null | wc -l)
+        [ "$n" -gt 0 ] || {
+            echo "linux-firmware-wifi: família '$fam' ficou VAZIA — layout do upstream mudou" >&2
+            exit 1
+        }
+    done
     n=$(find "$dst" -type f | wc -l)
-    [ "$n" -gt 100 ] || {
-        echo "linux-firmware-wifi: só $n arquivos; o layout do upstream mudou" >&2
-        exit 1
-    }
     # A segunda existe porque o motivo de o pacote ser subconjunto é caber na
-    # ISO. Se um dia passar disso, é decisão a retomar, não a absorver.
+    # mídia, e o minipax recusa árvore acima de 384 MiB. O teto é 260 MB e não
+    # 384 porque o firmware divide o orçamento com o resto do perfil — kernel,
+    # toolchain e ferramentas de rede. Se passar disso, é decisão a retomar.
     mb=$(du -sm "$dst" | cut -f1)
-    [ "$mb" -lt 400 ] || {
+    [ "$mb" -lt 260 ] || {
         echo "linux-firmware-wifi: subconjunto cresceu para ${mb} MB; revisar o escopo" >&2
         exit 1
     }

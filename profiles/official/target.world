@@ -22,3 +22,10 @@ wireguard-tools
 nmap
 mtr
 tcpdump
+
+# Wi-Fi. O iwd é o daemon (traz readline pelo iwctl, que é a única interface
+# até o iwgtk existir — ele depende do GTK4, travado no libjpeg cmake-only).
+# O firmware é a exceção declarada do LICENSING.md: 384 MB de blob sem fonte
+# correspondente, sem o qual o rádio não inicializa em máquina real.
+iwd
+linux-firmware-wifi
