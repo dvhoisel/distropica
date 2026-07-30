@@ -1,0 +1,29 @@
+NAME=libqrencode
+VERSION=4.1.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libpng"
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf"
+ABOUT="Gera código QR. Entra por uma exigência dura do iwgtk, que a usa para mostrar as credenciais de uma rede como QR — é como se passa a senha do Wi-Fi para um telefone sem digitá-la. Não há opção no meson do iwgtk para dispensá-la. É o tarball de RELEASE, do pool do Debian, e não o archive do GitHub que Alpine e Void pinam, por um motivo prático: o archive não traz o configure gerado, e esta árvore não tem autoconf, automake, libtool nem cmake. O conteúdo é o mesmo arquivo upstream — 461562 bytes, sha512 conferindo com o Manifest do Gentoo — apenas com o nome que a convenção do Debian dá ao tarball original. O site do autor, fukuchi.org, estava devolvendo 314 bytes de página de erro quando esta receita foi escrita."
+LICENSE=LGPL-2.1-or-later
+SRC="http://deb.debian.org/debian/pool/main/q/qrencode/qrencode_$VERSION.orig.tar.bz2"
+SHA256=e455d9732f8041cf5b9c388e345a641fd15707860f928e94507b1961256a6923
+
+build() {
+    tar -xjf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-static \
+        --disable-dependency-tracking \
+        --without-tools
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+
+    [ -e "$STAGE/usr/lib/pkgconfig/libqrencode.pc" ] || {
+        echo "libqrencode: libqrencode.pc não foi produzido" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

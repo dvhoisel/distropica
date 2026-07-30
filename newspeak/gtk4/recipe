@@ -1,0 +1,62 @@
+NAME=gtk4
+VERSION=4.22.4
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib cairo pango gdk-pixbuf graphene libepoxy fribidi wayland wayland-protocols libxkbcommon mesa fontconfig freetype harfbuzz"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc wayland-protocols gettext"
+ABOUT="O TOOLKIT DA DISTRO. Esta linha importa, porque a árvore teve o GTK3 primeiro e isso confundiu as coisas: o GTK3 está aqui como dependência de runtime do binário do Firefox, que ainda exige gtk+3.0 na versão 153 e não tem porte para o 4 — não como escolha de toolkit. Numa distro edge, deixar o legado ocupar o lugar de padrão é inversão, e esta receita a corrige. O que se escreve daqui para frente, e o que se traz de fora, é GTK4; o GTK3 fica sendo a bagagem de um pacote específico. Custou UM pacote novo, o graphene: todo o resto que o GTK4 exige já existia. Só o backend Wayland, como no GTK3. Sem Vulkan, porque o renderizador GL sobre a Mesa basta e o loader traria mais uma pilha; sem GStreamer, que é reprodução de mídia e arrastaria a cadeia inteira de codecs; sem CUPS e sem cpdb, que são impressão em rede; sem introspection, colord, tracker, sysprof, cloudproviders e accesskit. Diferente do GTK3, não precisa de ATK: a acessibilidade do GTK4 é interna, então nem a dependência nem a discussão da ponte se repetem aqui."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/gtk/4.22/gtk-$VERSION.tar.xz"
+SHA256=51bd9f60c7d23a665a556c7364c21fb2e4e282566b3e7e092455e8f910330893
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dwayland-backend=true \
+        -Dx11-backend=false \
+        -Dbroadway-backend=false \
+        -Dwin32-backend=false \
+        -Dmacos-backend=false \
+        -Dandroid-backend=false \
+        -Dvulkan=disabled \
+        -Dmedia-gstreamer=disabled \
+        -Dprint-cups=disabled \
+        -Dprint-cpdb=disabled \
+        -Dcloudproviders=disabled \
+        -Dsysprof=disabled \
+        -Dtracker=disabled \
+        -Dcolord=disabled \
+        -Daccesskit=disabled \
+        -Dintrospection=disabled \
+        -Ddocumentation=false \
+        -Dscreenshots=false \
+        -Dman-pages=false \
+        -Dbuild-demos=false \
+        -Dbuild-testsuite=false \
+        -Dbuild-examples=false \
+        -Dbuild-tests=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    # Assertar os artefatos, não a intenção das opções — a lição da Mesa.
+    [ -e "$STAGE/usr/lib/pkgconfig/gtk4.pc" ] || {
+        echo "gtk4: gtk4.pc não foi produzido" >&2
+        exit 1
+    }
+    [ -e "$STAGE/usr/lib/pkgconfig/gtk4-wayland.pc" ] || {
+        echo "gtk4: backend Wayland não foi produzido" >&2
+        exit 1
+    }
+    if [ -e "$STAGE/usr/lib/pkgconfig/gtk4-x11.pc" ]; then
+        echo "gtk4: backend X11 apareceu, e não deveria" >&2
+        exit 1
+    fi
+    # Estado de máquina: o cache de módulos de entrada depende do que está
+    # instalado e é regenerado por gtk4-query-immodules.
+    rm -f "$STAGE/usr/lib/gtk-4.0/4.0.0/immodules.cache"
+    find "$STAGE" -type d -empty -delete
+}

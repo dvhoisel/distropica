@@ -1,0 +1,55 @@
+NAME=linux-firmware-wifi
+VERSION=20260622
+KIND=source
+TOOLCHAIN=native
+DEPS=""
+BUILD_DEPS=""
+ABOUT="Firmware de Wi-Fi para Intel, Atheros e Realtek. ESTE PACOTE É A EXCEÇÃO DECLARADA da árvore, e a exceção precisa estar escrita onde ela mora, não só no LICENSING.md: é o único payload da Distrópica do qual NÃO temos a fonte correspondente. São blobs binários, redistribuíveis sob as licenças dos fabricantes descritas no arquivo WHENCE, mas sem código-fonte publicado por ninguém. Entra porque sem ele a placa não inicializa: o driver carrega, não encontra o firmware e o rádio simplesmente não existe para o sistema — a ferramenta gráfica abriria e não listaria rede nenhuma. É subconjunto e não o linux-firmware inteiro: só as três famílias comuns em laptop amd64, porque o pacote completo passa de 1 GB descompactado e inviabilizaria a ISO. O tarball baixado é o completo, de 609 MB, e a receita extrai apenas o necessário; o SRC não pode ser um subconjunto porque subconjunto não tem hash upstream. A conferência aqui é o sha256sums.asc que o kernel.org publica ASSINADO pelos mantenedores — para blob binário isso é a melhor fonte que existe. O Alpine pina a mesma data de release, mas do gitlab e em .tar.gz, então corrobora a VERSÃO e não o mesmo arquivo; registrado assim em vez de fingir duas fontes idênticas."
+LICENSE="linux-firmware (ver WHENCE; blobs proprietários redistribuíveis)"
+SRC="https://mirrors.edge.kernel.org/pub/linux/kernel/firmware/linux-firmware-$VERSION.tar.xz"
+SHA256=2b9d8a358e76eb766588609135e53fa548b902c551daae33ee32f26f25e60dbb
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    dst="$STAGE/usr/lib/firmware"
+    install -dm755 "$dst"
+
+    # Intel fica na raiz do repositório como iwlwifi-*.ucode; as demais em
+    # diretórios por driver. Copiar só o que os drivers habilitados no kernel
+    # sabem carregar.
+    for f in iwlwifi-*.ucode; do
+        [ -e "$f" ] && install -m644 "$f" "$dst/"
+    done
+    for d in ath9k_htc ath10k ath11k rtw88 rtw89 rtlwifi; do
+        [ -d "$d" ] && cp -a "$d" "$dst/"
+    done
+
+    # WHENCE é o índice de proveniência e licença de CADA arquivo: é o
+    # documento que torna a redistribuição defensável, e sem ele o pacote seria
+    # um monte de bytes sem origem declarada. As LICENCE.* das famílias que
+    # entram vão junto.
+    install -Dm644 WHENCE "$STAGE/usr/share/licenses/linux-firmware-wifi/WHENCE"
+    for l in LICENCE.iwlwifi_firmware LICENSE.QualcommAtheros_ath10k \
+             LICENCE.atheros_firmware LICENCE.rtlwifi_firmware.txt \
+             LICENCE.IntcSST2 GPL-2 LICENCE.ath10k; do
+        [ -e "$l" ] && install -m644 "$l" "$STAGE/usr/share/licenses/linux-firmware-wifi/"
+    done
+
+    # Guardas. A primeira pega o caso em que o layout do upstream mudou e os
+    # laços acima copiaram nada — falha silenciosa que só apareceria com a
+    # placa não inicializando na máquina do usuário.
+    n=$(find "$dst" -type f | wc -l)
+    [ "$n" -gt 100 ] || {
+        echo "linux-firmware-wifi: só $n arquivos; o layout do upstream mudou" >&2
+        exit 1
+    }
+    # A segunda existe porque o motivo de o pacote ser subconjunto é caber na
+    # ISO. Se um dia passar disso, é decisão a retomar, não a absorver.
+    mb=$(du -sm "$dst" | cut -f1)
+    [ "$mb" -lt 400 ] || {
+        echo "linux-firmware-wifi: subconjunto cresceu para ${mb} MB; revisar o escopo" >&2
+        exit 1
+    }
+    echo "linux-firmware-wifi: $n arquivos, ${mb} MB"
+    find "$STAGE" -type d -empty -delete
+}

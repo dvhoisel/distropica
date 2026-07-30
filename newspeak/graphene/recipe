@@ -1,0 +1,27 @@
+NAME=graphene
+VERSION=1.10.8
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf"
+ABOUT="Tipos de matemática gráfica: pontos, vetores, matrizes 4x4, quaternions, planos e caixas delimitadoras, com as operações vetorizadas em SSE2. É a única dependência que faltava para o GTK4 nesta árvore — tudo o mais que ele exige (cairo, pango, gdk-pixbuf, libepoxy, mesa, wayland, harfbuzz, fribidi, xkbcommon) já estava construído para o GTK3. O GTK4 usa estes tipos no seu grafo de cena, que é a diferença arquitetural dele para o GTK3: onde o 3 desenhava direto no cairo, o 4 monta uma árvore de nós e a entrega ao renderizador. Com gobject_types, porque é assim que o GTK a consome."
+LICENSE=MIT
+SRC="https://github.com/ebassi/graphene/archive/refs/tags/$VERSION.tar.gz"
+SHA256=922dc109d2dc5dc56617a29bd716c79dd84db31721a8493a13a5f79109a4a4ed
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dgobject_types=true \
+        -Dintrospection=disabled \
+        -Dgtk_doc=false \
+        -Dtests=false \
+        -Dinstalled_tests=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    find "$STAGE" -type d -empty -delete
+}

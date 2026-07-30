@@ -1,0 +1,29 @@
+NAME=iwgtk
+VERSION=0.9
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib gtk4 libqrencode iwd"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf gettext"
+ABOUT="A ferramenta gráfica de Wi-Fi: lista as redes, mostra o sinal, pede a senha, conecta e reconecta, e publica as credenciais como QR code para passar a senha a um telefone sem digitá-la — daí o libqrencode em DEPS, que o meson dele exige sem alternativa. Conversa com o iwd pelo D-Bus; não fala com o kernel diretamente nem duplica lógica de rede. É GTK4 desde a versão 0.5, e foi essa exigência que forçou a decisão de promover o GTK4 a toolkit da distro — as versões GTK3 pararam na 0.4, de 2021, velhas demais para a API D-Bus do iwd 3.12. Usa os ícones do tema Adwaita, que a árvore já tem. Cobre Wi-Fi e só Wi-Fi, o que é honesto: a ethernet desta distro sobe sozinha pelo udhcpc do rc.d e não precisa de interface gráfica para nada."
+LICENSE=GPL-3.0-or-later
+SRC="https://github.com/J-Lentz/iwgtk/archive/v$VERSION.tar.gz"
+SHA256=84a82dc730fe536034a65d148840e975c1353f4114db527439170ff410583d31
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    [ -x "$STAGE/usr/bin/iwgtk" ] || {
+        echo "iwgtk: o binário não foi produzido" >&2
+        exit 1
+    }
+    # O autostart do XDG dispara o indicador na sessão gráfica; sem sessão
+    # configurada ele é inerte, mas faz parte do pacote e fica.
+    find "$STAGE" -type d -empty -delete
+}

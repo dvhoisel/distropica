@@ -11,7 +11,34 @@ SHA256=0b6c436ed6ad9887a88ada1f72a0197b1eb73b020d8d344abab4c7fa7250f8f6
 
 build() {
     tar -xJf "$DL" --strip-components=1
-    ./configure --prefix=/usr --datadir=/usr/share
+    # As duas ferramentas são PINADAS em false, e não deixadas à sorte do
+    # AC_PATH_PROG, porque senão esta receita muda de comportamento conforme o
+    # que MAIS está instalado — foi exatamente o que aconteceu: ela construiu
+    # quando o GTK3 ainda não existia e passou a falhar depois que ele existiu.
+    #
+    # gtk-encode-symbolic-svg rasteriza os SVGs simbólicos em seis tamanhos, e
+    # rasterizar SVG depende do carregador do librsvg, que é Rust e não está
+    # nesta árvore (ver o ABOUT). Sem ele a etapa morre em "Can't load file:
+    # Unrecognized image file format". O próprio configure.ac faz esta mesma
+    # coisa quando não acha a ferramenta: zera symbolic_encode_sizes. Aqui a
+    # decisão é explícita em vez de acidental.
+    #
+    # gtk-update-icon-cache gera o icon-theme.cache, que é estado de máquina.
+    # O Makefile já o pula quando há DESTDIR, mas pinar remove a dúvida.
+    # Pina-se a VARIÁVEL DE CACHE do autoconf, não a variável de ambiente. O
+    # AC_PATH_PROG só honra um override de ambiente quando o valor PARECE um
+    # caminho absoluto (o case é [\\/]* | ?:[\\/]*); passar apenas "false"
+    # não casa, e ele vai buscar no PATH de todo jeito — foi o que aconteceu na
+    # primeira tentativa deste conserto. A variável de cache é testada antes
+    # dessa lógica e vence.
+    #
+    # O valor tem de ser a string "false" e não /bin/false: o configure.ac
+    # compara com "xfalse" para zerar symbolic_encode_sizes. Com um caminho
+    # real a comparação não casaria, a lista continuaria cheia e o /bin/false
+    # seria EXECUTADO a cada ícone, devolvendo erro.
+    ./configure --prefix=/usr --datadir=/usr/share \
+        ac_cv_path_GTK_ENCODE_SYMBOLIC_SVG=false \
+        ac_cv_path_GTK_UPDATE_ICON_CACHE=false
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
 

@@ -1,0 +1,47 @@
+NAME=dbus
+VERSION=1.16.2
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc expat busybox"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf"
+ABOUT="Barramento de mensagens entre processos. Entra por necessidade e não por gosto — foi ele que evitei ao desligar o X11 no GTK3, o que dispensou o atk-bridge e o at-spi2 inteiros. Mas o iwd só fala D-Bus: a API dele não é biblioteca nem socket próprio, é uma árvore de objetos no barramento do sistema, e a ferramenta gráfica conversa com o daemon por ali. Não havia como ter Wi-Fi gerenciável sem isto. Sem systemd, que esta distro não tem e não pretende ter, e por isso também sem user_session e sem a ativação por unidade — a ativação tradicional, por fork do próprio daemon, é a que resta e a que funciona aqui. Sem SELinux, AppArmor e libaudit, que são camadas de política que a árvore não usa; sem x11_autolaunch, que existiria para descobrir o barramento pela sessão X. As políticas em /etc/dbus-1 são padrão de fábrica, e é nelas que o iwd instala a sua."
+LICENSE="AFL-2.1 OR GPL-2.0-or-later"
+SRC="https://dbus.freedesktop.org/releases/dbus/dbus-$VERSION.tar.xz"
+SHA256=0ba2a1a4b16afe7bceb2c07e9ce99a8c2c3508e5dec290dbb643384bd6beb7e2
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --sysconfdir=/etc \
+        --localstatedir=/var \
+        --buildtype=release \
+        -Dsystemd=disabled \
+        -Duser_session=false \
+        -Dselinux=disabled \
+        -Dapparmor=disabled \
+        -Dlibaudit=disabled \
+        -Dx11_autolaunch=disabled \
+        -Dlaunchd=disabled \
+        -Dkqueue=disabled \
+        -Ddoxygen_docs=disabled \
+        -Dducktype_docs=disabled \
+        -Dxml_docs=disabled \
+        -Dmodular_tests=disabled \
+        -Dmessage_bus=true \
+        -Dtraditional_activation=true
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    [ -x "$STAGE/usr/bin/dbus-daemon" ] || {
+        echo "dbus: dbus-daemon não foi produzido" >&2
+        exit 1
+    }
+    # O socket do sistema e o diretório de máquina são estado de execução, não
+    # payload: nascem no boot, e reivindicá-los faria o manifesto discordar do
+    # disco no primeiro start.
+    rm -rf "$STAGE/var/run" "$STAGE/var/lib/dbus"
+    find "$STAGE" -type d -empty -delete
+}

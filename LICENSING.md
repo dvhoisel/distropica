@@ -41,7 +41,11 @@ binária. Para cada ISO, EFI, cache ou canal distribuído pelo projeto, a
 Distrópica deverá oferecer, com acesso equivalente, um conjunto de fontes
 correspondentes àquele artefato. Esse conjunto deve incluir, conforme o caso:
 
-- a revisão exata da Distrópica, os dois `Cargo.lock` e as crates vendorizadas;
+- a revisão exata da Distrópica, os dois `Cargo.lock` e as crates vendorizadas
+  (geradas no momento do empacotamento por
+  `cargo vendor --manifest-path minitrue/Cargo.toml -s minipax/Cargo.toml vendor`;
+  não são versionadas no repositório, porque são cópia verbatim do que o
+  `Cargo.lock` já pina e somam 182 MB);
 - fontes upstream exatas, configurações, patches e scripts de build/instalação;
 - fontes e configuração do kernel e do BusyBox presentes na mídia;
 - textos de licença, avisos de copyright e um inventário legível por máquina;
@@ -69,6 +73,38 @@ GFDL e componentes auxiliares sob outras licenças. Até o SBOM arquivo a arquiv
 ser produzido a partir do novo artefato, a receita declara
 `LICENSE=NOASSERTION`; isso não altera nenhuma licença upstream nem reduz as
 obrigações de fornecer fontes, exceções e avisos correspondentes.
+
+## Firmware: a exceção declarada
+
+O pacote `linux-firmware-wifi` é o **único payload da Distrópica do qual não
+existe fonte correspondente**, e essa exceção é declarada aqui em vez de
+diluída. São blobs binários de Intel, Qualcomm Atheros e Realtek, redistribuíveis
+sob as licenças dos fabricantes, para os quais nenhum código-fonte foi publicado
+por ninguém — nem pelo fabricante, nem pelo kernel.org, nem por nós. Não há
+bundle de fontes correspondentes a oferecer porque não há fonte.
+
+A exceção é aceita por uma razão prática e verificável: sem firmware, o driver
+carrega, o rádio não inicializa e a placa deixa de existir para o sistema. A
+alternativa a estes blobs não é um Wi-Fi livre — é Wi-Fi nenhum na maioria das
+máquinas reais.
+
+Os limites que a acompanham:
+
+- é **subconjunto deliberado**, só as famílias comuns em laptop amd64, e não o
+  `linux-firmware` completo;
+- o `WHENCE` do upstream — o índice que declara proveniência e licença de cada
+  arquivo — é instalado junto, em `/usr/share/licenses/linux-firmware-wifi/`,
+  e é ele que torna a redistribuição defensável;
+- a receita declara a licença como `linux-firmware (ver WHENCE)` e não a
+  atribui a nenhuma licença livre, pelo mesmo critério conservador aplicado ao
+  Zig e ao `gcc-pass2`;
+- **não entra na mídia live**: o instalador não leva firmware, e portanto
+  instalar por Wi-Fi não é suportado.
+
+Quem quiser uma Distrópica sem blob nenhum remove este pacote do perfil; nada
+mais na árvore depende dele, e o restante do sistema continua íntegro.
+
+## Uso privado e redistribuição
 
 Quem apenas constrói ou modifica a Distrópica para uso privado não é obrigado
 por esta política a publicar sua cópia. Quem redistribui binários deve cumprir

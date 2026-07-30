@@ -1,0 +1,42 @@
+NAME=iwd
+VERSION=3.12
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc dbus"
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf"
+ABOUT="O daemon de Wi-Fi. Substitui o wpa_supplicant e faz o trabalho inteiro: varredura, autenticação WPA2 e WPA3, e um cliente DHCP próprio — por isso não arrasta wpa_supplicant nem libnl, que seriam mais dois pacotes. Escrito pela Intel sobre a ell, que ele EMBUTE no tarball (134 arquivos em ell/); o --enable-external-ell é opt-in e não o usamos, o que dispensa um pacote separado. Delega criptografia ao kernel pela AF_ALG, então não depende de OpenSSL. Fala D-Bus e só D-Bus: a API dele é uma árvore de objetos no barramento do sistema, e é por ali que o iwgtk conversa com ele. Gere apenas Wi-Fi; a ethernet continua com o udhcpc do busybox no rc.d, que já funciona. Sem unidade systemd, que aqui não existe. O tarball é o .tar.xz do kernel.org, conferido contra o sha256sums.asc assinado que eles publicam e contra o pino do Void — fonte upstream assinada mais uma distro independente, que é conferência melhor que duas distros."
+LICENSE=LGPL-2.1-or-later
+SRC="https://mirrors.edge.kernel.org/pub/linux/network/wireless/iwd-$VERSION.tar.xz"
+SHA256=d89a5e45c7180170e19be828f9e944a768c593758094fc57a358d0e7c4cb1a49
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # --enable-dbus-policy instala a política em /usr/share/dbus-1: sem ela o
+    # daemon sobe e o barramento recusa o nome, o que falha longe da causa.
+    ./configure \
+        --prefix=/usr \
+        --sysconfdir=/etc \
+        --localstatedir=/var \
+        --libexecdir=/usr/libexec \
+        --disable-systemd-service \
+        --enable-dbus-policy \
+        --disable-manual-pages
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+
+    [ -x "$STAGE/usr/libexec/iwd" ] || [ -x "$STAGE/usr/bin/iwd" ] || {
+        echo "iwd: o daemon não foi produzido" >&2
+        exit 1
+    }
+    # Sem a política, o daemon não consegue registrar net.connman.iwd no
+    # barramento do sistema — e o sintoma aparece só no boot.
+    ls "$STAGE"/usr/share/dbus-1/system.d/*.conf >/dev/null 2>&1 || {
+        echo "iwd: política D-Bus não foi instalada" >&2
+        exit 1
+    }
+    # /var/lib/iwd guarda as redes conhecidas e as senhas: é estado do usuário,
+    # criado no primeiro uso, e não pode entrar no manifesto.
+    rm -rf "$STAGE/var"
+    find "$STAGE" -type d -empty -delete
+}

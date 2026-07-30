@@ -69,16 +69,87 @@ CONFIG_NFT_FIB_IPV6=y
 # Table=auto depende para instalar a regra por marca no lado v6.
 CONFIG_IPV6=y
 CONFIG_IPV6_MULTIPLE_TABLES=y
+# --- Wi-Fi -----------------------------------------------------------------
+# Pilha 802.11 e o interruptor de radio. O iwd le rfkill diretamente.
+CONFIG_WLAN=y
+CONFIG_CFG80211=y
+CONFIG_MAC80211=y
+CONFIG_RFKILL=y
+# Cripto que o iwd consome pelo AF_ALG. A lista NAO foi adivinhada: sai dos
+# nomes de algoritmo literais no fonte dele (ell/ e src/), que pede
+# cbc/ctr/ecb(aes), cmac(aes), hmac de md4 ate sha3-512, md4 e md5. Sem
+# CRYPTO_USER_API_HASH e _SKCIPHER o socket AF_ALG nem abre, e o daemon falha
+# na primeira associacao em vez de no boot.
+CONFIG_CRYPTO_USER_API=y
+CONFIG_CRYPTO_USER_API_HASH=y
+CONFIG_CRYPTO_USER_API_SKCIPHER=y
+CONFIG_CRYPTO_AES=y
+CONFIG_CRYPTO_CBC=y
+CONFIG_CRYPTO_CTR=y
+CONFIG_CRYPTO_ECB=y
+CONFIG_CRYPTO_CMAC=y
+CONFIG_CRYPTO_HMAC=y
+CONFIG_CRYPTO_MD4=y
+CONFIG_CRYPTO_MD5=y
+CONFIG_CRYPTO_SHA1=y
+CONFIG_CRYPTO_SHA256=y
+CONFIG_CRYPTO_SHA512=y
+CONFIG_CRYPTO_SHA3=y
+CONFIG_CRYPTO_DES=y
+# WPA3/SAE faz Diffie-Hellman pelo keyring do kernel (ell/key.c); EAP-TLS
+# precisa dos parsers de certificado.
+CONFIG_KEY_DH_OPERATIONS=y
+CONFIG_ASYMMETRIC_KEY_TYPE=y
+CONFIG_ASYMMETRIC_PUBLIC_KEY_SUBTYPE=y
+CONFIG_X509_CERTIFICATE_PARSER=y
+CONFIG_PKCS7_MESSAGE_PARSER=y
+# Drivers como MODULO, nao builtin: cada um exige firmware proprio, e modulo
+# nao carregado nao ocupa memoria em maquina que nao tem aquele radio.
+CONFIG_WLAN_VENDOR_INTEL=y
+CONFIG_IWLWIFI=m
+CONFIG_IWLDVM=m
+CONFIG_IWLMVM=m
+CONFIG_WLAN_VENDOR_ATH=y
+CONFIG_ATH9K=m
+CONFIG_ATH9K_PCI=y
+CONFIG_ATH9K_HTC=m
+CONFIG_ATH10K=m
+CONFIG_ATH10K_PCI=m
+CONFIG_ATH11K=m
+CONFIG_ATH11K_PCI=m
+CONFIG_WLAN_VENDOR_REALTEK=y
+CONFIG_RTL8XXXU=m
+CONFIG_RTW88=m
+CONFIG_RTW88_8822BE=m
+CONFIG_RTW88_8822CE=m
+CONFIG_RTW88_8821CE=m
+CONFIG_RTW89=m
+CONFIG_RTW89_8852AE=m
+CONFIG_RTW89_8852BE=m
+CONFIG_RTW89_8852CE=m
 KCONFIG
     make olddefconfig
     # Guarda: o Ministério EXIGE assinatura. Aborta AQUI se um pilar caiu — em vez
     # de descobrir no boot que um .ko não-assinado teria carregado.
     for s in MODULE_SIG MODULE_SIG_FORCE MODULE_SIG_ALL SYSTEM_TRUSTED_KEYRING \
         USER_NS TUN WIREGUARD NETFILTER NF_TABLES NF_TABLES_INET NFT_CT \
-        NFT_FIB_INET NF_CONNTRACK IPV6 IPV6_MULTIPLE_TABLES; do
+        NFT_FIB_INET NF_CONNTRACK IPV6 IPV6_MULTIPLE_TABLES \
+        WLAN CFG80211 MAC80211 RFKILL \
+        CRYPTO_USER_API_HASH CRYPTO_USER_API_SKCIPHER CRYPTO_CMAC \
+        CRYPTO_CTR CRYPTO_MD5 CRYPTO_SHA512 KEY_DH_OPERATIONS; do
         grep -q "^CONFIG_$s=y\$" .config || {
             echo "FATAL: falta CONFIG_$s=y no .config"
             grep -E 'MODULE_SIG|TRUSTED_KEYRING' .config
+            exit 1
+        }
+    done
+    # Os drivers sao =m e nao =y, entao a guarda acima nao os pega. Sem pelo
+    # menos um deles nao ha radio nenhum, e o sintoma aparece so na maquina do
+    # usuario: o iwgtk abre e nao lista rede.
+    for s in IWLWIFI ATH9K ATH10K RTW88; do
+        grep -q "^CONFIG_$s=m\$" .config || {
+            echo "FATAL: driver CONFIG_$s nao ficou como modulo"
+            grep -E "^(# )?CONFIG_$s\b" .config
             exit 1
         }
     done
