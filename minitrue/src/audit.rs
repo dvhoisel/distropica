@@ -100,6 +100,23 @@ impl Providers {
         None
     }
 
+    /// A raiz da claim `d:` que contém este caminho, se houver. É o que
+    /// distingue "arquivo do mundo A, que resolve contra o próprio payload"
+    /// de "arquivo do mundo B, que resolve contra /usr/lib".
+    fn tree_root_of<'a>(&'a self, virt: &'a str) -> Option<&'a str> {
+        let mut cursor = virt;
+        while let Some(at) = cursor.rfind('/') {
+            if at == 0 {
+                break;
+            }
+            cursor = &cursor[..at];
+            if self.trees.contains_key(cursor) {
+                return Some(cursor);
+            }
+        }
+        None
+    }
+
     fn covers_directory(&self, dir: &str) -> bool {
         self.owner
             .keys()
@@ -211,10 +228,39 @@ fn analyze(ctx: &Ctx, names: &[String]) -> Result<Analysis> {
             .collect();
         let mut satisfied: BTreeSet<String> = BTreeSet::new();
 
+        // O que auditar: as claims `f:` do mundo B, MAIS o conteúdo das claims
+        // `d:` do mundo A.
+        //
+        // Até 2026-07-30 só as `f:` eram lidas, e isso deixava o mundo A
+        // inteiramente fora do gate: `minitrue audit firefox` inspecionava ZERO
+        // arquivos, porque o payload de `/opt/<pacote>/<versão>` é UMA claim de
+        // árvore e não uma claim por arquivo. O custo disso não foi teórico —
+        // o Firefox foi publicado numa mídia sem a `alsa-lib` que o seu
+        // `libxul.so` exige no NEEDED, o `channel emit` aprovou, e o navegador
+        // só falhou na máquina instalada, com "libasound.so.2: cannot open
+        // shared object file". Um pacote binário era um ponto cego inteiro.
+        let mut to_inspect: Vec<String> = Vec::new();
         for (kind, virt) in &pkg.claims {
-            if *kind != 'f' {
-                continue;
+            match kind {
+                'f' => to_inspect.push(virt.clone()),
+                'd' => {
+                    if let Err(e) = collect_tree_files(ctx, virt, &mut to_inspect) {
+                        findings.push(Finding {
+                            severity: Severity::Erro,
+                            package: pkg.name.clone(),
+                            file: virt.clone(),
+                            message: format!("não consegui varrer a árvore do mundo A: {e}"),
+                        });
+                    }
+                }
+                _ => {}
             }
+        }
+        to_inspect.sort();
+        to_inspect.dedup();
+
+        for virt in &to_inspect {
+            let virt = virt.as_str();
             // Firmware de dispositivo não é código DESTE computador. O que
             // está sob /usr/lib/firmware é executado pelo processador do
             // próprio periférico — o rádio Wi-Fi, a GPU, a controladora — e o
@@ -291,7 +337,7 @@ fn analyze(ctx: &Ctx, names: &[String]) -> Result<Analysis> {
                 Err(e) => findings.push(Finding {
                     severity: Severity::Erro,
                     package: pkg.name.clone(),
-                    file: virt.clone(),
+                    file: virt.to_string(),
                     message: format!("não foi possível interpretar estaticamente: {e}"),
                 }),
             }
@@ -323,6 +369,61 @@ fn analyze(ctx: &Ctx, names: &[String]) -> Result<Analysis> {
         inspected,
         missing,
     })
+}
+
+/// Teto de arquivos por árvore do mundo A. Não é frugalidade: é o que impede
+/// que um payload absurdo — ou um link malicioso que escapasse da confinação —
+/// transforme a auditoria numa varredura sem fim. O Firefox, que é o maior
+/// pacote binário desta árvore, tem cerca de 200 arquivos.
+const MAX_TREE_FILES: usize = 20_000;
+
+/// Enumera os arquivos REGULARES sob uma claim de árvore do mundo A,
+/// devolvendo caminhos virtuais.
+///
+/// Symlinks são pulados de propósito: o que interessa auditar é o objeto, e
+/// segui-los levaria a contar o mesmo arquivo duas vezes — ou, se apontassem
+/// para fora, a analisar o payload de outro pacote como se fosse deste. Pelo
+/// mesmo motivo a descida usa `symlink_metadata` e nunca `metadata`.
+fn collect_tree_files(ctx: &Ctx, root_virt: &str, out: &mut Vec<String>) -> std::io::Result<()> {
+    fn walk(
+        real: &std::path::Path,
+        virt: &str,
+        out: &mut Vec<String>,
+        budget: &mut usize,
+    ) -> std::io::Result<()> {
+        let entries = match std::fs::read_dir(real) {
+            Ok(entries) => entries,
+            // Uma claim de árvore que não existe no disco não é erro DESTA
+            // função: o laço de auditoria já conta ausências como `missing`.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        for entry in entries {
+            let entry = entry?;
+            let meta = std::fs::symlink_metadata(entry.path())?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let child_virt = format!("{virt}/{name}");
+            if meta.is_dir() {
+                walk(&entry.path(), &child_virt, out, budget)?;
+            } else if meta.is_file() {
+                if *budget == 0 {
+                    return Err(std::io::Error::other(format!(
+                        "árvore excede {MAX_TREE_FILES} arquivos"
+                    )));
+                }
+                *budget -= 1;
+                out.push(child_virt);
+            }
+        }
+        Ok(())
+    }
+    let real = rooted(ctx, root_virt);
+    if !real.is_dir() {
+        return Ok(());
+    }
+    let mut budget = MAX_TREE_FILES;
+    walk(&real, root_virt.trim_end_matches('/'), out, &mut budget)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -403,13 +504,38 @@ fn audit_elf(
         );
     }
 
-    let search: Vec<String> = info
+    let mut search: Vec<String> = info
         .runpath
         .iter()
         .chain(info.rpath.iter())
         .map(|p| normalize(&p.replace("$ORIGIN", &origin).replace("${ORIGIN}", &origin)))
         .chain(DEFAULT_LIB_DIRS.iter().map(|d| d.to_string()))
         .collect();
+    // No mundo A o payload resolve contra SI MESMO, e isso é um fato do
+    // pacote e não uma indulgência. O libxul.so do Firefox não tem RUNPATH
+    // nenhum e exige libnspr4.so, libmozsqlite3.so e mais uma dúzia de
+    // bibliotecas que moram ao lado dele em /opt: quem as encontra é o
+    // lançador, que põe o próprio diretório no LD_LIBRARY_PATH antes de
+    // executar o binário. Modelar isso é descrever o que acontece; NÃO
+    // modelar seria produzir uma dúzia de erros falsos por arquivo e tornar a
+    // auditoria do mundo A inútil no primeiro uso.
+    //
+    // O acréscimo é estreito de propósito: o diretório do PRÓPRIO arquivo e a
+    // RAIZ da árvore, e só quando o arquivo está sob uma claim `d:`. Os dois
+    // são necessários e por motivos diferentes: o libxul.so mora na raiz e
+    // acha os vizinhos ali; já o gmp-clearkey/0.1/libclearkey.so é um plugin
+    // num subdiretório que exige libnss3.so — e essa está na RAIZ, carregada
+    // pelo processo que o abre. Sem a raiz na busca, os plugins geram erro
+    // falso; sem o diretório próprio, geram erro falso os que resolvem ao
+    // lado. Uma biblioteca de sistema ausente continua sendo erro, porque
+    // /usr/lib não é claim de árvore de ninguém.
+    if let Some(root) = providers.tree_root_of(virt) {
+        search.push(origin.clone());
+        let root = root.to_string();
+        if root != origin {
+            search.push(root);
+        }
+    }
 
     for needed in &info.needed {
         let Some((target, owner)) = resolve_library(ctx, needed, &search, providers) else {
@@ -903,6 +1029,77 @@ mod tests {
         assert_eq!(providers.owner_of("/opt/outro/1.0/bin/sh"), None);
         assert!(providers.covers_directory("/opt/busybox/1.35.0/lib"));
         assert!(!providers.covers_directory("/tmp/build"));
+    }
+
+    /// A claim `d:` do mundo A tem de ser EXPANDIDA em arquivos para auditar.
+    ///
+    /// Antes de 2026-07-30 o laço de auditoria só lia claims `f:`, e como o
+    /// payload inteiro de `/opt/<pacote>/<versão>` é UMA claim de árvore, todo
+    /// pacote binário passava com zero arquivos inspecionados — ponto cego
+    /// completo. Foi por essa fresta que o Firefox foi para uma mídia sem a
+    /// `alsa-lib` que o `libxul.so` exige. Este teste falha se alguém voltar a
+    /// pular as claims `d:`.
+    #[test]
+    fn claim_de_arvore_do_mundo_a_e_expandida_em_arquivos() {
+        let root = temp_root("arvore-mundo-a");
+        let tree = root.join("opt/exemplo/1.0");
+        std::fs::create_dir_all(tree.join("plugins")).unwrap();
+        std::fs::write(tree.join("binario"), b"\x7fELF").unwrap();
+        std::fs::write(tree.join("libinterna.so"), b"\x7fELF").unwrap();
+        std::fs::write(tree.join("plugins/extra.so"), b"\x7fELF").unwrap();
+        std::fs::write(tree.join("dados.txt"), b"nao e elf").unwrap();
+        // Symlink não é conteúdo novo: seguir levaria a contar duas vezes.
+        std::os::unix::fs::symlink("binario", tree.join("atalho")).unwrap();
+
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: true,
+            tofu: false,
+            jobs: 1,
+        };
+        let mut out = Vec::new();
+        collect_tree_files(&ctx, "/opt/exemplo/1.0", &mut out).unwrap();
+        out.sort();
+        assert_eq!(
+            out,
+            vec![
+                "/opt/exemplo/1.0/binario".to_string(),
+                "/opt/exemplo/1.0/dados.txt".to_string(),
+                "/opt/exemplo/1.0/libinterna.so".to_string(),
+                "/opt/exemplo/1.0/plugins/extra.so".to_string(),
+            ],
+            "a varredura tem de descer nos subdiretórios e ignorar symlinks"
+        );
+
+        // Uma árvore que não existe no disco não é erro desta função: o laço
+        // de auditoria já contabiliza ausência separadamente.
+        let mut vazio = Vec::new();
+        collect_tree_files(&ctx, "/opt/inexistente/9.9", &mut vazio).unwrap();
+        assert!(vazio.is_empty());
+    }
+
+    /// O payload do mundo A resolve contra SI MESMO — e contra a raiz da
+    /// árvore, não só contra o diretório do arquivo. Um plugin em
+    /// `gmp-clearkey/0.1/` exige `libnss3.so`, que mora na raiz do Firefox.
+    #[test]
+    fn arvore_do_mundo_a_reconhece_a_propria_raiz() {
+        let providers = Providers {
+            owner: BTreeMap::new(),
+            trees: [("/opt/firefox/153.0.1".to_string(), "firefox".to_string())]
+                .into_iter()
+                .collect(),
+        };
+        assert_eq!(
+            providers.tree_root_of("/opt/firefox/153.0.1/gmp-clearkey/0.1/libclearkey.so"),
+            Some("/opt/firefox/153.0.1")
+        );
+        assert_eq!(
+            providers.tree_root_of("/opt/firefox/153.0.1/libxul.so"),
+            Some("/opt/firefox/153.0.1")
+        );
+        // Fora de qualquer árvore: o mundo B resolve contra /usr/lib e mais
+        // nada, e é isso que faz uma biblioteca de sistema ausente ser erro.
+        assert_eq!(providers.tree_root_of("/usr/lib/libz.so.1"), None);
     }
 
     #[test]
