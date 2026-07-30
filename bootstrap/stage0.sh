@@ -50,10 +50,10 @@ export CARGO_TARGET_DIR="$REPO/target"
 # Base do canal, SEM o nome do binário: os arquivos são $MINITRUE_CHANNEL/minitrue
 # e $MINITRUE_CHANNEL/minitrue-musl.
 MINITRUE_CHANNEL=${MINITRUE_CHANNEL:-https://distropica.com.br/canal}
-MINITRUE_SHA256=7c96b0179c00ef5a9422425b9f71928f3b8fa31a5e4c8e4e449f6c6c8bcfe860
+MINITRUE_SHA256=5175a372dd218991c9d9234b58bbd01d09e7bbcf1c9fc8c366b04602e5ba115a
 # O estático musl, que roda DENTRO do rootfs. Construído com o zig como CC
 # (SPEC-0003 §10) e o mesmo --remap-path-prefix, e por isso também reprodutível.
-MINITRUE_MUSL_SHA256=bde43212f60b11113d55d44aeccdd10058987e35b3ff5c7033361e1ba5abf30c
+MINITRUE_MUSL_SHA256=c8d8c23a8e177aa58ec03ec873b3f9fc5722b6d4f13ce26e628c2cd8a5db191f
 
 # O runner mundo-B entra no rootfs por bwrap e precisa que todos os caminhos
 # de trabalho derivados daqui continuem válidos depois do chroot. Aceitar um

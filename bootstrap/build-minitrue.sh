@@ -50,6 +50,13 @@ command -v cargo >/dev/null 2>&1 || {
 export RUSTFLAGS="--remap-path-prefix=$REPO=/distropica"
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
 
+# CARGO_TARGET_DIR é FIXADO aqui, e não deduzido depois. Com --manifest-path o
+# cargo escreve em minitrue/target/, não em $REPO/target/ — e a primeira versão
+# deste script supunha o segundo, lia um binário de uma hora atrás e imprimia o
+# hash DELE como se fosse o do build recém-feito. Um script cujo trabalho é
+# provar reprodutibilidade não pode errar qual arquivo acabou de produzir.
+export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$REPO/target}
+
 set -- --release --locked --offline --manifest-path "$REPO/minitrue/Cargo.toml"
 if [ -n "$MUSL" ]; then
     rustup target list --installed 2>/dev/null | grep -q '^x86_64-unknown-linux-musl$' || {
@@ -61,13 +68,18 @@ fi
 
 cargo build "$@"
 
-# CARGO_TARGET_DIR, se definido, manda no lugar de $REPO/target — foi assim que
-# a primeira versão deste script procurou o binário no diretório errado depois
-# de um build bem-sucedido.
-TARGETDIR=${CARGO_TARGET_DIR:-$REPO/target}
-built=$TARGETDIR/release/minitrue
-[ -n "$MUSL" ] && built=$TARGETDIR/x86_64-unknown-linux-musl/release/minitrue
+built=$CARGO_TARGET_DIR/release/minitrue
+[ -n "$MUSL" ] && built=$CARGO_TARGET_DIR/x86_64-unknown-linux-musl/release/minitrue
 [ -x "$built" ] || { echo "erro: build não produziu $built" >&2; exit 1; }
+
+# Guarda contra ler artefato velho: se o binário não é mais novo que o fonte
+# mais recente, ele não é deste build. Sem isto o script imprime o hash de um
+# arquivo antigo e a "prova" de reprodutibilidade vira ficção.
+mais_novo=$(find "$REPO/minitrue/src" "$REPO/minitrue/Cargo.toml" -newer "$built" 2>/dev/null | head -1)
+if [ -n "$mais_novo" ]; then
+    echo "FATAL: $built é mais antigo que $mais_novo — o build não o regravou." >&2
+    exit 1
+fi
 
 # A guarda que prova que o remapeamento funcionou. Se um caminho de builder
 # vazar para dentro do binário, a reprodutibilidade entre máquinas cai em

@@ -215,6 +215,27 @@ fn analyze(ctx: &Ctx, names: &[String]) -> Result<Analysis> {
             if *kind != 'f' {
                 continue;
             }
+            // Firmware de dispositivo não é código DESTE computador. O que
+            // está sob /usr/lib/firmware é executado pelo processador do
+            // próprio periférico — o rádio Wi-Fi, a GPU, a controladora — e o
+            // hospedeiro apenas o entrega ao driver, que o repassa ao
+            // dispositivo. Muitos desses arquivos SÃO ELF, mas de outra
+            // arquitetura: os blobs de ath10k/ath11k, por exemplo, são ELF32
+            // do Hexagon da Qualcomm.
+            //
+            // Analisá-los como se fossem binários do sistema é erro de
+            // categoria: as bibliotecas que um firmware de rádio "exige" não
+            // existem nem existiriam neste sistema de arquivos, e nada se pode
+            // concluir sobre o fechamento a partir delas. Antes desta exceção
+            // o `channel emit` recusava 28 desses arquivos, o que impedia
+            // publicar firmware nenhum.
+            //
+            // A isenção é por CAMINHO e não por arquitetura de propósito:
+            // isentar "todo ELF que não é x86-64" esconderia um binário de
+            // sistema construído para o alvo errado, que é defeito de verdade.
+            if virt.starts_with("/usr/lib/firmware/") {
+                continue;
+            }
             let real = rooted(ctx, virt);
             if !real.exists() {
                 missing += 1;
