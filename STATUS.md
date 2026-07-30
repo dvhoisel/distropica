@@ -30,7 +30,103 @@ Os hashes QEMU final-v10 e VirtualBox network-v1 abaixo são evidência históri
 anterior à mudança de licença do pacote `base` (revisão funcional `7148ebd`).
 Não são pinos de uma mídia recomposta a partir da árvore licenciada atual.
 
-## Evidência integrada atual — `rede-v3`
+## Evidência integrada atual — `grafica-v1`
+
+A ISO com modo gráfico instala, reinicia sem mídia e **abre o Firefox em
+português**. A prova não é o aceite: o `accept-qemu` lê o SERIAL, e sessão
+gráfica não aparece no serial. A evidência é a captura de tela feita pelo
+monitor do QEMU, com o `bootstrap/live/screenshot-qemu` escrito para isso — a
+primeira mostra o painel do weston com os lançadores e o relógio; a segunda,
+com o Firefox rodando como cliente do compositor, mostra a janela de
+boas-vindas em pt-BR.
+
+```text
+CANAL=78 pacotes; fechamento: 2089 requisito(s), todos com provedor declarado
+CACHE=664 MB (streaming; teria sido recusado pelo limite antigo de 384 MiB)
+ISO=target/distropica-grafica.iso  (744 MB)
+TELA_1=target/tela-v8.png          (painel do weston, 1280x800)
+TELA_2=target/prova-ff/tela.png    (Firefox 153.0.1 pt-BR aberto)
+```
+
+**Sete falhas foram encontradas no caminho, e NENHUMA delas falhava no build.**
+Todas produziriam uma ISO que instala, boota e não serve:
+
+| Sintoma | Causa |
+|---|---|
+| `undefined symbol: gdk_x11_display_get_xdisplay` | 21 símbolos do libxul exigem GTK3 com backend X11 |
+| instalador recusa a mídia (416 MiB) | streaming faltava do lado da INSTALAÇÃO, não só da composição |
+| tela preta, `no input devices` | o `mdev` cria o nó mas não popula a base do udev, que é quem a libinput consulta |
+| tela preta, `failed to compile XKB keymap` | faltava o `xkeyboard-config` — dados de teclado, não código |
+| `Starting with no config file` | comentário com `;` no weston.ini invalida o ARQUIVO INTEIRO |
+| `libasound.so.2: cannot open` | `KIND=binary` não declarava DEPS; a ALSA ficou fora do fecho |
+| `Cannot spawn a message bus` | faltava `machine-id`, que tem de ser gerado no 1º boot e não vir no payload |
+
+O que a revisão traz, e o que custou:
+
+- **Modo gráfico**: weston 14.0.2 com backend DRM e renderizador pixman, seatd
+  0.9.3, Firefox 153.0.1 pt-BR (Mundo A, `/opt`), GTK3 com os backends Wayland
+  **e X11**, `weston-terminal` como único emulador de terminal da árvore. A
+  tty1 vira sessão gráfica quando há `/dev/dri/card*`; a tty2 é getty sempre.
+- **A corrente X11, medida e não suposta**: o `libxul.so` do Firefox declara
+  onze bibliotecas cliente do X e a `libasound` no `NEEDED`, com `-z now`, e
+  referencia **vinte e um símbolos `gdk_x11_*`** que só existem num GTK3 com o
+  backend X11 ligado. Descoberto executando o binário
+  (`undefined symbol: gdk_x11_display_get_xdisplay`), não lendo documentação.
+  Custo: dezessete receitas novas de bibliotecas cliente, `at-spi2-core`
+  substituindo o `atk` avulso, `libxml2`, backend `xlib` no cairo e GLX no
+  libepoxy. Nada disso é exercido em execução — a sessão é Wayland — mas o
+  carregador dinâmico não sabe disso.
+- **Streaming do cache**, sem o qual nada acima caberia: ver o item "Escala do
+  Minipax" em Limitações.
+- **`/etc/mdev.conf`**: o `mdev` criava os nós achatados em `/dev`, enquanto
+  libdrm procura `/dev/dri/card0` e libinput procura `/dev/input/event0`. Sem
+  as regras `=dri/` e `=input/`, o compositor sobe, não acha vídeo nem teclado
+  e morre — sem nada falhar em voz alta.
+- **A guarda que a auditoria impôs**: `channel emit` recusou o canal três vezes
+  por DEPS incompletos, e as três estavam certas. A mais instrutiva: o libtool
+  sobrelinka, e cada extensão do X carrega `libxcb`, `libXau` e `libXdmcp` no
+  próprio `NEEDED` — o que eu tinha suposto que viesse só por transitividade.
+  Os DEPS finais saíram de `readelf -d`, não da leitura da receita.
+- **A CEGUEIRA da auditoria, que a mesma corrente expôs — e que foi
+  CORRIGIDA.** `minitrue audit firefox` lia **zero arquivos**: a auditoria
+  percorria apenas claims `f:`, e o payload do Mundo A é UMA claim de árvore
+  `d:` sobre `/opt/<pacote>/<versão>`. Todo pacote binário era um ponto cego
+  inteiro, e foi por essa fresta que a `alsa-lib` — construída, presente na
+  árvore, exigida pelo `libxul.so` — não entrou na mídia. O `audit` agora
+  expande as claims `d:` em arquivos e os lê com o mesmo parser: o Firefox
+  passou de 0 para **30 arquivos e 321 requisitos**, e a árvore inteira de 1073
+  para **1203 arquivos e 2845 requisitos**.
+
+  Duas sutilezas que a correção teve de modelar, ambas descobertas por erro
+  falso na primeira tentativa:
+  - **o payload do Mundo A resolve contra si mesmo.** O `libxul.so` não tem
+    RUNPATH e exige `libnspr4.so` e mais treze vizinhas de `/opt`; quem as acha
+    é o lançador, que põe o próprio diretório no `LD_LIBRARY_PATH`. A busca
+    inclui o diretório do arquivo **e a raiz da árvore** — a segunda porque
+    plugins em subdiretório (`gmp-clearkey/0.1/libclearkey.so`) exigem
+    bibliotecas que moram na raiz. O acréscimo é estreito: fora de uma claim
+    `d:`, biblioteca de sistema ausente continua sendo erro;
+  - **symlinks dentro da árvore são pulados**, senão o mesmo arquivo é contado
+    duas vezes — ou, se apontassem para fora, o payload de outro pacote seria
+    analisado como se fosse deste.
+
+  Sobra um achado REAL, da Mozilla e não nosso: `libonnxruntime.so` declara
+  `RUNPATH` literalmente igual a `$`, um `$ORIGIN` truncado no build deles.
+  Fica como erro visível, porque RUNPATH relativo faz o carregador procurar a
+  partir do diretório de trabalho do processo — imprevisível e, no limite,
+  controlável por terceiros. Não é corrigível sem tocar no payload, e tocar no
+  payload obrigaria a remover a marca Firefox.
+- **A montagem do cache virou script** (`bootstrap/cache-from-channel`). Fazê-la
+  à mão custou três iterações de ISO, cada uma descobrindo UM item faltando
+  depois de compor 740 MB e bootar: a assinatura do Zig sob NOME DERIVADO
+  (`sha256(hash+chave+URL)`, e não o hash do artefato), o achatamento do
+  `pool/` por sha256 (o cache offline não tem `pool/` — isso é layout do
+  repositório HTTP), e os tarballs-FONTE do `cache.world` (`make` e `tree` são
+  `KIND=source`, e o filtro por `KIND=binary` os deixava de fora). O script
+  confere cada sha256 contra o índice e aborta em vez de produzir um cache que
+  só falha na máquina do usuário.
+
+## Evidência integrada anterior — `rede-v3`
 
 A closure foi reconstruída com o perfil de rede e emitida num canal local
 assinado com **24 artefatos** (eram 11). A instalação direta
@@ -395,8 +491,8 @@ artefato existente muda de hash. A terceira é o bug. A quarta é o conserto.
 | Sidecars (`.sha256`, `.media.lock`, `.manifest`) | ✅ | ✅ unit | temporários publicados sem sobrescrever antes da imagem; não há transação multi-arquivo, logo corrida/falha pode deixar sidecars sem imagem |
 | Classes de insumos de release | ✅ | 🟡 unit | `PROFILE_CLASS`, `MEDIA_CLASS` e `INSTALL_CLASS` podem ser `official-inputs` após os respectivos pinos; isso não declara reprodução oficial |
 | Modos canônicos das árvores | ✅ | ✅ unit | dirs `0755`, `root/` do overlay `0700`, `shadow`/`gshadow` e backups `0600`, executáveis `0755`, demais regulares `0644`; não depende dos modos que o Git preserva |
-| Limites das árvores | ✅ | 🟡 unit | Newspeak e overlay: 128 MiB de conteúdo regular cada; cache: 384 MiB; 50.000 entradas por árvore; entrada `cache.tar`: até 416 MiB. Conteúdo e tar ficam em memória. No canal, `.tar.zst` selado e tar descompactado coexistem, somando o pico de RAM; streaming é gate de release |
-| Modo offline/cache | ✅ | ✅ unit + E2E atual | `cache.world` exige jq, Make, tree e Zig. Make também é instalado por depender de `miniplenty-buildbase`; jq/tree começam ausentes para as provas e Zig fica somente no cache. A árvore atual tem cerca de 267 MB de regulares, abaixo do limite de 384 MiB |
+| Limites das árvores | ✅ | ✅ unit | Newspeak e overlay: 128 MiB de conteúdo regular cada, **em memória**; cache: **streaming**, teto de 4 GiB−1 (limite do FAT32 para UM arquivo, não de RAM); 50.000 entradas por árvore. Desde 2026-07-30 a árvore de cache é coletada por REFERÊNCIA (`EntryKind::RegularAt`), o `cache.tar` é escrito direto num `Write` com o sha256 saindo do mesmo fluxo, e o payload vai do disco para a mídia com buffer fixo. O instalador faz o mesmo em duas passadas: uma valida a árvore inteira lendo só cabeçalhos, a outra extrai. `payload_hash` inalterado — as ISOs continuam bit a bit idênticas às da versão em memória, o que os testes de reprodutibilidade provam. No canal, `.tar.zst` selado e tar descompactado ainda coexistem |
+| Modo offline/cache | ✅ | ✅ unit + E2E atual | `cache.world` exige jq, Make, tree e Zig. Make também é instalado por depender de `miniplenty-buildbase`; jq/tree começam ausentes para as provas e Zig fica somente no cache. Com o modo gráfico, a árvore passou a **647 MB** — o que só é possível porque o cache virou streaming |
 | Modo online/bootstrap de canal | ✅ | ✅ unit | Minipax exige config + índice/assinatura pareados, rejeita objetos e semeia antes de `rectify`; Minitrue valida minisign no uso. Não há endpoint oficial para E2E |
 | BOOT EFI vivo (kernel+initramfs+Minipax+Minitrue) | ✅ | ✅ E2E QEMU histórico + VirtualBox atual | fixa Linux 7.1.4, BusyBox e executores musl `static-pie`. `CONFIG_MODULES=y`, nenhum `.ko` na mídia e release `7.1.4-distropica-live`; o EFI atual inclui `simpledrm`+`fbcon` e VirtIO de rede built-in, sem fixar o disco |
 | Instalação por ISO em QEMU/OVMF | ✅ | ✅ E2E final-v10 | aceite histórico e automatizado: antes de escolher disco, materializa closure em `/run` e exporta snapshot EFI validado; depois particiona, copia, verifica, instala EFI e publica o marcador completo por último. Segundo boot ocorreu sem ISO |
@@ -616,15 +712,60 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   preparados e publicados sem substituição antes da imagem. Isso evita imagem
   publicada pelo Minipax sem sidecars, mas corrida ou falha pode deixar parte
   ou todos os sidecars sem imagem; não existe rollback multi-arquivo.
-- **Escala do Minipax:** Newspeak e overlay estão limitadas a 128 MiB de
-  conteúdo regular cada; cache, a 384 MiB; cada árvore admite 50.000 entradas,
-  e `cache.tar` é aceito até 416 MiB. As árvores são materializadas
-  integralmente em memória, junto do tar normalizado. O consumo do canal mantém simultaneamente o transporte
-  `.tar.zst` selado e o tar descompactado; o pico de RAM aproxima a soma dos
-  dois. O instalador vivo acrescenta a raiz pré-validada em `/run`, trocando
-  memória por garantia fail-before-wipe. O cache do perfil atual mediu cerca de
-  267 MB de regulares e coube nesses limites; ampliar o world
-  exigirá streaming e provavelmente uma partição de dados separada.
+- **Escala do Minipax:** o cache **deixou de ser limite de memória** em
+  2026-07-30. Newspeak e overlay seguem em memória, a 128 MiB de conteúdo
+  regular cada, e isso está certo: são árvores pequenas por natureza. O cache
+  passou a streaming em toda a cadeia — `collect` guarda referência em vez de
+  conteúdo, `pack_into` escreve o tar direto no destino somando o sha256 no
+  caminho, a composição da mídia copia do disco para a ISO com buffer fixo, e o
+  instalador valida numa passada de cabeçalhos antes de extrair noutra. O teto
+  que restou, 4 GiB−1, é o do FAT32 para um arquivo, e não de RAM. O que
+  destravou: o cache do perfil gráfico mede **647 MB**, contra os 267 MB do
+  perfil de rede, e teria sido recusado. O `payload_hash` não mudou, o que os
+  testes de reprodutibilidade de ISO e IMG comprovam. O instalador vivo
+  continua montando a raiz pré-validada em `/run`, trocando memória por
+  garantia fail-before-wipe — e ela funcionou: a primeira tentativa da mídia
+  gráfica foi recusada pelo limite antigo do instalador **antes de tocar no
+  disco**, caindo no shell de resgate.
+- **Travamento intermitente do OVMF antes do kernel, NÃO caracterizado.** Em
+  parte das execuções o firmware fica preso no splash do TianoCore, com o QEMU
+  a 100% de CPU, 113 bytes de serial e zero escrita em disco — por 18 minutos
+  numa observação. Repetir o mesmo comando com a mesma ISO arranca em 10 s.
+  O que a medição diz, e o que ela NÃO diz: a estrutura da mídia está
+  descartada como causa — GPT, El Torito e a ESP de 64 MiB em LBA 128 são
+  idênticos entre a ISO que trava e a que não trava, e a mesma ISO faz as duas
+  coisas. A hipótese inicial de que era o TAMANHO (777 → 780 MB) não sobreviveu
+  ao teste: a v9, a maior, arrancou 6 de 6 vezes seguidas com o hospedeiro
+  ocioso, em 2, 4 e 8 GiB de RAM; as falhas foram todas com carga alta, mas a
+  v7 arrancou 2 de 2 sob a MESMA carga, então nem isso explica. Fica registrado
+  como fenômeno observado sem causa estabelecida — e é gate: uma mídia que
+  boota em duas de três tentativas não é instalável para um usuário, por mais
+  que o aceite passe na tentativa seguinte.
+
+  O que foi descartado por medição, para quem retomar não refazer:
+  - **Não é a mídia corrompida.** A ESP extraída da ISO é FAT32 válido (129.046
+    clusters de dados, 1 setor por cluster, assinatura 0xAA55), e o
+    `EFI/BOOT/BOOTX64.EFI` dentro dela tem sha256 IDÊNTICO ao arquivo de origem
+    — andei a árvore de diretórios FAT à mão para confirmar. O bloco que o GPT
+    aponta em LBA 128 e o `/boot/esp.img` extraído pelo ISO9660 têm o mesmo
+    sha256, então o `--efi-boot-image` do xorriso fez o que promete.
+  - **Não é configuração do QEMU.** Bissecção com `-smp 2`, `-cpu qemu64`,
+    `-boot order=d,strict=on`, `-machine pc` e `-machine q35`: TODAS as
+    combinações produzem sucesso e falha em execuções repetidas da mesma ISO.
+  - **Não é RAM do convidado.** 2, 4 e 8 GiB, duas execuções cada: seis
+    sucessos.
+  - **Correlaciona com o tamanho, mas fracamente.** A ISO de 777 MB arrancou
+    10 de 10; a de 780 MB, cerca de dois terços das vezes. Amostra pequena.
+
+  A mensagem do firmware, quando falha, é `BdsDxe: failed to load Boot0002
+  "UEFI QEMU DVD-ROM" ...: Not Found` seguida de `No bootable option or device
+  was found` — o OVMF ENXERGA o dispositivo e não constrói a opção de boot da
+  ESP do El Torito. Suspeita a investigar, não verificada: a ESP tem 64 MiB
+  para um payload de 17 MB (o `create_plain_esp` usa
+  `max(payload + 16 MiB, 64 MiB)`), e o firmware lê esse bloco inteiro por IDE
+  emulado, em PIO. Encolher a ESP para o mínimo do FAT32 (~34 MiB) cortaria
+  essa leitura pela metade e tiraria 30 MB da ISO. Vale tentar antes de culpar
+  o OVMF.
 - **Escala do canal:** o consumidor sela transporte e tar e limita cada um a
   16 GiB, mas ainda não limita a quantidade de entradas do tar. Um objeto
   assinado enorme pode esgotar memória no preflight — sem alcançar o wipe, mas

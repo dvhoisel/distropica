@@ -1,4 +1,4 @@
-# Perfil-alvo mínimo instalável e pronto para compilar. Os componentes do
+# Perfil-alvo: instalável, gráfico e pronto para compilar. Os componentes do
 # toolchain entram como dependências de miniplenty-buildbase, não como desejos
 # top-level separados.
 base
@@ -29,3 +29,18 @@ tcpdump
 # correspondente, sem o qual o rádio não inicializa em máquina real.
 iwd
 linux-firmware-wifi
+
+# Modo gráfico. UM desejo, e é de propósito: o 'desktop' é o pacote de cola que
+# amarra compositor, navegador, fontes, tema de ícones e a configuração que faz
+# a tty1 virar sessão gráfica. Ele arrasta por DEPS o weston, o seatd, o
+# Firefox, o GTK3, a Mesa, as fontes DejaVu, os temas de ícone e os locales —
+# setenta e poucos pacotes ao todo. Repetir essa árvore aqui seria duplicar o
+# que os DEPS já dizem, e a primeira divergência entre as duas listas seria um
+# pacote que ninguém percebeu que saiu.
+#
+# O miniplenty-buildbase acima SOBREVIVEU à entrada do modo gráfico, e o motivo
+# é medido: o gcc-pass2 já vem no fecho de runtime porque é dele que saem
+# libstdc++.so.6 e libgcc_s.so.1, de que a Mesa precisa. Com ele já pago, o
+# buildbase custa só o make. Trocar 'pronto para compilar' por um megabyte
+# seria mau negócio.
+desktop

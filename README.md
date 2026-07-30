@@ -153,7 +153,8 @@ partir de nada além de binários upstream — foi **demonstrada**:
   Perfil, mídia e instalação recebem classes separadas que descrevem apenas
   quais **insumos** foram pinados — nunca se autoatribuem a condição de
   reprodução oficial. O perfil de desenvolvimento declara `base`, `linux`,
-  `ripgrep`, `vim` e `miniplenty-buildbase` como target padrão. Esse último é um metapacote sem
+  `ripgrep`, `vim`, `miniplenty-buildbase`, o conjunto de rede, o Wi-Fi e
+  `desktop` como target padrão. Esse último é um metapacote sem
   payload: suas dependências diretas são `base`, `make` e `gcc-pass2`, cuja
   closure final instala `linux-headers`, glibc, `mathlibs-glibc`, `zlib`,
   `binutils-glibc` e o GCC nativo; Vim traz `ncurses`. Assim, Make, `gcc`, `g++`, `as`, `ld`, `ar`
@@ -162,9 +163,44 @@ partir de nada além de binários upstream — foi **demonstrada**:
   quando uma compilação fonte `seed`/`cross` realmente ocorre. Antes de
   retificar o target, o Minipax confere os artefatos declarados em `cache.world`
   com `minitrue --offline cache verify`. `install-media` valida o payload antes
-  de materializá-lo. O perfil fixa `MEDIA_SIZE_MIB=512` para dimensionar a
+  de materializá-lo. O perfil fixa `MEDIA_SIZE_MIB=1024` para dimensionar a
   saída IMG e registrar esse parâmetro no lock; a ISO cresce conforme o payload
-  e não fica limitada nem preenchida até 512 MiB por esse campo.
+  e não fica limitada nem preenchida até 1024 MiB por esse campo. Desde
+  2026-07-30 a árvore de cache é **transmitida em fluxo**, e não materializada
+  em memória: `collect` a coleta por referência, `pack_into` escreve o
+  `cache.tar` direto no destino somando o sha256 no caminho, e o instalador a
+  valida numa passada de cabeçalhos antes de extrair noutra. O teto que restou
+  é o do FAT32 para um arquivo (4 GiB−1), e não o da RAM. Foi isso que permitiu
+  o cache saltar de 267 MB para 647 MB sem mudar o `payload_hash` — as ISOs
+  continuam bit a bit reprodutíveis.
+- **Modo gráfico — Wayland, weston e Firefox.** A tty1 vira sessão gráfica
+  quando o pacote `desktop` está instalado e existe `/dev/dri/card*`; senão,
+  vira um getty, e a tty2 é sempre um getty de emergência. O compositor é o
+  **weston** com backend DRM e renderizador **pixman** — que compõe direto no
+  buffer do KMS, sem EGL e sem GBM, porque numa árvore com Mesa softpipe o GL
+  não aceleraria nada e só acrescentaria uma superfície de falha. O navegador é
+  o binário oficial pt-BR da Mozilla, do Mundo A, em `/opt`.
+
+  **O preço do Firefox está escrito porque é grande.** Medindo o `libxul.so`
+  com `readelf -d`, ele declara `libX11`, `libxcb`, `libXext`, `libXrandr`,
+  `libXcomposite`, `libXdamage`, `libXfixes`, `libXrender`, `libXcursor`,
+  `libXi` e `libasound` no `NEEDED` — ligação dura, com `-z now`, resolvida
+  pelo carregador antes da primeira linha de código. Pior: ele referencia
+  **vinte e um símbolos `gdk_x11_*`**, que só existem num GTK3 compilado com o
+  backend X11. Uma árvore Wayland-only simplesmente não carrega esse binário, e
+  isso não se descobre lendo documentação — se descobriu executando e lendo
+  `undefined symbol: gdk_x11_display_get_xdisplay`.
+
+  Daí a corrente: dezessete receitas novas de bibliotecas **cliente** do X11
+  (não há servidor X nesta árvore, nem XWayland), o `at-spi2-core` — que o
+  backend X11 do GTK3 exige como dependência dura e que substituiu o `atk`
+  avulso —, o `libxml2` de que ele depende, o backend `xlib` no cairo e o GLX
+  no libepoxy. Em execução, **nada disso é exercido**: com `WAYLAND_DISPLAY`
+  no ambiente e `DISPLAY` ausente, o GDK escolhe Wayland e o caminho X11 fica
+  morto. Elas existem para o `ld.so`, não para o usuário. A alternativa seria
+  uma biblioteca de tocos falsos que quebraria no dia em que alguém a
+  chamasse, ou compilar o Firefox da fonte — o que exige Rust, clang,
+  cbindgen, nodejs e NASM.
 - **Mídia viva UEFI — implementação inicial.**
   `bootstrap/live/build-efi` produz um kernel EFI-stub com initramfs,
   BusyBox, Minipax e Minitrue `static-pie` ligados com musl. O PID 1 encontra a

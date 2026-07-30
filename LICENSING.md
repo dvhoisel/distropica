@@ -104,6 +104,37 @@ Os limites que a acompanham:
 Quem quiser uma Distrópica sem blob nenhum remove este pacote do perfil; nada
 mais na árvore depende dele, e o restante do sistema continua íntegro.
 
+## Firefox: binário de terceiro com marca registrada
+
+O pacote `firefox` é o **binário oficial da Mozilla**, do Mundo A, instalado em
+`/opt` sem qualquer modificação. Não é compilado aqui, e a razão é medida: o
+build a partir da fonte exige Rust, clang, cbindgen, nodejs e NASM, uma árvore
+maior que tudo o que esta distro construiu somado.
+
+Isso o coloca numa categoria diferente do firmware e diferente do resto da
+árvore, e a diferença precisa estar escrita:
+
+- o **código-fonte existe e é público** — o Firefox é MPL-2.0 e a Mozilla
+  publica a árvore inteira. Não há aqui a lacuna irreparável do firmware; há
+  uma escolha de não compilar, que pode ser revertida no dia em que a corrente
+  de build couber;
+- o payload **agrega** NSS, NSPR, libvpx, dav1d, ffvpx e mais de uma dezena de
+  componentes sob licenças próprias. Rotular o conjunto como MPL-2.0 seria
+  falso, então a receita declara `LICENSE=NOASSERTION` pelo mesmo critério
+  conservador aplicado ao Zig e ao `gcc-pass2`;
+- a **marca "Firefox" não é software livre**. A política de distribuição da
+  Mozilla permite redistribuir o binário oficial *sem modificação*; qualquer
+  alteração no payload obrigaria a remover a marca. É por isso que o
+  `install_pkg` da receita apenas extrai e não toca em nada — a ausência de
+  modificação não é descuido, é condição de licença;
+- para uma release oficial, o bundle de fontes correspondentes deve incluir o
+  ponteiro para a revisão exata publicada pela Mozilla, do mesmo modo que
+  inclui os tarballs upstream dos pacotes compilados.
+
+Quem quiser uma Distrópica sem binário de terceiro remove `firefox` do
+`DEPS` do pacote `desktop`; o modo gráfico continua subindo, com o weston e o
+`weston-terminal`, e sem navegador.
+
 ## Uso privado e redistribuição
 
 Quem apenas constrói ou modifica a Distrópica para uso privado não é obrigado
