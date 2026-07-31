@@ -547,6 +547,22 @@ for symbol in EFI EFI_STUB BLK_DEV_INITRD DEVTMPFS DEVTMPFS_MOUNT TMPFS \
     VGA_CONSOLE FONT_SUPPORT FONT_8x16; do
     set_config --enable "$symbol"
 done
+# Drivers de KMS por hardware, espelhando newspeak/linux pelo mesmo motivo do
+# bloco de rede acima: quem boota o sistema INSTALADO é este kernel, o
+# instalador exporta este EFI para a ESP, e por isso ligar os knobs lá não
+# muda nada enquanto a divergência existir. Foi medido: um sistema instalado
+# reporta 'Linux version 7.1.4-distropica-live'.
+#
+# O simpledrm sozinho já entrega /dev/dri/card0 a partir do framebuffer que a
+# firmware EFI deixa pronto, e é com ele que o weston sobe hoje — mas ele NÃO
+# faz modeset: a resolução fica congelada na que a firmware escolheu e
+# redimensionar a janela da máquina virtual não muda nada. Cada driver abaixo
+# cobre uma máquina real: vmwgfx é a VMSVGA do VirtualBox e do VMware,
+# vboxvideo é a placa legada do VirtualBox, bochs é a '-vga std' do QEMU e
+# virtio_gpu é a '-device virtio-gpu-pci'.
+for symbol in DRM_VMWGFX DRM_VBOXVIDEO DRM_BOCHS DRM_VIRTIO_GPU; do
+    set_config --enable "$symbol"
+done
 kmake olddefconfig
 grep -q '^CONFIG_CMDLINE_BOOL=y$' "$SOURCE/.config" || {
     echo "erro: kernel descartou CONFIG_CMDLINE_BOOL=y" >&2; exit 1;
@@ -577,6 +593,7 @@ for symbol in EFI EFI_STUB BLK_DEV_INITRD VIRTIO_BLK VIRTIO_NET BLK_DEV_SR \
     SERIO_I8042 VT VT_CONSOLE VGA_CONSOLE FONT_SUPPORT FONT_8x16 \
     BLK_DEV_NVME USB_XHCI_HCD USB_XHCI_PCI USB_STORAGE USB_HID HID_GENERIC \
     E1000E R8169 \
+    DRM_VMWGFX DRM_VBOXVIDEO DRM_BOCHS DRM_VIRTIO_GPU \
     USER_NS TUN WIREGUARD NETFILTER NF_TABLES NF_TABLES_INET NFT_CT \
     NFT_FIB_INET NF_CONNTRACK IPV6 IPV6_MULTIPLE_TABLES; do
     grep -q "^CONFIG_${symbol}=y$" "$SOURCE/.config" || {

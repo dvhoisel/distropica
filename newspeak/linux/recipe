@@ -149,6 +149,13 @@ CONFIG_DRM_SIMPLEDRM=y
 # /etc/rc.d/session cai no getty de proposito, e a pessoa conclui que o modo
 # grafico nao existe. Custa um driver pequeno e evita uma conclusao falsa.
 CONFIG_DRM_BOCHS=y
+# As DUAS placas do VirtualBox. Sem elas o convidado cai no simpledrm, que e o
+# framebuffer que a UEFI deixou: desenha, mas nao faz modesetting, nao muda de
+# resolucao e nao acompanha o redimensionamento da janela. O VMSVGA e o
+# controlador PADRAO do VirtualBox 7, entao esta e a placa que a maioria de
+# quem testar vai ter. O vboxvideo cobre o VBoxSVGA/VBoxVGA legado.
+CONFIG_DRM_VMWGFX=y
+CONFIG_DRM_VBOXVIDEO=y
 KCONFIG
     make olddefconfig
     # Guarda: o Ministério EXIGE assinatura. Aborta AQUI se um pilar caiu — em vez
@@ -159,7 +166,8 @@ KCONFIG
         WLAN CFG80211 MAC80211 RFKILL \
         CRYPTO_USER_API_HASH CRYPTO_USER_API_SKCIPHER CRYPTO_CMAC \
         CRYPTO_CTR CRYPTO_MD5 CRYPTO_SHA512 KEY_DH_OPERATIONS \
-        FRAMEBUFFER_CONSOLE SYSFB_SIMPLEFB DRM_SIMPLEDRM DRM_BOCHS; do
+        FRAMEBUFFER_CONSOLE SYSFB_SIMPLEFB DRM_SIMPLEDRM DRM_BOCHS \
+        DRM_VMWGFX DRM_VBOXVIDEO; do
         grep -q "^CONFIG_$s=y\$" .config || {
             echo "FATAL: falta CONFIG_$s=y no .config"
             grep -E 'MODULE_SIG|TRUSTED_KEYRING' .config
