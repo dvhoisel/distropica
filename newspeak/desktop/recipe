@@ -267,6 +267,33 @@ panel-position=top
 locking=false
 animation=zoom
 
+# O MODIFICADOR DOS ATALHOS, e ele é ALT porque Alt+Tab é memória muscular.
+# O default do weston é 'super' (shared/config-parser.c, linha do
+# binding-modifier), e com ele o trocador de janelas fica em Super+Tab — que
+# ninguém tenta.
+#
+# Isto é uma ESCOLHA COM PREÇO, e o preço está escrito aqui porque não dá para
+# pagá-lo pela metade: o weston tem UM modificador global para TODOS os
+# atalhos, não um por atalho. O parser aceita exatamente super, alt, ctrl,
+# shift ou none — não há combinação. Então mover o Tab move tudo junto.
+#
+# O que se ganha, e é convencional no Linux:
+#   Alt+Tab           troca de janela
+#   Alt+arrastar      move a janela
+#   Alt+botão-direito redimensiona
+#   Alt+Shift+F       tela cheia
+#
+# O QUE SE PERDE, e é o motivo de este comentário existir:
+#   Alt+K             MATA a aplicação focada, sem confirmação
+#
+# Esse é o force_kill_binding do desktop-shell/shell.c, que emite kill_signal
+# para o cliente em foco. E o weston CAPTURA a combinação: a aplicação nunca
+# recebe o Alt+K, então nem um navegador que quisesse tratá-lo poderia. Em
+# aplicação com menu, Alt+letra é mnemônico — a tecla existe e agora tem outro
+# dono. Registrado, e não escondido: quem trocar isto de volta para 'super'
+# recupera o Alt inteiro para as aplicações e perde o Alt+Tab.
+binding-modifier=alt
+
 # O painel do weston lê CAMINHO LITERAL de arquivo PNG; ele não sabe procurar
 # num tema de ícones nem renderizar SVG. Por isso os dois caminhos abaixo são
 # absolutos e foram conferidos contra o que os pacotes realmente instalam — o
@@ -379,6 +406,35 @@ WESTONINI
         echo "desktop: weston.ini sem renderer=pixman" >&2
         exit 1
     }
+    # O binding-modifier não é validado pelo weston: o parser compara o texto
+    # com super/alt/ctrl/shift/none numa cadeia de else-if e, se NENHUM casar,
+    # simplesmente mantém o default — que é 'super'. Um 'Alt' com maiúscula ou
+    # um 'meta' não dão erro, não dão aviso: o atalho só não é o que o arquivo
+    # diz que é. A guarda não fixa QUAL modificador (isso é escolha revisável),
+    # fixa que ele seja um dos que o parser conhece.
+    # Captura QUALQUER coisa depois do '=', e não só minúsculas: um
+    # 'binding-modifier=Alt' é exatamente o erro a pegar, e um padrão [a-z]+
+    # não casaria com ele — a guarda leria vazio e deixaria passar. Foi o que
+    # a primeira versão desta linha fazia.
+    #
+    # E APARA os espaços em volta, porque o weston apara: o config-parser dele
+    # avança sobre isspace() depois do '=' e recorta o rabo antes de comparar.
+    # Uma guarda mais estrita que o parser recusaria configuração válida, que é
+    # tão ruim quanto deixar passar a inválida.
+    modificador=$(grep -oE '^binding-modifier=.*' \
+        "$STAGE/etc/xdg/weston/weston.ini" | cut -d= -f2- \
+        | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' || true)
+    if [ -n "$modificador" ]; then
+        case "$modificador" in
+            super|alt|ctrl|shift|none) ;;
+            *)
+                echo "desktop: binding-modifier='$modificador' não é um dos que o" \
+                     "weston conhece; ele cairia em 'super' sem avisar" >&2
+                exit 1
+                ;;
+        esac
+    fi
+    unset modificador
     # O parser do weston trata linha iniciada por ';' como MALFORMADA e
     # descarta o arquivo inteiro, subindo com "Starting with no config file".
     # Um comentário no estilo errado apaga toda a configuração em silêncio.
