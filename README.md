@@ -3,21 +3,27 @@
 > Uma distribuição Linux distópica. Não instala pacotes: **retifica registros**.
 
 **[Site oficial](https://distropica.com.br/)** ·
-**[Baixar a ISO de desenvolvimento (378 MiB)](https://distropica.com.br/releases/distropica-rede-v3.iso)** ·
-**[SHA-256](https://distropica.com.br/releases/distropica-rede-v3.iso.sha256)** ·
-**[Manifesto](https://distropica.com.br/releases/distropica-rede-v3.iso.manifest)** ·
-**[Fontes correspondentes](https://distropica.com.br/releases/distropica-rede-v3-corresponding-sources.tar.zst)** ·
-**[SHA das fontes](https://distropica.com.br/releases/distropica-rede-v3-corresponding-sources.tar.zst.sha256)** ·
-**[Inventário das fontes](https://distropica.com.br/releases/distropica-rede-v3-sources.tsv)**
+**[Baixar a ISO 0.9 (745 MiB)](https://distropica.com.br/releases/distropica-0.9.iso)** ·
+**[SHA-256](https://distropica.com.br/releases/distropica-0.9.iso.sha256)** ·
+**[Manifesto](https://distropica.com.br/releases/distropica-0.9.iso.manifest)** ·
+**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.9-corresponding-sources.tar.zst)** ·
+**[SHA das fontes](https://distropica.com.br/releases/distropica-0.9-corresponding-sources.tar.zst.sha256)** ·
+**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.9-sources.tsv)** ·
+**[Índice de licenças](https://distropica.com.br/releases/distropica-0.9-licencas.tsv)**
 
-> **Atenção:** `rede-v3` é uma imagem de desenvolvimento para VM UEFI **64 bits**.
+> **Atenção:** a `0.9` é uma **pré-release de desenvolvimento** para VM UEFI
+> **64 bits**, e a própria mídia declara isso de si: `PROFILE_CLASS=custom`.
 > O instalador apaga integralmente o dispositivo escolhido. Use um disco virtual
 > descartável e confira o SHA-256 antes do boot.
 >
+> Ela pede a **senha de root antes do caminho do disco**: toda a interação
+> acontece antes de qualquer escrita, e a partir do disco escolhido a
+> instalação corre sozinha.
+>
 > Requisitos da VM: firmware **EFI de 64 bits** (no VirtualBox, `--firmware efi64`;
-> o EFI de 32 bits não carrega o `BOOTX64.EFI` e reporta "no bootable medium"),
-> **3 GiB de RAM** — com menos, o instalador é morto pelo OOM killer ao validar a
-> closure em memória — e disco de pelo menos 4 GiB.
+> o EFI de 32 bits não carrega o `BOOTX64.EFI` e reporta "no bootable medium") e
+> disco cuja raiz comporte **3,1 GiB** — a regra do instalador é `cache × 4 +
+> 512 MiB`, e ele recusa disco menor. O sistema instalado ocupa 2,4 GiB.
 
 A Distrópica parte de uma observação desconfortável sobre o mundo atual: os
 projetos novos (Zig, Go, Rust, os aplicativos das corporações) distribuem
@@ -35,6 +41,10 @@ Quando algo é removido, ele nunca existiu.
 mais recente do upstream, e o sistema é continuamente retificado para o
 presente — nunca um release congelado. O passado é reescrito para bater com o
 agora.
+
+## Apoio
+
+A Distrópica conta com o apoio do **[Prov](https://prov.net.br)**.
 
 ## Licença
 
@@ -54,9 +64,15 @@ nas combinações efetivamente distribuídas.
 Cada ISO, EFI, cache ou canal binário publicado deve vir acompanhado de acesso
 equivalente ao seu bundle de fontes correspondentes: revisão da Distrópica,
 crates Rust vendorizadas, fontes upstream exatas, configurações, patches,
-scripts, licenças e inventário. A imagem custom `rede-v3` atende essa
-regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-rede-v3-corresponding-sources.tar.zst),
-preso à revisão `941383e` e ao SHA-256 da ISO. O repositório público é a fonte
+scripts, licenças e inventário. A imagem custom `0.9` atende essa
+regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-0.9-corresponding-sources.tar.zst),
+preso à revisão `973a43a` e ao SHA-256 da ISO, e acompanha um
+[índice de licenças](https://distropica.com.br/releases/distropica-0.9-licencas.tsv)
+com os 371 textos extraídos de dentro dos próprios artefatos. Ela **não é
+artefato oficial** no sentido da SPEC-0011 §8: seis pacotes — `firefox`,
+`gcc-pass2`, `jq`, `vim`, `yq` e `zig` — ainda declaram `LICENSE=NOASSERTION`,
+porque cada um é um agregado cuja expressão depende do inventário por
+componente. O repositório público é a fonte
 do desenvolvimento, mas não substitui sozinho esse conjunto por artefato.
 Gerar uma imagem para uso privado não exige publicá-la; redistribuí-la
 transfere ao redistribuidor as obrigações das licenças presentes.
