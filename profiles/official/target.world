@@ -44,3 +44,11 @@ linux-firmware-wifi
 # buildbase custa só o make. Trocar 'pronto para compilar' por um megabyte
 # seria mau negócio.
 desktop
+
+# Terminal serial e servidor SSH. Os dois sao desejos de TOPO porque nada mais
+# os puxa: o minicom nao e dependencia de ninguem, e o openssh so existe se
+# alguem o pedir. O BusyBox tem 'microcom' e 'telnetd', e nenhum dos dois
+# substitui: o microcom nao configura porta nem transfere arquivo, e o telnetd
+# manda senha em claro.
+minicom
+openssh

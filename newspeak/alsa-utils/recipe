@@ -1,0 +1,50 @@
+NAME=alsa-utils
+VERSION=1.2.16
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc alsa-lib ncurses"
+BUILD_DEPS="gcc-pass2 binutils-glibc make gettext"
+ABOUT="As ferramentas de linha de comando da ALSA, e elas existem aqui por uma razão específica: SEM MIXER NÃO HÁ SOM. A alsa-lib sozinha abre o dispositivo e escreve amostras nele, mas a maioria das placas — e o VirtualBox entre elas — sobe com o canal Master MUTADO, e não há nada no sistema que o desmute. O sintoma é o pior desta árvore: nada falha, o navegador diz que está tocando, o /proc/asound lista a placa, e não sai áudio. Quem desmuta é o amixer; quem persiste o estado entre boots é o alsactl. Por isso este pacote é dependência do 'desktop' e não um extra. O alsactl também é o que torna o volume uma coisa que se ajusta uma vez: ele salva em /var/lib/alsa/asound.state no desligamento e restaura no boot, e esse arquivo é ESTADO DE MÁQUINA — gerado no primeiro uso, nunca no payload, mesmo motivo do machine-id e do hwdb.bin. Sem alsamixer curses (--disable-alsamixer seria uma opção), porque o ncurses já está na árvore por causa do Vim e o custo é um binário; um mixer visual é a diferença entre 'ajuste o volume' e 'leia a documentação do amixer'. Sem alsaconf: é um script interativo para escolher módulo ISA de placa de som dos anos noventa, e esta árvore compila tudo builtin. Sem bat/nhlt e sem as ferramentas de topologia, que servem a firmware de DSP que não embarcamos."
+LICENSE="GPL-2.0-or-later"
+SRC="https://www.alsa-project.org/files/pub/utils/alsa-utils-$VERSION.tar.bz2"
+SHA256=092399d5e8749a1d5e188e393157521cec4b75693b60ebb79bbce728cff2232c
+
+build() {
+    tar -xjf "$DL" --strip-components=1
+    # -rpath-link,/usr/lib: padrão recorrente desta toolchain — a libasound
+    # arrasta a libm e a libdl como transitivas e o ld nativo não as resolve.
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure --prefix=/usr \
+        --disable-alsaconf \
+        --disable-bat \
+        --disable-xmlto \
+        --disable-nls \
+        --with-udev-rules-dir=/usr/lib/udev/rules.d \
+        --with-systemdsystemunitdir=no
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+
+    # Guarda: os DOIS binários que justificam este pacote. O amixer é quem
+    # desmuta, e o alsactl é quem faz o ajuste sobreviver ao reboot. Se o
+    # configure decidir em silêncio que um deles não vai, o build "passa" e o
+    # defeito reaparece exatamente como antes: som mudo sem erro nenhum.
+    for ferramenta in amixer alsactl aplay; do
+        [ -x "$STAGE/usr/bin/$ferramenta" ] || {
+            echo "alsa-utils: $ferramenta não foi construído" >&2
+            ls "$STAGE/usr/bin" 2>/dev/null | head -20 >&2
+            exit 1
+        }
+    done
+    # alsamixer é o mixer visual; ele depende do ncurses, que está em DEPS.
+    [ -x "$STAGE/usr/bin/alsamixer" ] || {
+        echo "alsa-utils: alsamixer ausente — o ncurses não foi encontrado?" >&2
+        exit 1
+    }
+
+    # ESTADO DE MÁQUINA NÃO ENTRA NO MANIFESTO. O asound.state guarda o volume
+    # desta máquina; se viesse no payload, toda instalação nasceria com o
+    # volume de outra pessoa e o arquivo divergiria do registro no primeiro
+    # desligamento. Mesmo argumento do hwdb.bin do eudev.
+    rm -rf "$STAGE/var/lib/alsa"
+    find "$STAGE" -type d -empty -delete
+}

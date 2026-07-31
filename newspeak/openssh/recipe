@@ -1,0 +1,131 @@
+NAME=openssh
+VERSION=10.4p1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc openssl zlib busybox"
+BUILD_DEPS="gcc-pass2 binutils-glibc make"
+ABOUT="O servidor e o cliente SSH. Entra porque o BusyBox desta árvore não traz applet de ssh nem de sshd — só telnetd, que manda senha em claro e não é opção. SEM PAM, e isso é escolha e não omissão: o PAM traria uma pilha de módulos configuráveis para autenticar contra um /etc/passwd que tem exatamente uma conta; o OpenSSH sem PAM usa o crypt da glibc direto, que é o que o instalador já escreveu com chpasswd -c sha512. TRÊS COISAS QUE NÃO PODEM ESTAR NO PAYLOAD e por isso são geradas no primeiro boot pelo drop-in 20-sshd.sh: as chaves de host, que precisam ser ÚNICAS por instalação — se viessem no pacote, toda máquina instalada da mesma mídia teria a mesma identidade SSH, e a impressão digital que o cliente confere deixaria de significar qualquer coisa; a conta 'sshd' da separação de privilégio, porque contas são estado do admin (o base é explícito) e nenhum pacote as reivindica no manifesto; e o /var/empty, que o daemon exige vazio e de dono root. PermitRootLogin: esta distro tem UMA conta, e o instalador OBRIGA a definir a senha dela antes de tocar no disco — então login de root por senha fica ligado, porque a alternativa é embarcar um servidor no qual ninguém consegue entrar. O preço está escrito no sshd_config e é revisável em uma linha."
+LICENSE="BSD-2-Clause AND BSD-3-Clause AND ISC AND MIT AND SSH-OpenSSH"
+SRC="https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-$VERSION.tar.gz"
+SHA256=ef6026dd2aea8d56059638d5d3262902c892ceba9f88395835e0d06d3fb63238
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # --without-pam: ver o ABOUT. --with-privsep-path e --with-privsep-user
+    # nomeiam o que o drop-in cria no primeiro boot; o configure só grava os
+    # caminhos no binário, não cria nada.
+    ./configure --prefix=/usr \
+        --sysconfdir=/etc/ssh \
+        --with-privsep-path=/var/empty \
+        --with-privsep-user=sshd \
+        --with-ssl-engine \
+        --without-pam \
+        --without-selinux \
+        --without-kerberos5 \
+        --disable-strip
+    make -j"$JOBS"
+    make install-nokeys DESTDIR="$STAGE"
+
+    # Guarda: os dois lados. Um pacote de ssh sem sshd é um cliente; sem ssh é
+    # um servidor inacessível a partir daqui.
+    for binario in usr/sbin/sshd usr/bin/ssh usr/bin/ssh-keygen usr/bin/scp; do
+        [ -x "$STAGE/$binario" ] || {
+            echo "openssh: $binario não foi produzido" >&2
+            exit 1
+        }
+    done
+    # E a guarda que decide se ele autentica: sem libcrypto o daemon nem
+    # negocia. Conferir o .pc do openssl não bastaria — é a tabela de símbolos
+    # dinâmicos do binário que manda.
+    readelf -dW "$STAGE/usr/sbin/sshd" 2>/dev/null |
+        grep -q 'NEEDED.*libcrypto' || {
+        echo "openssh: o sshd não referencia a libcrypto" >&2
+        readelf -dW "$STAGE/usr/sbin/sshd" 2>/dev/null | grep NEEDED >&2
+        exit 1
+    }
+
+    # CHAVES DE HOST NÃO ENTRAM NO PAYLOAD. O install-nokeys já evita gerá-las
+    # aqui; esta linha existe porque uma versão futura do Makefile pode voltar
+    # a gerá-las, e uma chave privada no manifesto é o tipo de erro que só se
+    # descobre quando duas máquinas têm a mesma identidade.
+    rm -f "$STAGE"/etc/ssh/ssh_host_*
+    rm -rf "$STAGE/var/empty"
+
+    cat > "$STAGE/etc/ssh/sshd_config" <<'SSHDCONF'
+# sshd_config da Distrópica.
+#
+# PermitRootLogin yes, E ISTO É DECISÃO CONSCIENTE. Esta distro tem UMA conta,
+# root, e o instalador obriga a definir a senha dela antes de tocar no disco —
+# não há senha padrão a adivinhar. A alternativa, 'prohibit-password', seria
+# embarcar um servidor no qual ninguém consegue entrar, porque não há segunda
+# conta nem chave pré-instalada. Quem quiser só chave troca esta linha por
+# 'prohibit-password' e deposita a pública em /root/.ssh/authorized_keys.
+PermitRootLogin yes
+
+# Separação de privilégio: o daemon larga privilégio para a conta 'sshd' antes
+# de falar com a rede. A conta e o /var/empty são criados no primeiro boot pelo
+# 20-sshd.sh — não vêm no pacote, porque conta é estado do admin.
+UsePrivilegeSeparation sandbox
+
+# Sem X11: esta árvore é Wayland-only e não tem xauth. Deixar ligado anunciaria
+# um encaminhamento que falharia na primeira tentativa.
+X11Forwarding no
+
+# Sem DNS reverso na autenticação: numa rede sem resolvedor confiável isso só
+# acrescenta segundos de espera ao login e nenhuma segurança.
+UseDNS no
+
+Subsystem sftp /usr/libexec/sftp-server
+SSHDCONF
+    chmod 0644 "$STAGE/etc/ssh/sshd_config"
+
+    mkdir -p "$STAGE/etc/rc.d/rcS.d"
+    cat > "$STAGE/etc/rc.d/rcS.d/20-sshd.sh" <<'SSHDROP'
+# Drop-in de inicializacao: o servidor SSH. Sourced pelo rcS do base.
+#
+# Tres coisas sao criadas AQUI e nao no pacote, e cada uma por um motivo
+# diferente:
+#
+# 1. AS CHAVES DE HOST. Elas identificam ESTA maquina. Se viessem no payload,
+#    toda instalacao feita da mesma midia teria a mesma identidade SSH, e a
+#    impressao digital que o cliente confere no primeiro acesso deixaria de
+#    significar qualquer coisa — seria possivel se passar por qualquer
+#    Distropica instalada. E o mesmo argumento do machine-id, com consequencia
+#    pior.
+#
+# 2. A CONTA 'sshd'. O daemon larga privilegio para ela antes de falar com a
+#    rede. Contas sao estado do admin e nenhum pacote as reivindica no
+#    manifesto — o base e explicito sobre isso. Entao ela e acrescentada aqui,
+#    e so se ainda nao existir: quem ja tiver a conta mantem a dele.
+#
+# 3. O /var/empty. O sshd RECUSA iniciar se ele nao existir, ou se nao for de
+#    root, ou se tiver permissao de escrita para grupo/outros — e a mensagem
+#    dele nao diz qual das tres.
+if [ -x /usr/sbin/sshd ]; then
+    if ! grep -q '^sshd:' /etc/passwd 2>/dev/null; then
+        # UID/GID 74 e o valor que a maioria das distros usa para esta conta;
+        # shell falso e home inexistente, porque ninguem loga com ela.
+        echo 'sshd:x:74:74:Privilege-separated SSH:/var/empty:/sbin/nologin' \
+            >> /etc/passwd
+        grep -q '^sshd:' /etc/group 2>/dev/null ||
+            echo 'sshd:x:74:' >> /etc/group
+        echo "distropica: conta de separacao do sshd criada"
+    fi
+    mkdir -p /var/empty
+    chown root:root /var/empty 2>/dev/null || true
+    chmod 0755 /var/empty
+    if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
+        /usr/bin/ssh-keygen -A >/dev/null 2>&1 &&
+            echo "distropica: chaves de host SSH geradas"
+    fi
+    # -e manda o log para stderr, que o rcS ja direciona para o console: sem
+    # syslog nesta arvore, a alternativa seria o daemon falhar em silencio.
+    /usr/sbin/sshd -e >/dev/null 2>&1 &&
+        echo "distropica: sshd iniciado" ||
+        echo "distropica: sshd NAO subiu" >&2
+fi
+SSHDROP
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/20-sshd.sh"
+    find "$STAGE" -type d -empty -delete
+}

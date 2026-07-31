@@ -1,0 +1,49 @@
+NAME=minicom
+VERSION=2.10
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc ncurses"
+BUILD_DEPS="gcc-pass2 binutils-glibc make gettext pkgconf"
+ABOUT="Terminal serial. O BusyBox já traz o applet 'microcom', e ele NÃO substitui isto — a diferença não é de conforto: o microcom abre a porta, repassa bytes e sai; não tem menu de configuração, não muda velocidade sem reiniciar, não faz controle de fluxo por hardware, não registra sessão em arquivo e não transfere arquivo. Quem configura switch, roteador ou placa embarcada pelo console faz exatamente essas coisas, e é para elas que o minicom existe. Sem transferência de arquivo por padrão: os protocolos X/Y/ZMODEM vivem no lrzsz, que não está nesta árvore — o minicom continua funcionando e o menu de transferência fica sem backend, o que é honesto e visível. O upstream mora no Salsa do Debian desde que o site original saiu do ar; o tarball vem da árvore de tags de lá, e não de um espelho de terceiro."
+LICENSE="GPL-2.0-or-later"
+SRC="https://salsa.debian.org/minicom-team/minicom/-/archive/$VERSION/minicom-$VERSION.tar.bz2"
+SHA256=90e7ce2856b3eaaa3f452354d17981c49d32c426a255b6f0d3063a227c101538
+
+build() {
+    tar -xjf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # O tarball vem da árvore de tags, sem ./configure gerado: é preciso rodar
+    # o autogen. Ele exige autoconf/automake, que esta árvore não tem — então
+    # usa-se o build de meson, que o minicom 2.10 já suporta e que dispensa a
+    # cadeia autotools inteira.
+    if [ -x ./configure ]; then
+        ./configure --prefix=/usr --sysconfdir=/etc --disable-nls
+        make -j"$JOBS"
+        make install DESTDIR="$STAGE"
+    else
+        meson setup build \
+            --prefix=/usr \
+            --sysconfdir=/etc \
+            --buildtype=release
+        ninja -C build -j"$JOBS"
+        DESTDIR="$STAGE" ninja -C build install
+    fi
+
+    # Guarda: o binário, e não a intenção do configure.
+    [ -x "$STAGE/usr/bin/minicom" ] || {
+        echo "minicom: o binário não foi produzido" >&2
+        ls -R "$STAGE" 2>/dev/null | head -30 >&2
+        exit 1
+    }
+    # E a guarda que importa de verdade para um terminal serial: ele tem de
+    # estar ligado ao ncurses. Sem isso o binário existe, roda, e a tela fica
+    # ilegível — o mesmo modo de falhar silencioso que o resto desta árvore
+    # combate.
+    readelf -dW "$STAGE/usr/bin/minicom" 2>/dev/null |
+        grep -q 'NEEDED.*libncurses' || {
+        echo "minicom: o binário não referencia a libncurses" >&2
+        readelf -dW "$STAGE/usr/bin/minicom" 2>/dev/null | grep NEEDED >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

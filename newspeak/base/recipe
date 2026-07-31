@@ -112,6 +112,20 @@ event[0-9]*     root:root 0640 =input/
 mouse[0-9]*     root:root 0640 =input/
 mice            root:root 0640 =input/
 js[0-9]*        root:root 0640 =input/
+# Audio, pelo mesmo motivo do dri e do input: a ALSA procura /dev/snd/pcmC0D0p
+# e /dev/snd/controlC0, e o mdev, sem regra, cria tudo achatado em /dev. O
+# sintoma seria o de sempre nesta arvore — nada falha em voz alta, a placa
+# aparece em /proc/asound e o aplicativo diz que nao ha dispositivo de saida.
+#
+# Sao quatro familias de no e todas importam: controlC* e o mixer (sem ele nao
+# se desmuta nada), pcmC* sao as vias de reproducao e captura, timer e usado
+# pela sincronizacao, e seq e a fila MIDI. Sem placa, as linhas ficam inertes.
+controlC[0-9]*  root:root 0660 =snd/
+pcmC[0-9]*      root:root 0660 =snd/
+midiC[0-9]*     root:root 0660 =snd/
+hwC[0-9]*       root:root 0660 =snd/
+timer           root:root 0660 =snd/
+seq             root:root 0660 =snd/
 # O resto segue o default do mdev.
 .*              root:root 0660
 MDEV

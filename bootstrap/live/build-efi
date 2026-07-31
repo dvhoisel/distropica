@@ -487,10 +487,35 @@ set_config --disable DEBUG_INFO_BTF
 set_config --disable LOCALVERSION_AUTO
 set_config --set-str LOCALVERSION "-distropica-live"
 set_config --disable IKCONFIG
-for symbol in SOUND NETWORK_FILESYSTEMS NFS_FS SECURITY_SELINUX \
+# SOUND SAIU DESTA LISTA. Ele estava aqui por tamanho, junto com o resto que
+# a mídia não usa — e a conta fazia sentido enquanto este kernel só instalava.
+# Não faz mais: ele é o kernel que o sistema INSTALADO boota, e um desktop com
+# Firefox e sem áudio não é um desktop. O custo medido do stack HDA builtin é
+# de algumas centenas de KiB num EFI de 17 MiB.
+for symbol in NETWORK_FILESYSTEMS NFS_FS SECURITY_SELINUX \
     IO_URING HIBERNATION SUSPEND KEXEC KEXEC_FILE CRASH_DUMP CGROUPS \
     PERF_EVENTS FTRACE BPF_SYSCALL NUMA CPU_FREQ WIRELESS; do
     set_config --disable "$symbol"
+done
+# Áudio. Builtin, como todo o resto: o initramfs não leva módulo, e um driver
+# de som em módulo não seria carregado por ninguém.
+#
+# Três controladoras, porque três é o que se encontra:
+#   SND_HDA_INTEL   Intel HD Audio — o padrão em máquina real, o
+#                   '-device intel-hda' do QEMU e a opção "Intel HD Audio" do
+#                   VirtualBox
+#   SND_INTEL8X0    AC'97, que é o default de VM antiga e do VirtualBox
+#   SND_ENS1371     a Ensoniq que o VirtualBox oferece como SoundBlaster 16
+#
+# Os codecs importam tanto quanto a controladora: a HDA sem codec enumera a
+# placa e não produz som, que é indistinguível de driver ausente para quem
+# está do outro lado. GENERIC cobre o que a VM emula; REALTEK cobre a maioria
+# das máquinas reais; HDMI cobre saída por monitor.
+for symbol in SOUND SND SND_PCM SND_TIMER SND_HRTIMER \
+    SND_HDA_INTEL SND_HDA_GENERIC SND_HDA_CODEC_GENERIC \
+    SND_HDA_CODEC_REALTEK SND_HDA_CODEC_HDMI \
+    SND_INTEL8X0 SND_ENS1371 SND_USB_AUDIO SND_SUPPORT_OLD_API; do
+    set_config --enable "$symbol"
 done
 # Hardware amd64 real. Até aqui o perfil cobria máquina virtual: virtio, AHCI
 # e teclado PS/2. Numa máquina de verdade isso não basta e falha do pior jeito
@@ -594,6 +619,8 @@ for symbol in EFI EFI_STUB BLK_DEV_INITRD VIRTIO_BLK VIRTIO_NET BLK_DEV_SR \
     BLK_DEV_NVME USB_XHCI_HCD USB_XHCI_PCI USB_STORAGE USB_HID HID_GENERIC \
     E1000E R8169 \
     DRM_VMWGFX DRM_VBOXVIDEO DRM_BOCHS DRM_VIRTIO_GPU \
+    SOUND SND SND_PCM SND_HDA_INTEL SND_HDA_CODEC_GENERIC SND_INTEL8X0 \
+    SND_ENS1371 SND_USB_AUDIO \
     USER_NS TUN WIREGUARD NETFILTER NF_TABLES NF_TABLES_INET NFT_CT \
     NFT_FIB_INET NF_CONNTRACK IPV6 IPV6_MULTIPLE_TABLES; do
     grep -q "^CONFIG_${symbol}=y$" "$SOURCE/.config" || {

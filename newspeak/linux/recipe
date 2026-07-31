@@ -156,6 +156,22 @@ CONFIG_DRM_BOCHS=y
 # quem testar vai ter. O vboxvideo cobre o VBoxSVGA/VBoxVGA legado.
 CONFIG_DRM_VMWGFX=y
 CONFIG_DRM_VBOXVIDEO=y
+# Audio, espelhando o build-efi pelo mesmo motivo do bloco de video: quem
+# boota o sistema instalado e o kernel do live, e este aqui so passa a valer
+# quando essa divergencia acabar. Tres controladoras porque tres e o que se
+# encontra — HDA em maquina real e no QEMU, AC97 e Ensoniq em VM —, e os
+# codecs porque HDA sem codec enumera a placa e nao produz som.
+CONFIG_SOUND=y
+CONFIG_SND=y
+CONFIG_SND_PCM=y
+CONFIG_SND_HDA_INTEL=y
+CONFIG_SND_HDA_GENERIC=y
+CONFIG_SND_HDA_CODEC_GENERIC=y
+CONFIG_SND_HDA_CODEC_REALTEK=y
+CONFIG_SND_HDA_CODEC_HDMI=y
+CONFIG_SND_INTEL8X0=y
+CONFIG_SND_ENS1371=y
+CONFIG_SND_USB_AUDIO=y
 KCONFIG
     make olddefconfig
     # Guarda: o Ministério EXIGE assinatura. Aborta AQUI se um pilar caiu — em vez
@@ -167,7 +183,9 @@ KCONFIG
         CRYPTO_USER_API_HASH CRYPTO_USER_API_SKCIPHER CRYPTO_CMAC \
         CRYPTO_CTR CRYPTO_MD5 CRYPTO_SHA512 KEY_DH_OPERATIONS \
         FRAMEBUFFER_CONSOLE SYSFB_SIMPLEFB DRM_SIMPLEDRM DRM_BOCHS \
-        DRM_VMWGFX DRM_VBOXVIDEO; do
+        DRM_VMWGFX DRM_VBOXVIDEO \
+        SOUND SND SND_PCM SND_HDA_INTEL SND_HDA_CODEC_GENERIC \
+        SND_INTEL8X0 SND_ENS1371 SND_USB_AUDIO; do
         grep -q "^CONFIG_$s=y\$" .config || {
             echo "FATAL: falta CONFIG_$s=y no .config"
             grep -E 'MODULE_SIG|TRUSTED_KEYRING' .config
