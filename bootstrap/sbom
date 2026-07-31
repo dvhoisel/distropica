@@ -87,21 +87,54 @@ while IFS="$(printf '\t')" read -r pacote versao mundo licenca hash origem arqui
 
     case "$tipo" in
         *"gzip compressed"*|*"XZ compressed"*|*"bzip2 compressed"*|*"POSIX tar"*|*"Zstandard"*)
-            # tar -t primeiro, para não explodir árvores de centenas de MiB
-            # quando não há nada a colher.
+            # DUAS passagens sobre o arquivo, e não N+1. A versão anterior
+            # listava com `tar -t` e depois chamava `tar -xO` UMA VEZ POR TEXTO
+            # casado — e cada uma dessas chamadas redescomprime o tarball
+            # INTEIRO, porque tar não sabe procurar num fluxo comprimido. No
+            # gcc, com 45 textos dentro de 90 MiB de xz, isso eram 46
+            # descompressões do mesmo arquivo; a extração da árvore toda levou
+            # quarenta minutos. Agora é uma listagem mais uma extração que
+            # recebe todos os alvos de uma vez por -T.
             alvos=$(tar -tf "$fonte" 2>/dev/null | grep -E "$PADRAO" || true)
             if [ -n "$alvos" ]; then
                 mkdir -p "$destino"
-                for alvo in $alvos; do
-                    # Nome achatado: a hierarquia vira o próprio nome, para que
-                    # o índice mostre DE ONDE dentro do artefato cada texto veio.
-                    plano=$(printf '%s' "$alvo" | sed 's|^[^/]*/||; s|/|__|g')
+                bruto=$(mktemp -d "$SAIDA/.extraindo-$pacote.XXXXXX")
+                # --no-same-owner/--no-same-permissions: o conteúdo vem de
+                # tarball de terceiro, e nada aqui justifica deixá-lo escolher
+                # dono ou modo de arquivo nesta máquina.
+                printf '%s\n' "$alvos" | tar -xf "$fonte" -C "$bruto" -T - \
+                    --no-same-owner --no-same-permissions >/dev/null 2>&1 || true
+                printf '%s\n' "$alvos" | while IFS= read -r alvo; do
+                    [ -n "$alvo" ] || continue
+                    [ -f "$bruto/$alvo" ] || continue
+                    # Nome achatado: a hierarquia INTEIRA vira o nome, com o
+                    # primeiro componente e tudo. Tirá-lo parecia limpeza —
+                    # remove o redundante 'gcc-15.3.0/' — mas PERDE EVIDÊNCIA
+                    # quando um pacote tem mais de um tarball: o mathlibs-glibc
+                    # traz gmp, mpfr e mpc, e 'gmp-6.3.0/COPYING' e
+                    # 'mpfr-4.2.2/COPYING' achatavam para o mesmo 'COPYING'. O
+                    # segundo sobrescrevia o primeiro, e o índice seguia
+                    # afirmando que os dois estavam ali. Redundância no nome é
+                    # barata; texto de licença sumido em silêncio não é.
+                    plano=$(printf '%s' "$alvo" | sed 's|/|__|g')
                     [ -n "$plano" ] || continue
-                    tar -xOf "$fonte" "$alvo" > "$destino/$plano" 2>/dev/null || continue
+                    cp "$bruto/$alvo" "$destino/$plano" 2>/dev/null || continue
                     [ -s "$destino/$plano" ] || { rm -f "$destino/$plano"; continue; }
-                    registra "$pacote" "$destino/$plano" "$alvo"
-                    achou=sim
+                    hash=$(sha256sum "$destino/$plano" | cut -d' ' -f1)
+                    primeira=$(grep -m1 -a '[A-Za-z]' "$destino/$plano" 2>/dev/null |
+                        cut -c1-72 | tr -d '\t')
+                    printf '%s\t%s\t%s\t%s\n' "$pacote" "$alvo" "$hash" "$primeira" \
+                        >> "$INDICE"
                 done
+                rm -rf "$bruto"
+                # O laço acima roda em subshell (está depois de um pipe), então
+                # o contador dele não sobreviveria. Quem decide se houve
+                # colheita é o diretório de destino, que é fato no disco.
+                if [ -n "$(ls -A "$destino" 2>/dev/null)" ]; then
+                    achou=sim
+                else
+                    rmdir "$destino" 2>/dev/null || true
+                fi
             fi
             ;;
         *ELF*)
@@ -144,6 +177,19 @@ Para binários Go, o arquivo go-modules.txt é o grafo de módulos gravado pelo
 compilador dentro do executável: versão e hash de cada dependência, sem
 intermediário.
 FIM
+
+# A GUARDA QUE TRANSFORMA PERDA SILENCIOSA EM FALHA. Cada linha do índice
+# afirma que existe um arquivo; se as contas não baterem, alguma coisa
+# sobrescreveu evidência e o índice está mentindo. Foi assim que a colisão do
+# mathlibs-glibc apareceu — e só apareceu porque alguém foi conferir à mão.
+entradas=$(($(wc -l < "$INDICE") - 1))
+no_disco=$(find "$SAIDA" -type f ! -name INDICE ! -name LEIA-ME | wc -l)
+if [ "$entradas" -ne "$no_disco" ]; then
+    echo "erro: o índice tem $entradas entradas e há $no_disco arquivos" >&2
+    echo "      alguma evidência foi sobrescrita; nomes achatados colidiram" >&2
+    exit 1
+fi
+total_arquivos=$entradas
 
 echo "evidência: $SAIDA"
 echo "  arquivos coletados: $total_arquivos"
