@@ -1,0 +1,269 @@
+#!/bin/sh
+# Monta o BUNDLE DE FONTES CORRESPONDENTE de uma mídia, associado pelo hash do
+# artefato — o que a SPEC-0011 §8 exige antes de publicar ISO, EFI, cache ou
+# canal.
+#
+# Existe porque §8 não é uma recomendação de organização: é a condição que
+# transforma "publiquei um binário" em "publiquei um binário que alguém pode
+# reconstruir". Uma mídia da Distrópica é um agregado de componentes sob
+# licenças distintas, e várias delas — a glibc, o kernel, o BusyBox, o GCC —
+# obrigam quem distribui o binário a oferecer a fonte correspondente. URL e
+# sha256 na receita são RASTREABILIDADE, não disponibilidade: o dia em que o
+# ftp.gnu.org mudar de layout, a receita continua verdadeira e o download
+# continua morto. O bundle é o que sobrevive a isso.
+#
+# O que ele contém, item por item do §8:
+#   ARTEFATO      o hash da mídia a que este bundle corresponde, e só dela
+#   INVENTARIO    legível por máquina: pacote, versão, mundo, licença, hash,
+#                 URL de origem e o arquivo dentro do bundle
+#   distropica-*  a revisão EXATA da árvore, com receitas, configurações,
+#                 patches e scripts de compilação — que nesta distro são a
+#                 mesma coisa: a receita É o script
+#   vendor/       Cargo.lock e crates vendorizadas dos executores estáticos
+#   upstream/     cada fonte upstream, sob o próprio sha256
+#   kernel/       a fonte e a CONFIGURAÇÃO do Linux, que o §8 nomeia
+#                 expressamente, incluindo a do kernel vivo do EFI
+#
+# NÃO tenta resolver LICENSE=NOASSERTION. Um bundle completo com licenças por
+# declarar continua bloqueando publicação OFICIAL (§8, último parágrafo); o
+# script relata quais são, para que a pendência seja visível em vez de
+# descoberta depois.
+set -eu
+umask 022
+LC_ALL=C
+export LC_ALL
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+MEDIA=
+OUTPUT=
+CACHE=
+MINITRUE_ROOT=
+LIVE_CONFIG=
+
+usage() {
+    cat <<'EOF'
+uso: bootstrap/source-bundle --media ARQ --output NOVO-DIR --cache DIR \
+       --minitrue-root ROOTFS [--live-kernel-config ARQ]
+
+  --media ARQ         a mídia (ISO/IMG) a que o bundle corresponde
+  --output NOVO-DIR   diretório a criar; não é sobrescrito
+  --cache DIR         o mesmo cache offline com que a mídia foi composta;
+                      dele sai a LISTA DE PACOTES, e não da memória de quem
+                      digita o comando
+  --minitrue-root DIR rootfs Distrópica com os registros e o cache de fontes
+  --live-kernel-config ARQ
+                      .config do kernel vivo (o do BOOTX64.EFI). Sem ele o
+                      bundle sai sem a configuração do kernel que de fato
+                      boota, e o script AVISA — o §8 pede a configuração
+                      usada, não uma qualquer.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --media) MEDIA=${2:?}; shift 2 ;;
+        --output) OUTPUT=${2:?}; shift 2 ;;
+        --cache) CACHE=${2:?}; shift 2 ;;
+        --minitrue-root) MINITRUE_ROOT=${2:?}; shift 2 ;;
+        --live-kernel-config) LIVE_CONFIG=${2:?}; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "erro: opção desconhecida: $1" >&2; usage >&2; exit 1 ;;
+    esac
+done
+
+for required in MEDIA OUTPUT CACHE MINITRUE_ROOT; do
+    eval "value=\$$required"
+    [ -n "$value" ] || {
+        echo "erro: --$(echo "$required" | tr 'A-Z_' 'a-z-') é obrigatório" >&2
+        exit 1
+    }
+done
+[ -f "$MEDIA" ] || { echo "erro: mídia não existe: $MEDIA" >&2; exit 1; }
+[ ! -e "$OUTPUT" ] || { echo "erro: saída já existe: $OUTPUT" >&2; exit 1; }
+[ -d "$CACHE/channels" ] || { echo "erro: cache sem channels/: $CACHE" >&2; exit 1; }
+[ -d "$MINITRUE_ROOT/var/lib/minitrue/records" ] || {
+    echo "erro: rootfs sem registros: $MINITRUE_ROOT" >&2; exit 1;
+}
+
+REGISTROS=$MINITRUE_ROOT/var/lib/minitrue/records
+FONTES=$MINITRUE_ROOT/var/cache/minitrue
+
+# A revisão exata. Working tree suja invalidaria a correspondência: o bundle
+# diria "esta revisão produziu a mídia" enquanto a mídia teria saído de algo
+# que não está em commit nenhum. Isso é o §8 falhando em silêncio.
+cd "$REPO"
+REVISAO=$(git rev-parse HEAD)
+if [ -n "$(git status --porcelain)" ]; then
+    echo "erro: a árvore tem mudanças não commitadas" >&2
+    echo "      o bundle afirmaria corresponder a $REVISAO, que não é o que" >&2
+    echo "      construiu a mídia. commite antes." >&2
+    git status --short >&2
+    exit 1
+fi
+
+MEDIA_SHA=$(sha256sum "$MEDIA" | cut -d' ' -f1)
+# Se a mídia trouxe o manifesto lateral, ele é a segunda opinião sobre o
+# próprio hash — e discordância aqui significa mídia trocada ou corrompida
+# entre a composição e agora.
+if [ -f "$MEDIA.manifest" ]; then
+    declarado=$(grep '^MEDIA_SHA256=' "$MEDIA.manifest" | cut -d= -f2)
+    [ "$declarado" = "$MEDIA_SHA" ] || {
+        echo "erro: o manifesto declara $declarado mas a mídia é $MEDIA_SHA" >&2
+        exit 1
+    }
+fi
+
+mkdir -p "$OUTPUT/upstream" "$OUTPUT/vendor" "$OUTPUT/kernel"
+OUTPUT=$(CDPATH= cd -- "$OUTPUT" && pwd -P)
+
+# ---- a árvore, na revisão exata ------------------------------------------
+git archive --format=tar --prefix="distropica-$REVISAO/" "$REVISAO" \
+    | zstd -q -19 -o "$OUTPUT/distropica-$REVISAO.tar.zst"
+
+# ---- os executores estáticos, com Cargo.lock e crates --------------------
+# Sem --offline: se faltar uma crate no cache local, é melhor baixar agora do
+# que entregar um bundle que não compila. Com rede indisponível o script para,
+# em vez de produzir um vendor incompleto.
+for crate in minitrue minipax; do
+    [ -f "$REPO/$crate/Cargo.toml" ] || continue
+    vendor_tmp=$(mktemp -d "$OUTPUT/.vendor-$crate.XXXXXX")
+    (
+        cd "$REPO/$crate"
+        cargo vendor --versioned-dirs "$vendor_tmp/vendor" >"$vendor_tmp/config.toml"
+        cp Cargo.toml Cargo.lock "$vendor_tmp/" 2>/dev/null || true
+    ) >/dev/null 2>&1 || {
+        echo "erro: cargo vendor falhou para $crate" >&2
+        rm -rf "$vendor_tmp"
+        exit 1
+    }
+    tar --sort=name --owner=0 --group=0 --numeric-owner \
+        --mtime='@0' -C "$vendor_tmp" -cf - . \
+        | zstd -q -19 -o "$OUTPUT/vendor/$crate.tar.zst"
+    rm -rf "$vendor_tmp"
+done
+
+# ---- os pacotes da mídia, e as fontes de cada um -------------------------
+# A lista sai do ÍNDICE DO CACHE com que a mídia foi composta. Escrevê-la à
+# mão aqui seria recriar o problema que o cache-from-channel já resolveu.
+pacotes=$(cat "$CACHE"/channels/*/index 2>/dev/null | awk 'NF>=4 {print $1}' | sort -u)
+[ -n "$pacotes" ] || { echo "erro: nenhum pacote no índice do cache" >&2; exit 1; }
+
+inventario=$OUTPUT/INVENTARIO
+printf '# pacote\tversao\tmundo\tlicenca\tsha256\torigem\tarquivo\n' > "$inventario"
+
+faltando=
+noassertion=
+total=0
+copiadas=0
+for pacote in $pacotes; do
+    meta=$REGISTROS/$pacote/meta
+    [ -f "$meta" ] || { faltando="$faltando $pacote(sem-registro)"; continue; }
+    versao=$(grep '^VERSION=' "$meta" | head -1 | cut -d= -f2-)
+    mundo=$(grep '^WORLD=' "$meta" | head -1 | cut -d= -f2-)
+    licenca=$(grep '^LICENSE=' "$meta" | head -1 | cut -d= -f2-)
+    total=$((total + 1))
+    case "$licenca" in
+        NOASSERTION|'') noassertion="$noassertion $pacote" ;;
+    esac
+
+    receita=$REGISTROS/$pacote/recipe
+    if [ ! -f "$receita" ]; then
+        printf '%s\t%s\t%s\t%s\t-\t-\t(sem receita no registro)\n' \
+            "$pacote" "$versao" "$mundo" "$licenca" >> "$inventario"
+        continue
+    fi
+    # SRC e SHA256 são listas paralelas separadas por espaço (mathlibs-glibc
+    # traz três tarballs), e a única variável que aparece no SRC desta árvore
+    # é $VERSION — conferido em toda a newspeak antes de assumir isto.
+    src=$(grep '^SRC=' "$receita" | head -1 | cut -d= -f2- | tr -d '"')
+    hashes=$(grep '^SHA256=' "$receita" | head -1 | cut -d= -f2- | tr -d '"')
+    if [ -z "$src" ]; then
+        printf '%s\t%s\t%s\t%s\t-\t-\t(receita de montagem, sem fonte upstream)\n' \
+            "$pacote" "$versao" "$mundo" "$licenca" >> "$inventario"
+        continue
+    fi
+    src=$(printf '%s' "$src" | sed "s/\${VERSION}/$versao/g; s/\$VERSION/$versao/g")
+
+    indice=1
+    for hash in $hashes; do
+        url=$(printf '%s' "$src" | cut -d' ' -f"$indice")
+        indice=$((indice + 1))
+        if [ -f "$FONTES/$hash" ]; then
+            [ -f "$OUTPUT/upstream/$hash" ] || {
+                cp "$FONTES/$hash" "$OUTPUT/upstream/$hash"
+                copiadas=$((copiadas + 1))
+            }
+            arquivo=upstream/$hash
+            # A assinatura destacada, quando o cache a tem, viaja junto: ela é
+            # a prova de que a fonte é a que o upstream publicou.
+            for sidecar in "$FONTES/$hash".minisig "$FONTES/$hash".sig; do
+                [ -f "$sidecar" ] || continue
+                cp "$sidecar" "$OUTPUT/upstream/$(basename "$sidecar")"
+            done
+        else
+            arquivo='(AUSENTE do cache de fontes)'
+            faltando="$faltando $pacote"
+        fi
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$pacote" "$versao" "$mundo" "$licenca" "$hash" "$url" "$arquivo" \
+            >> "$inventario"
+    done
+done
+
+# ---- o kernel, que o §8 nomeia expressamente -----------------------------
+for config in "$MINITRUE_ROOT"/boot/config-*; do
+    [ -f "$config" ] || continue
+    cp "$config" "$OUTPUT/kernel/$(basename "$config")"
+done
+if [ -n "$LIVE_CONFIG" ] && [ -f "$LIVE_CONFIG" ]; then
+    cp "$LIVE_CONFIG" "$OUTPUT/kernel/config-live"
+else
+    echo "aviso: sem --live-kernel-config; o bundle sai SEM a configuração do" >&2
+    echo "       kernel que de fato boota o sistema instalado" >&2
+fi
+
+# ---- o que este bundle é, e de que artefato ------------------------------
+cat > "$OUTPUT/ARTEFATO" <<FIM
+BUNDLE_FORMAT=1
+MEDIA=$(basename "$MEDIA")
+MEDIA_SHA256=$MEDIA_SHA
+DISTROPICA_REVISION=$REVISAO
+PACOTES=$total
+FONTES_UPSTREAM=$copiadas
+FIM
+
+cat > "$OUTPUT/LEIA-ME" <<'FIM'
+Bundle de fontes correspondente — SPEC-0011 §8.
+
+Este diretório é a fonte correspondente da mídia nomeada em ARTEFATO, e de
+nenhuma outra: o MEDIA_SHA256 ali é o que amarra os dois. Uma mídia diferente
+exige um bundle diferente, ainda que a árvore seja a mesma.
+
+  ARTEFATO      a que mídia isto corresponde, e de que revisão da árvore
+  INVENTARIO    uma linha por fonte: pacote, versão, mundo, licença, sha256,
+                a URL de onde veio e onde está aqui dentro
+  distropica-*  a árvore na revisão exata: receitas, configurações, patches e
+                scripts de build — nesta distro a receita é o script
+  vendor/       Cargo.lock e crates dos executores estáticos
+  upstream/     cada fonte sob o próprio sha256, com assinatura quando existe
+  kernel/       as configurações do kernel usadas, inclusive a do kernel vivo
+
+As URLs do INVENTARIO são rastreabilidade, não promessa de disponibilidade:
+elas dizem de onde a fonte veio, e os arquivos em upstream/ são a fonte.
+FIM
+
+echo "bundle: $OUTPUT"
+echo "  mídia:     $MEDIA_SHA"
+echo "  revisão:   $REVISAO"
+echo "  pacotes:   $total"
+echo "  fontes:    $copiadas arquivos, $(du -sh "$OUTPUT/upstream" | cut -f1)"
+echo "  tamanho:   $(du -sh "$OUTPUT" | cut -f1)"
+if [ -n "$faltando" ]; then
+    echo "AVISO: fonte ausente do cache para:$faltando" >&2
+    echo "       o bundle está INCOMPLETO e não satisfaz o §8" >&2
+fi
+if [ -n "$noassertion" ]; then
+    echo "PENDENTE: LICENSE=NOASSERTION em:$noassertion" >&2
+    echo "          o §8 é explícito: isso NÃO libera o artefato para" >&2
+    echo "          publicação oficial, mesmo com o bundle completo." >&2
+fi
