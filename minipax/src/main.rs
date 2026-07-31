@@ -30,6 +30,7 @@ opções de instalação:
   --only-binary     exige canal para todo pacote-fonte
   --resume          permite continuar apenas um target marcado pelo minipax
   --export-boot-efi ARQ  install-media: exporta o EFI do snapshot validado
+  --check           install-media: só valida a mídia; não escreve nada
 
 `--target` nunca particiona. A escrita destrutiva em disco pertence ao
 instalador da mídia viva e exige alvo resolvido e confirmação explícita."#;
@@ -87,6 +88,7 @@ fn run_install_media(args: Vec<String>) -> Result<()> {
     let mut only_binary = false;
     let mut resume = false;
     let mut export_boot_efi = None;
+    let mut check_only = false;
     let mut seen = HashSet::new();
     let mut index = 0;
     while index < args.len() {
@@ -102,6 +104,7 @@ fn run_install_media(args: Vec<String>) -> Result<()> {
             "--from-source" => from_source = true,
             "--only-binary" => only_binary = true,
             "--resume" => resume = true,
+            "--check" => check_only = true,
             "--export-boot-efi" => {
                 export_boot_efi = Some(take_value(&args, &mut index, option)?.into())
             }
@@ -124,6 +127,7 @@ fn run_install_media(args: Vec<String>) -> Result<()> {
         only_binary,
         resume,
         export_boot_efi,
+        check_only,
     })
 }
 

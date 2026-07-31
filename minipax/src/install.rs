@@ -136,11 +136,21 @@ fn sha256_file(path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+/// Prefixo do diretório de trabalho que o minipax cria dentro do alvo.
+pub(crate) const WORKSPACE_PREFIX: &str = ".minipax-media-";
+
 fn target_is_empty(path: &Path) -> Result<bool> {
     let mut names = fs::read_dir(path)?
         .map(|entry| entry.map(|entry| entry.file_name()))
         .collect::<std::io::Result<Vec<_>>>()?;
     names.retain(|name| name != "lost+found");
+    // O espaço de trabalho do próprio minipax não conta como "alvo sujo".
+    // Ele é criado DENTRO do alvo de propósito: é ali que o cache.tar de
+    // centenas de MiB é extraído, e o alvo é o único lugar com disco de
+    // verdade durante uma instalação. Antes disso o trabalho ia para o TMPDIR,
+    // que num instalador vivo é tmpfs — memória — e foi o que fez a instalação
+    // morrer com ENOSPC numa máquina de 4 GiB.
+    names.retain(|name| !name.to_string_lossy().starts_with(WORKSPACE_PREFIX));
     Ok(names.is_empty())
 }
 

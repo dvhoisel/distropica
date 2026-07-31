@@ -64,6 +64,13 @@ pub struct MediaInstallOptions {
     pub only_binary: bool,
     pub resume: bool,
     pub export_boot_efi: Option<PathBuf>,
+    /// Valida a mídia por completo e NÃO materializa nada.
+    ///
+    /// Existe para separar as duas metades do que era um passo só. O
+    /// instalador vivo precisa saber se a mídia presta ANTES de apagar o
+    /// disco do usuário, mas não precisa — e não deve — construir o sistema
+    /// inteiro em memória para descobrir isso.
+    pub check_only: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -838,10 +845,53 @@ pub fn install_media(options: &MediaInstallOptions) -> Result<()> {
     if options.offline && snapshot.mode == DeclaredMode::Online {
         bail!("--offline não pode usar uma mídia declarada MODE=online sem cache");
     }
-    let workspace = tempfile::Builder::new()
-        .prefix("minipax-media-")
-        .tempdir()?;
+    if options.check_only {
+        // Tudo o que `load_media` já fez: media.meta, profile.lock, os hashes
+        // de cada peça e o sha256 do cache.tar contra o lock. Falta conferir
+        // que os tars são ESTRUTURALMENTE sãos — caminhos, modos, tipos,
+        // duplicatas, ancestrais — e isso se faz lendo só os cabeçalhos, sem
+        // escrever um byte e sem gastar espaço proporcional ao payload.
+        decode_archive(&snapshot.newspeak, TreePolicy::Newspeak, "newspeak.tar")?;
+        decode_archive(&snapshot.overlay, TreePolicy::Overlay, "overlay.tar")?;
+        if let Some(cache) = &snapshot.cache {
+            decode_entries(
+                File::open(cache)?,
+                TreePolicy::Cache,
+                "cache.tar",
+                ContentPolicy::Skip,
+            )?;
+        }
+        println!("mídia validada: nada foi escrito, nenhum disco foi tocado");
+        return Ok(());
+    }
+    // O espaço de trabalho vive DENTRO do alvo quando ele já existe, e é aqui
+    // que a decisão importa: é neste diretório que o `cache.tar` é extraído, e
+    // são centenas de MiB. Num instalador vivo o TMPDIR é tmpfs — memória — e
+    // mandar o payload para lá foi o que derrubou a instalação numa máquina de
+    // 4 GiB. O alvo é o único lugar com disco de verdade nesse momento.
+    //
+    // Quem chama não precisa saber disso nem exportar TMPDIR: a escolha é do
+    // minipax, e o `target_is_empty` conhece o prefixo e não o confunde com
+    // dado de alguém. Se o alvo ainda não existe (uso fora do instalador),
+    // cai no temporário do sistema como antes.
+    let workspace = if options.target.is_dir() {
+        tempfile::Builder::new()
+            .prefix(crate::install::WORKSPACE_PREFIX)
+            .tempdir_in(&options.target)?
+    } else {
+        tempfile::Builder::new()
+            .prefix("minipax-media-")
+            .tempdir()?
+    };
     let profile = resolved_from_media(&snapshot, workspace.path())?;
+    // A exportação do EFI RESERVA o destino antes de instalar, e isso é
+    // deliberado: um caminho de exportação inválido tem de falhar ANTES de
+    // materializar um sistema inteiro, não depois. Há teste para isso.
+    //
+    // A consequência para quem chama: NÃO aponte --export-boot-efi para dentro
+    // do --target. A reserva cria o arquivo, e o `install` recusaria o alvo por
+    // não estar vazio. O instalador vivo exporta para /run, que é tmpfs — são
+    // 17 MiB, e o payload de verdade já não passa por lá.
     let exported = if let Some(destination) = &options.export_boot_efi {
         let mut output = OpenOptions::new()
             .create_new(true)
@@ -1042,6 +1092,7 @@ mod tests {
             only_binary: true,
             resume: false,
             export_boot_efi: Some(exported_efi.clone()),
+            check_only: false,
         })
         .unwrap();
         assert_eq!(
@@ -1078,6 +1129,7 @@ mod tests {
             only_binary: false,
             resume: false,
             export_boot_efi: None,
+            check_only: false,
         })
         .is_err());
         assert!(fs::read_dir(fixture.target).unwrap().next().is_none());
@@ -1096,6 +1148,7 @@ mod tests {
             only_binary: false,
             resume: false,
             export_boot_efi: None,
+            check_only: false,
         })
         .is_err());
         assert!(fs::read_dir(fixture.target).unwrap().next().is_none());
@@ -1115,6 +1168,7 @@ mod tests {
             only_binary: true,
             resume: false,
             export_boot_efi: Some(export.clone()),
+            check_only: false,
         })
         .is_err());
         assert_eq!(fs::read(export).unwrap(), b"NAO-SOBRESCREVER");
@@ -1144,6 +1198,7 @@ mod tests {
             only_binary: false,
             resume: false,
             export_boot_efi: None,
+            check_only: false,
         })
         .is_err());
         assert!(fs::read_dir(fixture.target).unwrap().next().is_none());
