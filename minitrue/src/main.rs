@@ -92,6 +92,8 @@ uso: minitrue [--root DIR] [--offline] [--tofu] [--no-binary|--only-binary] [--j
                         (ELF/shebang, sem executar nada); sem argumento, tudo.
                         --output DIR|ARQ grava a serialização canônica
   newspeak  <pacote>    imprime a receita efetiva e sua origem
+  fingerprint <pacote>… imprime '<pacote> <fingerprint>' da closure de
+                        identidade; é o número que o crimestop exige do canal
   explain   <caminho>   de quem é o arquivo e toda a sua proveniência
   why       <pacote>    por que este pacote está no sistema
   pack <dir> [saída]    tara <dir> determinístico; imprime o sha256 (SPEC-0010)
@@ -223,6 +225,15 @@ fn run() -> anyhow::Result<()> {
             Some(n) => install::newspeak_show(&ctx, n),
             None => fail(1, "newspeak: diga o pacote"),
         },
+        // O fingerprint que ESTA árvore de receitas exige, para que outro
+        // programa possa confrontá-lo com o que um canal oferece sem
+        // reimplementar a regra. Ver install::fingerprint.
+        Some("fingerprint") => {
+            if names.is_empty() {
+                return fail(1, "fingerprint: diga ao menos um pacote");
+            }
+            install::fingerprint(&ctx, &names)
+        }
         Some("explain") => match names.first() {
             Some(t) => install::explain(&ctx, t),
             None => fail(1, "explain: diga o caminho ou o comando"),

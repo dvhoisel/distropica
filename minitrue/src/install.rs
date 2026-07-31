@@ -160,6 +160,39 @@ pub enum BinaryPolicy {
     BinaryOnly,
 }
 
+/// Imprime `<pacote> <fingerprint>` para a closure de identidade dos nomes
+/// pedidos, um por linha e em ordem estável.
+///
+/// Existe para que OUTRO programa possa perguntar "que fingerprint esta árvore
+/// de receitas exige?" sem reimplementar a regra. O fingerprint é transitivo
+/// sobre o texto da receita e sobre DEPS/BUILD_DEPS (SPEC-0011 §4), e quem o
+/// conhece é este crate; qualquer segunda implementação divergiria no primeiro
+/// detalhe que mudasse aqui.
+///
+/// O consumidor concreto é o `minipax media build`: ele embarca uma árvore de
+/// receitas ao lado de um cache de pacotes, e as duas coisas podem vir de
+/// lugares diferentes. Se divergirem, o `crimestop` recusa a instalação na
+/// máquina de quem recebeu a mídia — depois de a mídia existir, ter sido
+/// distribuída e o disco já ter sido apagado. Com isto, a mesma pergunta é
+/// feita enquanto a mídia ainda está sendo composta.
+///
+/// Usa a MESMA closure que o `rectify` congela, BUILD_DEPS inclusive, porque é
+/// dela que o fingerprint sai; um subconjunto daria outro número.
+pub fn fingerprint(ctx: &Ctx, names: &[String]) -> Result<()> {
+    let mut identity: Vec<Recipe> = Vec::new();
+    let mut seen = HashSet::new();
+    for name in names {
+        collect_identity(ctx, name, &mut seen, &mut Vec::new(), &mut identity)?;
+    }
+    let fingerprints = recipe::build_fingerprints(&identity)?;
+    let mut nomes: Vec<&String> = fingerprints.keys().collect();
+    nomes.sort();
+    for nome in nomes {
+        println!("{nome} {}", fingerprints[nome]);
+    }
+    Ok(())
+}
+
 /// Confere que os insumos pinados de cada pacote já estão no cache, incluindo
 /// assinaturas destacadas, sem baixar nem instalar nada. O contexto offline
 /// local torna essa promessa independente das flags fornecidas pelo chamador.

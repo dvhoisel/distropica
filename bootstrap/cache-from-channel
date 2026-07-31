@@ -79,6 +79,43 @@ done
 [ -f "$CHANNEL_CONFIG" ] || { echo "erro: channel-config não existe: $CHANNEL_CONFIG" >&2; exit 1; }
 [ -d "$MINITRUE_ROOT" ] || { echo "erro: rootfs não existe: $MINITRUE_ROOT" >&2; exit 1; }
 
+# AS RECEITAS QUE CONSTRUÍRAM ESTES PACOTES TÊM DE SER AS QUE VÃO EMBARCAR.
+#
+# O rootfs guarda a própria cópia da árvore de receitas, em
+# /var/lib/minitrue/newspeak, e é dela que o `channel emit` calcula os
+# fingerprints dos pacotes. A mídia, porém, embarca a árvore do REPOSITÓRIO,
+# porque é ela que o `minipax media build --newspeak` recebe. Se as duas
+# divergirem, o cache sai com pacote de uma receita e a mídia com o texto de
+# outra — e como o fingerprint é transitivo sobre o texto, o crimestop recusa
+# a instalação com "canal oferece X para fingerprint A, mas a receita efetiva
+# exige B".
+#
+# Isso já aconteceu: uma linha acrescentada a uma guarda de newspeak/linux,
+# sem reconstruir o pacote, produziu uma ISO de 780 MB que só falhou na
+# máquina de quem a testou, depois de apagar o disco. O erro é barato de
+# cometer e caro de descobrir, e o lugar de pegá-lo é aqui — antes de existir
+# mídia. Falha, e não aviso: uma mídia assim não instala em lugar nenhum.
+ROOTFS_NEWSPEAK=$MINITRUE_ROOT/var/lib/minitrue/newspeak
+if [ -d "$ROOTFS_NEWSPEAK" ] && [ -d "$REPO/newspeak" ]; then
+    divergentes=$(
+        for receita in "$REPO"/newspeak/*/recipe; do
+            pacote=$(basename "$(dirname "$receita")")
+            outra=$ROOTFS_NEWSPEAK/$pacote/recipe
+            [ -f "$outra" ] || continue
+            cmp -s "$receita" "$outra" || printf '%s ' "$pacote"
+        done
+    )
+    if [ -n "$divergentes" ]; then
+        echo "erro: a receita do repositório difere da que construiu o pacote:" >&2
+        echo "        $divergentes" >&2
+        echo "      a mídia embarcaria um texto que não corresponde ao payload," >&2
+        echo "      e o crimestop recusaria a instalação no disco do usuário." >&2
+        echo "      sincronize e reconstrua: cp newspeak/<pkg>/recipe \\" >&2
+        echo "        $ROOTFS_NEWSPEAK/<pkg>/recipe && minitrue rectify <pkg>" >&2
+        exit 1
+    fi
+fi
+
 SOURCE_CACHE="$SOURCE_CACHE $MINITRUE_ROOT/var/cache/minitrue"
 
 cp -a "$EMITTED" "$OUTPUT"

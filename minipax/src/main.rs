@@ -256,7 +256,7 @@ fn run_install(args: Vec<String>) -> Result<()> {
 }
 
 fn run_media(args: Vec<String>) -> Result<()> {
-    let accepted = ["--mode", "--format", "--boot-efi", "--output"];
+    let accepted = ["--mode", "--format", "--boot-efi", "--output", "--minitrue"];
     let ParsedArgs {
         common,
         valued,
@@ -291,6 +291,7 @@ fn run_media(args: Vec<String>) -> Result<()> {
             format,
             boot_efi,
             output,
+            minitrue: text("--minitrue").map(PathBuf::from),
         },
     )
 }

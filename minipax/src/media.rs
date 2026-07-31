@@ -80,6 +80,181 @@ pub struct MediaOptions {
     pub format: MediaFormat,
     pub boot_efi: PathBuf,
     pub output: PathBuf,
+    /// Binário do minitrue usado para perguntar que fingerprint a árvore de
+    /// receitas embarcada exige. Ver [`confere_identidade`].
+    pub minitrue: Option<PathBuf>,
+}
+
+/// Lê `<cache>/channels/<canal>/index` e devolve `(pacote, versão, fingerprint)`.
+///
+/// O formato é o índice canônico v2 do minitrue: campos separados por espaço,
+/// com nome, versão, arquitetura e — no quarto campo — o fingerprint da receita
+/// que produziu aquele pacote.
+fn indice_do_canal(index: &Path) -> Result<Vec<(String, String, String)>> {
+    let texto = fs::read_to_string(index)
+        .with_context(|| format!("não li o índice do canal: {}", index.display()))?;
+    let mut saida = Vec::new();
+    for linha in texto.lines() {
+        let linha = linha.trim();
+        if linha.is_empty() || linha.starts_with('#') {
+            continue;
+        }
+        let campos: Vec<&str> = linha.split_whitespace().collect();
+        if campos.len() < 4 {
+            bail!(
+                "índice do canal com linha de {} campos: {}",
+                campos.len(),
+                index.display()
+            );
+        }
+        saida.push((
+            campos[0].to_string(),
+            campos[1].to_string(),
+            campos[3].to_string(),
+        ));
+    }
+    Ok(saida)
+}
+
+/// AS RECEITAS QUE A MÍDIA EMBARCA TÊM DE SER AS QUE CONSTRUÍRAM OS PACOTES.
+///
+/// Uma mídia carrega duas coisas que vêm de lugares diferentes: os PACOTES,
+/// que saíram de um `minitrue channel emit` contra alguma árvore de receitas, e
+/// o TEXTO das receitas, que chega por `--newspeak`. Nada obrigava as duas a
+/// serem a mesma árvore, e quando divergem o `crimestop` recusa a instalação
+/// com "canal oferece X para fingerprint A, mas a receita efetiva exige B" —
+/// na máquina de quem recebeu a mídia, depois de ela ter sido composta,
+/// distribuída e o disco de destino já ter sido apagado.
+///
+/// Isso não é hipotético: uma linha acrescentada a uma guarda de
+/// newspeak/linux, sem reconstruir o pacote, produziu uma ISO de 780 MB que só
+/// falhou lá. O fingerprint é transitivo sobre o texto da receita, então
+/// QUALQUER edição — inclusive um comentário — basta para descasar.
+///
+/// A pergunta "que fingerprint esta árvore exige?" é respondida pelo próprio
+/// minitrue, e de propósito: a regra é dele (SPEC-0011 §4), e uma segunda
+/// implementação aqui divergiria no primeiro detalhe que mudasse lá.
+///
+/// Falha, e não avisa. Uma mídia que descasa não instala em lugar nenhum.
+fn confere_identidade(profile: &ResolvedProfile, minitrue: &Option<PathBuf>) -> Result<()> {
+    let Some(cache) = profile.cache_path.as_ref() else {
+        return Ok(());
+    };
+    // O channel-bootstrap/ do perfil NÃO é um cache de pacotes: ele leva só a
+    // configuração e o índice assinado que abrem a descoberta online. Numa
+    // mídia dessas não há payload para descasar da receita — o que a máquina
+    // instalar vem do canal vivo, e é lá, na instalação, que o crimestop faz
+    // esta mesma pergunta contra o índice que estiver valendo naquela hora.
+    // Conferir aqui seria afirmar hoje algo sobre um canal que muda amanhã.
+    if profile.cache_is_channel_bootstrap {
+        return Ok(());
+    }
+    let canais = cache.join("channels");
+    if !canais.is_dir() {
+        return Ok(());
+    }
+    let mut esperados: Vec<(String, String, String)> = Vec::new();
+    let mut entradas: Vec<PathBuf> = fs::read_dir(&canais)
+        .with_context(|| format!("não li {}", canais.display()))?
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .map(|e| e.path())
+        .collect();
+    entradas.sort();
+    for canal in entradas {
+        let index = canal.join("index");
+        if index.is_file() {
+            esperados.extend(indice_do_canal(&index)?);
+        }
+    }
+    if esperados.is_empty() {
+        return Ok(());
+    }
+
+    let ferramenta = minitrue
+        .clone()
+        .or_else(|| std::env::var_os("MINITRUE").map(PathBuf::from))
+        .or_else(|| crate::install::find_in_path("minitrue"))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "preciso do minitrue para conferir que as receitas embarcadas \
+                 correspondem aos pacotes do cache; passe --minitrue, defina \
+                 MINITRUE ou deixe-o no PATH"
+            )
+        })?;
+    crate::ensure_real_file(&ferramenta, "minitrue")?;
+
+    // A raiz é irrelevante para esta pergunta e por isso é um diretório vazio:
+    // com NEWSPEAK_PATH absoluto o minitrue lê só a árvore de receitas, e dar-lhe
+    // uma raiz de verdade convidaria a resposta a depender do que há instalado
+    // nela — que é justamente o que não se está perguntando.
+    //
+    // O caminho da árvore precisa ser ABSOLUTO: o minitrue resolve entradas
+    // relativas de NEWSPEAK_PATH contra --root, e com a raiz temporária isso
+    // apontaria para o vazio. O sintoma seria "não há receita para <o primeiro
+    // pacote do índice>", que não diz nada sobre a causa.
+    let arvore = crate::absolute_path(&profile.newspeak_path)?;
+    let raiz = tempfile::tempdir().context("não criei a raiz temporária")?;
+    let mut comando = Command::new(&ferramenta);
+    comando
+        .env_clear()
+        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .env("TZ", "UTC")
+        .env("NEWSPEAK_PATH", &arvore)
+        .arg("--root")
+        .arg(raiz.path())
+        .arg("fingerprint");
+    let mut nomes: Vec<&str> = esperados.iter().map(|(n, _, _)| n.as_str()).collect();
+    nomes.sort();
+    nomes.dedup();
+    for nome in &nomes {
+        comando.arg(nome);
+    }
+    let saida = comando
+        .output()
+        .with_context(|| format!("não consegui executar {}", ferramenta.display()))?;
+    if !saida.status.success() {
+        bail!(
+            "minitrue fingerprint falhou com {}: {}",
+            saida.status,
+            String::from_utf8_lossy(&saida.stderr).trim()
+        );
+    }
+    let texto = String::from_utf8(saida.stdout).context("minitrue devolveu saída não-UTF-8")?;
+    let mut exigidos: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for linha in texto.lines() {
+        let mut campos = linha.split_whitespace();
+        if let (Some(nome), Some(fp)) = (campos.next(), campos.next()) {
+            exigidos.insert(nome, fp);
+        }
+    }
+
+    let mut divergentes = Vec::new();
+    for (nome, versao, oferecido) in &esperados {
+        let Some(exigido) = exigidos.get(nome.as_str()) else {
+            bail!(
+                "o cache oferece {nome} {versao}, mas a árvore de receitas \
+                 embarcada não tem receita para ele"
+            );
+        };
+        if exigido != oferecido {
+            divergentes.push(format!(
+                "  {nome} {versao}: o cache traz o pacote de {oferecido}, \
+                 a receita embarcada exige {exigido}"
+            ));
+        }
+    }
+    if !divergentes.is_empty() {
+        bail!(
+            "as receitas embarcadas não correspondem aos pacotes do cache:\n{}\n\
+             o crimestop recusaria a instalação no disco de quem recebesse esta \
+             mídia. reconstrua os pacotes a partir destas receitas antes de compor.",
+            divergentes.join("\n")
+        );
+    }
+    Ok(())
 }
 
 /// De onde vêm os bytes de um arquivo do payload.
@@ -940,6 +1115,9 @@ impl Drop for TemporaryOutput {
 }
 
 pub fn build(profile: &ResolvedProfile, options: &MediaOptions) -> Result<()> {
+    // ANTES de qualquer byte: compor centenas de MiB e só então descobrir que o
+    // texto não bate com o payload é o erro que esta guarda existe para evitar.
+    confere_identidade(profile, &options.minitrue)?;
     let requested = crate::absolute_path(&options.output)?;
     let file_name = safe_output_name(&requested)?.to_string();
     let parent = requested
@@ -1100,6 +1278,7 @@ mod tests {
                     format: MediaFormat::Img,
                     boot_efi: efi.clone(),
                     output: output.clone(),
+                    minitrue: None,
                 },
             )
             .unwrap();
@@ -1153,6 +1332,7 @@ mod tests {
                 format: MediaFormat::Img,
                 boot_efi: efi,
                 output: third.clone(),
+                minitrue: None,
             },
         )
         .unwrap();
@@ -1177,6 +1357,7 @@ mod tests {
                 format: MediaFormat::Img,
                 boot_efi: efi.clone(),
                 output: bootstrap_as_offline.clone(),
+                minitrue: None,
             },
         )
         .is_err());
@@ -1190,6 +1371,7 @@ mod tests {
             format: MediaFormat::Img,
             boot_efi: efi.clone(),
             output: output.clone(),
+            minitrue: None,
         };
         assert!(build(&profile, &options).is_err());
         let online_without_channel = temp.path().join("online-sem-canal.img");
@@ -1200,6 +1382,7 @@ mod tests {
                 format: MediaFormat::Img,
                 boot_efi: efi.clone(),
                 output: online_without_channel.clone(),
+                minitrue: None,
             },
         )
         .is_err());
@@ -1216,6 +1399,7 @@ mod tests {
                 format: MediaFormat::Img,
                 boot_efi: efi.clone(),
                 output: temp.path().join("empty-cache.img"),
+                minitrue: None,
             },
         )
         .is_err());
@@ -1228,6 +1412,7 @@ mod tests {
                 format: MediaFormat::Img,
                 boot_efi: efi,
                 output: output.clone(),
+                minitrue: None,
             },
         )
         .is_err());
@@ -1265,6 +1450,7 @@ mod tests {
             format: MediaFormat::Img,
             boot_efi: efi.clone(),
             output: temp.path().join("ignored.img"),
+            minitrue: None,
         };
         let (_, _, _, profile_class, media_class, _cache) = payload(&release, &options).unwrap();
         assert_eq!(profile_class, "official-inputs");
@@ -1315,6 +1501,7 @@ mod tests {
                     format: MediaFormat::Iso,
                     boot_efi: efi.clone(),
                     output: output.clone(),
+                    minitrue: None,
                 },
             )
             .unwrap();
@@ -1322,5 +1509,132 @@ mod tests {
         assert_eq!(sha256_file(&first).unwrap(), sha256_file(&second).unwrap());
         let bytes = fs::read(&first).unwrap();
         assert_eq!(&bytes[0x8001..0x8006], b"CD001");
+    }
+
+    /// Um `minitrue` de mentira: um script que imprime linhas
+    /// `<pacote> <fingerprint>` fixas. Serve para exercitar a COMPARAÇÃO sem
+    /// depender do binário de verdade nem de uma árvore de receitas real — o
+    /// que este teste decide é o que `confere_identidade` faz com a resposta,
+    /// não como o minitrue chega a ela.
+    fn minitrue_de_mentira(dir: &Path, linhas: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let caminho = dir.join("minitrue-falso");
+        fs::write(
+            &caminho,
+            format!("#!/bin/sh\ncat <<'FIM'\n{linhas}\nFIM\n"),
+        )
+        .unwrap();
+        fs::set_permissions(&caminho, fs::Permissions::from_mode(0o755)).unwrap();
+        caminho
+    }
+
+    /// Monta um cache offline mínimo: só o índice importa para esta pergunta.
+    fn cache_com_indice(dir: &Path, index: &str) -> PathBuf {
+        let cache = dir.join("cache");
+        fs::create_dir_all(cache.join("channels/oficial")).unwrap();
+        fs::write(cache.join("channels/oficial/index"), index).unwrap();
+        cache
+    }
+
+    #[test]
+    fn indice_do_canal_le_nome_versao_e_fingerprint() {
+        let temp = tempfile::tempdir().unwrap();
+        let index = temp.path().join("index");
+        fs::write(
+            &index,
+            "base 0.2 x86_64 aaaa pool/base-0.2-x86_64.tar.zst bbbb cccc
+             linux 7.1.4 x86_64 dddd pool/linux-7.1.4-x86_64.tar.zst eeee ffff
+",
+        )
+        .unwrap();
+        let lido = indice_do_canal(&index).unwrap();
+        assert_eq!(
+            lido,
+            vec![
+                ("base".into(), "0.2".into(), "aaaa".into()),
+                ("linux".into(), "7.1.4".into(), "dddd".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn indice_do_canal_recusa_linha_curta_em_vez_de_ignora_la() {
+        // Pular a linha em silêncio faria a guarda "passar" sobre um índice que
+        // ela não entendeu — que é o modo de falhar que ela existe para evitar.
+        let temp = tempfile::tempdir().unwrap();
+        let index = temp.path().join("index");
+        fs::write(&index, "base 0.2 x86_64
+").unwrap();
+        let erro = indice_do_canal(&index).unwrap_err().to_string();
+        assert!(erro.contains("3 campos"), "mensagem inesperada: {erro}");
+    }
+
+    #[test]
+    fn media_recusa_quando_a_receita_embarcada_nao_bate_com_o_pacote() {
+        let (temp, mut profile, efi) = profile_fixture();
+        let cache = cache_com_indice(
+            temp.path(),
+            "base 0.2 x86_64 aaaa pool/base-0.2-x86_64.tar.zst bbbb cccc
+",
+        );
+        // A árvore embarcada exige 'zzzz'; o cache traz o pacote de 'aaaa'.
+        let falso = minitrue_de_mentira(temp.path(), "base zzzz");
+        profile.cache_path = Some(cache);
+        profile.cache_is_channel_bootstrap = false;
+        let erro = build(
+            &profile,
+            &MediaOptions {
+                mode: MediaMode::Offline,
+                format: MediaFormat::Img,
+                boot_efi: efi,
+                output: temp.path().join("saida.img"),
+                minitrue: Some(falso),
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(erro.contains("não correspondem"), "mensagem: {erro}");
+        assert!(erro.contains("aaaa") && erro.contains("zzzz"), "mensagem: {erro}");
+        // E nada foi escrito: a guarda roda ANTES de compor.
+        assert!(!temp.path().join("saida.img").exists());
+    }
+
+    #[test]
+    fn media_recusa_quando_o_pacote_nao_tem_receita_na_arvore() {
+        let (temp, mut profile, efi) = profile_fixture();
+        let cache = cache_com_indice(
+            temp.path(),
+            "fantasma 1.0 x86_64 aaaa pool/fantasma-1.0-x86_64.tar.zst bbbb cccc
+",
+        );
+        let falso = minitrue_de_mentira(temp.path(), "base zzzz");
+        profile.cache_path = Some(cache);
+        profile.cache_is_channel_bootstrap = false;
+        let erro = build(
+            &profile,
+            &MediaOptions {
+                mode: MediaMode::Offline,
+                format: MediaFormat::Img,
+                boot_efi: efi,
+                output: temp.path().join("saida.img"),
+                minitrue: Some(falso),
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(erro.contains("não tem receita"), "mensagem: {erro}");
+    }
+
+    #[test]
+    fn o_channel_bootstrap_nao_e_conferido_porque_nao_carrega_pacote() {
+        // Mídia online não leva payload: o que a máquina instalar vem do canal
+        // vivo, e é lá que o crimestop faz a pergunta. Conferir aqui seria
+        // afirmar hoje algo sobre um canal que muda amanhã.
+        let (temp, profile, _efi) = profile_fixture();
+        assert!(profile.cache_is_channel_bootstrap);
+        // O índice do fixture é um placeholder de um campo só; se a guarda o
+        // lesse, falharia. Não falhar é a prova de que ela pulou.
+        confere_identidade(&profile, &None).unwrap();
+        drop(temp);
     }
 }
