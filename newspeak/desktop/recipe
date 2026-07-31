@@ -280,13 +280,24 @@ animation=zoom
 # Isso já aconteceu: o compositor subiu com o renderizador GL em vez do pixman,
 # sem painel e sem lançadores, e a única pista era uma linha de aviso perdida
 # no meio do log.
+#
+# TRINTA E DOIS PIXELS, e não quarenta e oito. O painel do weston tem altura
+# FIXA de 32 — 'height = 32;' literal no clients/desktop-shell.c, sem opção
+# no weston.ini que mude isso — e o panel_launcher_redraw_handler CENTRALIZA
+# o ícone na alocação do lançador:
+#     allocation.x += allocation.width / 2 - largura_do_icone / 2;
+# Com ícone de 48 numa alocação de 32 isso dá x -= 8, o que joga o primeiro
+# lançador para fora da borda esquerda da superfície e o CORTA. O segundo não
+# aparenta defeito porque o transbordo dele cai sobre o vizinho em vez de cair
+# fora — ou seja, o sintoma visível é só do primeiro ícone, e a causa é dos
+# dois.
 
 [launcher]
-icon=/opt/firefox/current/browser/chrome/icons/default/default48.png
+icon=/opt/firefox/current/browser/chrome/icons/default/default32.png
 path=/usr/bin/firefox
 
 [launcher]
-icon=/usr/share/icons/Adwaita/48x48/legacy/utilities-terminal.png
+icon=/usr/share/icons/Adwaita/32x32/legacy/utilities-terminal.png
 path=/usr/bin/weston-terminal
 
 [keyboard]
@@ -306,10 +317,33 @@ WESTONINI
     # A falha é cosmética, e por isso a guarda avisa em vez de abortar: um
     # lançador sem ícone continua clicável, e derrubar o build do modo gráfico
     # por um PNG seria desproporcional.
-    for icone in /opt/firefox/current/browser/chrome/icons/default/default48.png \
-                 /usr/share/icons/Adwaita/48x48/legacy/utilities-terminal.png; do
-        [ -e "$icone" ] || echo "desktop: aviso — ícone ausente: $icone" >&2
+    #
+    # E a guarda confere a DIMENSÃO, não só a existência, porque o defeito que
+    # de fato apareceu não foi um ícone faltando: foram dois PNG de 48 num
+    # painel de 32, e o primeiro lançador saiu cortado na tela. Existir não
+    # era o bastante. Largura e altura ficam nos bytes 16..23 do PNG, em
+    # big-endian; lidos com `od` byte a byte porque na árvore de build não há
+    # ferramenta de imagem alguma, e porque `od -tu4` usaria a ordem de bytes
+    # do hospedeiro e leria o número trocado.
+    for icone in /opt/firefox/current/browser/chrome/icons/default/default32.png \
+                 /usr/share/icons/Adwaita/32x32/legacy/utilities-terminal.png; do
+        [ -e "$icone" ] || {
+            echo "desktop: aviso — ícone ausente: $icone" >&2
+            continue
+        }
+        set -- $(od -An -tu1 -j16 -N8 "$icone" 2>/dev/null)
+        [ "$#" -eq 8 ] || {
+            echo "desktop: aviso — não li o cabeçalho de $icone" >&2
+            continue
+        }
+        icone_largura=$(($1 * 16777216 + $2 * 65536 + $3 * 256 + $4))
+        icone_altura=$(($5 * 16777216 + $6 * 65536 + $7 * 256 + $8))
+        [ "$icone_largura" = 32 ] && [ "$icone_altura" = 32 ] || {
+            echo "desktop: aviso — $icone é ${icone_largura}x${icone_altura};" \
+                 "o painel do weston tem 32 e corta o que passar disso" >&2
+        }
     done
+    unset icone icone_largura icone_altura
 
     # O texto do chrome do Firefox depende da base de esquemas do GSettings —
     # e de nada dentro do settings.ini. Guarda, e nao comentario.
