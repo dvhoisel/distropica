@@ -3,7 +3,7 @@ VERSION=0.1
 KIND=source
 TOOLCHAIN=none
 DEPS="weston seatd eudev dbus firefox dejavu-fonts adwaita-icon-theme hicolor-icon-theme gtk3 mesa locales busybox"
-ABOUT="A COLA. Tudo o que faz a pilha gráfica virar uma tela em vez de um monte de bibliotecas instaladas: quem sobe o compositor, onde ele acha a configuração, e o que aparece na barra. Receita de montagem, sem SRC — só gera arquivos legíveis. Três peças. (1) /usr/bin/distropica-desktop, o lançador: cria o XDG_RUNTIME_DIR, que o protocolo Wayland exige e sem o qual o weston sai com 'XDG_RUNTIME_DIR not set' e nada mais; sobe o seatd se ninguém o subiu; e exec no weston. (2) dois drop-ins em /etc/rc.d/rcS.d, que é como um pacote acrescenta trabalho de inicialização sem ser dono do /etc/inittab, que é do base: o 05-udevd.sh e o 10-seatd.sh, nesta ordem. O udevd NÃO é redundante com o mdev, e essa foi a causa da primeira tela preta: o mdev cria os NÓS de dispositivo, mas quem enumera dispositivo de entrada é a libinput, e ela pergunta à libudev — cujo udev_enumerate_scan_devices filtra tudo que não tem entrada na base em /run/udev. Sem udevd, a lista volta vazia com /dev/input/event0 legível ali na frente, e o weston morre com 'no input devices on entering Weston'. (3) /etc/xdg/weston/weston.ini, a configuração do compositor, com o painel e os dois lançadores. O renderizador é o PIXMAN e não o GL, e essa é a decisão que merece explicação: o renderizador GL exige EGL sobre GBM, o que numa árvore com Mesa softpipe significa rasterizar por software e ainda assim depender do gbm achar um driver para a placa — em bochs-drm, virtio ou qualquer máquina sem driver 3D, isso é uma superfície de falha grande em troca de nada, porque o softpipe já é software. O pixman compõe direto no buffer dumb do KMS, sem EGL, sem GBM, e funciona onde o KMS funciona. A Mesa continua instalada e útil: é dela que o GTK e o Firefox tiram GL quando pedem. O terminal é o weston-terminal, único emulador desta árvore."
+ABOUT="A COLA. Tudo o que faz a pilha gráfica virar uma tela em vez de um monte de bibliotecas instaladas: quem sobe o compositor, onde ele acha a configuração, e o que aparece na barra. Receita de montagem, sem SRC — só gera arquivos legíveis. Três peças. (1) /usr/bin/distropica-desktop, o lançador: cria o XDG_RUNTIME_DIR, que o protocolo Wayland exige e sem o qual o weston sai com 'XDG_RUNTIME_DIR not set' e nada mais; sobe o seatd se ninguém o subiu; e exec no weston. (2) quatro drop-ins em /etc/rc.d/rcS.d, que é como um pacote acrescenta trabalho de inicialização sem ser dono do /etc/inittab, que é do base: 01-machine-id.sh, 02-gschemas.sh, 05-udevd.sh e 10-seatd.sh, nesta ordem. O 02-gschemas.sh é o menos evidente e o que custou mais caro: ele compila a base de esquemas do GSettings, e sem ela o backend Wayland do GTK abandona a própria inicialização antes de chegar ao update_xft_settings, que é o único lugar que define a resolução da tela — ela fica em -1, todo tamanho de fonte em pontos passa a ser negativo, e o Firefox abre sem UMA LETRA no próprio chrome enquanto a página ao lado renderiza normalmente. O udevd NÃO é redundante com o mdev, e essa foi a causa da primeira tela preta: o mdev cria os NÓS de dispositivo, mas quem enumera dispositivo de entrada é a libinput, e ela pergunta à libudev — cujo udev_enumerate_scan_devices filtra tudo que não tem entrada na base em /run/udev. Sem udevd, a lista volta vazia com /dev/input/event0 legível ali na frente, e o weston morre com 'no input devices on entering Weston'. (3) /etc/xdg/weston/weston.ini, a configuração do compositor, com o painel e os dois lançadores. O renderizador é o PIXMAN e não o GL, e essa é a decisão que merece explicação: o renderizador GL exige EGL sobre GBM, o que numa árvore com Mesa softpipe significa rasterizar por software e ainda assim depender do gbm achar um driver para a placa — em bochs-drm, virtio ou qualquer máquina sem driver 3D, isso é uma superfície de falha grande em troca de nada, porque o softpipe já é software. O pixman compõe direto no buffer dumb do KMS, sem EGL, sem GBM, e funciona onde o KMS funciona. A Mesa continua instalada e útil: é dela que o GTK e o Firefox tiram GL quando pedem. O terminal é o weston-terminal, único emulador desta árvore."
 LICENSE="GPL-3.0-or-later"
 
 build() {
@@ -78,6 +78,79 @@ fi
 MACHINEID
     chmod 0644 "$STAGE/etc/rc.d/rcS.d/01-machine-id.sh"
 
+    cat > "$STAGE/etc/rc.d/rcS.d/02-gschemas.sh" <<'GSCHEMAS'
+# Drop-in de inicializacao: a base compilada de esquemas do GSettings.
+#
+# ISTO NAO E SOBRE GSETTINGS. E o que faz o TEXTO DO NAVEGADOR APARECER, e a
+# ligacao entre uma coisa e a outra e tudo menos obvia — por isso esta escrita
+# por extenso.
+#
+# O gdkscreen-wayland.c do GTK3 inicializa os settings assim:
+#
+#     source = g_settings_schema_source_get_default ();
+#     if (source == NULL)
+#       return;                            <-- sai AQUI
+#     ... percorre os esquemas ...
+#     update_xft_settings (screen, FALSE);
+#
+# Sem NENHUM esquema compilado no sistema, g_settings_schema_source_get_default()
+# devolve NULL, a funcao retorna cedo, e o update_xft_settings() — unico lugar
+# do backend Wayland que chama _gdk_screen_set_resolution() — nunca roda. A
+# resolucao da tela fica no valor com que nasce em gdkscreen.c:
+# 'screen->resolution = -1.'.
+#
+# Dali em diante TODO tamanho de fonte em pontos vira negativo, porque o GTK
+# computa pontos x dpi / 72. O Firefox le esse numero para 'font: message-box',
+# que e a fonte de todo o chrome dele. Medido, com uma pagina que reporta o
+# valor computado: -0.152778px, que e 11pt x (-1)/72. Texto com tamanho
+# negativo nao desenha glifo nenhum.
+#
+# O sintoma engana porque e ASSIMETRICO, e foi por isso que custou tanto: os
+# icones do chrome aparecem (sao SVG em px), o conteudo da pagina aparece (px
+# das prefs do Firefox), os campos de formulario aparecem, e ate o relogio do
+# painel do weston aparece — o weston nao usa GTK. So o texto do navegador
+# some: aba sem titulo, barra de endereco vazia enquanto se digita nela.
+#
+# NAO e preciso o esquema org.gnome.desktop.interface, que esta arvore nao
+# tem: o get_dpi_from_gsettings() devolve 96.0 * 1.0 quando ele falta. Basta a
+# base EXISTIR, e os org.gtk.Settings.* que o proprio GTK instala bastam.
+#
+# Ha ainda um segundo motivo, independente deste: sem a base o g_settings_new()
+# nao degrada — a GLib emite G_LOG_LEVEL_ERROR e ABORTA o processo. O GTK abre
+# org.gtk.Settings.FileChooser ao montar um dialogo de arquivo, de modo que
+# "salvar como" no navegador nao falharia: mataria o navegador.
+#
+# Gerado no boot e nao no pacote porque o arquivo e funcao do conjunto de
+# TODOS os pacotes instalados e portanto nao pode pertencer a nenhum — mesmo
+# argumento do hwdb.bin do eudev e do loaders.cache do gdk-pixbuf. Refaz
+# quando falta ou quando alguma .gschema.xml e mais nova que ele, que e
+# exatamente o caso depois de instalar um pacote novo.
+if [ -x /usr/bin/glib-compile-schemas ] && [ -d /usr/share/glib-2.0/schemas ]; then
+    gschemas_refazer=nao
+    if [ ! -s /usr/share/glib-2.0/schemas/gschemas.compiled ]; then
+        gschemas_refazer=sim
+    else
+        for gschemas_xml in /usr/share/glib-2.0/schemas/*.gschema.xml; do
+            [ -e "$gschemas_xml" ] || break
+            if [ "$gschemas_xml" -nt /usr/share/glib-2.0/schemas/gschemas.compiled ]; then
+                gschemas_refazer=sim
+                break
+            fi
+        done
+    fi
+    if [ "$gschemas_refazer" = sim ]; then
+        if /usr/bin/glib-compile-schemas /usr/share/glib-2.0/schemas >/dev/null 2>&1; then
+            echo "distropica: esquemas do GSettings compilados"
+        else
+            echo "distropica: FALHA ao compilar os esquemas do GSettings;" \
+                 "o texto do navegador vai sumir" >&2
+        fi
+    fi
+    unset gschemas_refazer gschemas_xml
+fi
+GSCHEMAS
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/02-gschemas.sh"
+
     cat > "$STAGE/etc/rc.d/rcS.d/05-udevd.sh" <<'UDEVD'
 # Drop-in de inicializacao: o udevd. Sourced pelo rcS do base, ANTES do seatd.
 #
@@ -119,6 +192,59 @@ if [ -x /usr/bin/seatd ] && [ ! -S /run/seatd.sock ]; then
 fi
 SEATD
     chmod 0644 "$STAGE/etc/rc.d/rcS.d/10-seatd.sh"
+
+    install -d "$STAGE/etc/gtk-3.0"
+    cat > "$STAGE/etc/gtk-3.0/settings.ini" <<'GTKINI'
+# Configuracao do GTK3 para uma sessao SEM gerenciador de configuracao.
+#
+# Num desktop comum quem responde "qual e a fonte da interface?" e o
+# XSettings ou o dconf; aqui nao ha nem um nem outro, e o GTK cai no default
+# compilado. O sintoma medido: o Firefox abre, a PAGINA renderiza texto
+# normalmente, e o texto do proprio navegador — barra de endereco, abas,
+# menus — nao aparece. Conteudo e chrome usam caminhos de fonte diferentes: o
+# conteudo resolve pelo fontconfig, o chrome pergunta ao GTK.
+#
+# A fonte e nomeada explicitamente e nao por alias generico, porque esta
+# arvore tem UMA familia instalada e mentir sobre isso nao ajuda ninguem: se
+# um dia houver outra, muda-se aqui.
+[Settings]
+gtk-font-name = DejaVu Sans 11
+gtk-theme-name = Adwaita
+gtk-icon-theme-name = Adwaita
+gtk-cursor-theme-name = Adwaita
+gtk-application-prefer-dark-theme = false
+gtk-enable-animations = true
+# NAO HA gtk-xft-dpi AQUI, e a ausencia e deliberada. Ela custou caro e por
+# isso esta escrita: a tentacao de acrescenta-lo e forte e ele NAO funciona.
+#
+# O sintoma: o texto do chrome do Firefox sai com tamanho NEGATIVO. Medido,
+# nao suposto — uma pagina com 'font: message-box' reporta -0.152778px, que e
+# exatamente 11pt x (-1)/72. Esse -1 e o valor inicial de
+# gdk_screen_get_resolution(), em gdkscreen.c: 'screen->resolution = -1.'.
+#
+# Declarar gtk-xft-dpi neste arquivo nao conserta. O settings_update_resolution()
+# do gtksettings.c so propaga o valor para a tela quando a FONTE dele e
+# GTK_SETTINGS_SOURCE_APPLICATION (um aplicativo chamando g_object_set) — os
+# demais casos, diz o comentario do proprio GTK, sao tratados no
+# xsettings-client.c, que e X11. Um valor vindo daqui nao e nem um nem outro:
+# ele entra no GtkSettings, o gtk-query-settings o exibe certinho, e a tela
+# continua em -1. Foi testado com 98304 no lugar e o texto continuou invisivel.
+#
+# Numa sessao Wayland quem define a resolucao e o update_xft_settings() do
+# gdkscreen-wayland.c, e ele so e alcancado se existir uma base de esquemas
+# GSettings compilada. Essa e a causa de verdade, e o conserto esta no
+# 02-gschemas.sh — nao aqui.
+#
+# Os gtk-xft-* abaixo, ao contrario, NAO sao inertes: o
+# settings_update_font_options() os le do GtkSettings e monta as opcoes de
+# fonte do cairo com eles. Sao o que o XSettings forneceria e aqui ninguem
+# fornece.
+gtk-xft-antialias = 1
+gtk-xft-hinting = 1
+gtk-xft-hintstyle = hintslight
+gtk-xft-rgba = none
+GTKINI
+    chmod 0644 "$STAGE/etc/gtk-3.0/settings.ini"
 
     cat > "$STAGE/etc/xdg/weston/weston.ini" <<'WESTONINI'
 # weston.ini — configuração do compositor. Ver o ABOUT da receita 'desktop'
@@ -184,6 +310,30 @@ WESTONINI
                  /usr/share/icons/Adwaita/48x48/legacy/utilities-terminal.png; do
         [ -e "$icone" ] || echo "desktop: aviso — ícone ausente: $icone" >&2
     done
+
+    # O texto do chrome do Firefox depende da base de esquemas do GSettings —
+    # e de nada dentro do settings.ini. Guarda, e nao comentario.
+    [ -e "$STAGE/etc/rc.d/rcS.d/02-gschemas.sh" ] || {
+        echo "desktop: falta o drop-in dos esquemas do GSettings; sem ele a" \
+             "resolucao da tela fica em -1 e o chrome do Firefox fica sem texto" >&2
+        exit 1
+    }
+    # E a guarda contra o conserto ERRADO, que ja foi tentado e mediu-se que
+    # nao funciona: gtk-xft-dpi neste arquivo e inerte, porque o GTK so o
+    # propaga para a resolucao da tela quando vem do XSETTINGS ou de um
+    # g_object_set. Quem o acrescentar vai achar que consertou alguma coisa.
+    ! grep -q "^gtk-xft-dpi" "$STAGE/etc/gtk-3.0/settings.ini" || {
+        echo "desktop: gtk-xft-dpi no settings.ini e inerte; quem define a" \
+             "resolucao e o 02-gschemas.sh (ver o comentario do settings.ini)" >&2
+        exit 1
+    }
+    # A fonte nomeada no settings.ini tem de EXISTIR. Um nome errado aqui
+    # devolve o mesmo sintoma que a ausencia do arquivo: chrome sem texto.
+    fc_familia=$(grep -oE 'gtk-font-name = [^0-9]+' "$STAGE/etc/gtk-3.0/settings.ini" | sed 's/gtk-font-name = //; s/ *$//')
+    find /usr/share/fonts -iname "*$(echo "$fc_familia" | tr -d ' ')*" 2>/dev/null | grep -q . || {
+        echo "desktop: a fonte '$fc_familia' do settings.ini nao esta instalada" >&2
+        exit 1
+    }
 
     [ -x "$STAGE/usr/bin/distropica-desktop" ] || {
         echo "desktop: o lançador não foi instalado" >&2
