@@ -104,6 +104,15 @@ BB=/bin/busybox
 $BB mount -t proc     proc /proc 2>/dev/null
 $BB mount -t sysfs    sys  /sys  2>/dev/null
 $BB mount -t devtmpfs dev  /dev  2>/dev/null
+# devpts NAO e opcional num sistema com terminal grafico. O emulador chama
+# openpty(), que precisa de /dev/ptmx e do sistema de arquivos devpts montado
+# em /dev/pts; sem isso a chamada falha e o terminal simplesmente NAO ABRE,
+# sem mensagem em lugar nenhum. O console de texto funciona mesmo assim,
+# porque tty1 e tty2 sao terminais REAIS do kernel e nao pseudo-terminais —
+# e foi por isso que a falta passou despercebida ate alguem clicar no
+# lancador do terminal na sessao grafica.
+$BB mkdir -p /dev/pts 2>/dev/null
+$BB mount -t devpts -o gid=5,mode=620 devpts /dev/pts 2>/dev/null
 $BB mount -t tmpfs    tmp  /tmp  2>/dev/null
 $BB mount -t tmpfs    run  /run  2>/dev/null
 $BB mdev -s 2>/dev/null
@@ -117,7 +126,14 @@ for network_path in /sys/class/net/*; do
         echo "distropica: rede indisponivel em $interface (nao subi a interface)"
         continue
     fi
-    if $BB udhcpc -n -q -t 2 -T 2 -i "$interface" \
+    # -t 5 -T 3: cinco tentativas de tres segundos, ate quinze ao todo. Era
+    # -t 2 -T 2 — QUATRO SEGUNDOS, uma vez so — e rede real raramente
+    # responde nisso: o resultado era bootar sem rede e sem resolv.conf, e o
+    # navegador dizer "servidor nao encontrado" sem que nada tivesse falhado
+    # em voz alta. PENDENCIA CONHECIDA: com -q o cliente sai apos obter o
+    # lease, entao nao ha RENOVACAO; quando o lease expirar a rede cai. O
+    # conserto e um udhcpc em daemon, e exige decidir quem o supervisiona.
+    if $BB udhcpc -n -q -t 5 -T 3 -i "$interface" \
         -s /etc/udhcpc/default.script >/dev/null 2>&1; then
         echo "distropica: rede configurada em $interface"
     else
@@ -127,7 +143,7 @@ for network_path in /sys/class/net/*; do
     # Router Advertisement; o que falta e DNS. Duas fontes, nesta ordem, ambas
     # nao-fatais: DHCPv6, e o RDNSS do proprio RA — que o kernel nao expoe e o
     # busybox nao le, dai o rdisc6 (uma execucao, sem daemon).
-    $BB udhcpc6 -n -q -t 2 -T 2 -i "$interface" \
+    $BB udhcpc6 -n -q -t 3 -T 3 -i "$interface" \
         -s /etc/udhcpc/default6.script >/dev/null 2>&1 || true
     if ! $BB grep -q '^nameserver .*:' /etc/resolv.conf 2>/dev/null; then
         rdisc6 -1 -n -w 3000 "$interface" 2>/dev/null |
@@ -163,6 +179,35 @@ RCS
 /bin/busybox umount -a -r 2>/dev/null
 RCK
     chmod 755 "$STAGE/etc/rc.d/rcK"
+
+    cat > "$STAGE/etc/nsswitch.conf" <<'NSS'
+# Onde a glibc procura cada tipo de nome.
+#
+# Sem este arquivo a glibc nao falha: ela cai num default COMPILADO, que nao
+# esta escrito em lugar nenhum do sistema e muda entre versoes. Para uma
+# distro cujo lema e que o boot se le de cabo a rabo, depender de um default
+# invisivel para resolver nome de maquina e o oposto do que se pretende.
+#
+# 'files dns' na ordem que importa: /etc/hosts primeiro, para que localhost e
+# entradas locais funcionem sem rede nenhuma, e o DNS depois.
+passwd:     files
+group:      files
+shadow:     files
+hosts:      files dns
+networks:   files
+protocols:  files
+services:   files
+ethers:     files
+rpc:        files
+NSS
+
+    cat > "$STAGE/etc/hosts" <<'HOSTS'
+# Sem esta tabela nem 'localhost' resolve, e software que conversa consigo
+# mesmo pelo nome — nao pelo endereco — falha de formas dificeis de ler.
+127.0.0.1   localhost
+::1         localhost ip6-localhost ip6-loopback
+127.0.1.1   distropica
+HOSTS
 
     cat > "$STAGE/etc/hostname" <<'HOST'
 distropica
