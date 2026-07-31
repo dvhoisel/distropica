@@ -165,12 +165,12 @@
         <h1>DISTRÓPICA</h1>
         <p class="lead">Uma distribuição Linux distópica. Não instala pacotes: <strong>retifica registros</strong>. Binário do mantenedor primeiro; depois, binário da Distrópica; fonte quando ninguém publica um.</p>
         <div class="actions">
-          <a class="button primary" href="/releases/distropica-rede-v3.iso">Baixar ISO · 378 MiB</a>
-          <a class="button" href="/releases/distropica-rede-v3-corresponding-sources.tar.zst">Fontes correspondentes</a>
+          <a class="button primary" href="/releases/distropica-0.9.iso">Baixar ISO · 745 MiB</a>
+          <a class="button" href="/releases/distropica-0.9-corresponding-sources.tar.zst">Fontes correspondentes</a>
           <a class="button" href="https://github.com/dvhoisel/distropica">Examinar o código</a>
         </div>
         <div class="facts" aria-label="Características da imagem">
-          <div class="fact"><b>rede-v3</b><small>imagem de desenvolvimento</small></div>
+          <div class="fact"><b>0.9</b><small>pré-release de desenvolvimento</small></div>
           <div class="fact"><b>Linux 7.1.4</b><small>kernel da mídia</small></div>
           <div class="fact"><b>GCC 15.3</b><small>toolchain nativa</small></div>
           <div class="fact"><b>GPL-3.0+</b><small>código próprio</small></div>
@@ -207,33 +207,35 @@
         <div class="download">
           <div>
             <h3>ISO UEFI para VirtualBox</h3>
-            <p>A imagem instala um sistema mínimo com Vim, ripgrep, Make, GCC/G++ e o Minitrue, mais um perfil de rede: nftables, WireGuard, nmap, mtr, tcpdump e bash. A raiz é ext4 em tabela GPT. Ela também leva receitas online para instalar yq como binário upstream e compilar GNU nano da fonte.</p>
+            <p>A imagem instala um sistema com <strong>modo gráfico</strong>: compositor Weston sobre KMS, Firefox 153 em português, terminal e rede por DHCP. Junto vão Vim, ripgrep, Make, GCC/G++, o Minitrue e o perfil de rede — nftables, WireGuard, nmap, mtr, tcpdump e bash. A raiz é ext4 em tabela GPT. A instalação é <strong>offline</strong>: a mídia carrega os 85 pacotes e não busca nada na rede.</p>
             <div class="actions">
-              <a class="button primary" href="/releases/distropica-rede-v3.iso">Baixar a ISO</a>
-              <a class="button" href="/releases/distropica-rede-v3.iso.sha256">SHA-256</a>
-              <a class="button" href="/releases/distropica-rede-v3.iso.manifest">Manifesto</a>
-              <a class="button" href="/releases/distropica-rede-v3-corresponding-sources.tar.zst">Fontes correspondentes</a>
-              <a class="button" href="/releases/distropica-rede-v3-corresponding-sources.tar.zst.sha256">SHA das fontes</a>
-              <a class="button" href="/releases/distropica-rede-v3-sources.tsv">Inventário</a>
+              <a class="button primary" href="/releases/distropica-0.9.iso">Baixar a ISO</a>
+              <a class="button" href="/releases/distropica-0.9.iso.sha256">SHA-256</a>
+              <a class="button" href="/releases/distropica-0.9.iso.manifest">Manifesto</a>
+              <a class="button" href="/releases/distropica-0.9-corresponding-sources.tar.zst">Fontes correspondentes</a>
+              <a class="button" href="/releases/distropica-0.9-corresponding-sources.tar.zst.sha256">SHA das fontes</a>
+              <a class="button" href="/releases/distropica-0.9-sources.tsv">Inventário</a>
+              <a class="button" href="/releases/distropica-0.9-licencas.tsv">Licenças</a>
             </div>
-            <p class="hash"><strong>SHA-256</strong><br>a709d6007aa22c6a494195c0c4e458cc48fe52318bfd426420c13d1a00602a38</p>
-            <p class="hash"><strong>SHA-256 das fontes</strong><br>9e9ea4e8baaf247353f64ebce5eff41851a1a0034a4f57d44fab835a68fd7651</p>
+            <p class="hash"><strong>SHA-256</strong><br>8cdefdb69682e32bf758a2dc3f1b18d77279bd4172bac1ae677d5b9a5d1f5c4d</p>
+            <p class="hash"><strong>SHA-256 das fontes</strong><br>8e80f90ef714dd7d5d590f4556cb9e19417800fa11124029cb4c108b32cd6218</p>
           </div>
           <div>
             <h3>Primeiro boot</h3>
             <ol>
               <li>Crie uma VM x86_64 com UEFI.</li>
               <li>Monte a ISO como unidade óptica.</li>
-              <li>Use um disco virtual descartável de pelo menos 4 GiB.</li>
-              <li>Reserve pelo menos 3 GiB de RAM: o instalador valida a closure inteira em memória antes de tocar no disco.</li>
+              <li>Use um disco virtual descartável. O instalador exige raiz de 3,1 GiB e recusa disco menor; o sistema instalado ocupa 2,4 GiB.</li>
+              <li>O instalador pede a <strong>senha de root antes do caminho do disco</strong>: toda a interação acontece antes de qualquer escrita, e a partir do disco escolhido ele corre sozinho.</li>
+              <li>Ele apaga integralmente o disco que você indicar.</li>
               <li>Depois de instalar, remova a ISO antes do reboot.</li>
             </ol>
-            <pre><code>minitrue rectify yq
-minitrue rectify nano
+            <p>A tty1 vira sessão gráfica sozinha quando há placa com KMS; sem ela, cai num getty, de propósito.</p>
+            <pre><code>minitrue archives
 minitrue verify</code></pre>
           </div>
         </div>
-        <p class="warning"><strong>Aviso:</strong> esta é uma imagem local de desenvolvimento, não um release estável. O instalador apaga integralmente o dispositivo escolhido. A v2 teve conteúdo e sidecars verificados e possui bundle de fontes correspondente; o aceite automatizado completo no VirtualBox foi realizado na mídia v1, que compartilha a mesma base e o mesmo EFI.</p>
+        <p class="warning"><strong>Aviso:</strong> esta é uma pré-release de desenvolvimento, não um release estável — e a própria mídia declara isso de si: <code>PROFILE_CLASS=custom</code>. O instalador apaga integralmente o dispositivo escolhido. Esta ISO foi instalada e verificada em máquina virtual a partir do próprio arquivo publicado. Ela <strong>não é um artefato oficial</strong> no sentido da SPEC-0011 §8: seis pacotes — firefox, gcc-pass2, jq, vim, yq e zig — ainda declaram <code>LICENSE=NOASSERTION</code>, porque cada um é um agregado cuja expressão de licença depende do inventário por componente. O bundle de fontes correspondente e o índice de licenças acima são a evidência já levantada.</p>
       </div>
     </section>
   </main>
