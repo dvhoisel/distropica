@@ -255,12 +255,25 @@ partition_disk() {
     echo "$esp $root"
 }
 
-set_root_password() {
-    password_root=$1
+# A senha e pedida ANTES do caminho do disco, e o motivo nao e so de gosto:
+# assim TODA a interacao humana acontece antes de qualquer escrita, e a partir
+# do disco escolhido a instalacao corre sozinha. Na ordem anterior a senha era
+# pedida no fim, ja com o disco apagado — quem se distraisse e voltasse depois
+# encontrava a maquina parada num prompt, com o disco antigo destruido e o
+# sistema novo pela metade.
+#
+# Colher cedo permite tambem nao CARREGAR a senha em claro pela instalacao
+# inteira: ela e cifrada no ato, aqui, e o que atravessa e apenas o hash. O
+# cryptpw le da entrada padrao de proposito — passar a senha como argumento a
+# deixaria visivel em /proc/<pid>/cmdline para qualquer coisa que olhasse.
+senha_root_cifrada=
+
+ask_root_password() {
     if grep -q 'distropica.test=1' /proc/cmdline; then
         say "modo de teste: conta root permanece bloqueada"
         return 0
     fi
+    say "solicitando senha de root"
     while :; do
         printf 'Nova senha de root: ' >/dev/console
         stty -echo </dev/console >/dev/console 2>&1 || true
@@ -270,16 +283,30 @@ set_root_password() {
         stty echo </dev/console >/dev/console 2>&1 || true
         printf '\n' >/dev/console
         if [ -n "$first" ] && [ "$first" = "$second" ]; then
-            printf 'root:%s\n' "$first" |
-                chpasswd -c sha512 -R "$password_root" || return 1
+            senha_root_cifrada=$(printf '%s\n' "$first" | cryptpw -m sha512)
             first=
             second=
+            [ -n "$senha_root_cifrada" ] ||
+                rescue "não consegui cifrar a senha de root"
+            say "senha de root recebida"
             return 0
         fi
         first=
         second=
         say "senhas vazias ou diferentes; tente novamente"
     done
+}
+
+# Escreve o hash no sistema ja instalado. Nao ha o que perguntar aqui: se o
+# modo de teste pulou a coleta, nao ha hash e a conta segue bloqueada, que e
+# exatamente o que o modo de teste quer.
+apply_root_password() {
+    password_root=$1
+    [ -n "$senha_root_cifrada" ] || return 0
+    printf 'root:%s\n' "$senha_root_cifrada" |
+        chpasswd -e -R "$password_root" || return 1
+    senha_root_cifrada=
+    return 0
 }
 
 configure_network() {
@@ -378,8 +405,7 @@ install_system() {
         --export-boot-efi /run/distropica-BOOTX64.EFI \
         --only-binary || rescue "a instalação no disco falhou"
 
-    say "solicitando senha de root"
-    set_root_password /target || rescue "não configurei a senha de root"
+    apply_root_password /target || rescue "não configurei a senha de root"
     say "senha de root configurada"
 
     /bin/minitrue --root /target verify ||
@@ -441,6 +467,7 @@ fi
 media_device=$(find_media) || rescue "payload da mídia não encontrado"
 say "payload encontrado em $media_device"
 validate_media
+ask_root_password
 install_disk=$(choose_disk)
 install_system "$install_disk"
 rescue "o instalador retornou inesperadamente"
