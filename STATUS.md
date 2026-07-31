@@ -43,7 +43,8 @@ boas-vindas em pt-BR.
 ```text
 CANAL=78 pacotes; fechamento: 2089 requisito(s), todos com provedor declarado
 CACHE=664 MB (streaming; teria sido recusado pelo limite antigo de 384 MiB)
-ISO=target/distropica-grafica.iso  (744 MB)
+ISO=target/distropica-v2.iso       (744 MB)
+ISO_SHA256=8666d3ee07a1bea5f592fa9bd0bdb1e32b55c2b8a838f0db43316ccf40e92972
 TELA_1=target/tela-v8.png          (painel do weston, 1280x800)
 TELA_2=target/prova-ff/tela.png    (Firefox 153.0.1 pt-BR aberto)
 ```
