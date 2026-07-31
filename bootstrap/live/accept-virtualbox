@@ -492,7 +492,7 @@ guest_command_and_wait_or_fail() {
 
 echo "accept-virtualbox: fase 2/5: exercitando prompts gráficos offline"
 vbox startvm "$VM_UUID" --type=headless
-wait_for_log 'distropica-live: solicitando senha de root no console gráfico' 1 "$PREPARE_TIMEOUT"
+wait_for_log 'distropica-init: mídia validada; nenhum disco foi alterado' 1 "$PREPARE_TIMEOUT"
 sleep 2
 require_screen_text 'Nova senha de root' nova-senha 30
 type_text "$ephemeral_password"
@@ -501,8 +501,7 @@ sleep 2
 require_screen_text 'Repita a sen' repetir-senha 30
 type_text "$ephemeral_password"
 press_enter
-wait_for_log 'distropica-live: senha de root configurada' 1 60
-wait_for_log 'distropica-live: payload e closure validados; nenhum disco foi alterado' 1 60
+wait_for_log 'distropica-init: senha de root configurada' 1 60
 sleep 2
 require_screen_text 'dispositivo inteiro a APAGAR' autorizar-disco 30
 
@@ -515,12 +514,12 @@ grep -Fq '"SATA-1-0"="emptydrive"' "$RUN_DIR/evidence/after-eject-vm-info.txt" |
     fail "VirtualBox não confirmou a ejeção da ISO"
 type_text /dev/sda
 press_enter
-wait_for_log 'distropica-live: APAGANDO /dev/sda:' 1 120
+wait_for_log 'distropica-init: APAGANDO /dev/sda:' 1 120
 
 echo "accept-virtualbox: fase 3/5: reboot real pelo VDI sem ISO e sem link"
-wait_for_log 'distropica-live: INSTALLATION COMPLETE em /dev/sda; reiniciando' 1 "$INSTALL_TIMEOUT"
-wait_for_log 'distropica-live: kernel vivo iniciado' 2 "$BOOT_TIMEOUT"
-wait_for_log 'distropica-live: raiz instalada encontrada em /dev/sda2' 1 "$BOOT_TIMEOUT"
+wait_for_log 'distropica-init: INSTALLATION COMPLETE em /dev/sda; reiniciando' 1 "$INSTALL_TIMEOUT"
+wait_for_log 'distropica-init: kernel vivo iniciado' 2 "$BOOT_TIMEOUT"
+wait_for_log 'distropica-init: raiz instalada encontrada em /dev/sda2' 1 "$BOOT_TIMEOUT"
 wait_for_log 'distropica login:' 1 "$BOOT_TIMEOUT"
 sleep 3
 require_screen_text 'distropica login' login-sem-iso 30
@@ -657,8 +656,8 @@ grep -Fq '"SATA-1-0"="emptydrive"' \
     fail "a ISO reapareceu antes do terceiro boot"
 
 vbox startvm "$VM_UUID" --type=headless
-wait_for_log 'distropica-live: kernel vivo iniciado' 1 "$BOOT_TIMEOUT"
-wait_for_log 'distropica-live: raiz instalada encontrada em /dev/sda2' 1 "$BOOT_TIMEOUT"
+wait_for_log 'distropica-init: kernel vivo iniciado' 1 "$BOOT_TIMEOUT"
+wait_for_log 'distropica-init: raiz instalada encontrada em /dev/sda2' 1 "$BOOT_TIMEOUT"
 wait_for_log 'distropica login:' 1 "$BOOT_TIMEOUT"
 sleep 3
 require_screen_text 'distropica login' terceiro-boot-login 30

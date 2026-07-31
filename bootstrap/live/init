@@ -8,8 +8,15 @@ BB=/bin/busybox
 PATH=/bin:/usr/bin:/sbin:/usr/sbin
 export PATH HOME=/ TERM=linux
 
+# O prefixo e 'distropica-init', e o nome importa: este programa e o PID 1 da
+# midia, e ele faz DUAS coisas — boota uma raiz ja instalada, se achar uma, e
+# instala uma nova, se nao achar. Chamava-se 'distropica-live' ate 2026-07-30,
+# nome herdado de quando o desenho era montar o sistema inteiro em RAM antes de
+# tocar no disco. Isso mudou: a instalacao vai direto para o disco, e nao ha
+# ambiente vivo para experimentar. Manter 'live' era prometer um live CD que
+# esta distro deliberadamente NAO e.
 say() {
-    message="distropica-live: $*"
+    message="distropica-init: $*"
     printf '%s\n' "$message"
     # Na mídia interativa, /dev/console aponta para tty0. Espelhe somente os
     # marcadores não secretos no UART para permitir diagnóstico e sincronizar
