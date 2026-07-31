@@ -2,9 +2,18 @@ NAME=jq
 VERSION=1.8.2
 KIND=binary
 ABOUT="processador JSON de linha de comando; binário Linux x86_64 estático publicado pelo upstream. Pacote de prova do Mundo A: começa ausente e pode ser instalado offline pelo minitrue a partir do cache da mídia; o bundle estático ainda requer SBOM antes de uma release oficial"
-# O executável oficial agrega jq, oniguruma, decNumber, libc e runtimes; até o
-# SBOM arquivo/componente, rotulá-lo apenas com a licença MIT do jq seria falso.
-LICENSE=NOASSERTION
+# O binário oficial não traz arquivo de licença nenhum, mas traz a própria
+# linha de configure gravada dentro dele, e é dela que sai este escopo:
+#   --with-oniguruma=builtin --enable-all-static ... CC=x86_64-linux-gnu-gcc
+#
+#   MIT                 o jq
+#   BSD-2-Clause        a oniguruma, compilada para dentro (builtin)
+#   ICU                 o decNumber, cuja versão o binário declara: "decNumber 3.68"
+#   LGPL-2.1-or-later   a glibc, LIGADA ESTATICAMENTE (--enable-all-static, com
+#                       GCC Ubuntu 13.3). Isso não é detalhe: a LGPL trata
+#                       ligação estática de forma diferente da dinâmica, e quem
+#                       redistribuir este binário assume essa condição.
+LICENSE="MIT AND BSD-2-Clause AND ICU AND LGPL-2.1-or-later"
 SRC="https://github.com/jqlang/jq/releases/download/jq-$VERSION/jq-linux-amd64"
 SHA256=b1c22172dd303f3be49e935aa56aa48a8b7a46e0bc838b4997d3bb451495870f
 LINKS="jq=bin/jq"

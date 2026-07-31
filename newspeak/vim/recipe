@@ -6,9 +6,19 @@ SUPERSEDES="busybox"
 DEPS="glibc ncurses busybox"
 BUILD_DEPS="make gcc-pass2 binutils-glibc ncurses gawk perl"
 ABOUT="Vim de terminal com edição multibyte, syntax, eval e cores verdadeiras; compilado uma vez pela Distrópica a partir da tag estável assinada do upstream e entregue pronto pelo canal binário"
-# O runtime do Vim agrega arquivos sob licenças distintas; mantenha
-# NOASSERTION até o SBOM por arquivo enumerar todas elas.
-LICENSE=NOASSERTION
+# Escopo conferido no manifesto do registro (2061 entradas), e não na árvore
+# de fontes: este configure usa --disable-terminal e --without-x, então o
+# libvterm (MIT) NÃO é compilado e a libXpm não entra. As duas entradas com
+# "xpm" no manifesto são syntax/xpm.vim e syntax/xpm2.vim — realce de sintaxe
+# do próprio Vim, não a biblioteca.
+#
+#   Vim                 o editor e o runtime (LICENSE e runtime/doc/uganda.txt)
+#   0BSD                netrw, 20 arquivos instalados em runtime/pack/dist/opt
+#   BSD-2-Clause        editorconfig, 27 arquivos, "Simplified BSD"
+#   PSF-2.0             a parte do editorconfig derivada de código Python
+#   LGPL-2.1-or-later   o xdiff em src/xdiff, sempre compilado no binário desde
+#                       que o diff interno existe; o COPYING dele é a LGPL 2.1
+LICENSE="Vim AND 0BSD AND BSD-2-Clause AND PSF-2.0 AND LGPL-2.1-or-later"
 SRC="https://github.com/vim/vim/archive/refs/tags/v$VERSION.tar.gz"
 SHA256=7acd07bf6466bceb53c29bd5a5b38c55143f771376d8507b515f603f9caeb7f8
 

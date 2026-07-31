@@ -2,9 +2,19 @@ NAME=yq
 VERSION=4.53.2
 KIND=binary
 ABOUT="processador YAML/JSON/XML de linha de comando; pacote opcional online-only, instalado a partir do executável Linux x86_64 estático publicado pelo upstream"
-# O executável Go estático agrega dependências; a licença do payload completo
-# precisa de SBOM antes de qualquer redistribuição oficial pela Distrópica.
-LICENSE=NOASSERTION
+# Binário Go estático. O grafo de módulos está gravado DENTRO do executável
+# pelo próprio compilador — `go version -m` devolve 26 dependências com versão
+# e hash —, e a licença de cada uma foi lida do módulo baixado do proxy oficial
+# na versão exata, não deduzida do nome:
+#
+#   MIT           o yq e a maioria: envsubst, orderedmap, color, go-json,
+#                 go-yaml, go-colorable, go-isatty, go-wordwrap, go-cty,
+#                 gopher-lua, participle, go-textseg, copier
+#   Apache-2.0    levenshtein, utfbom, go-ini, cobra
+#   BSD-2-Clause  magiconair/properties
+#   BSD-3-Clause  pflag, go-cmp, golang.org/x/{net,sys,text} e o runtime do Go
+#   MPL-2.0       hashicorp/hcl, que é o único copyleft do conjunto
+LICENSE="MIT AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND MPL-2.0"
 SRC="https://github.com/mikefarah/yq/releases/download/v$VERSION/yq_linux_amd64"
 SHA256=d56bf5c6819e8e696340c312bd70f849dc1678a7cda9c2ad63eebd906371d56b
 LINKS="yq=bin/yq"

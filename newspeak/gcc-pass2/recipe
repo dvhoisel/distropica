@@ -7,10 +7,25 @@ SUPERSEDES="gcc libstdcxx"
 DEPS="linux-headers glibc mathlibs-glibc zlib binutils-glibc busybox"
 BUILD_DEPS="gcc binutils-cross libstdcxx"
 ABOUT="O gcc NATIVO da passada 2 (c,c++, GCC 15.3.0, hospedado na glibc) — o fecho do Estágio 2 (SPEC-0005 §4, vencido 2026-07-20). Construído pelo gcc da passada 1 (cross), com a glibc, os mathlibs-glibc e o binutils-glibc já presentes. Produz gcc/g++ nativos que compilam e rodam C e C++/STL sem shims. Oito muros vencidos na investigação, todos aqui codificados: (1) triple nativo build=host=target=distropica (senão a configure exige um g++ de build sem prefixo); (2/3) shims que injetam /usr no pass-1 gcc/g++, com -isystem (buscado após os -I do pacote, senão o obstack.h da glibc sombreia o da libiberty); (4) SELFTEST_TARGETS= (o pass-1 é flaky); (5) mathlibs+binutils glibc (DEPS/BUILD_DEPS acima); (6) mathlibs com -std=gnu17 (na receita mathlibs-glibc); (7/8) --disable-lto (o plugin depende do binutils-glibc, e o LTO fica off por opção, coerente com o pass-1). SUPERSEDE o gcc-passada-1 nos mesmos caminhos (cross-gcc, cc1/cc1plus em /usr/libexec) — colisão = dívida de 'fingerprint de build' (§4)."
-# O payload reúne compilador GPL, runtimes com GCC Runtime Library Exception,
-# manuais GFDL e componentes compiler-rt/BSD. Até existir SBOM arquivo a
-# arquivo, uma expressão agregada manual seria uma falsa precisão.
-LICENSE=NOASSERTION
+# Expressão do payload REALMENTE instalado, conferida contra o manifesto do
+# registro — 1698 entradas — e não contra a árvore de fontes, que traz muito
+# mais do que este configure constrói. Com --enable-languages=c,c++ não há
+# libphobos (Boost) nem libgo, e sem eles o libffi também não entra.
+#
+#   GPL-3.0-or-later             o compilador: gcc, g++, cc1, cc1plus
+#   ... WITH GCC-exception-3.1   os runtimes que o COPYING.RUNTIME cobre e que
+#                                o manifesto mostra instalados: libgcc_s,
+#                                libstdc++ (+exp/+fs), libgomp, libitm,
+#                                libatomic, libquadmath, libssp
+#   GFDL-1.3-invariants-or-later os manuais: 12 entradas em share/man e
+#                                share/info, incluindo gpl.7 e libitm.info
+#   NCSA OR MIT                  libasan/libtsan/libubsan, do libsanitizer, que
+#                                é compiler_rt: o LICENSE.TXT dele diz
+#                                "dual licensed under both the University of
+#                                Illinois BSD-Like license and the MIT license.
+#                                As a user of this code you may choose to use
+#                                it under either license" — daí o OR, e não AND
+LICENSE="GPL-3.0-or-later AND GPL-3.0-or-later WITH GCC-exception-3.1 AND GFDL-1.3-invariants-or-later AND (NCSA OR MIT)"
 SRC="https://ftp.gnu.org/gnu/gcc/gcc-15.3.0/gcc-15.3.0.tar.xz"
 SHA256=fa59c1beef8995f27c4d71c1df227587189315d3e6faff1bb4306e61b0c530eb
 

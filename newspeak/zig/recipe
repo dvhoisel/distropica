@@ -2,10 +2,23 @@ NAME=zig
 VERSION=0.16.0
 KIND=binary
 ABOUT="toolchain Zig; zig cc -target x86_64-linux-musl é o compilador C do mundo-fonte pré-E2"
-# O tar oficial inclui Zig (MIT) e sysroots/fontes auxiliares sob várias
-# licenças. Os avisos upstream ficam preservados no payload; a expressão exata
-# do bundle depende do inventário/SBOM que ainda é gate de release.
-LICENSE=NOASSERTION
+# Expressão do AGREGADO, e não do Zig sozinho: o install_pkg extrai o tarball
+# INTEIRO em /opt, então tudo o que a Ziglang embarca é payload desta distro.
+# Levantado com bootstrap/sbom, que extraiu 15 textos de licença de dentro do
+# próprio artefato — não do site do upstream:
+#
+#   MIT                          o Zig (LICENSE, "The MIT License (Expat)"),
+#                                a musl (lib/libc/musl/COPYRIGHT) e o emmalloc
+#   Apache-2.0 WITH LLVM-exception  libcxx, libcxxabi, libunwind e a wasi-libc
+#   Apache-2.0                   a wasi-libc, que se declara multilicenciada
+#                                sob Apache+LLVM, Apache e MIT
+#   BSD-2-Clause                 cloudlibc e o COPYRIGHT do FreeBSD
+#   BSD-3-Clause                 musl-fts (lib/libc/wasi/fts/musl-fts/COPYING)
+#   CC0-1.0                      dlmalloc, citado no LICENSE da wasi-libc
+#   ZPL-2.1                      mingw-w64 (lib/libc/mingw/COPYING), que se
+#                                declara ZPL 2.1 fora das partes marcadas
+#   LGPL-2.1-or-later            os cabeçalhos da glibc em lib/libc/glibc
+LICENSE="MIT AND Apache-2.0 WITH LLVM-exception AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND CC0-1.0 AND ZPL-2.1 AND LGPL-2.1-or-later"
 SRC="https://ziglang.org/download/$VERSION/zig-x86_64-linux-$VERSION.tar.xz"
 SHA256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
 SIG="$SRC.minisig"
