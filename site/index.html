@@ -137,7 +137,9 @@
       padding: 2.5rem 0; border-top: 1px solid var(--line);
       color: var(--muted); font-size: .8rem;
     }
-    footer .wrap { display: flex; justify-content: space-between; gap: 1rem; }
+    footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    footer .apoio a { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line); }
+    footer .apoio a:hover { border-bottom-color: currentColor; }
     @media (max-width: 760px) {
       .navlinks { display: none; }
       .hero { min-height: auto; padding: 4rem 0; }
@@ -248,6 +250,7 @@ minitrue verify</code></pre>
   <footer>
     <div class="wrap">
       <span>Distrópica · 2026 · doubleplusgood</span>
+      <span class="apoio">Com apoio do <a href="https://prov.net.br">Prov</a></span>
       <span><a href="https://github.com/dvhoisel/distropica/blob/agent/installable-live-media/LICENSE">GPL-3.0-or-later</a> · <a href="https://github.com/dvhoisel/distropica">GitHub</a></span>
     </div>
   </footer>
