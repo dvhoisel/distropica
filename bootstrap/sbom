@@ -1,0 +1,156 @@
+#!/bin/sh
+# Extrai, de dentro de cada artefato, TODO texto de licença e aviso que ele
+# carrega — o inventário por componente que a SPEC-0011 §8 chama de "textos e
+# avisos de terceiros materializados", e que as receitas com LICENSE=NOASSERTION
+# nomeiam como o gate que falta.
+#
+# Por que extrair em vez de rotular: os artefatos desta árvore são AGREGADOS. O
+# tarball do Zig traz doze licenças (LLVM, musl, glibc, mingw, wasi, libcxx); o
+# do GCC traz COPYING3, COPYING.RUNTIME, libffi, zlib, libsanitizer e libphobos;
+# o executável do jq embute oniguruma e decNumber; o do yq é um binário Go com
+# vinte e nove módulos dentro. Escrever `LICENSE=MIT` em qualquer um deles seria
+# o que a receita do gcc-pass2 já chama pelo nome: falsa precisão.
+#
+# Este script NÃO decide licença. Ele reúne a EVIDÊNCIA de onde a decisão sai, e
+# o faz a partir do artefato — não do que o upstream diz no site, não do que a
+# memória de quem escreve sugere. Para binário Go a evidência é ainda melhor que
+# um arquivo de texto: `go version -m` devolve o grafo de módulos com versão e
+# hash, gravado pelo próprio compilador dentro do executável.
+#
+# O que ele não alcança, e diz em voz alta: executável estático que não seja Go
+# não carrega metadado nenhum. Para esses, a evidência tem de vir da fonte
+# correspondente, e o script os lista como pendentes em vez de silenciá-los.
+set -eu
+umask 022
+LC_ALL=C
+export LC_ALL
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+BUNDLE=
+
+usage() {
+    cat <<'EOF'
+uso: bootstrap/sbom --bundle DIR
+
+  --bundle DIR   bundle de fontes produzido pelo bootstrap/source-bundle.
+                 O INVENTARIO dele dá a lista de pacotes e o hash de cada
+                 fonte; a saída vai para <bundle>/licencas/.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --bundle) BUNDLE=${2:?}; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "erro: opção desconhecida: $1" >&2; usage >&2; exit 1 ;;
+    esac
+done
+[ -n "$BUNDLE" ] || { echo "erro: --bundle é obrigatório" >&2; exit 1; }
+[ -f "$BUNDLE/INVENTARIO" ] || {
+    echo "erro: $BUNDLE não tem INVENTARIO; rode o source-bundle antes" >&2
+    exit 1
+}
+BUNDLE=$(CDPATH= cd -- "$BUNDLE" && pwd -P)
+SAIDA=$BUNDLE/licencas
+[ ! -e "$SAIDA" ] || { echo "erro: $SAIDA já existe" >&2; exit 1; }
+mkdir -p "$SAIDA"
+
+INDICE=$SAIDA/INDICE
+printf '# pacote\tcomponente\tsha256\tprimeira-linha\n' > "$INDICE"
+
+# Os nomes que carregam licença. Deliberadamente largo: é melhor recolher um
+# LICENSE_1_0.txt do Boost que ninguém esperava do que perder o aviso de um
+# componente que ninguém sabia estar ali.
+PADRAO='(^|/)(LICEN[SC]E|COPYING|NOTICE|COPYRIGHT|uganda)[^/]*$'
+
+sem_metadado=
+com_texto=
+total_arquivos=0
+
+registra() { # pacote arquivo-no-bundle rotulo
+    hash=$(sha256sum "$2" | cut -d' ' -f1)
+    primeira=$(grep -m1 -a '[A-Za-z]' "$2" 2>/dev/null | cut -c1-72 | tr -d '\t')
+    printf '%s\t%s\t%s\t%s\n' "$1" "$3" "$hash" "$primeira" >> "$INDICE"
+    total_arquivos=$((total_arquivos + 1))
+}
+
+# Uma linha por fonte no INVENTARIO; a coluna 1 é o pacote e a 5 o sha256.
+while IFS="$(printf '\t')" read -r pacote versao mundo licenca hash origem arquivo; do
+    case "$pacote" in '#'*|'') continue ;; esac
+    [ -n "$hash" ] && [ "$hash" != '-' ] || continue
+    fonte=$BUNDLE/upstream/$hash
+    [ -f "$fonte" ] || continue
+
+    destino=$SAIDA/$pacote
+    tipo=$(file -b "$fonte" 2>/dev/null || echo desconhecido)
+    achou=nao
+
+    case "$tipo" in
+        *"gzip compressed"*|*"XZ compressed"*|*"bzip2 compressed"*|*"POSIX tar"*|*"Zstandard"*)
+            # tar -t primeiro, para não explodir árvores de centenas de MiB
+            # quando não há nada a colher.
+            alvos=$(tar -tf "$fonte" 2>/dev/null | grep -E "$PADRAO" || true)
+            if [ -n "$alvos" ]; then
+                mkdir -p "$destino"
+                for alvo in $alvos; do
+                    # Nome achatado: a hierarquia vira o próprio nome, para que
+                    # o índice mostre DE ONDE dentro do artefato cada texto veio.
+                    plano=$(printf '%s' "$alvo" | sed 's|^[^/]*/||; s|/|__|g')
+                    [ -n "$plano" ] || continue
+                    tar -xOf "$fonte" "$alvo" > "$destino/$plano" 2>/dev/null || continue
+                    [ -s "$destino/$plano" ] || { rm -f "$destino/$plano"; continue; }
+                    registra "$pacote" "$destino/$plano" "$alvo"
+                    achou=sim
+                done
+            fi
+            ;;
+        *ELF*)
+            # Binário Go: o compilador grava o grafo de módulos DENTRO do
+            # executável. É evidência melhor que um arquivo de texto solto,
+            # porque não pode divergir do que foi de fato compilado.
+            if command -v go >/dev/null 2>&1 &&
+               go version -m "$fonte" >/dev/null 2>&1; then
+                mkdir -p "$destino"
+                go version -m "$fonte" > "$destino/go-modules.txt" 2>/dev/null
+                registra "$pacote" "$destino/go-modules.txt" '(grafo de módulos Go, do próprio binário)'
+                achou=sim
+            fi
+            ;;
+    esac
+
+    if [ "$achou" = sim ]; then
+        com_texto="$com_texto $pacote"
+    else
+        sem_metadado="$sem_metadado $pacote"
+    fi
+done < "$BUNDLE/INVENTARIO"
+
+cat > "$SAIDA/LEIA-ME" <<'FIM'
+Evidência de licenciamento, extraída dos artefatos.
+
+Cada subdiretório é um pacote; cada arquivo dentro dele é um texto de licença
+ou aviso que veio DE DENTRO do artefato daquele pacote. O nome do arquivo é o
+caminho original com '/' virando '__', para que se veja de onde no artefato
+cada texto saiu. O INDICE traz pacote, caminho original, sha256 e a primeira
+linha significativa de cada um.
+
+Isto é EVIDÊNCIA, não decisão. Nenhuma expressão SPDX foi inferida aqui: os
+artefatos desta árvore são agregados, e rotular um agregado com a licença do
+componente principal é o que as receitas com LICENSE=NOASSERTION já recusam
+fazer. O que este diretório entrega é a base a partir da qual essa expressão
+pode ser escrita — e defendida.
+
+Para binários Go, o arquivo go-modules.txt é o grafo de módulos gravado pelo
+compilador dentro do executável: versão e hash de cada dependência, sem
+intermediário.
+FIM
+
+echo "evidência: $SAIDA"
+echo "  arquivos coletados: $total_arquivos"
+echo "  pacotes com texto:  $(printf '%s\n' $com_texto | sort -u | wc -l)"
+if [ -n "$sem_metadado" ]; then
+    echo
+    echo "SEM EVIDÊNCIA NO ARTEFATO — precisam da fonte correspondente:" >&2
+    printf '%s\n' $sem_metadado | sort -u | tr '\n' ' ' >&2
+    echo >&2
+fi
