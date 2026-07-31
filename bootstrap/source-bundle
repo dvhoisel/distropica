@@ -143,10 +143,29 @@ for crate in minitrue minipax; do
 done
 
 # ---- os pacotes da mídia, e as fontes de cada um -------------------------
-# A lista sai do ÍNDICE DO CACHE com que a mídia foi composta. Escrevê-la à
-# mão aqui seria recriar o problema que o cache-from-channel já resolveu.
-pacotes=$(cat "$CACHE"/channels/*/index 2>/dev/null | awk 'NF>=4 {print $1}' | sort -u)
-[ -n "$pacotes" ] || { echo "erro: nenhum pacote no índice do cache" >&2; exit 1; }
+# TRÊS conjuntos, e não um. A primeira versão deste script leu só o índice do
+# canal e produziu um bundle sem o Firefox — o pacote mais pesado da mídia e o
+# de licença mais delicada. A regra é a mesma que o cache-from-channel já
+# documenta, e está repetida aqui porque errá-la é silencioso:
+#
+#  (a) o índice do canal: os pacotes do Mundo B, que têm artefato de canal;
+#  (b) todo KIND=binary: o Mundo A NÃO entra no índice — o payload dele É o
+#      arquivo publicado pelo upstream, endereçado pelo sha256 da receita;
+#  (c) todo nome em cache.world, independente do KIND: são as fontes de
+#      reconstrução que a mídia offline carrega para o sistema instalado poder
+#      recompilar sem rede.
+pacotes=$(
+    cat "$CACHE"/channels/*/index 2>/dev/null | awk 'NF>=4 {print $1}'
+    for receita in "$REPO"/newspeak/*/recipe; do
+        grep -q '^KIND=binary' "$receita" && basename "$(dirname "$receita")"
+    done
+    for world in "$REPO"/profiles/*/cache.world; do
+        [ -e "$world" ] || continue
+        sed -e 's/#.*//' -e '/^[[:space:]]*$/d' -e 's/[[:space:]]//g' "$world"
+    done
+)
+pacotes=$(printf '%s\n' $pacotes | sort -u)
+[ -n "$pacotes" ] || { echo "erro: nenhum pacote a empacotar" >&2; exit 1; }
 
 inventario=$OUTPUT/INVENTARIO
 printf '# pacote\tversao\tmundo\tlicenca\tsha256\torigem\tarquivo\n' > "$inventario"
@@ -155,22 +174,34 @@ faltando=
 noassertion=
 total=0
 copiadas=0
+divergentes=
 for pacote in $pacotes; do
+    receita=$REPO/newspeak/$pacote/recipe
+    [ -f "$receita" ] || { faltando="$faltando $pacote(sem-receita)"; continue; }
     meta=$REGISTROS/$pacote/meta
-    [ -f "$meta" ] || { faltando="$faltando $pacote(sem-registro)"; continue; }
-    versao=$(grep '^VERSION=' "$meta" | head -1 | cut -d= -f2-)
-    mundo=$(grep '^WORLD=' "$meta" | head -1 | cut -d= -f2-)
-    licenca=$(grep '^LICENSE=' "$meta" | head -1 | cut -d= -f2-)
+    versao=$(grep '^VERSION=' "$receita" | head -1 | cut -d= -f2- | tr -d '"')
+    mundo=$(grep -q '^KIND=binary' "$receita" && echo A || echo B)
     total=$((total + 1))
-    case "$licenca" in
-        NOASSERTION|'') noassertion="$noassertion $pacote" ;;
-    esac
 
-    receita=$REGISTROS/$pacote/recipe
-    if [ ! -f "$receita" ]; then
-        printf '%s\t%s\t%s\t%s\t-\t-\t(sem receita no registro)\n' \
-            "$pacote" "$versao" "$mundo" "$licenca" >> "$inventario"
-        continue
+    # A licença vem da RECEITA e não do registro. O registro é um instantâneo
+    # do que existia quando o pacote foi construído, e registros antigos
+    # simplesmente NÃO TÊM o campo — o do linux-headers não tem, e lê-lo dali
+    # dava string vazia, que a primeira versão deste script contou como
+    # licença por declarar. Duas mentiras opostas de uma vez: acusava
+    # linux-headers e make, que têm licença declarada, e deixava passar o
+    # Firefox, que não tem. A receita é a declaração corrente e autoritativa,
+    # e é ela que viaja neste bundle.
+    licenca=$(grep '^LICENSE=' "$receita" | head -1 | cut -d= -f2- | tr -d '"')
+    [ -n "$licenca" ] || licenca=NOASSERTION
+    case "$licenca" in
+        NOASSERTION) noassertion="$noassertion $pacote" ;;
+    esac
+    # Quando o registro TEM o campo e ele discorda da receita, isso é
+    # informação e não ruído: significa que a licença mudou depois do build.
+    if [ -f "$meta" ] && grep -q '^LICENSE=' "$meta"; then
+        do_registro=$(grep '^LICENSE=' "$meta" | head -1 | cut -d= -f2-)
+        [ "$do_registro" = "$licenca" ] || [ -z "$do_registro" ] ||
+            divergentes="$divergentes $pacote"
     fi
     # SRC e SHA256 são listas paralelas separadas por espaço (mathlibs-glibc
     # traz três tarballs), e a única variável que aparece no SRC desta árvore
@@ -261,6 +292,10 @@ echo "  tamanho:   $(du -sh "$OUTPUT" | cut -f1)"
 if [ -n "$faltando" ]; then
     echo "AVISO: fonte ausente do cache para:$faltando" >&2
     echo "       o bundle está INCOMPLETO e não satisfaz o §8" >&2
+fi
+if [ -n "$divergentes" ]; then
+    echo "AVISO: a licença da receita difere da congelada no registro em:$divergentes" >&2
+    echo "       o inventário traz a da receita, que é a corrente" >&2
 fi
 if [ -n "$noassertion" ]; then
     echo "PENDENTE: LICENSE=NOASSERTION em:$noassertion" >&2
