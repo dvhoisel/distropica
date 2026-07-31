@@ -138,16 +138,26 @@ if [ -n "$CLICK" ]; then
     # pixels e para ali — foi assim que o primeiro clique caiu no vazio, sem
     # erro nenhum em lugar nenhum. Por isso o estacionamento é feito em muitos
     # passos pequenos.
+    # TRÊS conexões, e não uma. O socat fecha o socket assim que termina de
+    # escrever, e o monitor do QEMU descarta o que ainda não consumiu: mandar
+    # estacionamento, deslocamento e clique na mesma conexão perde o FIM da
+    # fila. O sintoma é a foto mostrar a área de trabalho vazia com o ponteiro
+    # parado no canto — indistinguível de um aplicativo que não abre, que é
+    # exatamente o que este clique existe para decidir. Já aconteceu.
+    monitor() { socat - "UNIX-CONNECT:$MONITOR" >/dev/null 2>&1 || true; }
     {
         i=0
         while [ "$i" -lt 20 ]; do
             printf 'mouse_move -100 -100\n'
             i=$((i + 1))
         done
-        printf 'mouse_move %s %s\n' "$x" "$y"
-        printf 'mouse_button 1\n'
-        printf 'mouse_button 0\n'
-    } | socat - "UNIX-CONNECT:$MONITOR" >/dev/null 2>&1 || true
+    } | monitor
+    sleep 1
+    printf 'mouse_move %s %s\n' "$x" "$y" | monitor
+    sleep 1
+    printf 'mouse_button 1\n' | monitor
+    sleep 1
+    printf 'mouse_button 0\n' | monitor
     echo "clicou em ($x,$y); esperando ${SETTLE_AFTER}s pelo aplicativo"
     sleep "$SETTLE_AFTER"
 fi
