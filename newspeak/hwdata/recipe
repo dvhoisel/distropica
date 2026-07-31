@@ -1,0 +1,30 @@
+NAME=hwdata
+VERSION=0.399
+KIND=source
+TOOLCHAIN=none
+DEPS=""
+ABOUT="As tabelas que traduzem número de fabricante em nome: pci.ids e usb.ids. O BusyBox JÁ traz lspci e lsusb — o que falta não é o comando, é a base que ele consulta. Sem ela os dois imprimem só identificadores hexadecimais, e a pergunta que a pessoa realmente tem, 'qual é a minha placa de som?', não é respondida. Isso deixou de ser detalhe quando esta árvore passou a escolher drivers de vídeo, som e wi-fi por hipótese sobre que hardware existe do outro lado: lspci com nomes é como quem recebe a distro descobre se o driver que embarcamos serve para a máquina dela. Complementa o hwdata-pnp, que recortou de propósito só a tabela de monitores e explica ali o porquê do recorte; este pacote traz as duas tabelas grandes e deixa oui.txt e iab.txt de fora, que são registro de MAC e não têm consumidor nesta árvore."
+LICENSE="GPL-2.0-or-later OR XFree86-1.1"
+SRC="https://github.com/vcrhonek/hwdata/archive/refs/tags/v$VERSION.tar.gz"
+SHA256=74872355e14d5ddc48a0f63036227ffb5f7796a3012c6377ac1fc7432ffe2b41
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    install -d "$STAGE/usr/share/hwdata"
+    # So as duas tabelas que tem consumidor aqui. O configure/make do upstream
+    # instalaria tambem oui.txt e iab.txt (registro de MAC, ~10 MiB juntos) e
+    # regras de udev que esta arvore nao usa; copiar o que se quer e mais
+    # honesto que instalar tudo e apagar depois.
+    install -m 0644 pci.ids "$STAGE/usr/share/hwdata/pci.ids"
+    install -m 0644 usb.ids "$STAGE/usr/share/hwdata/usb.ids"
+
+    # Guarda: tabela existe e tem conteudo. Um arquivo truncado responde a
+    # consulta com silencio, que e indistinguivel de tabela ausente.
+    for tabela in pci.ids usb.ids; do
+        linhas=$(grep -c . "$STAGE/usr/share/hwdata/$tabela" || echo 0)
+        [ "$linhas" -ge 1000 ] || {
+            echo "hwdata: $tabela tem so $linhas linhas" >&2
+            exit 1
+        }
+    done
+}

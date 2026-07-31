@@ -1,0 +1,26 @@
+NAME=libevent
+VERSION=2.1.13
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc openssl"
+BUILD_DEPS="gcc-pass2 binutils-glibc make"
+ABOUT="Laço de eventos. Está aqui por UM consumidor — o tmux — e por nada mais, o que é o suficiente: sem ela o tmux não constrói. Ele usa a libevent para multiplexar as janelas, os clientes e os pseudo-terminais num processo só, que é o que permite a sessão sobreviver ao cliente que a abriu. Com openssl, porque o bufferevent_openssl faz parte da biblioteca e desacoplá-lo exigiria --disable-openssl, o que deixaria um pedaço da API faltando para qualquer consumidor futuro por economia de nada — o openssl já está na árvore. Sem os testes e sem o benchmark, que não são payload."
+LICENSE="BSD-3-Clause AND ISC"
+SRC="https://github.com/libevent/libevent/releases/download/release-$VERSION-stable/libevent-$VERSION-stable.tar.gz"
+SHA256=f7e9383b8c0baa81b687e5b5eecc01beefaf1b19b64151d95ed61647fe7a315c
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure --prefix=/usr \
+        --disable-static \
+        --disable-samples \
+        --disable-libevent-regress
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    ls "$STAGE/usr/lib/libevent.so"* >/dev/null 2>&1 || {
+        echo "libevent: a biblioteca compartilhada nao foi produzida" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

@@ -52,3 +52,28 @@ desktop
 # manda senha em claro.
 minicom
 openssh
+
+# Basico que faltava, e o primeiro nao e acrescimo: e conserto. O
+# /etc/ssl/certs estava VAZIO, e o openssl foi configurado esperando encontrar
+# uma loja la — sem ela toda verificacao de TLS do sistema falha. Passou
+# despercebido porque o minitrue carrega as proprias raizes dentro do binario,
+# entao o gerenciador de pacotes funcionava e so o resto do sistema e que nao
+# tinha TLS verificavel.
+#
+# O hwdata nao traz comando: o BusyBox ja tem lspci e lsusb, e o que falta e a
+# tabela que eles consultam. Sem ela imprimem hexadecimal, e a pergunta 'qual e
+# a minha placa?' fica sem resposta — o que passou a importar quando esta
+# arvore comecou a escolher driver de video, som e wi-fi por hipotese sobre o
+# hardware do outro lado.
+#
+# curl e libevent NAO estao nesta lista, e e de proposito: o git fala HTTPS
+# pela libcurl e o tmux nao constroi sem libevent, entao os dois chegam por
+# DEPS — que e onde a relacao de fato existe, como este arquivo ja diz do
+# libmnl e do libnftnl. Repeti-los aqui criaria uma segunda lista para
+# manter.
+ca-certificates
+hwdata
+git
+strace
+tmux
+file

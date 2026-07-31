@@ -1,0 +1,34 @@
+NAME=file
+VERSION=5.46
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc zlib"
+BUILD_DEPS="gcc-pass2 binutils-glibc make"
+ABOUT="Identifica o tipo de um arquivo pelos bytes dele, e instala a libmagic junto. Entra por um argumento concreto e não por completude: o próprio ferramental desta distro depende dele. O bootstrap/sbom, que extrai a evidência de licenciamento de dentro dos artefatos, decide como abrir cada um chamando 'file -b' — e a Distrópica não conseguia rodar a própria ferramenta. Com zlib, para que ele enxergue dentro de arquivo comprimido em vez de parar em 'gzip compressed data'; sem bzip2, xz e zstd porque nenhuma das três está na árvore como biblioteca, e o BusyBox as descomprime pela linha de comando quando alguém precisa."
+LICENSE="BSD-2-Clause"
+SRC="https://astron.com/pub/file/file-$VERSION.tar.gz"
+SHA256=c9cc77c7c560c543135edc555af609d5619dbef011997e988ce40a3d75d86088
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure --prefix=/usr \
+        --enable-zlib \
+        --disable-bzlib \
+        --disable-xzlib \
+        --disable-zstdlib \
+        --disable-lzlib \
+        --disable-static
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -x "$STAGE/usr/bin/file" ] || {
+        echo "file: o binario nao foi produzido" >&2; exit 1;
+    }
+    # A base magica e o pacote inteiro: sem ela o comando roda e nao reconhece
+    # nada, que e pior do que nao existir.
+    [ -s "$STAGE/usr/share/misc/magic.mgc" ] || {
+        echo "file: a base magica compilada nao foi instalada" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

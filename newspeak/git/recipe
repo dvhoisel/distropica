@@ -1,0 +1,39 @@
+NAME=git
+VERSION=2.55.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc curl openssl zlib expat pcre2 perl"
+BUILD_DEPS="gcc-pass2 binutils-glibc make gettext"
+ABOUT="Controle de versão. Faltava, e a falta era gritante: esta distro se apresenta como pronta para compilar, embarca gcc, make, vim e ripgrep, e o site convida a examinar o código — sem nenhuma forma de obter esse código versionado ou registrar uma alteração. A libcurl em DEPS é o que torna clone por https:// possível; sem ela sobrariam ssh:// e git://, e o primeiro repositório que alguém tentasse buscar falharia. O expat é para push por HTTP; o pcre2 dá ao git grep as mesmas expressões que o ripgrep desta árvore já usa, em vez de duas sintaxes diferentes na mesma máquina. Perl entra porque partes do git são scripts Perl e sem ele add -p, rebase -i e send-email não funcionam — não é opcional, é o que o upstream assume. Sem Tcl/Tk: gitk e git-gui exigiriam uma terceira pilha gráfica numa árvore que já carrega GTK3 por causa do Firefox e GTK4 como toolkit próprio."
+LICENSE="GPL-2.0-only AND LGPL-2.1-or-later AND BSD-3-Clause AND MIT"
+SRC="https://mirrors.edge.kernel.org/pub/software/scm/git/git-$VERSION.tar.xz"
+SHA256=457fdb04dc8728e007d4688695e6912e6f680727920f2a40bf11eacc17505357
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure --prefix=/usr \
+        --with-curl \
+        --with-expat \
+        --with-libpcre2 \
+        --with-openssl \
+        --without-tcltk \
+        --without-iconv
+    make -j"$JOBS" NO_GETTEXT=1 NO_TCLTK=1
+    make install DESTDIR="$STAGE" NO_GETTEXT=1 NO_TCLTK=1
+    [ -x "$STAGE/usr/bin/git" ] || {
+        echo "git: o binario nao foi produzido" >&2; exit 1;
+    }
+    # A GUARDA QUE IMPORTA. Um git sem libcurl constroi, instala e roda — e so
+    # falha quando alguem tenta clonar por https, que e o caso comum. Conferir
+    # o binario e a unica forma de saber; o configure aceita --with-curl e
+    # segue em frente se nao a encontrar.
+    readelf -dW "$STAGE/usr/bin/git-remote-http" 2>/dev/null |
+        grep -q 'NEEDED.*libcurl' || {
+        echo "git: o git-remote-http nao referencia a libcurl;" >&2
+        echo "     clone por https:// falharia e ssh:// funcionaria," >&2
+        echo "     que e o jeito mais confuso de descobrir o problema" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

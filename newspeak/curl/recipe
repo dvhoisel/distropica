@@ -1,0 +1,46 @@
+NAME=curl
+VERSION=8.21.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc openssl zlib ca-certificates"
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf"
+ABOUT="Cliente HTTP. O BusyBox já traz um applet wget, e ele resolve baixar um arquivo — o que não resolve é ser BIBLIOTECA: o git fala HTTPS pela libcurl, e sem ela um clone por https:// simplesmente não existe, sobrando só ssh:// e git://. É por isso que este pacote entra junto com o git e não sozinho. O ca-certificates está em DEPS e isso não é zelo: um cliente TLS sem loja de raízes falha em toda conexão verificada, e a alternativa que as pessoas encontram é desligar a verificação — exatamente o desfecho que esta árvore não quer induzir. Só HTTP e HTTPS: FTP, SMTP, IMAP, LDAP, RTSP e companhia saem, porque cada protocolo ligado é superfície que ninguém aqui exercita. Sem libssh2, sem libidn2, sem nghttp2 — HTTP/2 exigiria mais uma biblioteca para um ganho que não se mede neste uso."
+LICENSE="curl"
+SRC="https://curl.se/download/curl-$VERSION.tar.xz"
+SHA256=aa1b66a70eace83dc624508745646c08ae561de512ab403adffb93ac87fc72e6
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure --prefix=/usr \
+        --with-openssl \
+        --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt \
+        --enable-http \
+        --disable-ftp --disable-file --disable-ldap --disable-ldaps \
+        --disable-rtsp --disable-dict --disable-telnet --disable-tftp \
+        --disable-pop3 --disable-imap --disable-smb --disable-smtp \
+        --disable-gopher --disable-mqtt \
+        --without-libpsl --without-libidn2 --without-nghttp2 \
+        --without-libssh2 --without-brotli --without-zstd \
+        --disable-static
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -x "$STAGE/usr/bin/curl" ] || {
+        echo "curl: o binario nao foi produzido" >&2; exit 1;
+    }
+    ls "$STAGE/usr/lib/libcurl.so"* >/dev/null 2>&1 || {
+        echo "curl: a libcurl nao foi produzida — o git nao teria como falar HTTPS" >&2
+        exit 1
+    }
+    # A guarda que decide se ele verifica alguma coisa: o caminho do bundle tem
+    # de estar COMPILADO no binario. Se o configure o descartar, o curl passa a
+    # procurar num default do sistema que aqui nao existe, e toda conexao
+    # verificada falha com uma mensagem sobre certificado que nao aponta a
+    # causa.
+    strings -a "$STAGE/usr/bin/curl" 2>/dev/null |
+        grep -qx '/etc/ssl/certs/ca-certificates.crt' || {
+        echo "curl: o caminho do bundle de CAs nao ficou embutido" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}
