@@ -372,8 +372,19 @@ impl ResolvedProfile {
                 // temporário enquanto o hash se forma. Em nenhum momento o
                 // payload inteiro existe na memória.
                 let entries = tree::collect(path, TreePolicy::Cache)?;
+                // O temporário nasce AO LADO do cache, e não no TMPDIR, e isso
+                // não é detalhe: no instalador vivo o TMPDIR é tmpfs, ou seja
+                // MEMÓRIA. Empacotar 664 MiB de cache para lá enquanto 2 GiB
+                // de escrita estão pendentes numa máquina de 4 GiB sem swap
+                // não trava — deixa o sistema em pressão de memória, e a
+                // instalação parece congelada logo depois do último `verify`.
+                //
+                // O cache já vive no disco de destino (o `install-media` cria
+                // seu espaço de trabalho dentro do `--target`), então o irmão
+                // dele está no mesmo sistema de arquivos e no lugar certo.
+                let scratch = path.parent().unwrap_or(path.as_path());
                 let mut sink = HashingWriter {
-                    inner: std::io::BufWriter::new(tempfile::NamedTempFile::new()?),
+                    inner: std::io::BufWriter::new(tempfile::NamedTempFile::new_in(scratch)?),
                     hasher: Sha256::new(),
                     written: 0,
                 };
