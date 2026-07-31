@@ -49,6 +49,26 @@ INITTAB
 # compositor que morre por falta de placa seria reiniciado para sempre. Numa
 # maquina sem driver KMS — QEMU com VGA padrao, por exemplo — o resultado seria
 # um laco em vez de um console. Melhor um getty honesto.
+# O HOME, e ele NAO e detalhe cosmetico. O init do BusyBox entrega HOME=/ e
+# nao le o /etc/passwd; quem le e o `login`, e a sessao grafica nao passa por
+# ele — entra direto por esta linha do inittab. O sintoma barato e um `cd` sem
+# argumento dentro do terminal ir para / em vez de /root. O caro e que TODO
+# programa que grava configuracao no HOME passa a sujar a raiz do sistema: o
+# Firefox cria /.mozilla, com perfil, cache e cookies, na raiz.
+#
+# Lido do /etc/passwd e nao escrito aqui, porque o dono desse fato e o passwd;
+# repetir '/root' nesta linha seria criar uma segunda verdade que ninguem
+# atualizaria. Se o diretorio nao existir, mantem-se o que veio: melhor um
+# HOME errado do que um HOME que aponta para lugar nenhum.
+sessao_home=$(awk -F: -v uid="$(id -u 2>/dev/null || echo 0)" \
+    '$3 == uid { print $6; exit }' /etc/passwd 2>/dev/null)
+if [ -n "$sessao_home" ] && [ -d "$sessao_home" ]; then
+    HOME=$sessao_home
+    export HOME
+    cd "$HOME" || true
+fi
+unset sessao_home
+
 if [ -x /usr/bin/distropica-desktop ]; then
     for card in /dev/dri/card*; do
         [ -e "$card" ] || continue
