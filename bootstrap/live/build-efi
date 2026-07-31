@@ -497,6 +497,40 @@ for symbol in NETWORK_FILESYSTEMS NFS_FS SECURITY_SELINUX \
     PERF_EVENTS FTRACE BPF_SYSCALL NUMA CPU_FREQ WIRELESS; do
     set_config --disable "$symbol"
 done
+# Wi-Fi. BUILTIN, e não em módulo — e essa diferença é o defeito inteiro.
+#
+# O newspeak/linux constrói estes drivers como '=m', com um argumento correto
+# para ELE: módulo não carregado não ocupa memória em máquina que não tem
+# aquele rádio. Só que quem boota o sistema instalado é ESTE kernel, e ele não
+# instala módulo em lugar nenhum — o initramfs não leva nenhum, e o EFI é um
+# bzImage só. Os módulos que existem no disco estão em /lib/modules/7.1.4, do
+# pacote linux, e o kernel em execução é 7.1.4-distropica-live: o modprobe
+# procura pela versão em execução e não acha nada.
+#
+# O resultado medido era o pior tipo de meia-verdade: a pilha 802.11 presente
+# (WLAN, CFG80211, MAC80211, RFKILL builtin), o firmware de 65 MiB embarcado na
+# mídia, o iwd instalado — e ZERO drivers, então nenhuma interface de rádio
+# aparecia e não havia o que configurar. Sessenta e cinco megabytes de firmware
+# para hardware que ninguém conseguia acionar.
+#
+# Builtin custa tamanho no EFI e resolve isso de vez. A alternativa honesta
+# seria instalar os módulos deste kernel no alvo, o que exige o build-efi
+# emiti-los e o instalador depositá-los — mudança maior, e que não muda o que
+# o usuário obtém no fim.
+for symbol in WLAN CFG80211 MAC80211 RFKILL \
+    WLAN_VENDOR_INTEL IWLWIFI IWLDVM IWLMVM \
+    WLAN_VENDOR_ATH ATH9K ATH9K_PCI ATH9K_HTC ATH10K ATH10K_PCI \
+    ATH11K ATH11K_PCI \
+    WLAN_VENDOR_REALTEK RTL8XXXU RTW88 RTW88_8822BE RTW88_8822CE \
+    RTW88_8821CE RTW89 RTW89_8852AE RTW89_8852BE RTW89_8852CE \
+    CRYPTO_USER_API CRYPTO_USER_API_HASH CRYPTO_USER_API_SKCIPHER \
+    CRYPTO_AES CRYPTO_CBC CRYPTO_CTR CRYPTO_ECB CRYPTO_CMAC CRYPTO_HMAC \
+    CRYPTO_MD4 CRYPTO_MD5 CRYPTO_SHA1 CRYPTO_SHA256 CRYPTO_SHA512 \
+    KEY_DH_OPERATIONS ASYMMETRIC_KEY_TYPE X509_CERTIFICATE_PARSER \
+    FW_LOADER; do
+    set_config --enable "$symbol"
+done
+
 # Áudio. Builtin, como todo o resto: o initramfs não leva módulo, e um driver
 # de som em módulo não seria carregado por ninguém.
 #
@@ -621,6 +655,7 @@ for symbol in EFI EFI_STUB BLK_DEV_INITRD VIRTIO_BLK VIRTIO_NET BLK_DEV_SR \
     DRM_VMWGFX DRM_VBOXVIDEO DRM_BOCHS DRM_VIRTIO_GPU \
     SOUND SND SND_PCM SND_HDA_INTEL SND_HDA_CODEC_GENERIC SND_INTEL8X0 \
     SND_ENS1371 SND_USB_AUDIO \
+    IWLWIFI IWLMVM ATH9K ATH10K RTW88 RTW89 RTL8XXXU FW_LOADER \
     USER_NS TUN WIREGUARD NETFILTER NF_TABLES NF_TABLES_INET NFT_CT \
     NFT_FIB_INET NF_CONNTRACK IPV6 IPV6_MULTIPLE_TABLES; do
     grep -q "^CONFIG_${symbol}=y$" "$SOURCE/.config" || {
