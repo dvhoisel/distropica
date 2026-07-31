@@ -236,8 +236,16 @@ HOST
     cat > "$STAGE/etc/os-release" <<'OSREL'
 NAME="Distropica"
 ID=distropica
-PRETTY_NAME="Distropica (edge/rolling)"
+PRETTY_NAME="Distropica 0.9 (edge/rolling)"
 VERSION="rolling"
+# O numero da MIDIA, e nao da distro. VERSION continua "rolling" porque a
+# premissa e essa: nao ha versao do sistema a que se atualizar, ha o estado
+# corrente da arvore. Mas midia de instalacao precisa de nome proprio — para
+# se dizer qual foi usada, qual regrediu, qual baixar de novo —, e o BUILD_ID
+# e o campo que a especificacao do os-release reserva justamente para isso em
+# distro rolling. Numerar o VERSION seria prometer uma serie de versoes que
+# esta distro nao tem.
+BUILD_ID="0.9"
 ANSI_COLOR="1;30"
 HOME_URL="https://github.com/dvhoisel/distropica"
 OSREL
