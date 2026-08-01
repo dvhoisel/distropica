@@ -3,8 +3,8 @@ VERSION=0.9
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc glib gtk4 libqrencode iwd"
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf gettext"
-ABOUT="A ferramenta gráfica de Wi-Fi: lista as redes, mostra o sinal, pede a senha, conecta e reconecta, e publica as credenciais como QR code para passar a senha a um telefone sem digitá-la — daí o libqrencode em DEPS, que o meson dele exige sem alternativa. Conversa com o iwd pelo D-Bus; não fala com o kernel diretamente nem duplica lógica de rede. É GTK4 desde a versão 0.5, e foi essa exigência que forçou a decisão de promover o GTK4 a toolkit da distro — as versões GTK3 pararam na 0.4, de 2021, velhas demais para a API D-Bus do iwd 3.12. Usa os ícones do tema Adwaita, que a árvore já tem. Cobre Wi-Fi e só Wi-Fi, o que é honesto: a ethernet desta distro sobe sozinha pelo udhcpc do rc.d e não precisa de interface gráfica para nada."
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf gettext scdoc"
+ABOUT="A ferramenta gráfica de Wi-Fi: lista as redes, mostra o sinal, pede a senha, conecta e reconecta, e publica as credenciais como QR code para passar a senha a um telefone sem digitá-la — daí o libqrencode em DEPS, que o meson dele exige sem alternativa. Conversa com o iwd pelo D-Bus; não fala com o kernel diretamente nem duplica lógica de rede. É GTK4 desde a versão 0.5, e foi essa exigência que forçou a decisão de promover o GTK4 a toolkit da distro — as versões GTK3 pararam na 0.4, de 2021, velhas demais para a API D-Bus do iwd 3.12. Usa os ícones do tema Adwaita, que a árvore já tem. O scdoc em BUILD_DEPS não é conforto: o meson.build chama find_program('scdoc') sem 'required: false' para gerar as duas páginas de manual, e o pacote não expõe nenhuma opção — não há meson_options.txt nem meson.options no tarball do 0.9 — então ou o scdoc está na árvore ou o iwgtk não compila. Ele é só de construção e não aparece no fechamento de execução. Cobre Wi-Fi e só Wi-Fi, o que é honesto: a ethernet desta distro sobe sozinha pelo udhcpc do rc.d e não precisa de interface gráfica para nada."
 LICENSE=GPL-3.0-or-later
 SRC="https://github.com/J-Lentz/iwgtk/archive/v$VERSION.tar.gz"
 SHA256=84a82dc730fe536034a65d148840e975c1353f4114db527439170ff410583d31
@@ -21,6 +21,65 @@ build() {
 
     [ -x "$STAGE/usr/bin/iwgtk" ] || {
         echo "iwgtk: o binário não foi produzido" >&2
+        exit 1
+    }
+
+    # O ÍCONE SVG SAI, e por duas razões independentes — qualquer uma bastaria.
+    #
+    # (1) Ele é indecodificável aqui. Este gdk-pixbuf é construído com
+    #     -Dbuiltin_loaders=png,gif e -Dothers=disabled, e não há librsvg na
+    #     árvore (é Rust, e a decisão de não ter Rust está no adwaita-icon-theme
+    #     e na mesa). Nada nesta distro transforma este arquivo em pixel.
+    # (2) Ele colide com o modelo de posse. O caminho é
+    #     /usr/share/icons/hicolor/scalable/apps, e o hicolor-icon-theme
+    #     reivindica esse diretório com claim 'd:' — instalar igual ou abaixo de
+    #     diretório reclamado por outro pacote é doublethink pela SPEC-0003 §7,
+    #     e a instalação para com essa mensagem exata. O hicolor existe para ser
+    #     ponto de despejo compartilhado no freedesktop, mas nesta árvore ele é
+    #     dono exclusivo dos 651 diretórios vazios que constituem o pacote.
+    #
+    # Removido o arquivo, o find -type d -empty do fim poda a árvore de
+    # diretórios inteira sob /usr/share/icons e o iwgtk deixa de reivindicar
+    # qualquer coisa lá. É o que resolve, e não um SUPERSEDES.
+    rm -f "$STAGE/usr/share/icons/hicolor/scalable/apps/iwgtk.svg"
+
+    # A unidade systemd sai pelo motivo óbvio: esta distro não tem systemd, o
+    # init é o do BusyBox com drop-ins em /etc/rc.d. Um arquivo .service aqui
+    # não é inerte, é enganoso — descreve um mecanismo que não existe.
+    rm -f "$STAGE/usr/lib/systemd/user/iwgtk.service"
+
+    # Sem o SVG, 'Icon=iwgtk' nos dois .desktop aponta para um nome que nenhum
+    # tema desta árvore resolve. Reapontado para o Adwaita, que TEM PNG para
+    # este nome — é o mesmo ícone que o painel do weston usa no lançador, então
+    # a barra e o menu de aplicações mostram a mesma coisa.
+    for entrada in "$STAGE/usr/share/applications/iwgtk.desktop" \
+                   "$STAGE/etc/xdg/autostart/iwgtk-indicator.desktop"; do
+        [ -f "$entrada" ] || {
+            echo "iwgtk: entrada .desktop ausente: $entrada" >&2
+            exit 1
+        }
+        sed -i 's/^Icon=iwgtk$/Icon=network-wireless/' "$entrada"
+        grep -q '^Icon=network-wireless$' "$entrada" || {
+            echo "iwgtk: o Icon= de $entrada não foi reapontado" >&2
+            grep '^Icon=' "$entrada" >&2
+            exit 1
+        }
+    done
+
+    # Guarda: nada de SVG e nada de systemd sobrou. As duas remoções acima são
+    # por caminho literal; se o upstream mudar o nome ou o destino de qualquer
+    # um dos dois, os rm viram no-ops silenciosos e o defeito volta — a colisão
+    # com o hicolor derrubaria o build, mas a unidade morta passaria batida.
+    #
+    # '! -type d' NÃO é detalhe: a primeira versão desta guarda derrubou o build
+    # apontando /usr/lib/systemd/user, que é o diretório que sobrou depois de o
+    # rm levar o .service — e que a poda de diretórios vazios, três linhas
+    # abaixo, remove de qualquer modo. O que se quer aqui é arquivo instalado,
+    # não continente vazio a caminho da lixeira.
+    achado=$(find "$STAGE" ! -type d \( -name '*.svg' -o -path '*/systemd/*' \) -print)
+    [ -z "$achado" ] || {
+        echo "iwgtk: sobrou arquivo que não deveria ser instalado:" >&2
+        echo "$achado" >&2
         exit 1
     }
     # O autostart do XDG dispara o indicador na sessão gráfica; sem sessão
