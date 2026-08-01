@@ -4,7 +4,7 @@ KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
 BUILD_DEPS="gcc-pass2 binutils-glibc make cmake"
-ABOUT="Decodificador JPEG, e o pacote que obrigou o cmake a entrar nesta árvore. A série 3.x abandonou os autotools e só constrói com cmake — a receita do gdk-pixbuf registrava isso como bloqueio, e o gtk4 o transformou em impedimento, porque ele pede jpeg com dependency() incondicional, sem opção de desligar. A alternativa era fixar a 2.1.5.1, última com autotools, de 2023 e sem correção de segurança desde então; num decodificador de imagem — que processa arquivo vindo de terceiro e é superfície de ataque clássica — isso seria escolher dívida de segurança para evitar dívida de ferramenta. Sem os binários de linha de comando (cjpeg, djpeg, jpegtran): quem consome isto aqui é biblioteca, e o utilitário só existiria para nunca ser chamado. Com a API de 8 bits e a compatibilidade de libjpeg 6b, que é o que todo consumidor desta árvore espera."
+ABOUT="Decodificador JPEG, e o pacote que obrigou o cmake a entrar nesta árvore. A série 3.x abandonou os autotools e só constrói com cmake — a receita do gdk-pixbuf registrava isso como bloqueio, e o gtk4 o transformou em impedimento, porque ele pede jpeg com dependency() incondicional, sem opção de desligar. A alternativa era fixar a 2.1.5.1, última com autotools, de 2023 e sem correção de segurança desde então; num decodificador de imagem — que processa arquivo vindo de terceiro e é superfície de ataque clássica — isso seria escolher dívida de segurança para evitar dívida de ferramenta. Sem os binários de linha de comando (cjpeg, djpeg, jpegtran): quem consome isto aqui é biblioteca, e o utilitário só existiria para nunca ser chamado. Com a API de 8 bits e a compatibilidade de libjpeg 6b, que é o que todo consumidor desta árvore espera. SEM A API TurboJPEG, e por dois motivos que se somam: nada nesta árvore a consome — o GTK4 pede dependency('libjpeg'), que é a API clássica —, e construí-la arrasta o spng com uma zlib EMBUTIDA que o cmake compila sem -fPIC e depois tenta ligar dentro de uma biblioteca compartilhada, o que o ld recusa com 'relocation R_X86_64_32 can not be used when making a shared object'. Desligá-la remove o consumidor inexistente e a cópia embutida de uma biblioteca que a árvore já tem, de uma vez. SEM SIMD, e isso é dívida declarada: o assembler NASM não existe nesta árvore, então as rotinas vetorizadas — que são a razão de o projeto se chamar turbo — caem no C portável. Para decodificar ícone e miniatura no GTK isso não se mede; se um dia alguém abrir foto grande em quantidade, o NASM entra e este comentário sai."
 LICENSE="IJG AND BSD-3-Clause AND Zlib"
 SRC="https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/$VERSION/libjpeg-turbo-$VERSION.tar.gz"
 SHA256=6f30092cef9fb839779646608f4ee14ae3cbac989c47fa05e841b0841f09878e
@@ -18,7 +18,7 @@ build() {
         -DCMAKE_BUILD_TYPE=Release \
         -DENABLE_STATIC=FALSE \
         -DWITH_JPEG8=TRUE \
-        -DWITH_TURBOJPEG=TRUE
+        -DWITH_TURBOJPEG=FALSE
     cmake --build build -j "$JOBS"
     DESTDIR="$STAGE" cmake --install build
 

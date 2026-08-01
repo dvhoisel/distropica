@@ -2,7 +2,7 @@ NAME=cmake
 VERSION=4.4.2
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc gcc-pass2 openssl zlib ncurses"
+DEPS="glibc gcc-pass2 openssl zlib ncurses expat"
 BUILD_DEPS="gcc-pass2 binutils-glibc make openssl zlib"
 ABOUT="O outro sistema de build. Entrou porque a árvore bateu num muro concreto e não por gosto de generalidade: o libjpeg-turbo 3.x só constrói com cmake, o GTK4 exige jpeg sem opção de desligar, e o iwgtk — a interface gráfica de Wi-Fi que já estava escrita aqui — exige GTK4. Sem cmake, a corrente inteira ficava parada, e a receita do gdk-pixbuf já registrava esse bloqueio por escrito. Ele se constrói em DUAS etapas por natureza: o ./bootstrap compila uma versão mínima de si mesmo com make puro, e essa versão constrói a definitiva — é assim que o upstream resolve o problema de um construtor que precisa de si próprio. Usa a zlib, o openssl e a ncurses da árvore em vez das cópias que ele traz dentro: manter cópia embutida seria ter duas versões da mesma biblioteca no mesmo sistema, com a de dentro invisível ao minitrue e às atualizações. As outras bibliotecas vendorizadas dele (libarchive, libuv, jsoncpp, expat próprio) ficam como vêm, porque nenhuma existe nesta árvore e trazê-las agora seria arrastar cinco pacotes para destravar um. Sem ccmake curses? Não: com ele, porque a ncurses já está aqui e um configurador visual custa um binário."
 LICENSE="BSD-3-Clause"
@@ -16,10 +16,21 @@ build() {
     # copias vendorizadas de tudo, e isso deixaria zlib, openssl e ncurses
     # duplicados dentro do binario — invisiveis ao minitrue, sem atualizacao e
     # sem entrada no manifesto.
+    # Os nomes das opcoes foram LIDOS do bootstrap, e nao supostos: a primeira
+    # versao escreveu '--system-curl=no', que nao e a sintaxe dele — sao flags
+    # pareadas, --system-X e --no-system-X. Ele reclamou com 'Unknown option'
+    # e parou, o que e o melhor que podia acontecer.
+    #
+    # zlib e expat vem DA ARVORE; as demais vendorizadas ficam como vem, porque
+    # nenhuma existe aqui e traze-las agora seria arrastar cinco pacotes para
+    # destravar um. O curl embutido fica de proposito: o curl desta arvore
+    # existe, mas nao e dependencia declarada deste pacote, e depender dele na
+    # ordem de build criaria acoplamento que ninguem pediu.
     ./bootstrap --prefix=/usr \
         --parallel="$JOBS" \
         --system-zlib \
-        --system-curl=no \
+        --system-expat \
+        --no-system-curl \
         --no-qt-gui \
         -- -DCMAKE_BUILD_TYPE=Release
     make -j"$JOBS"

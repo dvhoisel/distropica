@@ -1,0 +1,43 @@
+NAME=shared-mime-info
+VERSION=2.5.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib libxml2"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf gettext libxml2"
+ABOUT="A base de tipos MIME, e o update-mime-database que a compila. Entrou porque o GTK4 a exige de forma DURA: o meson.build dele chama gnome.post_install(update_mime_database: os_linux) sem opção que desligue, e sem o programa o configure para com 'Program update-mime-database not found'. A receita do gdk-pixbuf tinha evitado este pacote de propósito, com o argumento de que ele traria libxml2 e itstool atrás — o argumento envelheceu pela metade: a libxml2 já está na árvore desde que o GTK3 entrou, e o itstool só é exigido para as traduções, que aqui não se constroem. Restou uma dependência, não três. Também não é só requisito de build: quem responde 'que tipo de arquivo é este?' no diálogo de abrir do GTK é o g_content_type_guess, e ele lê esta base em tempo de execução. Sem os testes, que pedem xmllint; sem a especificação, que pede xmlto; sem traduções. E sem rodar o update-mime-database no fim do build: ele reescreveria a base do SISTEMA DE BUILD, fora do STAGE — é estado de máquina, e quem o gera no primeiro boot é o drop-in, como o gschemas.compiled e o hwdb.bin."
+LICENSE="GPL-2.0-or-later"
+SRC="https://gitlab.freedesktop.org/xdg/shared-mime-info/-/archive/$VERSION/shared-mime-info-$VERSION.tar.bz2"
+SHA256=b75b420da9b0be9a3d99b1bee6ed87957b56ab54583ac1a97fbd0dc98ddddb25
+
+build() {
+    tar -xjf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --buildtype=release \
+        -Dbuild-tools=true \
+        -Dupdate-mimedb=false \
+        -Dbuild-translations=false \
+        -Dbuild-tests=false \
+        -Dbuild-spec=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    # Guarda: e este programa, e so ele, que o gtk4 procura. Sem ele o pacote
+    # instala a base e o proximo build para exatamente onde parava antes.
+    [ -x "$STAGE/usr/bin/update-mime-database" ] || {
+        echo "shared-mime-info: update-mime-database nao foi produzido" >&2
+        ls "$STAGE/usr/bin" 2>/dev/null >&2
+        exit 1
+    }
+    [ -f "$STAGE/usr/share/mime/packages/freedesktop.org.xml" ] || {
+        echo "shared-mime-info: a base XML nao foi instalada" >&2
+        exit 1
+    }
+    # A base COMPILADA e estado de maquina: ela e funcao de todos os pacotes
+    # que depositam .xml em /usr/share/mime/packages, e portanto nao pertence
+    # a nenhum. Mesmo argumento do gschemas.compiled.
+    rm -f "$STAGE/usr/share/mime/mime.cache" \
+          "$STAGE/usr/share/mime/"*.xml 2>/dev/null || true
+    find "$STAGE" -type d -empty -delete
+}
