@@ -545,10 +545,32 @@ done
 # placa e não produz som, que é indistinguível de driver ausente para quem
 # está do outro lado. GENERIC cobre o que a VM emula; REALTEK cobre a maioria
 # das máquinas reais; HDMI cobre saída por monitor.
+# O 7.1 reorganizou o HDA para sound/hda/, e os nomes abaixo foram LIDOS do
+# Kconfig de lá. Esta lista já esteve errada DUAS VEZES, em direções opostas, e
+# vale registrar as duas porque o modo de errar é o mesmo:
+#
+#   1. SND_HDA_CODEC_GENERIC foi inventado. O certo é SND_HDA_GENERIC, e a
+#      guarda derrubou o build — funcionou.
+#   2. Ao consertar, concluí que SND_HDA_CODEC_REALTEK e SND_HDA_CODEC_HDMI
+#      também não existiam, e os troquei por dez símbolos ALC* mais dois
+#      HDMI_*. ELES EXISTEM: são declarados com 'menuconfig' e não com
+#      'config', e o grep que usei procurava '^config '. Como não estavam na
+#      lista de guardas, o set_config aceitou os doze nomes em silêncio, o
+#      olddefconfig os descartou por serem invisíveis sem o guarda-chuva, e o
+#      kernel saiu com UM codec: sound/hda/codecs/generic.o. Som em VM, nada de
+#      ajuste em máquina real — e nenhuma mensagem em lugar nenhum.
+#
+# Por isso os dois guarda-chuvas entram aqui E na lista de guardas lá embaixo.
+# Cada um "will enable all ... codec drivers as default", nas palavras do
+# próprio Kconfig, o que dispensa enumerar modelo por modelo.
+#
+# SND_HDA_GENERIC continua sendo o que importa para máquina virtual: é o
+# analisador de fallback, que dirige codec sem driver específico, e é ele que
+# faz som sair no QEMU e no VirtualBox.
 for symbol in SOUND SND SND_PCM SND_TIMER SND_HRTIMER \
-    SND_HDA_INTEL SND_HDA_GENERIC SND_HDA_CODEC_GENERIC \
+    SND_HDA SND_HDA_INTEL SND_HDA_GENERIC \
     SND_HDA_CODEC_REALTEK SND_HDA_CODEC_HDMI \
-    SND_INTEL8X0 SND_ENS1371 SND_USB_AUDIO SND_SUPPORT_OLD_API; do
+    SND_INTEL8X0 SND_ENS1371 SND_USB_AUDIO; do
     set_config --enable "$symbol"
 done
 # Hardware amd64 real. Até aqui o perfil cobria máquina virtual: virtio, AHCI
@@ -653,8 +675,8 @@ for symbol in EFI EFI_STUB BLK_DEV_INITRD VIRTIO_BLK VIRTIO_NET BLK_DEV_SR \
     BLK_DEV_NVME USB_XHCI_HCD USB_XHCI_PCI USB_STORAGE USB_HID HID_GENERIC \
     E1000E R8169 \
     DRM_VMWGFX DRM_VBOXVIDEO DRM_BOCHS DRM_VIRTIO_GPU \
-    SOUND SND SND_PCM SND_HDA_INTEL SND_HDA_CODEC_GENERIC SND_INTEL8X0 \
-    SND_ENS1371 SND_USB_AUDIO \
+    SOUND SND SND_PCM SND_HDA_INTEL SND_HDA_GENERIC SND_INTEL8X0 \
+    SND_ENS1371 SND_USB_AUDIO SND_HDA_CODEC_REALTEK SND_HDA_CODEC_HDMI \
     IWLWIFI IWLMVM ATH9K ATH10K RTW88 RTW89 RTL8XXXU FW_LOADER \
     USER_NS TUN WIREGUARD NETFILTER NF_TABLES NF_TABLES_INET NFT_CT \
     NFT_FIB_INET NF_CONNTRACK IPV6 IPV6_MULTIPLE_TABLES; do
