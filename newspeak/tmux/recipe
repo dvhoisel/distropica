@@ -21,12 +21,27 @@ build() {
     # As DUAS bibliotecas que decidem se ele funciona: sem a libevent ele nao
     # multiplexa, sem o ncurses ele nao desenha. Conferir o .pc nao pega o caso
     # de o configure ter achado uma e nao a outra.
-    for lib in libevent libtinfo libncurses; do
-        readelf -dW "$STAGE/usr/bin/tmux" 2>/dev/null | grep -q "NEEDED.*$lib" && continue
-        [ "$lib" = libncurses ] && continue
-        echo "tmux: o binario nao referencia $lib" >&2
-        readelf -dW "$STAGE/usr/bin/tmux" 2>/dev/null | grep NEEDED >&2
+    #
+    # Sao duas condicoes DIFERENTES e por isso duas conferencias, nao um laco.
+    # A primeira versao disto varria 'libevent libtinfo libncurses' num for com
+    # um 'continue' para o ultimo caso, o que na pratica EXIGIA a libtinfo e
+    # tornava a libncurses opcional — o oposto da intencao escrita no
+    # comentario, que era exigir uma das duas. Aqui passaria por sorte, porque
+    # o ncurses desta arvore e --with-termlib=tinfo e o tmux acaba na libtinfo;
+    # mas uma arvore sem termlib separada teria sido reprovada com o binario
+    # correto na mao. Mesmo erro que o minicom cometeu, e pela mesma razao:
+    # 'biblioteca de terminal' aqui e libtinfo OU libncurses, e o sufixo 'w'
+    # das variantes wide entra pelo casamento parcial.
+    ligacoes=$(readelf -dW "$STAGE/usr/bin/tmux" 2>/dev/null | grep NEEDED)
+    printf '%s\n' "$ligacoes" | grep -q 'libevent' || {
+        echo "tmux: o binario nao referencia a libevent — sem ela nao multiplexa" >&2
+        printf '%s\n' "$ligacoes" >&2
         exit 1
-    done
+    }
+    printf '%s\n' "$ligacoes" | grep -qE 'libtinfo|libncurses' || {
+        echo "tmux: o binario nao referencia biblioteca de terminal" >&2
+        printf '%s\n' "$ligacoes" >&2
+        exit 1
+    }
     find "$STAGE" -type d -empty -delete
 }
