@@ -14,7 +14,7 @@ build() {
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
     ./configure --prefix=/usr \
         --with-openssl \
-        --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt \
+        --with-ca-bundle=/etc/ssl/cert.pem \
         --enable-http \
         --disable-ftp --disable-file --disable-ldap --disable-ldaps \
         --disable-rtsp --disable-dict --disable-telnet --disable-tftp \
@@ -37,9 +37,33 @@ build() {
     # procurar num default do sistema que aqui nao existe, e toda conexao
     # verificada falha com uma mensagem sobre certificado que nao aponta a
     # causa.
-    strings -a "$STAGE/usr/bin/curl" 2>/dev/null |
-        grep -qx '/etc/ssl/certs/ca-certificates.crt' || {
-        echo "curl: o caminho do bundle de CAs nao ficou embutido" >&2
+    #
+    # /etc/ssl/cert.pem e NAO /etc/ssl/certs/ca-certificates.crt, que era o que
+    # estava aqui. Nesta distro o bundle mora no CAfile nativo do OpenSSL; o
+    # /etc/ssl/certs e o CApath vazio, que pertence ao pacote openssl e no qual
+    # o ca-certificates nao pode escrever sem doublethink. O porque completo
+    # esta no build() do ca-certificates; se este caminho for alterado aqui sem
+    # ser alterado la, o curl deixa de verificar TLS em silencio.
+    #
+    # A GUARDA OLHA A LIBCURL E NAO O BINARIO, e a primeira versao dela olhava o
+    # binario — derrubando o build depois de compilar e instalar tudo, com o
+    # caminho corretamente configurado. O motivo esta no fonte do 8.21.0: o
+    # CURL_CA_BUNDLE so e consumido em lib/ (vtls/vtls_config.c, version.c,
+    # getinfo.c); o src/ do programa de linha de comando so le a VARIAVEL DE
+    # AMBIENTE de mesmo nome. Com --disable-static o executavel liga a
+    # libcurl.so, entao a string existe uma vez so, dentro da biblioteca. Como
+    # e a libcurl que o git usa, e exatamente ali que ela precisa estar.
+    biblioteca=$(find "$STAGE/usr/lib" -maxdepth 1 -type f \
+        -name 'libcurl.so.*' | head -1)
+    [ -n "$biblioteca" ] || {
+        echo "curl: nao achei o arquivo real da libcurl para conferir o bundle" >&2
+        ls -la "$STAGE/usr/lib" >&2
+        exit 1
+    }
+    strings -a "$biblioteca" 2>/dev/null |
+        grep -qx '/etc/ssl/cert.pem' || {
+        echo "curl: o caminho do bundle de CAs nao ficou embutido na libcurl" >&2
+        strings -a "$biblioteca" 2>/dev/null | grep -E '^/etc/ssl' >&2 || true
         exit 1
     }
     find "$STAGE" -type d -empty -delete
