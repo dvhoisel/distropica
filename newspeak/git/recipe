@@ -19,8 +19,47 @@ build() {
         --with-openssl \
         --without-tcltk \
         --without-iconv
-    make -j"$JOBS" NO_GETTEXT=1 NO_TCLTK=1
-    make install DESTDIR="$STAGE" NO_GETTEXT=1 NO_TCLTK=1
+    # NO_RUST=1 É O QUE FAZ ESTE PACOTE EXISTIR NESTA ÁRVORE. O git 2.55 tem um
+    # subsistema em Rust — a libgitcore.a, construída com cargo — e sem esta
+    # variável o build morre com '/bin/sh: cargo: not found' depois de compilar
+    # o resto inteiro. Esta distro não tem toolchain Rust por decisão registrada
+    # (ver mesa e adwaita-icon-theme); o ripgrep, o único Rust presente, entra
+    # como binário musl estático do upstream e não é compilado aqui.
+    #
+    # E não se perde funcionalidade: o Cargo.toml do git 2.55 NÃO TEM
+    # DEPENDÊNCIA NENHUMA, e os cinco fontes Rust (csum_file, hash, lib, loose,
+    # varint) são reimplementação de código C que continua no repositório. Com
+    # NO_RUST o Makefile simplesmente volta a compilar varint.o e companhia — é
+    # a mesma funcionalidade por outro caminho, e o próprio Makefile chama isso
+    # de 'Optional Rust support'.
+    #
+    # PRAZO CONHECIDO, e está escrito no Makefile do upstream: "With Git 3.0
+    # though, Rust will always be enabled". Quando o git 3.0 sair, esta receita
+    # para de funcionar e a escolha vira: congelar numa 2.x, ou trazer o Rust
+    # para a árvore. Não há terceira saída, e não adianta descobrir isso no dia.
+    #
+    # O ./configure não conhece Rust — não há --without-rust; é variável de
+    # make, e por isso vai nas duas invocações e não na configuração.
+    # INSTALL_SYMLINKS=1: o git instala mais de cem nomes que sao o MESMO
+    # programa — git-cat-file, git-receive-pack, git-upload-pack, os aliases do
+    # remote-curl — e por padrao os cria como HARDLINK. O minitrue recusa isso
+    # com "STAGE contem hardlink; instalacao ainda nao preserva essa topologia",
+    # e a recusa esta certa: um manifesto por arquivo nao consegue afirmar que
+    # dois caminhos sao o mesmo inode, entao instalar quebraria a identidade que
+    # o pacote declarou.
+    #
+    # Das tres saidas que o Makefile oferece, esta e a unica boa. Sem knob
+    # nenhum: hardlink, e o build para. Com NO_INSTALL_HARDLINKS: o Makefile
+    # tenta symlink e CAI PARA COPIA quando o symlink falha — e cada copia e uma
+    # replica do binario do git, que passa de 4 MB; cento e poucas delas seriam
+    # meio giga de nada na midia. Com INSTALL_SYMLINKS: symlink SEMPRE, sem
+    # caminho de fallback, e relativo (o Makefile calcula o caminho de execdir
+    # para bindir), o que sobrevive ao DESTDIR e ao rootfs de instalacao.
+    # SKIP_DASHED_BUILT_INS existe e apagaria os nomes em vez de liga-los; nao
+    # foi usado porque script antigo ainda chama git-cat-file diretamente.
+    make -j"$JOBS" NO_GETTEXT=1 NO_TCLTK=1 NO_RUST=1 INSTALL_SYMLINKS=1
+    make install DESTDIR="$STAGE" NO_GETTEXT=1 NO_TCLTK=1 NO_RUST=1 \
+        INSTALL_SYMLINKS=1
     [ -x "$STAGE/usr/bin/git" ] || {
         echo "git: o binario nao foi produzido" >&2; exit 1;
     }
@@ -28,11 +67,37 @@ build() {
     # falha quando alguem tenta clonar por https, que e o caso comum. Conferir
     # o binario e a unica forma de saber; o configure aceita --with-curl e
     # segue em frente se nao a encontrar.
-    readelf -dW "$STAGE/usr/bin/git-remote-http" 2>/dev/null |
+    #
+    # O helper NAO mora em /usr/bin, e era la que a primeira versao desta
+    # guarda o procurava — ela derrubou o build depois de compilar e instalar o
+    # git inteiro, com o arquivo correto e ligado a libcurl a dois diretorios
+    # de distancia. O git instala os transportes em gitexecdir, que com
+    # --prefix=/usr e /usr/libexec/git-core. Aqui o caminho e DESCOBERTO em vez
+    # de escrito: se o upstream mudar o gitexecdir de novo, a guarda continua
+    # valendo e a mensagem de ausencia diz o que houve.
+    remoto=$(find "$STAGE" -type f -name 'git-remote-http' | head -1)
+    [ -n "$remoto" ] || {
+        echo "git: o git-remote-http nao foi instalado em lugar nenhum;" >&2
+        echo "     sem ele nao ha clone por http nem por https" >&2
+        find "$STAGE" -name 'git-remote-*' >&2
+        exit 1
+    }
+    readelf -dW "$remoto" 2>/dev/null |
         grep -q 'NEEDED.*libcurl' || {
-        echo "git: o git-remote-http nao referencia a libcurl;" >&2
+        echo "git: $remoto nao referencia a libcurl;" >&2
         echo "     clone por https:// falharia e ssh:// funcionaria," >&2
         echo "     que e o jeito mais confuso de descobrir o problema" >&2
+        readelf -dW "$remoto" 2>/dev/null | grep NEEDED >&2
+        exit 1
+    }
+    # Guarda do INSTALL_SYMLINKS: nenhum arquivo com mais de um link. Se a
+    # variavel deixar de ser respeitada, o build passaria aqui e so morreria
+    # depois, na instalacao, com a mensagem do minitrue sobre topologia — que e
+    # correta mas nao diz de quem e a culpa nem o que fazer.
+    duplos=$(find "$STAGE" -type f -links +1 -print)
+    [ -z "$duplos" ] || {
+        echo "git: sobrou hardlink no STAGE; o INSTALL_SYMLINKS nao pegou" >&2
+        printf '%s\n' "$duplos" | head -10 >&2
         exit 1
     }
     find "$STAGE" -type d -empty -delete
