@@ -36,12 +36,19 @@ build() {
         exit 1
     }
     # E a guarda que importa de verdade para um terminal serial: ele tem de
-    # estar ligado ao ncurses. Sem isso o binário existe, roda, e a tela fica
-    # ilegível — o mesmo modo de falhar silencioso que o resto desta árvore
-    # combate.
+    # estar ligado a uma biblioteca de terminal. Sem isso o binário existe,
+    # roda, e a tela fica ilegível.
+    #
+    # A biblioteca é a libtinfo, e NÃO a libncurses — a primeira versão desta
+    # guarda exigia a segunda e teria derrubado o build. O minicom é um
+    # programa de termcap: o configure.ac dele varre 'tinfow tinfo curses
+    # termcap terminfo termlib' e para no primeiro que resolva tputs. Nesta
+    # árvore o ncurses é construído com --with-termlib=tinfo, então quem tem
+    # tputs é a libtinfo, e é nela que ele para. Aceitar qualquer uma das duas
+    # descreve o que pode acontecer sem afrouxar o que importa.
     readelf -dW "$STAGE/usr/bin/minicom" 2>/dev/null |
-        grep -q 'NEEDED.*libncurses' || {
-        echo "minicom: o binário não referencia a libncurses" >&2
+        grep -qE 'NEEDED.*(libtinfo|libncurses)' || {
+        echo "minicom: o binário não referencia biblioteca de terminal" >&2
         readelf -dW "$STAGE/usr/bin/minicom" 2>/dev/null | grep NEEDED >&2
         exit 1
     }

@@ -14,7 +14,15 @@ build() {
     # -rpath-link,/usr/lib: padrão recorrente desta toolchain — a libasound
     # arrasta a libm e a libdl como transitivas e o ld nativo não as resolve.
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # --with-curses=ncursesw NAO e redundante com o ncurses em DEPS. O
+    # configure do alsa-utils so tenta a variante WIDE quando ela e pedida
+    # explicitamente ou quando NLS esta ligado; com --disable-nls e 'auto' ele
+    # vai direto ao nome estreito. E este ncurses e --enable-widec: instala
+    # libncursesw e ncursesw.pc, sem libncurses nem ncurses.pc. Resultado
+    # medido: "configure: error: this packages requires a curses library",
+    # com a biblioteca instalada ali do lado.
     ./configure --prefix=/usr \
+        --with-curses=ncursesw \
         --disable-alsaconf \
         --disable-bat \
         --disable-xmlto \
@@ -28,19 +36,22 @@ build() {
     # desmuta, e o alsactl é quem faz o ajuste sobreviver ao reboot. Se o
     # configure decidir em silêncio que um deles não vai, o build "passa" e o
     # defeito reaparece exatamente como antes: som mudo sem erro nenhum.
-    for ferramenta in amixer alsactl aplay; do
+    # O alsactl vai para /usr/sbin e nao para /usr/bin — e ferramenta de
+    # administracao, e o upstream o instala la. A primeira versao desta guarda
+    # procurava os tres em /usr/bin e derrubou o build DEPOIS de ele compilar
+    # inteiro, com o binario existindo a um diretorio de distancia.
+    [ -x "$STAGE/usr/sbin/alsactl" ] || {
+        echo "alsa-utils: alsactl não foi construído" >&2
+        ls "$STAGE/usr/sbin" 2>/dev/null | head -20 >&2
+        exit 1
+    }
+    for ferramenta in amixer aplay alsamixer; do
         [ -x "$STAGE/usr/bin/$ferramenta" ] || {
             echo "alsa-utils: $ferramenta não foi construído" >&2
             ls "$STAGE/usr/bin" 2>/dev/null | head -20 >&2
             exit 1
         }
     done
-    # alsamixer é o mixer visual; ele depende do ncurses, que está em DEPS.
-    [ -x "$STAGE/usr/bin/alsamixer" ] || {
-        echo "alsa-utils: alsamixer ausente — o ncurses não foi encontrado?" >&2
-        exit 1
-    }
-
     # ESTADO DE MÁQUINA NÃO ENTRA NO MANIFESTO. O asound.state guarda o volume
     # desta máquina; se viesse no payload, toda instalação nasceria com o
     # volume de outra pessoa e o arquivo divergiria do registro no primeiro

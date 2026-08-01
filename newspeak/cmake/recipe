@@ -1,0 +1,45 @@
+NAME=cmake
+VERSION=4.4.2
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2 openssl zlib ncurses"
+BUILD_DEPS="gcc-pass2 binutils-glibc make openssl zlib"
+ABOUT="O outro sistema de build. Entrou porque a árvore bateu num muro concreto e não por gosto de generalidade: o libjpeg-turbo 3.x só constrói com cmake, o GTK4 exige jpeg sem opção de desligar, e o iwgtk — a interface gráfica de Wi-Fi que já estava escrita aqui — exige GTK4. Sem cmake, a corrente inteira ficava parada, e a receita do gdk-pixbuf já registrava esse bloqueio por escrito. Ele se constrói em DUAS etapas por natureza: o ./bootstrap compila uma versão mínima de si mesmo com make puro, e essa versão constrói a definitiva — é assim que o upstream resolve o problema de um construtor que precisa de si próprio. Usa a zlib, o openssl e a ncurses da árvore em vez das cópias que ele traz dentro: manter cópia embutida seria ter duas versões da mesma biblioteca no mesmo sistema, com a de dentro invisível ao minitrue e às atualizações. As outras bibliotecas vendorizadas dele (libarchive, libuv, jsoncpp, expat próprio) ficam como vêm, porque nenhuma existe nesta árvore e trazê-las agora seria arrastar cinco pacotes para destravar um. Sem ccmake curses? Não: com ele, porque a ncurses já está aqui e um configurador visual custa um binário."
+LICENSE="BSD-3-Clause"
+SRC="https://github.com/Kitware/CMake/releases/download/v$VERSION/cmake-$VERSION.tar.gz"
+SHA256=1db9e61e60b6e0874c86386340b910382f3c5e75b9fbfb44d122063129a2789d
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # --system-* nomeia o que usar DA ARVORE. O default do bootstrap e usar as
+    # copias vendorizadas de tudo, e isso deixaria zlib, openssl e ncurses
+    # duplicados dentro do binario — invisiveis ao minitrue, sem atualizacao e
+    # sem entrada no manifesto.
+    ./bootstrap --prefix=/usr \
+        --parallel="$JOBS" \
+        --system-zlib \
+        --system-curl=no \
+        --no-qt-gui \
+        -- -DCMAKE_BUILD_TYPE=Release
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+
+    [ -x "$STAGE/usr/bin/cmake" ] || {
+        echo "cmake: o binario nao foi produzido" >&2
+        exit 1
+    }
+    # Guarda: ele tem de conseguir configurar um projeto trivial. Um cmake que
+    # instala e nao configura e pior que cmake ausente, porque o proximo pacote
+    # falha com erro do PROJETO dele e nao com 'cmake nao existe'.
+    prova=$(mktemp -d)
+    printf 'cmake_minimum_required(VERSION 3.20)\nproject(prova C)\n' \
+        > "$prova/CMakeLists.txt"
+    ( cd "$prova" && "$STAGE/usr/bin/cmake" -S . -B build >/dev/null 2>&1 ) || {
+        echo "cmake: instalou mas nao configura um projeto trivial" >&2
+        rm -rf "$prova"
+        exit 1
+    }
+    rm -rf "$prova"
+    find "$STAGE" -type d -empty -delete
+}

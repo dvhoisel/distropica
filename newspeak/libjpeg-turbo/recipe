@@ -1,0 +1,38 @@
+NAME=libjpeg-turbo
+VERSION=3.2.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="gcc-pass2 binutils-glibc make cmake"
+ABOUT="Decodificador JPEG, e o pacote que obrigou o cmake a entrar nesta árvore. A série 3.x abandonou os autotools e só constrói com cmake — a receita do gdk-pixbuf registrava isso como bloqueio, e o gtk4 o transformou em impedimento, porque ele pede jpeg com dependency() incondicional, sem opção de desligar. A alternativa era fixar a 2.1.5.1, última com autotools, de 2023 e sem correção de segurança desde então; num decodificador de imagem — que processa arquivo vindo de terceiro e é superfície de ataque clássica — isso seria escolher dívida de segurança para evitar dívida de ferramenta. Sem os binários de linha de comando (cjpeg, djpeg, jpegtran): quem consome isto aqui é biblioteca, e o utilitário só existiria para nunca ser chamado. Com a API de 8 bits e a compatibilidade de libjpeg 6b, que é o que todo consumidor desta árvore espera."
+LICENSE="IJG AND BSD-3-Clause AND Zlib"
+SRC="https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/$VERSION/libjpeg-turbo-$VERSION.tar.gz"
+SHA256=6f30092cef9fb839779646608f4ee14ae3cbac989c47fa05e841b0841f09878e
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    cmake -S . -B build \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DCMAKE_INSTALL_LIBDIR=/usr/lib \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DENABLE_STATIC=FALSE \
+        -DWITH_JPEG8=TRUE \
+        -DWITH_TURBOJPEG=TRUE
+    cmake --build build -j "$JOBS"
+    DESTDIR="$STAGE" cmake --install build
+
+    ls "$STAGE/usr/lib/libjpeg.so"* >/dev/null 2>&1 || {
+        echo "libjpeg-turbo: a libjpeg nao foi produzida" >&2
+        exit 1
+    }
+    # O .pc e o que o gtk4 procura: ele usa dependency('libjpeg', 'jpeg'), que
+    # e pkg-config. Biblioteca instalada sem .pc e invisivel para quem a pede
+    # assim, e o sintoma seria o meson tentar baixar um subprojeto.
+    [ -f "$STAGE/usr/lib/pkgconfig/libjpeg.pc" ] || {
+        echo "libjpeg-turbo: libjpeg.pc ausente; o gtk4 nao a encontraria" >&2
+        ls "$STAGE/usr/lib/pkgconfig" 2>/dev/null >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}
