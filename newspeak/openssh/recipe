@@ -15,11 +15,21 @@ build() {
     # --without-pam: ver o ABOUT. --with-privsep-path e --with-privsep-user
     # nomeiam o que o drop-in cria no primeiro boot; o configure só grava os
     # caminhos no binário, não cria nada.
+    #
+    # SEM --with-ssl-engine, e isso não é escolha: o ENGINE FOI REMOVIDO DA
+    # OPENSSL. Esta árvore está na 4.0.1, e o /usr/include/openssl/engine.h
+    # dela diz literalmente "Engine support is gone" — o header sobrou como
+    # stub de compatibilidade de código-fonte e a libcrypto não exporta um
+    # único símbolo ENGINE_*. Foi depreciado na 3.0 e removido na 4.0. A chave
+    # estava aqui por hábito e derrubava o build com 'OpenSSL ENGINE support
+    # not found' depois de o configure varrer a libcrypto inteira. O ENGINE
+    # servia para delegar cripto a hardware externo (HSM, smartcard); o
+    # substituto na 3.x/4.x são os PROVIDERS, que o OpenSSH usa sozinho quando
+    # configurados no openssl.cnf — não há chave de configure para pedi-los.
     ./configure --prefix=/usr \
         --sysconfdir=/etc/ssh \
         --with-privsep-path=/var/empty \
         --with-privsep-user=sshd \
-        --with-ssl-engine \
         --without-pam \
         --without-selinux \
         --without-kerberos5 \
