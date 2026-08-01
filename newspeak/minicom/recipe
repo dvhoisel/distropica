@@ -4,7 +4,7 @@ KIND=source
 TOOLCHAIN=native
 DEPS="glibc ncurses"
 BUILD_DEPS="gcc-pass2 binutils-glibc make gettext pkgconf"
-ABOUT="Terminal serial. O BusyBox já traz o applet 'microcom', e ele NÃO substitui isto — a diferença não é de conforto: o microcom abre a porta, repassa bytes e sai; não tem menu de configuração, não muda velocidade sem reiniciar, não faz controle de fluxo por hardware, não registra sessão em arquivo e não transfere arquivo. Quem configura switch, roteador ou placa embarcada pelo console faz exatamente essas coisas, e é para elas que o minicom existe. Sem transferência de arquivo por padrão: os protocolos X/Y/ZMODEM vivem no lrzsz, que não está nesta árvore — o minicom continua funcionando e o menu de transferência fica sem backend, o que é honesto e visível. O upstream mora no Salsa do Debian desde que o site original saiu do ar; o tarball vem da árvore de tags de lá, e não de um espelho de terceiro."
+ABOUT="Terminal serial. O BusyBox já traz o applet 'microcom', e ele NÃO substitui isto — a diferença não é de conforto: o microcom abre a porta, repassa bytes e sai; não tem menu de configuração, não muda velocidade sem reiniciar, não faz controle de fluxo por hardware, não registra sessão em arquivo e não transfere arquivo. Quem configura switch, roteador ou placa embarcada pelo console faz exatamente essas coisas, e é para elas que o minicom existe. Sem transferência de arquivo por padrão: os protocolos X/Y/ZMODEM vivem no lrzsz, que não está nesta árvore — o minicom continua funcionando e o menu de transferência fica sem backend, o que é honesto e visível. O upstream mora no Salsa do Debian desde que o site original saiu do ar; o tarball vem da árvore de tags de lá, e não de um espelho de terceiro. O DIRETÓRIO DE TRAVAS É FIXADO AQUI e não descoberto: ver o comentário no build(), porque essa escolha vai compilada dentro do binário e o pacote traz um drop-in de init só por causa dela."
 LICENSE="GPL-2.0-or-later"
 SRC="https://salsa.debian.org/minicom-team/minicom/-/archive/$VERSION/minicom-$VERSION.tar.bz2"
 SHA256=90e7ce2856b3eaaa3f452354d17981c49d32c426a255b6f0d3063a227c101538
@@ -12,22 +12,38 @@ SHA256=90e7ce2856b3eaaa3f452354d17981c49d32c426a255b6f0d3063a227c101538
 build() {
     tar -xjf "$DL" --strip-components=1
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
-    # O tarball vem da árvore de tags, sem ./configure gerado: é preciso rodar
-    # o autogen. Ele exige autoconf/automake, que esta árvore não tem — então
-    # usa-se o build de meson, que o minicom 2.10 já suporta e que dispensa a
-    # cadeia autotools inteira.
-    if [ -x ./configure ]; then
-        ./configure --prefix=/usr --sysconfdir=/etc --disable-nls
-        make -j"$JOBS"
-        make install DESTDIR="$STAGE"
-    else
-        meson setup build \
-            --prefix=/usr \
-            --sysconfdir=/etc \
-            --buildtype=release
-        ninja -C build -j"$JOBS"
-        DESTDIR="$STAGE" ninja -C build install
-    fi
+
+    # --enable-lock-dir É OBRIGATÓRIO AQUI, e o motivo é mais interessante do
+    # que "senão o configure falha".
+    #
+    # O minicom usa trava UUCP: antes de abrir /dev/ttyS0 ele cria LCK..ttyS0
+    # num diretório, e é assim que dois programas não disputam a mesma porta
+    # serial. O caminho desse diretório é COMPILADO NO BINÁRIO — não é lido de
+    # arquivo de configuração e não é opção de linha de comando.
+    #
+    # Sem a chave, o configure VARRE o sistema onde está compilando à procura de
+    # /etc/locks, /var/lock, /var/spool/lock, /var/run e mais quatro, e fixa no
+    # binário o primeiro que existir. Isso é errado por construção nesta árvore:
+    # o build roda dentro do rootfs de construção, que não é o sistema
+    # instalado. O resultado observado foi o erro 'No suitable lock directory',
+    # porque NENHUM dos oito existe no rootfs de build — e esse foi o desfecho
+    # bom. O ruim seria um deles existir por acaso e o minicom sair daqui
+    # travando num caminho que a máquina do usuário não tem.
+    #
+    # /run/lock e não /var/lock: o rcS do base monta /run como tmpfs a cada
+    # boot, e trava de porta serial é estado volátil por definição — ela tem de
+    # sumir quando a máquina reinicia, senão uma queda de energia deixa a porta
+    # permanentemente "ocupada" por um processo que não existe mais. O /var
+    # desta distro é persistente e seria exatamente o lugar errado.
+    #
+    # O diretório em si é criado pelo drop-in 03-lockdir.sh, mais abaixo: o /run
+    # nasce vazio a cada boot, então não adianta o pacote criá-lo no payload.
+    ./configure --prefix=/usr \
+        --sysconfdir=/etc \
+        --enable-lock-dir=/run/lock \
+        --disable-nls
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
 
     # Guarda: o binário, e não a intenção do configure.
     [ -x "$STAGE/usr/bin/minicom" ] || {
@@ -52,5 +68,36 @@ build() {
         readelf -dW "$STAGE/usr/bin/minicom" 2>/dev/null | grep NEEDED >&2
         exit 1
     }
+    # E a guarda do caminho de trava: o que vale é o que ficou DENTRO do
+    # binário. Se um dia o configure ignorar a chave, ou se o nome dela mudar,
+    # o build passaria e o minicom procuraria a trava num diretório que esta
+    # distro não cria — falha de sintoma obscuro, na hora de abrir a porta.
+    strings -a "$STAGE/usr/bin/minicom" 2>/dev/null |
+        grep -qx '/run/lock' || {
+        echo "minicom: /run/lock não foi compilado no binário" >&2
+        strings -a "$STAGE/usr/bin/minicom" 2>/dev/null |
+            grep -E '^/(var|run|etc|usr)/[a-z/]*lock' >&2 || true
+        exit 1
+    }
+
+    mkdir -p "$STAGE/etc/rc.d/rcS.d"
+    cat > "$STAGE/etc/rc.d/rcS.d/03-lockdir.sh" <<'LOCKDROP'
+# Drop-in de inicializacao: o diretorio de travas de porta serial. Sourced
+# pelo rcS do base.
+#
+# O minicom traz /run/lock compilado dentro do binario (ver a receita) e NAO o
+# cria: ele so tenta escrever LCK..ttyS0 la dentro e falha se o diretorio nao
+# existir. E o /run e tmpfs montado do zero a cada boot, entao nenhum pacote
+# consegue entrega-lo pelo payload — tem de ser criado em tempo de execucao,
+# aqui, depois de o rcS montar o /run e antes de qualquer coisa querer usar.
+#
+# Esta em 03 e nao em 20 de proposito: e uma linha, nao depende de nada, e
+# qualquer outro programa que venha a usar trava UUCP ja a encontra pronta.
+# Se um segundo pacote precisar de /run/lock, isto migra para o rcS do base e
+# este drop-in some — enquanto for so o minicom, mora com quem o exige.
+mkdir -p /run/lock
+chmod 0755 /run/lock
+LOCKDROP
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/03-lockdir.sh"
     find "$STAGE" -type d -empty -delete
 }
