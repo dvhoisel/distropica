@@ -2,7 +2,13 @@ NAME=shared-mime-info
 VERSION=2.5.1
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc glib libxml2"
+# O gcc-pass2 em DEPS nao e engano nem preguica: quem fornece a libstdc++ e a
+# libgcc_s nesta arvore e o pacote do compilador, e o update-mime-database e
+# escrito em C++ — readelf -d nele mostra as duas. Nao ha pacote de runtime
+# C++ separado aqui, entao ou se declara o gcc-pass2 ou se publica um binario
+# cuja dependencia nao esta no manifesto. Nao pesa na midia: o gcc-pass2 ja
+# viajava no canal desde a 0.9, porque esta distro se propoe a compilar.
+DEPS="glibc glib libxml2 gcc-pass2"
 BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf gettext libxml2"
 ABOUT="A base de tipos MIME, e o update-mime-database que a compila. Entrou porque o GTK4 a exige de forma DURA: o meson.build dele chama gnome.post_install(update_mime_database: os_linux) sem opção que desligue, e sem o programa o configure para com 'Program update-mime-database not found'. A receita do gdk-pixbuf tinha evitado este pacote de propósito, com o argumento de que ele traria libxml2 e itstool atrás — o argumento envelheceu pela metade: a libxml2 já está na árvore desde que o GTK3 entrou, e o itstool só é exigido para as traduções, que aqui não se constroem. Restou uma dependência, não três. Também não é só requisito de build: quem responde 'que tipo de arquivo é este?' no diálogo de abrir do GTK é o g_content_type_guess, e ele lê esta base em tempo de execução. Sem os testes, que pedem xmllint; sem a especificação, que pede xmlto; sem traduções. E sem rodar o update-mime-database no fim do build: ele reescreveria a base do SISTEMA DE BUILD, fora do STAGE — é estado de máquina, e quem o gera no primeiro boot é o drop-in, como o gschemas.compiled e o hwdb.bin."
 LICENSE="GPL-2.0-or-later"

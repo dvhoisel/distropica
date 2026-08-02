@@ -2,7 +2,7 @@ NAME=git
 VERSION=2.55.0
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc curl openssl zlib expat pcre2 perl"
+DEPS="glibc curl openssl zlib expat pcre2 perl busybox"
 BUILD_DEPS="gcc-pass2 binutils-glibc make gettext"
 ABOUT="Controle de versão. Faltava, e a falta era gritante: esta distro se apresenta como pronta para compilar, embarca gcc, make, vim e ripgrep, e o site convida a examinar o código — sem nenhuma forma de obter esse código versionado ou registrar uma alteração. A libcurl em DEPS é o que torna clone por https:// possível; sem ela sobrariam ssh:// e git://, e o primeiro repositório que alguém tentasse buscar falharia. O expat é para push por HTTP; o pcre2 dá ao git grep as mesmas expressões que o ripgrep desta árvore já usa, em vez de duas sintaxes diferentes na mesma máquina. Perl entra porque partes do git são scripts Perl e sem ele add -p, rebase -i e send-email não funcionam — não é opcional, é o que o upstream assume. Sem Tcl/Tk: gitk e git-gui exigiriam uma terceira pilha gráfica numa árvore que já carrega GTK3 por causa do Firefox e GTK4 como toolkit próprio."
 LICENSE="GPL-2.0-only AND LGPL-2.1-or-later AND BSD-3-Clause AND MIT"
@@ -90,6 +90,31 @@ build() {
         readelf -dW "$remoto" 2>/dev/null | grep NEEDED >&2
         exit 1
     }
+    # O git-p4 SAI, e o busybox ENTRA em DEPS. As duas coisas vêm do mesmo
+    # lugar: a auditoria de fechamento, que recusa publicar um pacote cujo
+    # payload exige coisa que o DEPS não declara.
+    #
+    # Vinte e quatro arquivos do git começam com '#!/bin/sh' — git-submodule,
+    # git-mergetool, git-filter-branch, os treze ganchos de exemplo em
+    # templates/hooks. Isso é dependência de verdade e não formalidade: sem
+    # /bin/sh metade da porcelana do git não roda. Daí o busybox, que é quem
+    # fornece o /bin/sh desta distro.
+    #
+    # O git-p4 é outra história. Ele começa com '#!/usr/bin/python', e não há
+    # python no fechamento de execução — não é o caso de declarar um provedor,
+    # é o caso de o arquivo não ter o que fazer aqui. Ele é a ponte para
+    # Perforce, um sistema de controle de versão comercial dos anos noventa que
+    # esta distro não tem como falar de nenhum outro jeito. Declarar o
+    # python-glibc em DEPS por causa dele arrastaria um interpretador inteiro
+    # para a closure de todo alvo que tenha git. Sai o script e sai o manual
+    # dele, que descreveria um comando ausente.
+    rm -f "$STAGE/usr/libexec/git-core/git-p4" \
+          "$STAGE/usr/share/man/man1/git-p4.1"
+    [ ! -e "$STAGE/usr/libexec/git-core/git-p4" ] || {
+        echo "git: o git-p4 continua no STAGE" >&2
+        exit 1
+    }
+
     # Guarda do INSTALL_SYMLINKS: nenhum arquivo com mais de um link. Se a
     # variavel deixar de ser respeitada, o build passaria aqui e so morreria
     # depois, na instalacao, com a mensagem do minitrue sobre topologia — que e

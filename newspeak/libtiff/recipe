@@ -17,12 +17,29 @@ build() {
         --disable-tests \
         --disable-lzma --disable-webp --disable-zstd --disable-jbig \
         --disable-libdeflate \
+        --disable-cxx \
         --with-zlib-include-dir=/usr/include \
         --with-jpeg-include-dir=/usr/include
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
     [ -f "$STAGE/usr/lib/pkgconfig/libtiff-4.pc" ] || {
         echo "libtiff: libtiff-4.pc ausente; o gtk4 nao a encontraria" >&2
+        exit 1
+    }
+    # --disable-cxx e a guarda que o acompanha: sem eles o pacote instala a
+    # libtiffxx, um wrapper C++ de tres classes sobre a mesma API, e ela arrasta
+    # libstdc++ e libgcc_s para o fechamento de EXECUCAO — que nesta arvore
+    # significa declarar o gcc-pass2 inteiro em DEPS.
+    #
+    # E ninguem a usa. Varri /usr/lib e /usr/bin do rootfs com readelf: os unicos
+    # arquivos que referenciam libtiffxx sao os proprios links dela. O gtk4, o
+    # unico consumidor de TIFF aqui, pede dependency('libtiff-4') e chama a API
+    # C. Pagar uma dependencia de runtime por uma biblioteca que nada abre seria
+    # o pior dos dois mundos.
+    achado=$(find "$STAGE" -name 'libtiffxx*' -print)
+    [ -z "$achado" ] || {
+        echo "libtiff: a libtiffxx foi construida apesar do --disable-cxx" >&2
+        echo "$achado" >&2
         exit 1
     }
     find "$STAGE" -type d -empty -delete

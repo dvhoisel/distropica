@@ -22,5 +22,19 @@ build() {
         echo "libevent: a biblioteca compartilhada nao foi produzida" >&2
         exit 1
     }
+    # O event_rpcgen.py sai. Ele comeca com '#!/usr/bin/env python' e gera codigo
+    # C para a camada de RPC da libevent — camada que nada nesta arvore usa; o
+    # tmux, unico consumidor, quer o laco de eventos e mais nada. Manter o script
+    # custaria declarar busybox em DEPS pelo /usr/bin/env E um interpretador
+    # python que nao esta no fechamento de execucao: o resultado seria um
+    # gerador de codigo instalado e incapaz de rodar, que e pior do que ausente.
+    # A auditoria de fechamento nao aceitaria o meio-termo, e tem razao.
+    rm -f "$STAGE/usr/bin/event_rpcgen.py" "$STAGE/usr/bin/event_rpcgen"
+    achado=$(find "$STAGE" ! -type d -name 'event_rpcgen*' -print)
+    [ -z "$achado" ] || {
+        echo "libevent: o gerador de RPC continua instalado:" >&2
+        echo "$achado" >&2
+        exit 1
+    }
     find "$STAGE" -type d -empty -delete
 }
