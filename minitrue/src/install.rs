@@ -26,6 +26,77 @@ static TX_COUNTER: AtomicU64 = AtomicU64::new(0);
 static MOVE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static ATOMIC_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+thread_local! {
+    /// Correções de receita que esta operação NÃO conseguiu aplicar.
+    ///
+    /// Existe por um defeito concreto e caro: um provisório que já cedeu
+    /// caminhos não pode ser reconstruído — reconstruí-lo retomaria arquivos
+    /// dos sucessores —, e até aqui o minitrue tratava isso como rotina. Ele
+    /// comparava a impressão digital, via que a receita tinha mudado, decidia
+    /// não poder aplicar, e imprimia "baseline preservado": uma frase que não
+    /// distingue "não havia nada a fazer" de "sua correção foi descartada".
+    ///
+    /// O custo medido: um `chmod 4755` no busybox disparou a reconstrução de
+    /// 119 pacotes por cascata de fingerprint — e o único arquivo que precisava
+    /// mudar foi o único que não mudou. Seis horas de CPU para descobrir isso
+    /// conferindo o modo do binário na mão, porque a saída do rectify dizia que
+    /// estava tudo bem.
+    ///
+    /// Nesta árvore não é caso raro: os NOVE provisórios (busybox, binutils,
+    /// gcc, gmp, mpfr, mpc, libstdcxx, binutils-cross, python) têm receita
+    /// divergente do registro. Toda correção escrita neles desde o bootstrap
+    /// está inerte.
+    static CORRECOES_DESCARTADAS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Anota — e ANUNCIA — que a receita de um provisório mudou e não pôde ser
+/// aplicada. Chamada nos dois caminhos que recusam reconstruir um provisório
+/// cedido (mundo A em `install_binary`, mundo B em `install_one`).
+///
+/// A mensagem sai na hora, para quem estiver lendo o log corrido, e a lista
+/// volta no fim do rectify, para quem só olha o final. Uma linha no meio de
+/// 119 pacotes não é aviso; é ruído.
+fn anotar_correcao_descartada(nome: &str, versao: &str, gravado: &str, atual: &str) {
+    let curto = |f: &str| f.chars().take(12).collect::<String>();
+    eprintln!(
+        "  CORRECAO DESCARTADA: {nome} {versao} — a receita mudou \
+         ({} -> {}) mas este provisorio ja cedeu caminhos e reconstrui-lo \
+         retomaria arquivos dos sucessores. O QUE ESTA NO DISCO CONTINUA SENDO \
+         O DO BOOTSTRAP.",
+        curto(gravado),
+        curto(atual)
+    );
+    CORRECOES_DESCARTADAS.with(|lista| {
+        lista.borrow_mut().push(format!("{nome} {versao}"));
+    });
+}
+
+/// Esvazia a lista e imprime o resumo. Devolve quantas correções ficaram por
+/// aplicar, para o chamador decidir o que fazer com esse número.
+fn relatar_correcoes_descartadas() -> usize {
+    CORRECOES_DESCARTADAS.with(|lista| {
+        let pendentes = lista.borrow_mut().split_off(0);
+        if pendentes.is_empty() {
+            return 0;
+        }
+        eprintln!();
+        eprintln!(
+            "ATENCAO: {} correcao(oes) de receita NAO foram aplicadas:",
+            pendentes.len()
+        );
+        for item in &pendentes {
+            eprintln!("  {item}");
+        }
+        eprintln!(
+            "Sao provisorios que ja cederam caminhos aos sucessores. So um \
+             bootstrap do zero aplica o que essas receitas dizem; ate la o \
+             disco tem o artefato do bootstrap, nao o que a receita descreve."
+        );
+        pendentes.len()
+    })
+}
+
 /// Escreve `bytes` em `path` **atomicamente**: grava num temporário irmão e
 /// `rename` por cima (atômico no mesmo filesystem). Um leitor nunca vê um
 /// arquivo meio-escrito, e um crash não deixa `path` corrompido (SPEC-0003 §6).
@@ -294,6 +365,18 @@ pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> 
             resolution.get(&r.name),
         )?;
     }
+    // O RESUMO É PARTE DO CONSERTO, e não enfeite. Uma linha de aviso no meio
+    // de 119 pacotes rola para fora da tela antes de alguém ler; foi assim que
+    // uma correção descartada passou despercebida por uma reconstrução inteira.
+    // Aqui ela é a última coisa impressa.
+    //
+    // O rectify continua saindo com 0: as correções que ele CONSEGUIU aplicar
+    // foram aplicadas, e o que sobrou não é falha desta execução — é uma
+    // limitação conhecida da cessão provisional, que só um bootstrap novo
+    // resolve. Falhar aqui tornaria o rectify inutilizável nesta árvore, onde
+    // os nove provisórios estão nessa situação, sem tornar nada mais correto.
+    // O que faltava era a informação, e ela agora existe.
+    relatar_correcoes_descartadas();
     Ok(())
 }
 
@@ -629,11 +712,28 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> R
                 if explicit {
                     world_add(ctx, &r.name)?;
                 }
-                println!(
-                    "provisório {} {} já cedeu caminhos; baseline preservado.",
-                    r.name,
-                    meta.get("VERSION").map(String::as_str).unwrap_or("?")
-                );
+                let versao = meta.get("VERSION").map(String::as_str).unwrap_or("?");
+                // A DIFERENCA QUE FALTAVA SER DITA. Chegar aqui significa que o
+                // fast path acima nao valeu; isso acontece por dois motivos bem
+                // diferentes e ate agora ambos saiam com a mesma frase:
+                //
+                //   fingerprint IGUAL    o registro so nao esta "intacto"
+                //                        porque a cessao encolheu o manifesto.
+                //                        Nao ha nada a fazer, e "baseline
+                //                        preservado" descreve bem.
+                //   fingerprint DIFERENTE alguem corrigiu a receita e a
+                //                        correcao NAO vai entrar. Dizer
+                //                        "baseline preservado" aqui e mentir
+                //                        por omissao.
+                match meta.get("FINGERPRINT") {
+                    Some(gravado) if gravado != fingerprint => {
+                        anotar_correcao_descartada(&r.name, versao, gravado, fingerprint);
+                    }
+                    _ => println!(
+                        "provisório {} {} já cedeu caminhos; baseline preservado.",
+                        r.name, versao
+                    ),
+                }
                 return Ok(());
             }
             ProvisionalCession::Incoherent => bail!(
@@ -2663,11 +2763,18 @@ fn install_source(
                 if explicit {
                     world_add(ctx, &r.name)?;
                 }
-                println!(
-                    "provisório {} {} já cedeu caminhos; baseline preservado.",
-                    r.name,
-                    meta.get("VERSION").map(String::as_str).unwrap_or("?")
-                );
+                // Mesma distincao do mundo A, pelo mesmo motivo: fingerprint
+                // igual e rotina; fingerprint diferente e correcao descartada.
+                let versao = meta.get("VERSION").map(String::as_str).unwrap_or("?");
+                match meta.get("FINGERPRINT") {
+                    Some(gravado) if gravado != fingerprint => {
+                        anotar_correcao_descartada(&r.name, versao, gravado, fingerprint);
+                    }
+                    _ => println!(
+                        "provisório {} {} já cedeu caminhos; baseline preservado.",
+                        r.name, versao
+                    ),
+                }
                 return Ok(());
             }
             ProvisionalCession::Incoherent => bail!(
