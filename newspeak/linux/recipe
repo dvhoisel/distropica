@@ -95,6 +95,12 @@ CONFIG_CRYPTO_SHA1=y
 CONFIG_CRYPTO_SHA256=y
 CONFIG_CRYPTO_SHA512=y
 CONFIG_CRYPTO_SHA3=y
+# CRYPTO_DES ja estava aqui e esta certo — o registro fica porque a falta
+# dele NO KERNEL DO LIVE derrubou o iwd: 'DES support not found' e o daemon
+# sai na partida, com o sintoma final sendo o botao de Wi-Fi nao abrir
+# nada. O iwd testa os algoritmos por AF_ALG ao subir e exige des3_ede
+# para MSCHAPv2. Esta receita nao e o kernel que boota; o do build-efi e,
+# e la o simbolo faltava. Divergir dele foi o que escondeu o defeito.
 CONFIG_CRYPTO_DES=y
 # WPA3/SAE faz Diffie-Hellman pelo keyring do kernel (ell/key.c); EAP-TLS
 # precisa dos parsers de certificado.
@@ -188,6 +194,7 @@ KCONFIG
         WLAN CFG80211 MAC80211 RFKILL \
         CRYPTO_USER_API_HASH CRYPTO_USER_API_SKCIPHER CRYPTO_CMAC \
         CRYPTO_CTR CRYPTO_MD5 CRYPTO_SHA512 KEY_DH_OPERATIONS \
+        CRYPTO_DES CRYPTO_CBC CRYPTO_ECB \
         FRAMEBUFFER_CONSOLE SYSFB_SIMPLEFB DRM_SIMPLEDRM DRM_BOCHS \
         DRM_VMWGFX DRM_VBOXVIDEO \
         SOUND SND SND_PCM SND_HDA_INTEL SND_HDA_GENERIC \
