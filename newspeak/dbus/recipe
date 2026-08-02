@@ -43,5 +43,86 @@ build() {
     # payload: nascem no boot, e reivindicá-los faria o manifesto discordar do
     # disco no primeiro start.
     rm -rf "$STAGE/var/run" "$STAGE/var/lib/dbus"
+
+    mkdir -p "$STAGE/etc/rc.d/rcS.d"
+    cat > "$STAGE/etc/rc.d/rcS.d/06-dbus.sh" <<'DBUSDROP'
+# Drop-in de inicializacao: o barramento do sistema. Sourced pelo rcS do base.
+#
+# ESTE ARQUIVO NAO EXISTIA, e a falta so aparecia no fim da cadeia: o pacote
+# instalava o dbus-daemon, o iwd instalava a politica dele em
+# /usr/share/dbus-1/system.d, o iwgtk aparecia no painel — e clicar no icone
+# nao abria nada. O iwgtk pergunta pelo nome net.connman.iwd no barramento do
+# sistema, nao acha barramento nenhum, e sai. O binario ate carrega a string
+# "iwd is down" para esse caso. Nada falha em voz alta em lugar nenhum.
+#
+# Tres coisas sao criadas AQUI e nao no pacote:
+#
+# 1. A CONTA 'messagebus'. O /usr/share/dbus-1/system.conf diz
+#    <user>messagebus</user>: o daemon comeca como root, abre o socket e larga
+#    privilegio para essa conta. Sem ela ele sai com "Failed to change to
+#    user". Conta e estado do admin e nenhum pacote a reivindica no manifesto —
+#    mesmo argumento do sshd.
+# 2. O /run/dbus. O system.conf aponta o socket e o pidfile para la, e o /run e
+#    tmpfs montado do zero a cada boot.
+# 3. O machine-id, que ja veio do 01-machine-id.sh. Por isso este drop-in e 06
+#    e nao 00: o dbus-daemon RECUSA subir sem /etc/machine-id ou
+#    /var/lib/dbus/machine-id.
+if [ -x /usr/bin/dbus-daemon ]; then
+    if ! grep -q '^messagebus:' /etc/passwd 2>/dev/null; then
+        # 81 e o uid/gid que a maioria das distros usa para esta conta.
+        echo 'messagebus:x:81:81:D-Bus message bus:/run/dbus:/sbin/nologin' \
+            >> /etc/passwd
+        grep -q '^messagebus:' /etc/group 2>/dev/null ||
+            echo 'messagebus:x:81:' >> /etc/group
+        echo "distropica: conta do barramento D-Bus criada"
+    fi
+    # 'wheel' e 'netdev' sao citados pelas POLITICAS: o system.conf do proprio
+    # dbus da wheel poder de administrar o barramento, e o iwd-dbus.conf do iwd
+    # da netdev poder de falar com o daemon de Wi-Fi. Sem os grupos existirem, o
+    # dbus reclama "Unknown group" a cada boot e a regra correspondente vira
+    # letra morta. Sao criados vazios: nesta distro so ha a conta root, que
+    # nao precisa de grupo para nada — o que se ganha e a politica passar a
+    # significar o que diz, e o log parar de acusar defeito que nao ha.
+    for grupo_nome in wheel:97 netdev:98; do
+        grep -q "^${grupo_nome%%:*}:" /etc/group 2>/dev/null ||
+            echo "${grupo_nome%%:*}:x:${grupo_nome##*:}:" >> /etc/group
+    done
+    unset grupo_nome
+    mkdir -p /run/dbus
+    chown root:root /run/dbus 2>/dev/null || true
+    chmod 0755 /run/dbus
+
+    # O QUE DECIDE SE SUBIU E O SOCKET, E NAO O STATUS DE SAIDA. Esta linha ja
+    # foi 'if dbus-daemon --system --fork 2>/dev/null; then echo iniciado', e
+    # ela MENTIA duas vezes:
+    #
+    #   1. O --fork faz o processo pai sair assim que termina o fork, ANTES de o
+    #      filho abrir o socket e antes de ele poder falhar. Medido: status 0 e
+    #      /run/dbus vazio cinco segundos depois. O 'iniciado' saia no console
+    #      com o barramento inexistente.
+    #   2. O 2>/dev/null jogava fora a unica coisa que diria POR QUE. Foi essa
+    #      redirecao que me obrigou a caçar o defeito por eliminacao em vez de
+    #      ler a mensagem.
+    #
+    # Agora o erro vai para o console junto com o resto do boot, e a espera e
+    # pelo arquivo que importa. Trinta tentativas de 100ms: o daemon abre o
+    # socket em alguns milissegundos numa maquina real, e tres segundos e folga
+    # para o pior caso sob emulacao sem aceleracao.
+    /usr/bin/dbus-daemon --system --fork
+    espera=0
+    while [ ! -S /run/dbus/system_bus_socket ] && [ "$espera" -lt 30 ]; do
+        espera=$((espera + 1))
+        sleep 0.1
+    done
+    if [ -S /run/dbus/system_bus_socket ]; then
+        echo "distropica: barramento D-Bus do sistema iniciado"
+    else
+        echo "distropica: D-Bus do sistema NAO subiu; sem ele nao ha Wi-Fi" >&2
+        echo "            gerenciavel — o iwgtk abre e nao acha o iwd" >&2
+    fi
+    unset espera
+fi
+DBUSDROP
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/06-dbus.sh"
     find "$STAGE" -type d -empty -delete
 }

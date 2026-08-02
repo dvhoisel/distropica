@@ -38,5 +38,56 @@ build() {
     # /var/lib/iwd guarda as redes conhecidas e as senhas: é estado do usuário,
     # criado no primeiro uso, e não pode entrar no manifesto.
     rm -rf "$STAGE/var"
+
+    mkdir -p "$STAGE/etc/rc.d/rcS.d"
+    cat > "$STAGE/etc/rc.d/rcS.d/07-iwd.sh" <<'IWDDROP'
+# Drop-in de inicializacao: o daemon de Wi-Fi. Sourced pelo rcS do base.
+#
+# ESTE ARQUIVO NAO EXISTIA, e a consequencia foi a Distropica 0.10 sair com uma
+# ferramenta grafica de Wi-Fi que nao abria. Tudo o mais estava certo: o iwgtk
+# compilado, ligado nas bibliotecas certas, com lancador no painel e icone de
+# 32px conferido por guarda. Mas o iwgtk e um cliente D-Bus do iwd e nada
+# subia o iwd — clicar no icone nao fazia nada, sem mensagem em lugar nenhum.
+#
+# A licao ficou registrada aqui porque e generalizavel: nesta distro, daemon
+# que nenhum drop-in inicia e daemon que nao existe. Conferir que o binario foi
+# produzido, como a guarda do build() faz, nao diz nada sobre isso.
+#
+# Depende do 06-dbus.sh, e a ordem e por isso: a API do iwd E o barramento do
+# sistema. Sem ele, o daemon sobe, tenta registrar net.connman.iwd, falha e sai.
+#
+# O /var/lib/iwd e criado AQUI e nao no pacote: guarda as redes conhecidas e as
+# senhas delas, que sao estado do usuario. 0700 porque o conteudo e segredo.
+if [ -x /usr/libexec/iwd ]; then
+    mkdir -p /var/lib/iwd
+    chown root:root /var/lib/iwd 2>/dev/null || true
+    chmod 0700 /var/lib/iwd
+    if [ -S /run/dbus/system_bus_socket ]; then
+        # Sem '>/dev/null 2>&1': se o daemon tiver o que dizer ao morrer, isso
+        # precisa chegar ao console. A versao anterior desta linha silenciava a
+        # saida dele, do mesmo modo que o drop-in do dbus silenciava a sua — e
+        # foi assim que um Wi-Fi que nao funcionava virou "clicar no icone nao
+        # faz nada", sem uma unica pista em lugar nenhum.
+        /usr/libexec/iwd &
+        iwd_pid=$!
+        # E a conferencia e se ele CONTINUA VIVO, nao se o shell conseguiu
+        # dispara-lo — coisa que sempre da certo. Um daemon que sai no primeiro
+        # segundo (politica D-Bus recusada, nome ja tomado, socket sumindo) e
+        # indistinguivel de um daemon saudavel para quem so olha o '&'.
+        sleep 1
+        if kill -0 "$iwd_pid" 2>/dev/null; then
+            echo "distropica: iwd iniciado"
+        else
+            echo "distropica: iwd saiu logo apos iniciar; sem Wi-Fi" >&2
+        fi
+        unset iwd_pid
+    else
+        # Dizer POR QUE, e nao so que falhou: sem esta linha o sintoma volta a
+        # ser "o botao de Wi-Fi nao faz nada", que nao aponta para lugar nenhum.
+        echo "distropica: iwd NAO iniciado — sem barramento D-Bus do sistema" >&2
+    fi
+fi
+IWDDROP
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/07-iwd.sh"
     find "$STAGE" -type d -empty -delete
 }
