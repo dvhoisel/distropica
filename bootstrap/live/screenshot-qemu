@@ -101,6 +101,8 @@ SHOT=$LOG_DIR/tela.ppm
     -drive "file=$DISK,format=raw,if=none,id=target,snapshot=on" \
     -device virtio-blk-pci,drive=target,bootindex=1 \
     -device virtio-gpu-pci \
+    -device qemu-xhci \
+    -device usb-tablet \
     -nic none \
     -display none \
     -serial "file:$SERIAL" \
@@ -131,29 +133,50 @@ if [ -n "$CLICK" ]; then
     x=${CLICK%,*}
     y=${CLICK#*,}
     case "$x$y" in *[!0-9]*) echo "erro: --click precisa ser X,Y numérico" >&2; exit 1 ;; esac
-    # O mouse emulado é PS/2, que reporta movimento RELATIVO — não há como
-    # dizer "vá para (17,16)". E o protocolo PS/2 codifica o deslocamento em
-    # NOVE BITS COM SINAL: qualquer valor fora de -256..255 é truncado. Um
-    # único 'mouse_move -4000 -4000' não leva o ponteiro ao canto, leva-o 256
-    # pixels e para ali — foi assim que o primeiro clique caiu no vazio, sem
-    # erro nenhum em lugar nenhum. Por isso o estacionamento é feito em muitos
-    # passos pequenos.
-    # TRÊS conexões, e não uma. O socat fecha o socket assim que termina de
-    # escrever, e o monitor do QEMU descarta o que ainda não consumiu: mandar
-    # estacionamento, deslocamento e clique na mesma conexão perde o FIM da
-    # fila. O sintoma é a foto mostrar a área de trabalho vazia com o ponteiro
-    # parado no canto — indistinguível de um aplicativo que não abre, que é
-    # exatamente o que este clique existe para decidir. Já aconteceu.
+    # O PONTEIRO É UM TABLET USB, e não o mouse PS/2 padrão do QEMU. A diferença
+    # é a única coisa que faz este clique ser confiável, e custou duas fotos
+    # erradas para ficar claro.
+    #
+    # O PS/2 reporta movimento RELATIVO: não há como dizer "vá para (84,17)", só
+    # "ande tanto". Duas coisas estragam isso, e a segunda esconde a primeira.
+    # A primeira é o protocolo, que codifica o deslocamento em nove bits com
+    # sinal e trunca qualquer valor fora de -256..255 — um 'mouse_move -4000
+    # -4000' anda 256 px e para. A segunda é o WESTON, que aplica aceleração de
+    # ponteiro ao movimento relativo, e cuja curva ENCOLHE deslocamento lento:
+    # medido aqui, pedir 84 px levou o ponteiro a algo perto de 20. O clique
+    # caiu no primeiro lançador do painel e a foto mostrou o FIREFOX aberto —
+    # um aplicativo, só que não o pedido. Isso é pior que não abrir nada, porque
+    # parece sucesso. Quebrar o movimento em passos de 4 px não resolveu: a
+    # curva penaliza justamente o passo pequeno.
+    #
+    # O usb-tablet reporta posição ABSOLUTA. O 'mouse_move x y' do monitor passa
+    # a significar a coordenada literal, sem acumulador, sem truncamento de nove
+    # bits e sem aceleração — não há velocidade a acelerar quando o dispositivo
+    # diz onde está. O kernel desta distro tem USB_XHCI_HCD e USB_HID builtin,
+    # entao o tablet e enumerado sem modulo nenhum.
+    #
+    # DUAS conexões, e não uma. O socat fecha o socket assim que termina de
+    # escrever e o monitor do QEMU descarta o que ainda não consumiu: mandar
+    # deslocamento e clique na mesma conexão perde o FIM da fila. O sintoma é a
+    # foto mostrar a área de trabalho vazia com o ponteiro parado — igualzinho a
+    # um aplicativo que não abre, que é exatamente o que este clique existe para
+    # decidir. Já aconteceu.
+    # A COORDENADA DO MONITOR NÃO É EM PIXEL. Para dispositivo absoluto o QEMU
+    # usa um espaço fixo de 0..32767 em cada eixo, independente da resolução —
+    # e foi por isso que 'mouse_move 84 17' pôs o ponteiro perto do canto
+    # superior esquerdo em vez do terceiro lançador. O --click continua sendo em
+    # PIXEL, que é o que se lê numa foto; a conversão é feita aqui.
+    #
+    # 1280x800 é a resolução que o virtio-gpu entrega a este kernel, medida no
+    # cabeçalho dos PPM que este mesmo script produz. Se mudar, as fotos saem
+    # com outro tamanho e este par tem de mudar junto — daí a guarda no fim, que
+    # compara o PPM gerado com o que foi assumido aqui.
+    TELA_LARGURA=1280
+    TELA_ALTURA=800
+    ax=$(( x * 32767 / TELA_LARGURA ))
+    ay=$(( y * 32767 / TELA_ALTURA ))
     monitor() { socat - "UNIX-CONNECT:$MONITOR" >/dev/null 2>&1 || true; }
-    {
-        i=0
-        while [ "$i" -lt 20 ]; do
-            printf 'mouse_move -100 -100\n'
-            i=$((i + 1))
-        done
-    } | monitor
-    sleep 1
-    printf 'mouse_move %s %s\n' "$x" "$y" | monitor
+    printf 'mouse_move %s %s\n' "$ax" "$ay" | monitor
     sleep 1
     printf 'mouse_button 1\n' | monitor
     sleep 1
@@ -173,6 +196,19 @@ wait "$QEMU_PID" 2>/dev/null || true
 trap - EXIT INT TERM
 
 [ -s "$SHOT" ] || { echo "erro: o screendump saiu vazio" >&2; exit 1; }
+# Guarda da resolução assumida na conversão do --click. O PPM começa com
+# "P6\n<largura> <altura>\n255\n"; se a tela deixar de ser 1280x800, o clique
+# passa a cair no lugar errado SEM ERRO NENHUM — a foto sai, mostra o desktop
+# intacto, e nada distingue isso de um aplicativo que não abriu. Já custou duas
+# rodadas de dez minutos cada.
+if [ -n "$CLICK" ]; then
+    lida=$(head -c 32 "$SHOT" | tr '\n' ' ' | cut -d' ' -f2,3)
+    [ "$lida" = "1280 800" ] || {
+        echo "erro: a tela é '$lida', mas a conversão do --click assume 1280 800;" >&2
+        echo "      ajuste TELA_LARGURA/TELA_ALTURA neste script" >&2
+        exit 1
+    }
+fi
 cp "$SHOT" "$OUTPUT"
 echo "tela: $OUTPUT ($(wc -c < "$OUTPUT") bytes)"
 echo "serial: $SERIAL"
