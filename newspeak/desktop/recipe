@@ -50,7 +50,30 @@ export LANG
 # compositor toma a tela, morre, e nao sobra nada. Diagnosticar a primeira
 # falha desta pilha exigiu injetar um script na imagem do disco e ler o ext4
 # com debugfs; com o log em arquivo, basta abrir /var/log/weston.log.
-exec weston --log=/var/log/weston.log "$@"
+#
+# O BARRAMENTO DE SESSAO ENVOLVE A SESSAO INTEIRA, e sem ele metade dos
+# aplicativos graficos nao abre — literalmente nao abre, sem mensagem.
+#
+# Esta distro tinha so o barramento de SISTEMA (o do 06-dbus.sh, que serve ao
+# iwd). Nao e a mesma coisa: o de sistema e unico na maquina e serve daemons; o
+# de sessao e por usuario logado e e onde toda aplicacao GTK moderna registra a
+# si mesma. O iwgtk e uma GtkApplication — chama g_application_run, que chama
+# g_application_register, que tenta pegar o nome dele NO BARRAMENTO DE SESSAO.
+# Sem barramento, o registro falha e o programa termina sem abrir janela.
+#
+# O sintoma medido em QEMU foi exatamente esse: iwd no ar, politica D-Bus
+# correta, o icone do painel destacando ao receber o clique — e nada acontecer.
+# O Firefox nao sofria disso e por isso a falta passou despercebida: ele nao
+# usa GApplication.
+#
+# dbus-run-session sobe um barramento, exporta DBUS_SESSION_BUS_ADDRESS e roda
+# o comando; quando o weston sai, o barramento morre junto. Como os lancadores
+# do painel sao filhos do weston, todos herdam o endereco.
+[ -x /usr/bin/dbus-run-session ] || {
+    echo "distropica: dbus-run-session ausente; aplicativos GTK nao abrirao" >&2
+    exec weston --log=/var/log/weston.log "$@"
+}
+exec dbus-run-session -- weston --log=/var/log/weston.log "$@"
 LAUNCHER
     chmod 0755 "$STAGE/usr/bin/distropica-desktop"
 
@@ -181,14 +204,30 @@ UDEVD
 
     cat > "$STAGE/etc/rc.d/rcS.d/10-seatd.sh" <<'SEATD'
 # Drop-in de inicialização: o daemon de assentos. Sourced pelo rcS do base.
-# Sem -g: o seatd resolve o grupo com getgrnam e SAI COM ERRO se ele nao
-# existir, e esta arvore so tem o grupo root — as contas sao estado do admin e
-# o base nao as gerencia. Sem -g o socket fica so para o root, que e
-# exatamente quem roda o compositor hoje. O grupo entra junto com o login
-# grafico de usuario comum, quando ele existir.
+#
+# '-g seat' AGORA EXISTE, e o comentario anterior aqui previa exatamente este
+# dia: dizia que sem -g o socket ficava so para o root, "que e exatamente quem
+# roda o compositor hoje", e que o grupo entraria "junto com o login grafico de
+# usuario comum, quando ele existir". Ele existe — a conta distropica, criada
+# pelo 04-usuario.sh do base, que tambem cria o grupo 'seat' com ela dentro.
+#
+# O seatd e quem abre /dev/dri/card0 e /dev/input/event* como root e entrega os
+# descritores ao compositor. E por causa dele que os nos podem continuar
+# root:root 0660 no mdev.conf e ainda assim uma sessao de usuario comum
+# funcionar: ninguem alem do seatd precisa abri-los.
+#
+# O -g e resolvido com getgrnam e o seatd SAI COM ERRO se o grupo nao existir —
+# daí a conferencia antes. Cair para o modo sem grupo e melhor que nao subir:
+# numa arvore onde o 04-usuario.sh tenha falhado, a sessao ainda sobe como root
+# pelo mesmo caminho de recuo que o /etc/rc.d/session usa.
 if [ -x /usr/bin/seatd ] && [ ! -S /run/seatd.sock ]; then
-    /usr/bin/seatd >/dev/null 2>&1 &
-    echo "distropica: seatd iniciado"
+    if grep -q '^seat:' /etc/group 2>/dev/null; then
+        /usr/bin/seatd -g seat >/dev/null 2>&1 &
+        echo "distropica: seatd iniciado (grupo seat)"
+    else
+        /usr/bin/seatd >/dev/null 2>&1 &
+        echo "distropica: seatd iniciado sem grupo; sessao grafica so como root" >&2
+    fi
 fi
 SEATD
     chmod 0644 "$STAGE/etc/rc.d/rcS.d/10-seatd.sh"
@@ -380,6 +419,38 @@ WESTONINI
         }
     done
     unset icone icone_largura icone_altura
+
+    # CADA LANCADOR DO PAINEL PRECISA DO SEU DAEMON DE PE, e esta guarda existe
+    # porque a falta dela deixou a 0.10 sair com um botao de Wi-Fi que nao fazia
+    # NADA ao ser clicado.
+    #
+    # O diagnostico que nao foi feito na epoca leva dez segundos: o iwgtk e um
+    # cliente D-Bus do iwd; o iwd registra net.connman.iwd no barramento do
+    # SISTEMA; e nenhum dos seis drop-ins de init da midia subia o dbus-daemon
+    # ou o iwd. Os dois binarios viajavam instalados e mortos. Tudo o mais tinha
+    # sido conferido — que o iwgtk compilou, que ligava nas bibliotecas certas,
+    # que o icone tinha 32px — e nada disso diz se o programa ABRE.
+    #
+    # A conferencia e contra a arvore instalada, como a dos icones, porque os
+    # drop-ins pertencem aos pacotes dbus e iwd. E ABORTA em vez de avisar: a
+    # diferenca para o caso do icone e que ali o lancador continua clicavel e
+    # so fica feio, enquanto aqui ele nao faz coisa alguma — publicar isso e
+    # publicar uma funcionalidade que nao existe.
+    for exigencia in \
+        "iwgtk:/etc/rc.d/rcS.d/06-dbus.sh:sem barramento D-Bus do sistema o iwgtk nao acha o iwd" \
+        "iwgtk:/etc/rc.d/rcS.d/07-iwd.sh:sem o daemon iwd o iwgtk abre e nao lista rede nenhuma"; do
+        lancador=${exigencia%%:*}
+        resto=${exigencia#*:}
+        arquivo=${resto%%:*}
+        motivo=${resto#*:}
+        grep -q "path=/usr/bin/$lancador" "$STAGE/etc/xdg/weston/weston.ini" || continue
+        [ -e "$arquivo" ] || {
+            echo "desktop: o painel oferece $lancador, mas falta $arquivo —" >&2
+            echo "         $motivo" >&2
+            exit 1
+        }
+    done
+    unset exigencia lancador resto arquivo motivo
 
     # O texto do chrome do Firefox depende da base de esquemas do GSettings —
     # e de nada dentro do settings.ini. Guarda, e nao comentario.

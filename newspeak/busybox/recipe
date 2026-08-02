@@ -10,7 +10,25 @@ SHA256=6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348
 install_pkg() {
     mkdir -p "$PREFIX/bin"
     cp "$DL" "$PREFIX/bin/busybox"
-    chmod 755 "$PREFIX/bin/busybox"
+    # 4755 E NAO 755: o bit setuid. Sem ele o applet `su` recusa rodar com
+    # "su: must be suid to work properly", e esta distro nao tem outra forma de
+    # um usuario comum virar root — nao ha shadow, nao ha sudo, nao ha doas. A
+    # sessao grafica passou a rodar como a conta 'distropica' (ver o
+    # 04-usuario.sh do base), entao a conta comum deixou de ser hipotese.
+    #
+    # ISTO NAO TORNA TODO APPLET PRIVILEGIADO, e a diferenca esta no proprio
+    # binario: este busybox e compilado com FEATURE_SUID_CONFIG — as strings
+    # dele trazem "/etc/busybox.conf" e "must be suid to work properly". Com
+    # essa opcao ele le /etc/busybox.conf no arranque e LARGA privilegio em todo
+    # applet que nao esteja listado la. O base entrega esse arquivo com dois
+    # nomes apenas, `su` e `passwd`; `ls`, `sh`, `cp` e os outros trezentos
+    # rodam com o uid de quem chamou, como antes.
+    #
+    # A alternativa considerada e recusada era o base carregar uma copia setuid
+    # do binario em /usr/sbin/su: custaria 2 pacotes de reconstrucao em vez de
+    # 119, mas deixaria dois caminhos para o mesmo programa — um com o bit e
+    # outro sem — e qual venceria dependeria da ordem do PATH.
+    chmod 4755 "$PREFIX/bin/busybox"
     # applets como symlinks; o farm padrão do minitrue expõe tudo em /usr/bin
     for a in $("$PREFIX/bin/busybox" --list); do
         ln -s busybox "$PREFIX/bin/$a"

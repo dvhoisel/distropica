@@ -18,6 +18,31 @@ build() {
     install -m 0644 "$WORK/NOTICE" \
         "$STAGE/usr/share/licenses/distropica/NOTICE"
 
+    # /var/run -> /run. O LINK DE COMPATIBILIDADE QUE FALTAVA, e a ausencia dele
+    # custou uma rodada inteira de diagnostico.
+    #
+    # O /var/run foi o lugar historico dos sockets e pidfiles; ha mais de uma
+    # decada o lugar e /run, e toda distro entrega este link para os programas
+    # compilados contra o caminho antigo. Esta arvore nao entregava, e o
+    # primeiro programa a notar foi o iwd: ele traz
+    # 'unix:path=/var/run/dbus/system_bus_socket' compilado dentro (vem do ell,
+    # que ele embute), o dbus-daemon escuta em /run/dbus/system_bus_socket, e o
+    # resultado medido em QEMU foi 'Failed to initialize D-Bus' seguido de o
+    # daemon sair — com o barramento no ar, funcionando, dois caracteres ao
+    # lado. O sintoma final era o botao de Wi-Fi nao abrir nada.
+    #
+    # Conferido antes de escolher onde consertar: a glib e a libdbus desta
+    # arvore ja usam /run; so o ell usa o caminho velho. Ainda assim o conserto
+    # e aqui e nao no drop-in do iwd, porque quem esta errado e o LAYOUT — o
+    # proximo binario de terceiro compilado contra /var/run bateria na mesma
+    # parede, e um DBUS_SYSTEM_BUS_ADDRESS no drop-in so esconderia isso.
+    #
+    # Vai no payload e nao num drop-in porque e ESTRUTURA e nao estado: o /run e
+    # tmpfs recriado a cada boot, mas o link que aponta para ele e tao estatico
+    # quanto o /bin -> /usr/bin. Fica no manifesto e o verify o confere.
+    mkdir -p "$STAGE/var"
+    ln -s /run "$STAGE/var/run"
+
     cat > "$STAGE/etc/inittab" <<'INITTAB'
 # /etc/inittab — busybox init (SPEC-0006 Fase B). Legivel de cabo a rabo:
 # `cat /etc/inittab` responde "o que roda no boot?".
@@ -75,7 +100,69 @@ if [ -x /usr/bin/distropica-desktop ]; then
         # Se o compositor sair sozinho (o usuario encerrou a sessao), cai no
         # getty em vez de reabrir a sessao grafica; quem quiser de volta usa
         # `distropica-desktop`.
-        /usr/bin/distropica-desktop
+        #
+        # A SESSAO GRAFICA NAO RODA COMO ROOT. Ela rodava, e isso significava
+        # que o Firefox — o programa desta distro que mais abre conteudo de
+        # terceiro — tinha permissao de reescrever o /usr. Quem lanca esta
+        # linha e o init, entao aqui somos root e a queda de privilegio e nossa
+        # para fazer.
+        #
+        # O 'su' AQUI NAO EXIGE SETUID: quem chama e root, e o busybox so exige
+        # o bit quando o chamador nao e. E por isso que a sessao grafica de
+        # usuario comum funciona sem tornar o busybox setuid; o que exige o bit
+        # e o caminho inverso, o `su -` do usuario para root.
+        #
+        # -l e obrigatorio e nao cosmetico: sem ele o ambiente continua o do
+        # root — HOME=/root a frente de tudo —, e o Firefox criaria o perfil em
+        # /root sem poder escrever la. Com -l vem HOME=/home/distropica, o
+        # shell de login le o perfil, e o cd inicial e a home certa.
+        #
+        # O /run/user/UID e criado ANTES da queda de privilegio porque /run e
+        # de root e modo 0755: o proprio usuario nao consegue criar o diretorio
+        # dele la dentro. O lancador ate tenta, e o mkdir falha silenciosamente
+        # — o weston entao sai por falta de XDG_RUNTIME_DIR, que e uma mensagem
+        # que nao aponta para permissao nenhuma.
+        if id distropica >/dev/null 2>&1; then
+            sessao_uid=$(id -u distropica)
+            mkdir -p "/run/user/$sessao_uid"
+            chown "$sessao_uid:$sessao_uid" "/run/user/$sessao_uid" 2>/dev/null || true
+            chmod 0700 "/run/user/$sessao_uid"
+            # O /var/log/weston.log tem de ser GRAVAVEL PELO USUARIO, e este par
+            # de linhas e o que faltava: o lancador roda 'weston
+            # --log=/var/log/weston.log', o /var/log e de root, e assim que a
+            # sessao passou a rodar como 'distropica' o weston morreu na
+            # primeira linha com "Failed to open /var/log/weston.log: Permission
+            # denied". A tty1 caiu para o getty e a tela virou console — o
+            # defeito apareceu na PRIMEIRA foto tirada depois da queda de
+            # privilegio, e nao haveria como perceber sem ela.
+            #
+            # O arquivo e criado aqui, ainda como root, e nao movido para dentro
+            # da home: o valor dele e ser encontravel por quem for diagnosticar
+            # um boot que nao chegou a tela, e /var/log e onde essa pessoa olha.
+            # Truncar a cada sessao e proposital — o que interessa e a falha
+            # desta vez, nao o historico.
+            mkdir -p /var/log
+            : > /var/log/weston.log
+            chown "$sessao_uid:$sessao_uid" /var/log/weston.log 2>/dev/null || true
+            chmod 0644 /var/log/weston.log
+            # Uma linha de diagnostico antes da queda de privilegio. Ela existe
+            # porque a falha desta etapa e MUDA por natureza: se a conta nao
+            # resolver, o que aparece na tela e o erro de um programa tres
+            # camadas acima — 'dbus: Looking up user ID 1000: not found' — e
+            # nada diz que o problema esta aqui. Custa um echo por boot.
+            echo "distropica: sessao para uid $sessao_uid;" \
+                 "passwd resolve: $(getent passwd "$sessao_uid" >/dev/null 2>&1 &&
+                    echo sim || echo NAO)"
+            su -l distropica -c /usr/bin/distropica-desktop
+            unset sessao_uid
+        else
+            # Sem a conta comum, sobe como root em vez de nao subir. O drop-in
+            # 04-usuario.sh deveria te-la criado; se nao criou, uma tela de
+            # root e melhor que uma tty1 em respawn — e a mensagem diz o que
+            # houve, em vez de deixar o operador procurando.
+            echo "distropica: conta 'distropica' ausente; sessao grafica como root" >&2
+            /usr/bin/distropica-desktop
+        fi
         echo "distropica: sessao grafica encerrada; console na tty1"
         break
     done
@@ -83,6 +170,98 @@ fi
 exec /sbin/getty 38400 tty1
 SESSION
     chmod 755 "$STAGE/etc/rc.d/session"
+
+    cat > "$STAGE/etc/busybox.conf" <<'BBCONF'
+# /etc/busybox.conf — QUAIS applets do BusyBox mantem privilegio.
+#
+# O binario do busybox e setuid root (ver a receita dele, que explica por que).
+# Sozinho, isso faria TODO applet rodar como root — um `ls` privilegiado, um
+# `cp` privilegiado, uma superficie enorme por causa de um comando so. Este
+# arquivo e o que impede isso: o busybox desta arvore e compilado com
+# FEATURE_SUID_CONFIG, le esta lista no arranque e LARGA privilegio em tudo que
+# nao estiver aqui.
+#
+# A sintaxe e '<applet> = <permissoes> <usuario>.<grupo>', e 'ssx' significa
+# setuid, setgid e executavel por qualquer um.
+#
+# DOIS NOMES, e cada um tem de justificar-se:
+#
+#   su      e a razao de o bit existir. Sem ele um usuario comum nao tem como
+#           virar root nesta distro — nao ha sudo, nao ha doas, nao ha shadow.
+#           A sessao grafica roda como 'distropica' desde o 04-usuario.sh.
+#   passwd  para a conta comum poder trocar a PROPRIA senha. Sem privilegio ele
+#           nao escreve em /etc/shadow, e a alternativa seria pedir root para
+#           uma operacao que e do dono da conta.
+#
+# O que NAO esta aqui e deliberado. `mount` e `umount` ficam de fora: montar
+# disco e operacao de administrador nesta maquina, e liberar isso a qualquer um
+# daria acesso ao conteudo de qualquer particao. `login` tambem: quem o invoca
+# e o getty, que ja roda como root pelo inittab.
+#
+# Este arquivo precisa ser de root e nao ser gravavel por grupo ou outros; o
+# busybox o ignora em silencio se nao for, e o efeito seria voltar ao
+# comportamento embutido sem ninguem notar.
+[SUID]
+su = ssx root.root
+passwd = ssx root.root
+BBCONF
+    chmod 0644 "$STAGE/etc/busybox.conf"
+
+    mkdir -p "$STAGE/etc/rc.d/rcS.d"
+    cat > "$STAGE/etc/rc.d/rcS.d/04-usuario.sh" <<'USUARIODROP'
+# Drop-in de inicializacao: a conta comum. Sourced pelo rcS do base.
+#
+# ATE AQUI ESTA DISTRO TINHA UMA CONTA SO, root, e a sessao grafica rodava com
+# ela: o Firefox, o terminal e tudo o que se abrisse na tela eram root. Isso
+# nao e uma questao de etiqueta — e a diferenca entre um navegador comprometido
+# poder ler o /home e poder reescrever o /usr.
+#
+# A conta e criada AQUI e nao no payload pelo mesmo motivo das contas do sshd e
+# do messagebus, e o base e explicito sobre isso no ABOUT: passwd e shadow sao
+# estado do admin, e nenhum pacote os reivindica no manifesto. Quem ja tiver a
+# conta mantem a dele — todos os testes abaixo sao 'se ainda nao existir'.
+#
+# SEM SENHA DEFINIDA, e isso e escolha. O campo fica '!' (bloqueado), o que
+# impede login por senha nesta conta; a sessao grafica nao passa por
+# autenticacao porque quem a lanca e o init, como root. Definir uma e um
+# `passwd distropica` como root. A alternativa — senha vazia — daria login sem
+# nada em qualquer tty, e nao ha nesta distro um so lugar em que isso ajude.
+distropica_uid=1000
+if ! grep -q '^distropica:' /etc/passwd 2>/dev/null; then
+    grep -q '^distropica:' /etc/group 2>/dev/null ||
+        echo "distropica:x:$distropica_uid:" >> /etc/group
+    echo "distropica:x:$distropica_uid:$distropica_uid:Distropica:/home/distropica:/bin/sh" \
+        >> /etc/passwd
+    grep -q '^distropica:' /etc/shadow 2>/dev/null ||
+        echo 'distropica:!::0:99999:7:::' >> /etc/shadow
+    echo "distropica: conta de usuario 'distropica' criada"
+fi
+# GRUPOS DE ACESSO A HARDWARE. Sao dois e cada um destrava uma coisa:
+#
+#   seat   quem pode falar com o seatd, que e quem entrega ao compositor os
+#          descritores de /dev/dri e /dev/input. Sem estar neste grupo, a
+#          sessao grafica de um usuario comum nao abre — o weston sai com
+#          "failed to create compositor backend". O seatd e iniciado com
+#          '-g seat' pelo drop-in do desktop.
+#   audio  quem pode abrir /dev/snd/*. As regras do mdev deste mesmo pacote
+#          dao os nos ao grupo audio; sem isso o usuario ve a placa e nao
+#          consegue tocar nada, que e o modo de falha silencioso de sempre.
+for grupo_hw in seat:101 audio:102; do
+    grep -q "^${grupo_hw%%:*}:" /etc/group 2>/dev/null ||
+        echo "${grupo_hw%%:*}:x:${grupo_hw##*:}:distropica" >> /etc/group
+done
+unset grupo_hw
+# Home com dono certo e 0700: o Firefox, o GTK e o weston gravam perfil, cache
+# e configuracao aqui. Se ficasse de root, a sessao subiria e todo programa
+# falharia ao escrever — cada um a sua maneira, nenhum dizendo o porque.
+if [ ! -d /home/distropica ]; then
+    mkdir -p /home/distropica
+    chown "$distropica_uid:$distropica_uid" /home/distropica 2>/dev/null || true
+    chmod 0700 /home/distropica
+fi
+unset distropica_uid
+USUARIODROP
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/04-usuario.sh"
 
     cat > "$STAGE/etc/mdev.conf" <<'MDEV'
 # /etc/mdev.conf — onde o mdev cria cada no de dispositivo.
@@ -120,12 +299,17 @@ js[0-9]*        root:root 0640 =input/
 # Sao quatro familias de no e todas importam: controlC* e o mixer (sem ele nao
 # se desmuta nada), pcmC* sao as vias de reproducao e captura, timer e usado
 # pela sincronizacao, e seq e a fila MIDI. Sem placa, as linhas ficam inertes.
-controlC[0-9]*  root:root 0660 =snd/
-pcmC[0-9]*      root:root 0660 =snd/
+# root:audio e nao root:root: os nos precisam ser abriveis pela conta que roda
+# a sessao grafica, e ela nao e mais root. Com root:root 0660 a placa aparece
+# em /proc/asound, o alsamixer lista os controles e NADA toca — o modo de falha
+# mais caro desta arvore, porque nao ha erro em lugar nenhum. O grupo audio e o
+# 04-usuario.sh que cria, com a conta distropica dentro.
+controlC[0-9]*  root:audio 0660 =snd/
+pcmC[0-9]*      root:audio 0660 =snd/
 midiC[0-9]*     root:root 0660 =snd/
 hwC[0-9]*       root:root 0660 =snd/
-timer           root:root 0660 =snd/
-seq             root:root 0660 =snd/
+timer           root:audio 0660 =snd/
+seq             root:audio 0660 =snd/
 # O resto segue o default do mdev.
 .*              root:root 0660
 MDEV
