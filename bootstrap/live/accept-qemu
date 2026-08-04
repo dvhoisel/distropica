@@ -17,6 +17,23 @@ OVMF_VARS_TEMPLATE=${OVMF_VARS_TEMPLATE:-/usr/share/OVMF/OVMF_VARS_4M.fd}
 QEMU=${QEMU_SYSTEM_X86_64:-}
 DISK_SIZE_MIB=4096
 MEMORY_MIB=2048
+# cache=writethrough E NAO writeback, e a diferenca nao e de desempenho.
+#
+# Este script MATA o QEMU quando ve o getty — nao ha desligamento limpo, porque
+# nao ha ninguem logado para digitar poweroff e o ACPI nao derruba este init.
+# Com writeback, o que o convidado escreveu fica no cache do hospedeiro e MORRE
+# junto: o disco que sobra nao e o que o sistema construiu.
+#
+# Isso nao e detalhe de teste — corrompe o proximo boot. Medido: os drop-ins do
+# rcS acrescentam contas ao /etc/passwd; os DADOS se perdem mas o TAMANHO do
+# inode e journaled e sobrevive. No boot seguinte o '>>' escreve depois do
+# buraco, e o arquivo fica com a primeira linha, 200 bytes de NUL, e o resto. O
+# parser do busybox pula os nulos e o da glibc para neles — 'id -u distropica'
+# responde 1000 e 'getent passwd 1000' diz que nao existe. Foi assim que o
+# barramento de sessao passou horas parecendo um defeito de D-Bus.
+#
+# Com writethrough cada escrita do convidado chega ao arquivo antes de o write
+# retornar. O aceite fica mais lento e o disco passa a valer como evidencia.
 INSTALL_TIMEOUT=600
 BOOT_TIMEOUT=180
 ACCEL=tcg
@@ -162,6 +179,7 @@ firmware_size=$((code_size + vars_size))
 mkdir -- "$LOG_DIR"
 chmod 755 "$LOG_DIR"
 OVMF_VARS=$LOG_DIR/OVMF_VARS.fd
+MONITOR=$LOG_DIR/monitor.sock
 INSTALL_LOG=$LOG_DIR/install.log
 BOOT_LOG=$LOG_DIR/boot.log
 META=$LOG_DIR/acceptance.meta
@@ -263,7 +281,7 @@ set -- "$QEMU" \
     -machine "pc,accel=$ACCEL" -cpu qemu64 -smp 2 -m "$MEMORY_MIB" \
     -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE" \
     -drive "if=pflash,format=raw,file=$OVMF_VARS" \
-    -drive "if=none,id=target,format=raw,cache=writeback,file=$DISK" \
+    -drive "if=none,id=target,format=raw,cache=writethrough,file=$DISK" \
     -device virtio-blk-pci,drive=target,bootindex=2 \
     -drive "if=none,id=install_iso,format=raw,media=cdrom,readonly=on,file=$ISO" \
     -device ide-cd,drive=install_iso,bootindex=1 \
@@ -308,13 +326,14 @@ set -- "$QEMU" \
     -machine "pc,accel=$ACCEL" -cpu qemu64 -smp 2 -m "$MEMORY_MIB" \
     -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE" \
     -drive "if=pflash,format=raw,file=$OVMF_VARS" \
-    -drive "if=none,id=target,format=raw,cache=writeback,file=$DISK" \
+    -drive "if=none,id=target,format=raw,cache=writethrough,file=$DISK" \
     -device virtio-blk-pci,drive=target,bootindex=1 \
     -boot order=c,menu=off,strict=on \
-    -nic none -display none -monitor none -serial stdio \
+    -nic none -display none -monitor "unix:$MONITOR,server,nowait" -serial stdio \
     -rtc base=2024-01-01T00:00:00,clock=vm \
     -no-reboot
 : > "$BOOT_LOG"
+rm -f -- "$MONITOR"
 defer_termination
 "$@" >"$BOOT_LOG" 2>&1 &
 ACTIVE_QEMU_PID=$!
@@ -333,6 +352,33 @@ done
 if ! grep -Fq 'distropica login:' "$BOOT_LOG"; then
     cleanup_qemu
     fail "segundo QEMU encerrou antes do getty (log: $BOOT_LOG)"
+fi
+# DESLIGAMENTO LIMPO, e nao kill. Este script matava o QEMU aqui, e o disco que
+# sobrava NAO era o que o sistema tinha construido: o journal do ext4 do
+# convidado ficava com a atualizacao de TAMANHO dos arquivos que o rcS escreveu
+# sem os DADOS correspondentes. O boot seguinte replayava o journal e o
+# /etc/passwd aparecia com a primeira linha, um buraco de bytes nulos e o resto.
+# O parser do busybox pula nulos, o da glibc para neles — e a sessao grafica
+# passava a nao achar a propria conta, com o erro brotando no dbus, tres
+# camadas acima. Horas de diagnostico atras de um defeito que o proprio teste
+# fabricava.
+#
+# 'system_powerdown' e o botao de energia do ACPI. Quem responde a ele do lado
+# de dentro e o acpid, iniciado pelo 08-acpid.sh do base, que executa poweroff
+# — o init roda o rcK, desmonta e o journal fecha coerente. Se o convidado nao
+# responder (imagem antiga, sem acpid), o cleanup_qemu do fim ainda mata, e o
+# aceite passa: o que se perde e a qualidade do disco, nao o resultado do teste.
+if command -v socat >/dev/null 2>&1 && [ -S "$MONITOR" ]; then
+    printf 'system_powerdown\n' | socat - "UNIX-CONNECT:$MONITOR" >/dev/null 2>&1 || true
+    desligamento_deadline=$(($(date +%s) + 120))
+    while process_running "$ACTIVE_QEMU_PID"; do
+        [ "$(date +%s)" -lt "$desligamento_deadline" ] || {
+            echo "accept-qemu: aviso — o convidado nao desligou pelo ACPI em 120s;" >&2
+            echo "  o disco resultante pode ter journal incoerente" >&2
+            break
+        }
+        sleep 1
+    done
 fi
 cleanup_qemu
 grep -Fq 'distropica: rcS ok (mounts, mdev, hostname)' "$BOOT_LOG" ||
