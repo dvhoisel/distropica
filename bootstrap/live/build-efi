@@ -568,10 +568,18 @@ done
 # SND_HDA_GENERIC continua sendo o que importa para máquina virtual: é o
 # analisador de fallback, que dirige codec sem driver específico, e é ele que
 # faz som sair no QEMU e no VirtualBox.
+# SND_VIRTIO é a quarta controladora, e a única que o QEMU moderno oferece por
+# padrão quando se pede áudio sem escolher placa: '-device virtio-sound-pci'.
+# Estava desligada, e o efeito era o mesmo das outras ausências desta lista —
+# uma máquina onde o áudio simplesmente não existe, sem uma linha dizendo por
+# quê. As três dependências foram CONFERIDAS na config viva antes de acrescentar
+# o símbolo, e não deduzidas: VIRTIO=y, SND_PCM=y e SND_JACK=y já estavam lá, e
+# o próprio Kconfig de sound/virtio declara SND_VIRTIO como 'config' — não como
+# 'menuconfig', que foi a armadilha que já custou os codecs HDA duas vezes.
 for symbol in SOUND SND SND_PCM SND_TIMER SND_HRTIMER \
     SND_HDA SND_HDA_INTEL SND_HDA_GENERIC \
     SND_HDA_CODEC_REALTEK SND_HDA_CODEC_HDMI \
-    SND_INTEL8X0 SND_ENS1371 SND_USB_AUDIO; do
+    SND_INTEL8X0 SND_ENS1371 SND_USB_AUDIO SND_VIRTIO; do
     set_config --enable "$symbol"
 done
 # Hardware amd64 real. Até aqui o perfil cobria máquina virtual: virtio, AHCI
@@ -678,6 +686,7 @@ for symbol in EFI EFI_STUB BLK_DEV_INITRD VIRTIO_BLK VIRTIO_NET BLK_DEV_SR \
     DRM_VMWGFX DRM_VBOXVIDEO DRM_BOCHS DRM_VIRTIO_GPU \
     SOUND SND SND_PCM SND_HDA_INTEL SND_HDA_GENERIC SND_INTEL8X0 \
     SND_ENS1371 SND_USB_AUDIO SND_HDA_CODEC_REALTEK SND_HDA_CODEC_HDMI \
+    SND_VIRTIO \
     IWLWIFI IWLMVM ATH9K ATH10K RTW88 RTW89 RTL8XXXU FW_LOADER \
     CRYPTO_USER_API_SKCIPHER CRYPTO_CBC CRYPTO_ECB CRYPTO_DES \
     USER_NS TUN WIREGUARD NETFILTER NF_TABLES NF_TABLES_INET NFT_CT \
