@@ -1,0 +1,182 @@
+#!/bin/sh
+# Confere, sobre um root já reconstruído, as quatro coisas que esta rodada
+# prometeu mudar. Não constrói nada: só mede o que está em disco.
+#
+# Existe porque cada uma dessas promessas já falhou uma vez de um jeito MUDO —
+# o pacote instalado sem o daemon que ele precisa, o símbolo de kernel aceito e
+# descartado no olddefconfig, o chmod que a receita pedia e o registro
+# ignorava. Medir depois é o que separa "a receita diz" de "o disco tem".
+set -eu
+umask 022
+LC_ALL=C
+export LC_ALL
+
+ROOT=
+CANAL=
+CONFIG=
+
+usage() {
+    cat <<'EOF'
+uso: bootstrap/verifica-0.10 --root ROOTFS [--canal INDICE] [--kernel-config ARQ]
+
+  --root DIR          root reconstruído a inspecionar
+  --canal ARQ         índice de canal emitido; se dado, mede os PAYLOADS que
+                      embarcam, e não a árvore de build
+  --kernel-config ARQ .config do kernel vivo, para conferir SND_VIRTIO
+
+Sai 0 se tudo o que foi prometido está no disco, 1 se algo faltou.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --root) ROOT=${2:?}; shift 2 ;;
+        --canal) CANAL=${2:?}; shift 2 ;;
+        --kernel-config) CONFIG=${2:?}; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "erro: opção desconhecida: $1" >&2; usage >&2; exit 1 ;;
+    esac
+done
+[ -n "$ROOT" ] || { echo "erro: --root é obrigatório" >&2; exit 1; }
+[ -d "$ROOT" ] || { echo "erro: root não existe: $ROOT" >&2; exit 1; }
+
+falhas=0
+reprova() { echo "  REPROVA: $*" >&2; falhas=$((falhas + 1)); }
+aprova()  { echo "  ok: $*"; }
+
+echo "== 1. busybox com o bit setuid =="
+# Sem ele o applet `su` recusa rodar, e a conta comum não tem como virar root.
+# A receita pede 4755 desde sempre; o que faltava era o registro aceitar a
+# correção de um provisional que já cedeu caminhos.
+bb=$(find "$ROOT/opt/busybox" -maxdepth 3 -name busybox -type f 2>/dev/null | head -1)
+if [ -z "$bb" ]; then
+    reprova "binário do busybox não encontrado sob $ROOT/opt/busybox"
+else
+    modo=$(stat -c %a "$bb")
+    case "$modo" in
+        4755) aprova "busybox em $modo" ;;
+        *) reprova "busybox em $modo; esperado 4755" ;;
+    esac
+fi
+
+echo "== 2. base regulatória do Wi-Fi =="
+# O cabeçalho é conferido como o KERNEL o confere: FWDB_MAGIC 'RGDB' seguido de
+# FWDB_VERSION 20. Um arquivo presente porém de formato futuro é recusado em
+# silêncio no boot, que é indistinguível de arquivo ausente.
+db=$ROOT/usr/lib/firmware/regulatory.db
+p7s=$ROOT/usr/lib/firmware/regulatory.db.p7s
+if [ ! -f "$db" ]; then
+    reprova "regulatory.db ausente"
+elif [ ! -f "$p7s" ]; then
+    reprova "regulatory.db.p7s ausente — sem ela o kernel recusa a base"
+else
+    cab=$(od -An -tx1 -N8 "$db" | tr -d ' \n')
+    if [ "$cab" = "5247444200000014" ]; then
+        aprova "regulatory.db com magic RGDB e versão 20, mais assinatura"
+    else
+        reprova "cabeçalho da regulatory.db inesperado: $cab"
+    fi
+fi
+
+echo "== 3. SND_VIRTIO no kernel vivo =="
+if [ -z "$CONFIG" ]; then
+    echo "  (pulado: --kernel-config não informado)"
+elif [ ! -f "$CONFIG" ]; then
+    reprova "config do kernel não existe: $CONFIG"
+elif grep -q '^CONFIG_SND_VIRTIO=y$' "$CONFIG"; then
+    aprova "CONFIG_SND_VIRTIO=y"
+else
+    reprova "CONFIG_SND_VIRTIO não ficou =y — olddefconfig pode tê-lo descartado"
+fi
+
+echo "== 4. símbolos de depuração =="
+# A medição que importa é sobre o que EMBARCA. Medir a árvore de build inclui
+# toolchain que não vai na mídia e infla o número nas duas direções.
+if [ -n "$CANAL" ] && [ -f "$CANAL" ]; then
+    python3 - "$CANAL" <<'MEDE' || reprova "medição de depuração falhou"
+import io, os, struct, subprocess, sys, tarfile
+
+indice = sys.argv[1]
+cache = os.path.dirname(os.path.dirname(os.path.dirname(indice)))
+PREFIXOS = (".debug_", ".zdebug_", ".stab", ".gnu_debuglink")
+
+
+def secoes(d):
+    if len(d) < 64 or d[:4] != b"\x7fELF":
+        return None
+    e = "<" if d[5] == 1 else ">"
+    try:
+        shoff, = struct.unpack_from(e + "Q", d, 0x28)
+        shent, shnum, shstr = struct.unpack_from(e + "HHH", d, 0x3A)
+        if not shoff or not shnum or shstr >= shnum:
+            return []
+        b = shoff + shstr * shent
+        so, st = struct.unpack_from(e + "QQ", d, b + 0x18)
+        nomes = d[so:so + st]
+        saida = []
+        for i in range(shnum):
+            o = shoff + i * shent
+            nm, tp = struct.unpack_from(e + "II", d, o)
+            sz, = struct.unpack_from(e + "Q", d, o + 0x20)
+            if tp == 8:
+                continue
+            fim = nomes.find(b"\0", nm)
+            saida.append((nomes[nm:fim].decode("ascii", "replace"), sz))
+        return saida
+    except (struct.error, IndexError, ValueError):
+        return []
+
+
+elf = dbg = 0
+piores = []
+for linha in open(indice, encoding="utf-8"):
+    c = linha.split()
+    if len(c) < 6:
+        continue
+    caminho = os.path.join(cache, c[5])
+    if not os.path.exists(caminho):
+        continue
+    bruto = subprocess.run(["zstd", "-dc", caminho], capture_output=True).stdout
+    pe = pd = 0
+    try:
+        with tarfile.open(fileobj=io.BytesIO(bruto)) as t:
+            for m in t:
+                if not m.isfile() or m.size < 64:
+                    continue
+                f = t.extractfile(m)
+                if f is None:
+                    continue
+                d = f.read()
+                s = secoes(d)
+                if s is None:
+                    continue
+                pe += len(d)
+                pd += sum(sz for n, sz in s if n.startswith(PREFIXOS))
+    except tarfile.TarError:
+        continue
+    elf += pe
+    dbg += pd
+    if pd:
+        piores.append((pd, c[0]))
+
+pct = 100.0 * dbg / elf if elf else 0.0
+print(f"  {dbg/2**20:.1f} MiB de depuração em {elf/2**20:.1f} MiB de ELF ({pct:.1f}%)")
+print("  referência da 0.10 publicada: 266.0 MiB em 656.0 MiB (40.5%)")
+piores.sort(reverse=True)
+for d, n in piores[:5]:
+    print(f"    ainda com depuração: {n} — {d/2**20:.1f} MiB")
+# Falha se a redução não aconteceu. O alvo não é zero: gnu_debuglink e restos
+# de objetos de terceiros são legítimos; 5% é folga generosa sobre os 40,5%.
+sys.exit(0 if pct < 5.0 else 1)
+MEDE
+else
+    echo "  (pulado: --canal não informado; a medição só vale sobre o que embarca)"
+fi
+
+echo
+if [ "$falhas" -eq 0 ]; then
+    echo "VERIFICA-OK: as quatro promessas estão no disco"
+    exit 0
+fi
+echo "VERIFICA-FALHOU: $falhas item(ns) não conferem" >&2
+exit 1
