@@ -85,7 +85,25 @@ pub struct Recipe {
 /// `-O2` e não `-O0`: o que sai é exatamente o que o autoconf faria, menos o
 /// `-g`. Uma receita que precise de outra coisa exporta a sua e vence, como já
 /// acontece com LDFLAGS.
-pub const BUILD_FLAGS: &[(&str, &str)] = &[("CFLAGS", "-O2"), ("CXXFLAGS", "-O2")];
+///
+/// E `-g0` EXPLÍCITO, não apenas a omissão do `-g`. A primeira versão disto
+/// tinha só `-O2`, e a primeira reconstrução mostrou que não bastava: `zig cc`
+/// emite informação de depuração POR PADRÃO. Medido no zig desta árvore, um
+/// `main` vazio compilado com `zig cc -O2` sai com 4 seções `.debug_*`; com
+/// `-g0`, com zero.
+///
+/// Não é caso de canto: sete pacotes que EMBARCAM na mídia usam as toolchains
+/// baseadas em zig — glibc, binutils-glibc, gcc-pass2, mathlibs-glibc, zlib,
+/// make e linux-headers —, e a glibc sozinha carregava 28,7 MiB de depuração.
+/// Só omitir o `-g` teria consertado o autotools e deixado esses de fora,
+/// que é o pior dos mundos: metade do problema resolvido com a aparência de
+/// inteiro.
+///
+/// Para o gcc nativo o `-g0` é redundante e inofensivo. Vale notar, para quem
+/// for medir: um binário linkado ainda mostra `.debug_*` herdadas do
+/// `crt1.o`/`crti.o`/`crtn.o` da glibc enquanto ELA não for reconstruída — o
+/// objeto compilado no mesmo comando já sai com zero.
+pub const BUILD_FLAGS: &[(&str, &str)] = &[("CFLAGS", "-O2 -g0"), ("CXXFLAGS", "-O2 -g0")];
 
 /// Serialização canônica de [`BUILD_FLAGS`] para o fingerprint e para o
 /// ambiente do runner. Uma função só, para que identidade e execução não possam

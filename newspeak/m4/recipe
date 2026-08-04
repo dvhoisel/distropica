@@ -9,7 +9,20 @@ SHA256=f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66
 # É a raiz de confiança da corroboração (SPEC-0009 §6): o build DEVE reproduzi-lo
 # (crimestop se divergir), e uma attestation de builder o assina. m4 é provado
 # byte-idêntico (SPEC-0010); esta é a 1ª receita a pinar REPROCORR.
-REPROCORR=de4710b70e7acc1267cf106b285f80e4a384ce6923fb4ed2b3bf4181bb29946e
+#
+# O VALOR MUDOU, e o motivo é declarado e não descoberto: o runner passou a
+# declarar CFLAGS/CXXFLAGS="-O2 -g0" no contrato de build, então o payload é
+# legitimamente outro. O anterior era
+# de4710b70e7acc1267cf106b285f80e4a384ce6923fb4ed2b3bf4181bb29946e, construído
+# quando o autoconf ainda preenchia CFLAGS com o seu default "-g -O2".
+#
+# O crimestop funcionou: foi ele que parou a reconstrução da árvore em vez de
+# deixar passar um artefato que a receita não descrevia mais. O valor novo foi
+# MEDIDO — o pin saiu, o build rodou, o hash veio do registro — e não copiado da
+# mensagem de erro, que trunca em 16 dígitos. A reprodução foi confirmada numa
+# segunda construção, já com este pin no lugar: o próprio crimestop é quem a
+# valida.
+REPROCORR=3609991d1e8a84964e8ed758bda67134dfe5242ba03eeb4b58592418d454a502
 
 build() {
     tar -xJf "$DL" --strip-components=1
