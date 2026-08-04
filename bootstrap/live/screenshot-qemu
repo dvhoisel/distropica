@@ -88,6 +88,7 @@ LOG_DIR=$(CDPATH= cd -- "$LOG_DIR" && pwd -P)
 cp "$OVMF_VARS" "$LOG_DIR/OVMF_VARS.fd"
 chmod u+w "$LOG_DIR/OVMF_VARS.fd"
 MONITOR=$LOG_DIR/monitor.sock
+QMP=$LOG_DIR/qmp.sock
 SERIAL=$LOG_DIR/serial.log
 SHOT=$LOG_DIR/tela.ppm
 
@@ -101,10 +102,12 @@ SHOT=$LOG_DIR/tela.ppm
     -drive "file=$DISK,format=raw,if=none,id=target,snapshot=on" \
     -device virtio-blk-pci,drive=target,bootindex=1 \
     -device virtio-gpu-pci \
+    -device virtio-tablet-pci,id=tablet \
     -nic none \
     -display none \
     -serial "file:$SERIAL" \
     -monitor "unix:$MONITOR,server,nowait" \
+    -qmp "unix:$QMP,server,nowait" \
     -no-reboot &
 QEMU_PID=$!
 
@@ -131,94 +134,101 @@ if [ -n "$CLICK" ]; then
     x=${CLICK%,*}
     y=${CLICK#*,}
     case "$x$y" in *[!0-9]*) echo "erro: --click precisa ser X,Y numérico" >&2; exit 1 ;; esac
-    # MALHA FECHADA: mover, fotografar, achar o cursor, corrigir. Nao ha como
-    # mirar em malha aberta com este ponteiro, e a tentativa custou caro.
+    # UM TABLET ABSOLUTO E O QMP. Aqui houve, antes, uma malha fechada que
+    # fotografava a tela a cada passo, procurava o cursor pelo brilho e emitia
+    # correções relativas. Ela era engenhosa e NUNCA ATIVOU UM LANÇADOR — o
+    # experimento de controle, clicar no terminal, também não abria nada. Vale
+    # registrar por que, porque o defeito não estava onde a complexidade estava:
     #
-    # O mouse do QEMU e PS/2 e reporta movimento RELATIVO. Dois obstaculos se
-    # somam. O protocolo trunca deslocamento fora de -256..255, daí o
-    # estacionamento no canto ir em muitos passos pequenos. E o weston aplica
-    # aceleracao de ponteiro cuja curva NAO E PREVISIVEL de fora: medido aqui,
-    # pedir 81 px levou o ponteiro a ~20 (encolheu) e pedir 80 px levou a 148
-    # (amplificou). Qualquer fator fixo erra.
+    #   1. Esta máquina não tinha dispositivo apontador NENHUM declarado. O
+    #      convidado via só o mouse PS/2 que o q35 emula por padrão, e o PS/2
+    #      reporta movimento RELATIVO — daí a malha, daí a aceleração
+    #      imprevisível do weston (81 px viravam ~20; 80 px viravam 148).
+    #   2. Os comandos `mouse_move`/`mouse_button` do monitor HMP são legado e
+    #      agem sobre o "mouse selecionado", que com mais de um dispositivo não
+    #      é necessariamente o que tem o ponteiro. O botão ia para um lugar e a
+    #      posição para outro. Foi isso que produziu o sintoma mais confuso de
+    #      todos: o ícone REALÇAVA sob o cursor e o clique não fazia nada.
     #
-    # O usb-tablet, que reporta posicao absoluta, resolveria a mira — e nao
-    # serve: com ele o ponteiro CHEGA ao alvo, o icone ate realca, e o botao nao
-    # ativa lancador nenhum. Verificado com o experimento de controle que este
-    # bloco agora torna obrigatorio: clicar no TERMINAL, que obviamente
-    # funciona. Nao abria.
+    # O conserto remove a causa em vez de compensá-la: `-device
+    # virtio-tablet-pci` dá um dispositivo ABSOLUTO, que o convidado enxerga
+    # porque este kernel tem CONFIG_VIRTIO_INPUT=y (conferido, não suposto), e
+    # o `input-send-event` do QMP entrega posição e botão pelo mesmo caminho,
+    # em lotes atômicos. Sem aceleração para adivinhar, sem saturação de delta,
+    # sem ambiguidade de quem recebe o clique: com um único apontador absoluto
+    # declarado, o roteamento por tipo de evento não tem para onde errar.
     #
-    # Entao: PS/2 para o botao, malha fechada para a mira. Cada iteracao
-    # fotografa a tela, localiza o cursor pelo brilho (a seta e clara sobre um
-    # fundo escuro) e emite a correcao relativa. Converge em poucas voltas e nao
-    # depende de nenhuma constante da curva.
-    monitor() { socat - "UNIX-CONNECT:$MONITOR" >/dev/null 2>&1 || true; }
-    {
-        i=0
-        while [ "$i" -lt 20 ]; do
-            printf 'mouse_move -100 -100\n'
-            i=$((i + 1))
-        done
-    } | monitor
-    sleep 1
-    # Sai do painel antes de comecar: o estacionamento deixa o cursor em (0,0),
-    # que esta DENTRO do painel — e a busca por brilho ignora essa faixa, para
-    # nao confundir a seta com os icones. Sem este empurrao a primeira iteracao
-    # nao acha nada e a malha desiste antes de comecar.
-    printf 'mouse_move 60 200\n' | monitor
-    sleep 1
-    # O ALVO DA MALHA E ABAIXO DO PAINEL, e o painel e alcancado depois.
-    # Motivo: o cursor e localizado por brilho, e dentro do painel os proprios
-    # icones sao claros — a busca acharia um icone em vez da seta. Entao a malha
-    # converge para (x, 60), em area vazia e escura, e so entao um unico
-    # movimento grande para cima leva o ponteiro ao topo. Ele GRUDA em y=0
-    # porque o compositor limita o ponteiro a tela, e y=0 esta dentro do painel
-    # (32 px de altura) — a imprecisao vertical deixa de importar.
-    alvo_y=60
-    mira=0
-    while [ "$mira" -lt 8 ]; do
-        mira=$((mira + 1))
-        rm -f "$LOG_DIR/mira.ppm"
-        printf 'screendump %s\n' "$LOG_DIR/mira.ppm" | monitor
-        n=0
-        while [ ! -s "$LOG_DIR/mira.ppm" ] && [ "$n" -lt 50 ]; do
-            n=$((n + 1)); sleep 0.1
-        done
-        posicao=$(python3 - "$LOG_DIR/mira.ppm" <<'ACHACURSOR'
+    # O eixo absoluto do virtio-input vai de 0 a 32767, independente da
+    # resolução; a conversão é linear e a guarda de resolução lá embaixo
+    # continua sendo o que impede o clique de cair no lugar errado em silêncio.
+    command -v python3 >/dev/null 2>&1 || {
+        echo "erro: python3 é necessário para falar QMP" >&2; exit 1; }
+    n=0
+    while [ ! -S "$QMP" ] && [ "$n" -lt 100 ]; do n=$((n + 1)); sleep 0.1; done
+    [ -S "$QMP" ] || { echo "erro: socket QMP não apareceu" >&2; exit 1; }
+    python3 - "$QMP" "$x" "$y" <<'QMPCLICK' || exit 1
+import json
+import socket
 import sys
-from PIL import Image
-im = Image.open(sys.argv[1]).convert("L")
-w, h = im.size
-px = im.load()
-# A seta do cursor e o unico grupo de pixels claros fora do painel (y>=34) e
-# fora de qualquer janela; procura-se o pixel mais claro dessa regiao.
-melhor, mx, my = -1, -1, -1
-for y in range(34, h, 2):
-    for x in range(0, w, 2):
-        v = px[x, y]
-        if v > melhor:
-            melhor, mx, my = v, x, y
-print(mx, my, melhor)
-ACHACURSOR
-)
-        set -- $posicao
-        cx=$1; cy=$2; brilho=$3
-        [ "$brilho" -gt 120 ] || { echo "  mira $mira: cursor nao localizado" >&2; break; }
-        dx=$(( x - cx )); dy=$(( alvo_y - cy ))
-        adx=${dx#-}; ady=${dy#-}
-        echo "  mira $mira: cursor em ($cx,$cy); falta ($dx,$dy)"
-        [ "$adx" -le 4 ] && [ "$ady" -le 4 ] && break
-        # Meio passo por vez: a curva amplifica, e passo inteiro oscila.
-        printf 'mouse_move %s %s\n' "$(( dx / 2 ))" "$(( dy / 2 ))" | monitor
-        sleep 1
-    done
-    rm -f "$LOG_DIR/mira.ppm"
-    # Sobe ao painel: dx=0 preserva a coluna que a malha acertou, e o -400
-    # garante o encosto no topo por maior que seja a aceleracao.
-    printf 'mouse_move 0 -400\n' | monitor
-    sleep 1
-    printf 'mouse_button 1\n' | monitor
-    sleep 1
-    printf 'mouse_button 0\n' | monitor
+import time
+
+caminho, x, y = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+LARGURA, ALTURA = 1280, 800
+
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect(caminho)
+f = s.makefile("rw", encoding="utf-8", newline="\n")
+
+
+def comando(cmd, **args):
+    f.write(json.dumps({"execute": cmd, "arguments": args} if args
+                       else {"execute": cmd}) + "\n")
+    f.flush()
+    # O QMP intercala eventos assíncronos com respostas; a resposta é a
+    # primeira linha que traga "return" ou "error".
+    while True:
+        linha = f.readline()
+        if not linha:
+            raise SystemExit("QMP fechou a conexão")
+        msg = json.loads(linha)
+        if "error" in msg:
+            raise SystemExit(f"QMP recusou {cmd}: {msg['error']}")
+        if "return" in msg:
+            return msg["return"]
+
+
+f.readline()          # saudação
+comando("qmp_capabilities")
+
+ax = min(32767, max(0, round(x * 32767 / (LARGURA - 1))))
+ay = min(32767, max(0, round(y * 32767 / (ALTURA - 1))))
+
+
+def enviar(eventos):
+    # SEM o parametro `device`, e isto e uma armadilha de nome. Em
+    # `input-send-event` o `device` NAO e o dispositivo de entrada: e o
+    # console de VIDEO para onde rotear o evento. Passar "tablet" ali com
+    # `-display none` faz o QEMU procurar a propriedade `device` no
+    # qemu-fixed-text-console, nao achar, e ABORTAR — o processo morre com
+    # SIGABRT e o cliente ve apenas "Connection reset by peer", sem uma
+    # palavra sobre a causa. Medido aqui.
+    #
+    # Omitido, o QEMU roteia por TIPO de evento: `abs` vai para um
+    # dispositivo que suporte eixo absoluto, que e exatamente o tablet.
+    comando("input-send-event", events=eventos)
+
+
+# Posicionar e clicar sao lotes SEPARADOS, e de proposito: o compositor precisa
+# processar o movimento e decidir o foco antes do botao chegar. Num unico lote
+# o weston ve os dois no mesmo quadro e o realce acontece sem a ativacao.
+enviar([{"type": "abs", "data": {"axis": "x", "value": ax}},
+        {"type": "abs", "data": {"axis": "y", "value": ay}}])
+time.sleep(1.0)
+enviar([{"type": "btn", "data": {"down": True, "button": "left"}}])
+time.sleep(0.15)
+enviar([{"type": "btn", "data": {"down": False, "button": "left"}}])
+print(f"  clique absoluto em ({x},{y}) -> eixo ({ax},{ay})")
+QMPCLICK
     echo "clicou em ($x,$y); esperando ${SETTLE_AFTER}s pelo aplicativo"
     sleep "$SETTLE_AFTER"
 fi
