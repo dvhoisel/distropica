@@ -72,6 +72,32 @@ pub struct Recipe {
     files_fingerprint: Option<String>,
 }
 
+/// Flags de compilação que o runner declara para TODO `build()`, e que por
+/// isso entram na identidade da receita ([`Recipe::own_fingerprint`]).
+///
+/// Existem porque a ausência delas não era neutralidade: sem CFLAGS no
+/// ambiente, o autoconf usa o SEU default, que é `-g -O2`. Medido nos payloads
+/// da 0.10: 266 MiB de seções `.debug_*` em 656 MiB de ELF, em 81 dos 86
+/// pacotes com binário. Os pacotes meson (dbus, pango, cairo) traziam menos de
+/// 3% — `buildtype=release` já desliga o debug —, o que localiza o defeito no
+/// default do autotools e em mais nada.
+///
+/// `-O2` e não `-O0`: o que sai é exatamente o que o autoconf faria, menos o
+/// `-g`. Uma receita que precise de outra coisa exporta a sua e vence, como já
+/// acontece com LDFLAGS.
+pub const BUILD_FLAGS: &[(&str, &str)] = &[("CFLAGS", "-O2"), ("CXXFLAGS", "-O2")];
+
+/// Serialização canônica de [`BUILD_FLAGS`] para o fingerprint e para o
+/// ambiente do runner. Uma função só, para que identidade e execução não possam
+/// discordar: se divergissem, o fingerprint prometeria flags que o build não
+/// usou.
+pub fn build_flags_material() -> String {
+    BUILD_FLAGS
+        .iter()
+        .map(|(nome, valor)| format!("{nome}={valor}\n"))
+        .collect()
+}
+
 impl Recipe {
     /// Dependências implicadas pelo contrato de `TOOLCHAIN`, mesmo quando a
     /// receita não repete o nome em `BUILD_DEPS`. A semente também permanece
@@ -102,6 +128,21 @@ impl Recipe {
             h.update(b"\0files\0");
             h.update(fh.as_bytes());
         }
+        // O CONTRATO DE FLAGS ENTRA NA IDENTIDADE, e a alternativa não era
+        // "mais barato": era quebrado. O runner declara CFLAGS/CXXFLAGS para
+        // todo build(), e isso MUDA O PAYLOAD — foi por não declará-los que 266
+        // MiB de símbolos de depuração entraram na mídia pelo default do
+        // autoconf. Se as flags mudassem sem mexer no fingerprint, dois payloads
+        // diferentes teriam a mesma identidade, o `rectify` diria "os registros
+        // já estão corretos" sobre um artefato que a receita já não descreve, e
+        // o REPROCORR gravado deixaria de ser reproduzível — que é a única coisa
+        // que ele promete.
+        //
+        // Fica aqui e não num bump de "minitrue-fp-v2" porque isto é
+        // ESPECÍFICO: quem ler um fingerprint que mudou merece saber que mudou
+        // a flag, e não que a versão do esquema andou.
+        h.update(b"\0build-flags\0");
+        h.update(build_flags_material().as_bytes());
         Ok(hex::encode(h.finalize()))
     }
 

@@ -1253,6 +1253,18 @@ fn build_command(
         ("AR".into(), be.ar.clone()),
         ("RANLIB".into(), be.ranlib.clone()),
         ("NM".into(), be.nm.clone()),
+        // As flags saem de `recipe::BUILD_FLAGS`, que é a MESMA fonte que o
+        // fingerprint consome. Repeti-las aqui como literal deixaria a
+        // identidade prometer uma coisa e o build fazer outra — e a divergência
+        // seria invisível até alguém tentar reproduzir um REPROCORR.
+        //
+        // Descascar depois foi a alternativa considerada e RECUSADA: rodar
+        // `strip` sobre o $STAGE faria o manifesto registrar bytes que o
+        // build() não escreveu, e nesta árvore o registro é a verdade sobre o
+        // que aconteceu. Melhor não produzir o que não se quer guardar.
+        //
+        // Quem quiser a árvore com símbolos reconstrói do bundle de fontes
+        // exportando CFLAGS="-g -O2"; a fonte correspondente existe para isso.
         ("RETRIES".into(), retries.to_string()),
         ("HOME".into(), c(work)),
         (
@@ -1265,6 +1277,9 @@ fn build_command(
         ("LANGUAGE".into(), String::new()),
         ("TZ".into(), "UTC".into()),
     ];
+    for (nome, valor) in recipe::BUILD_FLAGS {
+        envs.push(((*nome).into(), (*valor).into()));
+    }
     for (i, (p, _)) in artifacts.iter().enumerate() {
         let cp = c(p);
         if i == 0 {
