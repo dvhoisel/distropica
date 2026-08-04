@@ -27,8 +27,15 @@ tcpdump
 # até o iwgtk existir — ele depende do GTK4, travado no libjpeg cmake-only).
 # O firmware é a exceção declarada do LICENSING.md: 384 MB de blob sem fonte
 # correspondente, sem o qual o rádio não inicializa em máquina real.
+#
+# O wireless-regdb e desejo de TOPO pela mesma razao do firmware: quem o
+# consome e o kernel, e o kernel nao aparece em DEPS de ninguem. Sem ele o
+# radio sobe no dominio mundial restritivo, que corta canais legais no pais de
+# quem usa — e o unico aviso e uma linha de boot que se perde entre outras
+# cinquenta.
 iwd
 linux-firmware-wifi
+wireless-regdb
 
 # Modo gráfico. UM desejo, e é de propósito: o 'desktop' é o pacote de cola que
 # amarra compositor, navegador, fontes, tema de ícones e a configuração que faz

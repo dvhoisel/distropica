@@ -1,0 +1,74 @@
+NAME=wireless-regdb
+VERSION=2026.05.30
+KIND=source
+TOOLCHAIN=none
+DEPS=""
+BUILD_DEPS=""
+ABOUT="A base regulatória do Wi-Fi: que canais, que potência e que largura de banda são legais em cada país. Sem ela o cfg80211 fica no domínio mundial, que é a interseção restritiva de todas as jurisdições — o rádio funciona, mas some metade dos canais legais no país de quem usa, e nada avisa; o único sinal é uma linha de boot, 'Direct firmware load for regulatory.db failed with error -2'. A pendência estava escrita dentro da receita do linux-firmware-wifi, que é onde a falta aparecia e não é de onde a base vem: ela é do projeto wireless-regdb, publicado à parte no kernel.org. AQUI NÃO SE COMPILA A BASE, e a razão é de criptografia e não de preguiça: este kernel tem CONFIG_CFG80211_REQUIRE_SIGNED_REGDB=y e só carrega a regulatory.db se a regulatory.db.p7s a assinar com uma chave que ele embute. As chaves embutidas são sforshee e wens; a chave privada é dos mantenedores. Uma base recompilada de db.txt seria legítima e o kernel a RECUSARIA. Então o payload é o par binário do upstream, e a fonte correspondente — db.txt, com as 2203 linhas que descrevem cada domínio, mais as ferramentas db2fw.py e dbparse.py que o geram — viaja no mesmo tarball e no bundle de fontes. Difere do linux-firmware-wifi, que é blob sem fonte nenhuma: aqui a fonte existe e é auditável; o que não se pode reproduzir é a assinatura."
+LICENSE="ISC"
+SRC="https://mirrors.edge.kernel.org/pub/software/network/wireless-regdb/wireless-regdb-$VERSION.tar.xz"
+SHA256=8a27bfc081bafed8c24dd70fab0d96f098e5a0bfcd08d3da672595f225ab8993
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+
+    # /usr/lib/firmware é onde o request_firmware do kernel procura, e é o mesmo
+    # diretório que o linux-firmware-wifi povoa. Não há colisão: no mundo B o
+    # manifesto reivindica ARQUIVO a arquivo, e um diretório com conteúdo não
+    # gera claim de árvore. O `find -empty -delete` do fim existe justamente
+    # para que nenhum diretório vazio vire claim e bloqueie o outro pacote —
+    # foi assim que a glibc confiscou o /usr/share/locale.
+    install -Dm644 regulatory.db "$STAGE/usr/lib/firmware/regulatory.db"
+    install -Dm644 regulatory.db.p7s "$STAGE/usr/lib/firmware/regulatory.db.p7s"
+    install -Dm644 LICENSE "$STAGE/usr/share/licenses/wireless-regdb/LICENSE"
+
+    db=$STAGE/usr/lib/firmware/regulatory.db
+    p7s=$STAGE/usr/lib/firmware/regulatory.db.p7s
+
+    # GUARDA 1: o cabeçalho, exatamente como o kernel o lê. O net/wireless/reg.c
+    # desta árvore define FWDB_MAGIC 0x52474442 ('RGDB') e FWDB_VERSION 20, e
+    # confere os dois antes de olhar qualquer país. Um arquivo com magic errado
+    # ou versão futura é recusado EM SILÊNCIO no boot — o mesmo sintoma de não
+    # existir. Por isso a guarda confere o que o consumidor confere, e não
+    # "o arquivo tem bytes".
+    #
+    # Os oito primeiros bytes são magic (4) e versão (4), big-endian. od é a
+    # ferramenta porque xxd não está garantido no ambiente de build.
+    cabecalho=$(od -An -tx1 -N8 "$db" | tr -d ' \n')
+    [ "$cabecalho" = "5247444200000014" ] || {
+        echo "wireless-regdb: cabeçalho inesperado: $cabecalho" >&2
+        echo "  esperado 52474442 ('RGDB') + 00000014 (versão 20)" >&2
+        echo "  se o upstream subiu a versão do formato, este kernel a recusa" >&2
+        exit 1
+    }
+
+    # GUARDA 2: a assinatura tem de ser um PKCS#7 DER de verdade. Sem ela o
+    # kernel recusa a base inteira, e um .p7s truncado ou vazio produz
+    # exatamente o erro que este pacote existe para eliminar. 0x30 0x82 é a
+    # SEQUENCE de comprimento longo com que todo DER deste tipo começa.
+    assinatura=$(od -An -tx1 -N2 "$p7s" | tr -d ' \n')
+    [ "$assinatura" = "3082" ] || {
+        echo "wireless-regdb: regulatory.db.p7s não começa como DER: $assinatura" >&2
+        exit 1
+    }
+    bytes_p7s=$(wc -c < "$p7s")
+    [ "$bytes_p7s" -gt 512 ] || {
+        echo "wireless-regdb: assinatura tem só $bytes_p7s bytes" >&2
+        exit 1
+    }
+
+    # GUARDA 3: a base precisa descrever MUITOS países, e não um. O formato
+    # aceita uma base válida e quase vazia; o db.txt do upstream traz mais de
+    # uma centena de domínios. Contar países exigiria interpretar o binário, o
+    # que seria reimplementar o parser do kernel aqui; o tamanho é o proxy
+    # honesto — a base de 2026 tem ~6 KB e uma com meia dúzia de países teria
+    # centenas de bytes.
+    bytes_db=$(wc -c < "$db")
+    [ "$bytes_db" -gt 4096 ] || {
+        echo "wireless-regdb: base tem só $bytes_db bytes; parece truncada" >&2
+        exit 1
+    }
+    echo "wireless-regdb: base de ${bytes_db} B, assinatura de ${bytes_p7s} B"
+
+    find "$STAGE" -type d -empty -delete
+}

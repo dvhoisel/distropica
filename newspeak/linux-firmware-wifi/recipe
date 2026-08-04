@@ -60,13 +60,13 @@ build() {
         [ -d "$d" ] && cp -a "$d" "$dst/"
     done
 
-    # PENDÊNCIA CONHECIDA: a base regulatória (regulatory.db) NÃO vem daqui.
-    # O aceite mostrou "Direct firmware load for regulatory.db failed with
-    # error -2" no boot, e a correção óbvia — copiá-la deste tarball — não
-    # funciona: ela é do projeto wireless-regdb, publicado à parte no
-    # kernel.org. Sem ela o rádio funciona, mas o cfg80211 fica no domínio
-    # mundial restritivo, que corta canais legais no país do usuário. Falta uma
-    # receita wireless-regdb; são poucos KB e não bloqueia a mídia.
+    # A base regulatória (regulatory.db) NÃO vem daqui, e a busca por ela neste
+    # tarball é o primeiro reflexo errado de quem vê o "Direct firmware load for
+    # regulatory.db failed with error -2" no boot: ela é do projeto
+    # wireless-regdb, publicado à parte no kernel.org. Existe agora a receita
+    # `wireless-regdb`, que a traz junto com a assinatura sem a qual este kernel
+    # a recusa. Este comentário fica porque o sintoma continua apontando para
+    # cá, e o próximo a investigar merece ser mandado ao lugar certo.
 
     # WHENCE é o índice de proveniência e licença de CADA arquivo: é o
     # documento que torna a redistribuição defensável, e sem ele o pacote seria
