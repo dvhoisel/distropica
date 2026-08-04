@@ -208,9 +208,20 @@ partir de nada além de binários upstream — foi **demonstrada**:
   seatd), `audio` (abrir `/dev/snd`) e `netdev` (comandar o iwd). O `/etc/rc.d/session`
   larga o privilégio com `su -l` antes de chamar o compositor. Isso é a diferença
   entre um navegador comprometido poder ler o `/home` e poder reescrever o `/usr`.
-  O `su -` do usuário **de volta** para root ainda não funciona: exige o bit
-  setuid no busybox, que está na receita e é inerte enquanto a árvore não for
-  reconstruída de um bootstrap novo.
+  O `su -` do usuário **de volta** para root funciona, e isto foi medido em
+  execução e não deduzido: no sistema instalado, `login: root` → `su -
+  distropica` → `su -` devolve root, com o binário em `-rwsr-xr-x` e um applet
+  fora do `/etc/busybox.conf` ainda rodando como uid 1000.
+
+  Esta linha já afirmou o contrário, e vale registrar por que a afirmação
+  errada era plausível. O `minitrue rectify` avisa, a cada ciclo, que a
+  correção da receita do busybox **não foi aplicada** — e o aviso é verdadeiro,
+  mas sobre o *rootfs de build*, onde o busybox é provisional e já cedeu `ar`,
+  `awk` e `strings` aos sucessores; um provisional que cedeu não pode ser
+  reconstruído sem retomar o que cedeu. No **alvo** não há registro anterior
+  nenhum: o busybox é instalado do zero pela receita, e o `chmod 4755` roda
+  como qualquer outra linha dela. Tomei o aviso do build por um fato sobre o
+  produto, e escrevi isso aqui sem executar `su -` uma vez sequer.
 
 - **O botão de energia desliga a máquina.** Um `acpid` escuta o evento e chama
   `poweroff`, o init roda o `rcK` e o filesystem fecha coerente. Sem isso a única
