@@ -3,15 +3,15 @@
 > Uma distribuição Linux distópica. Não instala pacotes: **retifica registros**.
 
 **[Site oficial](https://distropica.com.br/)** ·
-**[Baixar a ISO 0.9 (745 MiB)](https://distropica.com.br/releases/distropica-0.9.iso)** ·
-**[SHA-256](https://distropica.com.br/releases/distropica-0.9.iso.sha256)** ·
-**[Manifesto](https://distropica.com.br/releases/distropica-0.9.iso.manifest)** ·
-**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.9-corresponding-sources.tar.zst)** ·
-**[SHA das fontes](https://distropica.com.br/releases/distropica-0.9-corresponding-sources.tar.zst.sha256)** ·
-**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.9-sources.tsv)** ·
-**[Índice de licenças](https://distropica.com.br/releases/distropica-0.9-licencas.tsv)**
+**[Baixar a ISO 0.10 (907 MiB)](https://distropica.com.br/releases/distropica-0.10-x86_64.iso)** ·
+**[SHA-256](https://distropica.com.br/releases/distropica-0.10-x86_64.iso.sha256)** ·
+**[Manifesto](https://distropica.com.br/releases/distropica-0.10-x86_64.iso.manifest)** ·
+**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.10-corresponding-sources.tar.zst)** ·
+**[SHA das fontes](https://distropica.com.br/releases/distropica-0.10-corresponding-sources.tar.zst.sha256)** ·
+**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.10-sources.tsv)** ·
+**[Índice de licenças](https://distropica.com.br/releases/distropica-0.10-licencas.tsv)**
 
-> **Atenção:** a `0.9` é uma **pré-release de desenvolvimento** para VM UEFI
+> **Atenção:** a `0.10` é uma **pré-release de desenvolvimento** para VM UEFI
 > **64 bits**, e a própria mídia declara isso de si: `PROFILE_CLASS=custom`.
 > O instalador apaga integralmente o dispositivo escolhido. Use um disco virtual
 > descartável e confira o SHA-256 antes do boot.
@@ -64,15 +64,17 @@ nas combinações efetivamente distribuídas.
 Cada ISO, EFI, cache ou canal binário publicado deve vir acompanhado de acesso
 equivalente ao seu bundle de fontes correspondentes: revisão da Distrópica,
 crates Rust vendorizadas, fontes upstream exatas, configurações, patches,
-scripts, licenças e inventário. A imagem custom `0.9` atende essa
-regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-0.9-corresponding-sources.tar.zst),
-preso à revisão `973a43a` e ao SHA-256 da ISO, e acompanha um
-[índice de licenças](https://distropica.com.br/releases/distropica-0.9-licencas.tsv)
-com os 371 textos extraídos de dentro dos próprios artefatos. Ela **não é
-artefato oficial** no sentido da SPEC-0011 §8: seis pacotes — `firefox`,
-`gcc-pass2`, `jq`, `vim`, `yq` e `zig` — ainda declaram `LICENSE=NOASSERTION`,
-porque cada um é um agregado cuja expressão depende do inventário por
-componente. O repositório público é a fonte
+scripts, licenças e inventário. A imagem custom `0.10` atende essa
+regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-0.10-corresponding-sources.tar.zst),
+preso à revisão `eb6d32f` e ao SHA-256 da ISO, e acompanha um
+[índice de licenças](https://distropica.com.br/releases/distropica-0.10-licencas.tsv)
+com os 411 textos extraídos de dentro dos próprios artefatos. Todos os 104
+pacotes do inventário declaram licença — não há mais nenhum
+`LICENSE=NOASSERTION`. Oito deles não carregam o texto da licença dentro do
+próprio artefato (`busybox`, `ca-certificates`, `firefox`, `jq`, `libcap`,
+`libdrm`, `libxml2`, `ripgrep`); para esses a evidência está no bundle de
+fontes, e não na mídia, e o índice diz de onde veio cada texto.
+O repositório público é a fonte
 do desenvolvimento, mas não substitui sozinho esse conjunto por artefato.
 Gerar uma imagem para uso privado não exige publicá-la; redistribuí-la
 transfere ao redistribuidor as obrigações das licenças presentes.
@@ -189,6 +191,33 @@ partir de nada além de binários upstream — foi **demonstrada**:
   é o do FAT32 para um arquivo (4 GiB−1), e não o da RAM. Foi isso que permitiu
   o cache saltar de 267 MB para 647 MB sem mudar o `payload_hash` — as ISOs
   continuam bit a bit reprodutíveis.
+- **Wi-Fi gerenciável, e a cadeia inteira precisa existir.** O daemon é o
+  **iwd** e a interface gráfica é o **iwgtk**, no painel. Nenhum dos dois basta
+  sozinho: o iwgtk fala com o iwd por **D-Bus de sistema**, que precisa estar de
+  pé; o iwd testa algoritmos de criptografia pelo **AF_ALG** ao subir e sai se
+  faltar `CRYPTO_DES`; ele procura o socket em `/var/run`, que só existe se
+  houver o link de compatibilidade para `/run`; o iwgtk é uma `GtkApplication` e
+  registra a si mesma no **barramento de sessão**, que não é o de sistema; e a
+  conta que roda a sessão precisa estar no grupo **netdev**, senão a política do
+  próprio iwd nega o acesso. Cada um desses elos, faltando, produz o mesmo
+  sintoma — clicar no ícone e nada acontecer — e nenhum deles falha em voz alta.
+  Estão todos verificados em execução, com foto.
+
+- **A sessão gráfica não roda como root.** Ela roda como a conta comum
+  `distropica`, criada no primeiro boot junto dos grupos `seat` (falar com o
+  seatd), `audio` (abrir `/dev/snd`) e `netdev` (comandar o iwd). O `/etc/rc.d/session`
+  larga o privilégio com `su -l` antes de chamar o compositor. Isso é a diferença
+  entre um navegador comprometido poder ler o `/home` e poder reescrever o `/usr`.
+  O `su -` do usuário **de volta** para root ainda não funciona: exige o bit
+  setuid no busybox, que está na receita e é inerte enquanto a árvore não for
+  reconstruída de um bootstrap novo.
+
+- **O botão de energia desliga a máquina.** Um `acpid` escuta o evento e chama
+  `poweroff`, o init roda o `rcK` e o filesystem fecha coerente. Sem isso a única
+  saída era segurar o botão e cortar a energia com o disco montado — e o journal
+  do ext4 guardava tamanho de arquivo sem os dados, corrompendo o `/etc/passwd`
+  no boot seguinte de um jeito que o busybox tolera e a glibc não.
+
 - **Modo gráfico — Wayland, weston e Firefox.** A tty1 vira sessão gráfica
   quando o pacote `desktop` está instalado e existe `/dev/dri/card*`; senão,
   vira um getty, e a tty2 é sempre um getty de emergência. O compositor é o

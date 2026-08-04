@@ -172,13 +172,13 @@
         <h1>DISTRÓPICA</h1>
         <p class="lead">Uma distribuição Linux distópica. Não instala pacotes: <strong>retifica registros</strong>. Binário do mantenedor primeiro; depois, binário da Distrópica; fonte quando ninguém publica um.</p>
         <div class="actions">
-          <a class="button primary" href="/releases/distropica-0.9.iso">Baixar ISO · 745 MiB</a>
-          <a class="button" href="/releases/distropica-0.9-corresponding-sources.tar.zst">Fontes correspondentes</a>
+          <a class="button primary" href="/releases/distropica-0.10-x86_64.iso">Baixar ISO · 907 MiB</a>
+          <a class="button" href="/releases/distropica-0.10-corresponding-sources.tar.zst">Fontes correspondentes</a>
           <a class="button" href="https://github.com/dvhoisel/distropica">Examinar o código</a>
         </div>
-        <p class="warning compact"><strong>Antes de baixar:</strong> pré-release de desenvolvimento, não release estável. <strong>O instalador apaga integralmente o disco que você indicar.</strong> Não é artefato oficial — seis pacotes ainda têm licença por declarar. <a href="#download">Aviso completo</a>.</p>
+        <p class="warning compact"><strong>Antes de baixar:</strong> pré-release de desenvolvimento, não release estável. <strong>O instalador apaga integralmente o disco que você indicar.</strong> Wi-Fi, áudio e sessão gráfica de usuário comum. Nenhum pacote declara licença indefinida. <a href="#download">Aviso completo</a>.</p>
         <div class="facts" aria-label="Características da imagem">
-          <div class="fact"><b>0.9</b><small>pré-release de desenvolvimento</small></div>
+          <div class="fact"><b>0.10</b><small>pré-release de desenvolvimento</small></div>
           <div class="fact"><b>Linux 7.1.4</b><small>kernel da mídia</small></div>
           <div class="fact"><b>GCC 15.3</b><small>toolchain nativa</small></div>
           <div class="fact"><b>GPL-3.0+</b><small>código próprio</small></div>
@@ -215,18 +215,18 @@
         <div class="download">
           <div>
             <h3>ISO UEFI para VirtualBox</h3>
-            <p>A imagem instala um sistema com <strong>modo gráfico</strong>: compositor Weston sobre KMS, Firefox 153 em português, terminal e rede por DHCP. Junto vão Vim, ripgrep, Make, GCC/G++, o Minitrue e o perfil de rede — nftables, WireGuard, nmap, mtr, tcpdump e bash. A raiz é ext4 em tabela GPT. A instalação é <strong>offline</strong>: a mídia carrega os 85 pacotes e não busca nada na rede.</p>
+            <p>A imagem instala um sistema com <strong>modo gráfico</strong>: compositor Weston sobre KMS, Firefox 153 em português, terminal e rede por DHCP. A sessão gráfica roda como a conta comum <code>distropica</code>, não como root. Há <strong>Wi-Fi gerenciável</strong> — daemon iwd e a ferramenta gráfica iwgtk no painel — e <strong>áudio</strong>, com o mixer da ALSA. Junto vão Git, OpenSSH, tmux, strace, file, minicom, Vim, ripgrep, Make, GCC/G++, o Minitrue e o perfil de rede: nftables, WireGuard, nmap, mtr, tcpdump e bash. A raiz é ext4 em tabela GPT. A instalação é <strong>offline</strong>: a mídia carrega os 97 pacotes do canal e não busca nada na rede.</p>
             <div class="actions">
-              <a class="button primary" href="/releases/distropica-0.9.iso">Baixar a ISO</a>
-              <a class="button" href="/releases/distropica-0.9.iso.sha256">SHA-256</a>
-              <a class="button" href="/releases/distropica-0.9.iso.manifest">Manifesto</a>
-              <a class="button" href="/releases/distropica-0.9-corresponding-sources.tar.zst">Fontes correspondentes</a>
-              <a class="button" href="/releases/distropica-0.9-corresponding-sources.tar.zst.sha256">SHA das fontes</a>
-              <a class="button" href="/releases/distropica-0.9-sources.tsv">Inventário</a>
-              <a class="button" href="/releases/distropica-0.9-licencas.tsv">Licenças</a>
+              <a class="button primary" href="/releases/distropica-0.10-x86_64.iso">Baixar a ISO</a>
+              <a class="button" href="/releases/distropica-0.10-x86_64.iso.sha256">SHA-256</a>
+              <a class="button" href="/releases/distropica-0.10-x86_64.iso.manifest">Manifesto</a>
+              <a class="button" href="/releases/distropica-0.10-corresponding-sources.tar.zst">Fontes correspondentes</a>
+              <a class="button" href="/releases/distropica-0.10-corresponding-sources.tar.zst.sha256">SHA das fontes</a>
+              <a class="button" href="/releases/distropica-0.10-sources.tsv">Inventário</a>
+              <a class="button" href="/releases/distropica-0.10-licencas.tsv">Licenças</a>
             </div>
-            <p class="hash"><strong>SHA-256</strong><br>8cdefdb69682e32bf758a2dc3f1b18d77279bd4172bac1ae677d5b9a5d1f5c4d</p>
-            <p class="hash"><strong>SHA-256 das fontes</strong><br>8e80f90ef714dd7d5d590f4556cb9e19417800fa11124029cb4c108b32cd6218</p>
+            <p class="hash"><strong>SHA-256</strong><br>fd91ddbdd24e991cc7ccedec6a2e97c6b1ee75b987158c9ea0cf80c0d02f1289</p>
+            <p class="hash"><strong>SHA-256 das fontes</strong><br>89b6818a729fca491592c5ff576ac474b07c20e1c43a8968bfade7f15ee88f64</p>
           </div>
           <div>
             <h3>Primeiro boot</h3>
@@ -243,7 +243,9 @@
 minitrue verify</code></pre>
           </div>
         </div>
-        <p class="warning"><strong>Aviso:</strong> esta é uma pré-release de desenvolvimento, não um release estável — e a própria mídia declara isso de si: <code>PROFILE_CLASS=custom</code>. O instalador apaga integralmente o dispositivo escolhido. Esta ISO foi instalada e verificada em máquina virtual a partir do próprio arquivo publicado. Ela <strong>não é um artefato oficial</strong> no sentido da SPEC-0011 §8: seis pacotes — firefox, gcc-pass2, jq, vim, yq e zig — ainda declaram <code>LICENSE=NOASSERTION</code>, porque cada um é um agregado cuja expressão de licença depende do inventário por componente. O bundle de fontes correspondente e o índice de licenças acima são a evidência já levantada.</p>
+        <p class="warning"><strong>Aviso:</strong> esta é uma pré-release de desenvolvimento, não um release estável — e a própria mídia declara isso de si: <code>PROFILE_CLASS=custom</code>. O instalador apaga integralmente o dispositivo escolhido.</p>
+        <p class="warning"><strong>O que foi verificado, e o que não foi.</strong> Este arquivo, o publicado, foi bootado em UEFI: ele valida a própria mídia e chega ao instalador sem tocar em disco algum. A instalação completa, o modo gráfico, o Wi-Fi e o áudio foram verificados numa mídia construída da mesma árvore e do mesmo cache, que difere desta apenas na linha de comando do kernel — a de teste autoriza instalação automática, para que a verificação possa ser automatizada. O Wi-Fi foi exercitado em máquina virtual, que não emula rádio: a janela do iwgtk abre e lista vazio. <strong>Ninguém associou esta imagem a uma rede sem fio real ainda.</strong></p>
+        <p class="warning"><strong>Licenças:</strong> todos os 104 pacotes do inventário declaram licença — não há mais nenhum <code>NOASSERTION</code>. Oito deles não carregam o texto da licença dentro do próprio artefato (busybox, ca-certificates, firefox, jq, libcap, libdrm, libxml2, ripgrep); para esses a evidência está no bundle de fontes correspondente, e não na mídia. O índice de licenças acima diz, pacote a pacote, de onde veio cada texto.</p>
       </div>
     </section>
   </main>
