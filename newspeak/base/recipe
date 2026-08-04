@@ -122,7 +122,14 @@ if [ -x /usr/bin/distropica-desktop ]; then
         # dele la dentro. O lancador ate tenta, e o mkdir falha silenciosamente
         # — o weston entao sai por falta de XDG_RUNTIME_DIR, que e uma mensagem
         # que nao aponta para permissao nenhuma.
-        if id distropica >/dev/null 2>&1; then
+        # A CONDICAO E 'A GLIBC RESOLVE?', e nao 'o id acha?'. Os dois nao
+        # sao a mesma pergunta: o busybox tem parser proprio de /etc/passwd e
+        # aceita arquivo que a glibc recusa. Quem precisa da conta aqui e o
+        # dbus da sessao, que usa getpwuid da glibc — entao e a glibc que
+        # decide. Com 'id' no lugar disto, uma conta meio-existente levava a
+        # sessao a subir, o barramento a falhar e a tela a virar console, com o
+        # erro aparecendo tres camadas acima e sem apontar para nada.
+        if getent passwd distropica >/dev/null 2>&1; then
             sessao_uid=$(id -u distropica)
             mkdir -p "/run/user/$sessao_uid"
             chown "$sessao_uid:$sessao_uid" "/run/user/$sessao_uid" 2>/dev/null || true
@@ -160,7 +167,10 @@ if [ -x /usr/bin/distropica-desktop ]; then
             # 04-usuario.sh deveria te-la criado; se nao criou, uma tela de
             # root e melhor que uma tty1 em respawn — e a mensagem diz o que
             # houve, em vez de deixar o operador procurando.
-            echo "distropica: conta 'distropica' ausente; sessao grafica como root" >&2
+            echo "distropica: a conta 'distropica' nao resolve pela glibc;" >&2
+            echo "            sessao grafica como root. Se ela existe no" >&2
+            echo "            /etc/passwd, o arquivo esta corrompido — veja o" >&2
+            echo "            aviso do 04-usuario.sh no inicio do boot." >&2
             /usr/bin/distropica-desktop
         fi
         echo "distropica: sessao grafica encerrada; console na tty1"
@@ -207,6 +217,61 @@ passwd = ssx root.root
 BBCONF
     chmod 0644 "$STAGE/etc/busybox.conf"
 
+    mkdir -p "$STAGE/etc/acpi/PWRF"
+    cat > "$STAGE/etc/acpi/PWRF/00000080" <<'PWRBTN'
+#!/bin/sh
+# O botao de energia. Chamado pelo acpid quando o firmware envia o evento
+# PWRF/00000080, que e o que uma UEFI manda ao se apertar o botao — e o que o
+# 'system_powerdown' do QEMU emula.
+#
+# Sem isto o botao nao faz NADA: o kernel gera o evento, ninguem escuta, e a
+# unica forma de desligar e digitar poweroff num console. Numa maquina de
+# verdade isso significa segurar o botao por cinco segundos e cortar a energia
+# com o filesystem montado.
+#
+# E foi assim que esta arvore produziu um defeito que levou horas para
+# entender: o aceite em QEMU matava a VM sem desligar, o journal do ext4 ficava
+# com a atualizacao de TAMANHO do /etc/passwd sem os DADOS, e o boot seguinte
+# replayava isso — arquivo com a primeira linha, um buraco de bytes nulos, e o
+# resto. O parser do busybox pula nulos; o da glibc para neles. O sintoma final
+# era a sessao grafica nao achar a propria conta.
+exec /sbin/poweroff
+PWRBTN
+    chmod 0755 "$STAGE/etc/acpi/PWRF/00000080"
+
+    mkdir -p "$STAGE/etc/rc.d/rcS.d"
+    cat > "$STAGE/etc/rc.d/rcS.d/08-acpid.sh" <<'ACPIDROP'
+# Drop-in de inicializacao: o escutador de eventos ACPI. Sourced pelo rcS.
+#
+# Existe para o botao de energia funcionar — ver /etc/acpi/PWRF/00000080, que
+# explica o que a falta dele custou. O kernel tem CONFIG_ACPI_BUTTON=y e gera o
+# evento; faltava alguem escutando.
+#
+# O acpid do BusyBox le /etc/acpi/<dispositivo>/<acao> e executa o arquivo
+# correspondente. Sem -f ele vai para segundo plano sozinho.
+if [ -x /usr/bin/acpid ] && [ -d /etc/acpi ]; then
+    /usr/bin/acpid -c /etc/acpi
+    # QUEM DECIDE E O PIDFILE, e nao o '$!' do shell — pela terceira vez nesta
+    # arvore o mesmo engano: acpid, como o dbus-daemon --fork, DAEMONIZA
+    # SOZINHO, entao o processo que o shell conhece e o pai que sai logo. Um
+    # 'kill -0 $!' um segundo depois reprova um daemon perfeitamente vivo, e foi
+    # o que aconteceu: o log dizia "acpid saiu logo apos iniciar" enquanto o
+    # botao de energia desligava a maquina normalmente.
+    espera=0
+    while [ ! -f /run/acpid.pid ] && [ "$espera" -lt 20 ]; do
+        espera=$((espera + 1))
+        sleep 0.1
+    done
+    if [ -f /run/acpid.pid ] && kill -0 "$(cat /run/acpid.pid)" 2>/dev/null; then
+        echo "distropica: acpid iniciado (botao de energia desliga a maquina)"
+    else
+        echo "distropica: acpid nao subiu; o botao de energia nao desliga" >&2
+    fi
+    unset espera
+fi
+ACPIDROP
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/08-acpid.sh"
+
     mkdir -p "$STAGE/etc/rc.d/rcS.d"
     cat > "$STAGE/etc/rc.d/rcS.d/04-usuario.sh" <<'USUARIODROP'
 # Drop-in de inicializacao: a conta comum. Sourced pelo rcS do base.
@@ -236,6 +301,35 @@ if ! grep -q '^distropica:' /etc/passwd 2>/dev/null; then
         echo 'distropica:!::0:99999:7:::' >> /etc/shadow
     echo "distropica: conta de usuario 'distropica' criada"
 fi
+# A CONTA TEM DE RESOLVER PELA GLIBC, e nao so pelo busybox. Os dois leem o
+# mesmo /etc/passwd com parsers diferentes, e essa diferenca ja escondeu um
+# defeito por horas: um arquivo com buraco de bytes NUL no meio faz o busybox
+# pular e a glibc parar. 'id -u distropica' respondia 1000 e 'getent passwd
+# 1000' dizia que a conta nao existe — e quem quebrava tres camadas acima era o
+# dbus da sessao grafica, com "Looking up user ID 1000: not found".
+#
+# O buraco nasce de um boot cujas escritas se perderam antes do sync: os dados
+# somem, o TAMANHO do inode e journaled e sobrevive, e o proximo '>>' escreve
+# depois do vazio. Queda de energia no primeiro boot produz exatamente isso.
+#
+# Nao ha conserto automatico seguro aqui — reescrever /etc/passwd por conta
+# propria e pior que o defeito. O que se pode, e se faz, e NAO deixar passar
+# calado.
+if command -v getent >/dev/null 2>&1 && ! getent passwd distropica >/dev/null 2>&1; then
+    echo "distropica: ATENCAO — a glibc nao resolve a conta 'distropica'." >&2
+    echo "            A sessao grafica vai subir como root, e programas que" >&2
+    echo "            usam GApplication (o iwgtk e um) nao abrirao." >&2
+    # O ESTADO VAI JUNTO COM O AVISO. Sem isto o diagnostico exige um ciclo
+    # inteiro de reconstruir, instalar e bootar so para ver o arquivo — foi o
+    # que aconteceu, mais de uma vez. O passwd tem quatro linhas; despeja-lo
+    # custa nada e responde de primeira se o problema e conteudo (buraco de
+    # nulos de um boot interrompido, campo malformado) ou se e o proprio NSS.
+    echo "            --- /etc/passwd ($(wc -c < /etc/passwd) bytes) ---" >&2
+    od -c /etc/passwd >&2
+    echo "            --- getent root: $(getent passwd 0 >/dev/null 2>&1 &&
+        echo sim || echo NAO) | nsswitch: $(sed -n 's/^passwd: *//p' \
+        /etc/nsswitch.conf 2>/dev/null) ---" >&2
+fi
 # GRUPOS DE ACESSO A HARDWARE. Sao dois e cada um destrava uma coisa:
 #
 #   seat   quem pode falar com o seatd, que e quem entrega ao compositor os
@@ -246,7 +340,16 @@ fi
 #   audio  quem pode abrir /dev/snd/*. As regras do mdev deste mesmo pacote
 #          dao os nos ao grupo audio; sem isso o usuario ve a placa e nao
 #          consegue tocar nada, que e o modo de falha silencioso de sempre.
-for grupo_hw in seat:101 audio:102; do
+#   netdev quem pode COMANDAR O IWD. A politica D-Bus que o proprio iwd
+#          instala (/usr/share/dbus-1/system.d/iwd-dbus.conf) so autoriza root
+#          e os grupos netdev e wheel; para todo o resto o daemon responde
+#          "Access denied: User must be a member of either the netdev or wheel
+#          group to control iwd". Enquanto a sessao grafica era de root isso
+#          nao aparecia — foi a queda de privilegio desta mesma receita que
+#          criou o problema, e o sintoma medido em QEMU foi o iwgtk sair com
+#          status 0, sem janela e sem erro visivel na tela: a mensagem ia para
+#          o stderr do compositor, que so se le abrindo /var/log/weston.log.
+for grupo_hw in seat:101 audio:102 netdev:98; do
     grep -q "^${grupo_hw%%:*}:" /etc/group 2>/dev/null ||
         echo "${grupo_hw%%:*}:x:${grupo_hw##*:}:distropica" >> /etc/group
 done

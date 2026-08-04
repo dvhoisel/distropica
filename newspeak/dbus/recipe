@@ -78,11 +78,17 @@ if [ -x /usr/bin/dbus-daemon ]; then
     fi
     # 'wheel' e 'netdev' sao citados pelas POLITICAS: o system.conf do proprio
     # dbus da wheel poder de administrar o barramento, e o iwd-dbus.conf do iwd
-    # da netdev poder de falar com o daemon de Wi-Fi. Sem os grupos existirem, o
-    # dbus reclama "Unknown group" a cada boot e a regra correspondente vira
-    # letra morta. Sao criados vazios: nesta distro so ha a conta root, que
-    # nao precisa de grupo para nada — o que se ganha e a politica passar a
-    # significar o que diz, e o log parar de acusar defeito que nao ha.
+    # da netdev poder de FALAR COM O DAEMON DE WI-FI. Sem os grupos existirem, o
+    # dbus reclama "Unknown group" a cada boot e a regra vira letra morta.
+    #
+    # Aqui eles nascem VAZIOS, e so se ainda nao existirem. Quem poe a conta
+    # 'distropica' dentro do netdev e o 04-usuario.sh do base, que roda antes
+    # deste (04 < 06); este laco e a rede de seguranca para uma arvore sem
+    # aquele drop-in. E a associacao NAO E DETALHE: com a sessao grafica rodando
+    # como usuario comum, sem netdev o iwd responde "Access denied: User must be
+    # a member of either the netdev or wheel group to control iwd" e o iwgtk sai
+    # com status 0 — sem janela e sem uma linha na tela, porque a mensagem vai
+    # para o stderr do compositor.
     for grupo_nome in wheel:97 netdev:98; do
         grep -q "^${grupo_nome%%:*}:" /etc/group 2>/dev/null ||
             echo "${grupo_nome%%:*}:x:${grupo_nome##*:}:" >> /etc/group
