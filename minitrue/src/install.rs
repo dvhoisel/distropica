@@ -26,77 +26,6 @@ static TX_COUNTER: AtomicU64 = AtomicU64::new(0);
 static MOVE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static ATOMIC_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-thread_local! {
-    /// Correções de receita que esta operação NÃO conseguiu aplicar.
-    ///
-    /// Existe por um defeito concreto e caro: um provisório que já cedeu
-    /// caminhos não pode ser reconstruído — reconstruí-lo retomaria arquivos
-    /// dos sucessores —, e até aqui o minitrue tratava isso como rotina. Ele
-    /// comparava a impressão digital, via que a receita tinha mudado, decidia
-    /// não poder aplicar, e imprimia "baseline preservado": uma frase que não
-    /// distingue "não havia nada a fazer" de "sua correção foi descartada".
-    ///
-    /// O custo medido: um `chmod 4755` no busybox disparou a reconstrução de
-    /// 119 pacotes por cascata de fingerprint — e o único arquivo que precisava
-    /// mudar foi o único que não mudou. Seis horas de CPU para descobrir isso
-    /// conferindo o modo do binário na mão, porque a saída do rectify dizia que
-    /// estava tudo bem.
-    ///
-    /// Nesta árvore não é caso raro: os NOVE provisórios (busybox, binutils,
-    /// gcc, gmp, mpfr, mpc, libstdcxx, binutils-cross, python) têm receita
-    /// divergente do registro. Toda correção escrita neles desde o bootstrap
-    /// está inerte.
-    static CORRECOES_DESCARTADAS: std::cell::RefCell<Vec<String>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
-/// Anota — e ANUNCIA — que a receita de um provisório mudou e não pôde ser
-/// aplicada. Chamada nos dois caminhos que recusam reconstruir um provisório
-/// cedido (mundo A em `install_binary`, mundo B em `install_one`).
-///
-/// A mensagem sai na hora, para quem estiver lendo o log corrido, e a lista
-/// volta no fim do rectify, para quem só olha o final. Uma linha no meio de
-/// 119 pacotes não é aviso; é ruído.
-fn anotar_correcao_descartada(nome: &str, versao: &str, gravado: &str, atual: &str) {
-    let curto = |f: &str| f.chars().take(12).collect::<String>();
-    eprintln!(
-        "  CORRECAO DESCARTADA: {nome} {versao} — a receita mudou \
-         ({} -> {}) mas este provisorio ja cedeu caminhos e reconstrui-lo \
-         retomaria arquivos dos sucessores. O QUE ESTA NO DISCO CONTINUA SENDO \
-         O DO BOOTSTRAP.",
-        curto(gravado),
-        curto(atual)
-    );
-    CORRECOES_DESCARTADAS.with(|lista| {
-        lista.borrow_mut().push(format!("{nome} {versao}"));
-    });
-}
-
-/// Esvazia a lista e imprime o resumo. Devolve quantas correções ficaram por
-/// aplicar, para o chamador decidir o que fazer com esse número.
-fn relatar_correcoes_descartadas() -> usize {
-    CORRECOES_DESCARTADAS.with(|lista| {
-        let pendentes = lista.borrow_mut().split_off(0);
-        if pendentes.is_empty() {
-            return 0;
-        }
-        eprintln!();
-        eprintln!(
-            "ATENCAO: {} correcao(oes) de receita NAO foram aplicadas:",
-            pendentes.len()
-        );
-        for item in &pendentes {
-            eprintln!("  {item}");
-        }
-        eprintln!(
-            "Sao provisorios que ja cederam caminhos aos sucessores. So um \
-             bootstrap do zero aplica o que essas receitas dizem; ate la o \
-             disco tem o artefato do bootstrap, nao o que a receita descreve."
-        );
-        pendentes.len()
-    })
-}
-
 /// Escreve `bytes` em `path` **atomicamente**: grava num temporário irmão e
 /// `rename` por cima (atômico no mesmo filesystem). Um leitor nunca vê um
 /// arquivo meio-escrito, e um crash não deixa `path` corrompido (SPEC-0003 §6).
@@ -365,18 +294,19 @@ pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> 
             resolution.get(&r.name),
         )?;
     }
-    // O RESUMO É PARTE DO CONSERTO, e não enfeite. Uma linha de aviso no meio
-    // de 119 pacotes rola para fora da tela antes de alguém ler; foi assim que
-    // uma correção descartada passou despercebida por uma reconstrução inteira.
-    // Aqui ela é a última coisa impressa.
+    // AQUI HAVIA UM RESUMO DE "correções não aplicadas", e o fato de ele não
+    // existir mais é o conserto inteiro contado em uma linha.
     //
-    // O rectify continua saindo com 0: as correções que ele CONSEGUIU aplicar
-    // foram aplicadas, e o que sobrou não é falha desta execução — é uma
-    // limitação conhecida da cessão provisional, que só um bootstrap novo
-    // resolve. Falhar aqui tornaria o rectify inutilizável nesta árvore, onde
-    // os nove provisórios estão nessa situação, sem tornar nada mais correto.
-    // O que faltava era a informação, e ela agora existe.
-    relatar_correcoes_descartadas();
+    // Ele foi escrito quando um provisional que já cedeu caminhos não podia ser
+    // reconstruído: o rectify comparava a impressão digital, via que a receita
+    // tinha mudado, e seguia adiante — de modo que toda correção escrita num
+    // dos nove provisionais desde o bootstrap ficava inerte. O resumo tornava
+    // isso VISÍVEL, que era metade do conserto; a outra metade era aplicar a
+    // correção, e é o que o refresh agora faz.
+    //
+    // Reconstruir sempre foi possível — bastava não retomar o que foi cedido.
+    // Com o refresh no lugar, `anotar_correcao_descartada` ficou sem chamador
+    // nenhum, e foi o compilador quem apontou isso.
     Ok(())
 }
 
@@ -668,6 +598,7 @@ fn install_meta(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> Res
             manifest_typed: true,
             source_origin: SourceRecordOrigin::Local,
             journal: None,
+            baseline_extra: None,
         },
     )?;
     if explicit {
@@ -687,6 +618,11 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> R
     let opt = ctx.opt(&r.name);
     ensure_real_directory_or_absent(&ctx.root, &rec_dir, "registro do pacote")?;
     ensure_real_directory_or_absent(&ctx.root, &opt, "prefixo mundo A")?;
+    // Caminho canônico -> linha do baseline antigo, para o que este provisional
+    // já cedeu aos sucessores. Vazio em toda instalação que não seja o refresh
+    // de um provisional cedido, que é o caso de absolutamente todo pacote fora
+    // do busybox da semente.
+    let mut cedidos: Vec<(String, String)> = Vec::new();
     if let Some(meta) = read_meta_strict(&rec_dir)? {
         ensure_supported_record_format(&meta, &r.name)?;
         if meta.get("VERSION") == Some(&r.version)
@@ -703,38 +639,80 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> R
                 return Ok(());
             }
         }
-        // Exceção histórica: uma semente legado/fingerprint antigo que já
-        // cedeu parte do baseline não pode ser reconstruída, pois retomaria os
-        // arquivos dos sucessores. v2 com identidade atual passou primeiro
-        // pelo fast path forte acima.
+        // Um provisional que já cedeu parte do baseline não pode ser
+        // reconstruído do jeito comum, porque a reconstrução comum reivindica
+        // tudo o que o build produz — inclusive o que os sucessores já tomaram.
+        // v2 com identidade atual passou primeiro pelo fast path forte acima.
         match provisional_cession_state(ctx, &rec_dir, r)? {
             ProvisionalCession::Intact => {
                 if explicit {
                     world_add(ctx, &r.name)?;
                 }
                 let versao = meta.get("VERSION").map(String::as_str).unwrap_or("?");
-                // A DIFERENCA QUE FALTAVA SER DITA. Chegar aqui significa que o
-                // fast path acima nao valeu; isso acontece por dois motivos bem
-                // diferentes e ate agora ambos saiam com a mesma frase:
+                // Chegar aqui significa que o fast path acima nao valeu, e isso
+                // acontece por tres motivos bem diferentes:
                 //
-                //   fingerprint IGUAL    o registro so nao esta "intacto"
-                //                        porque a cessao encolheu o manifesto.
-                //                        Nao ha nada a fazer, e "baseline
-                //                        preservado" descreve bem.
-                //   fingerprint DIFERENTE alguem corrigiu a receita e a
-                //                        correcao NAO vai entrar. Dizer
-                //                        "baseline preservado" aqui e mentir
-                //                        por omissao.
+                //   fingerprint IGUAL     o registro so nao esta "intacto"
+                //                         porque a cessao encolheu o manifesto.
+                //                         Nao ha nada a fazer, e "baseline
+                //                         preservado" descreve bem.
+                //   fingerprint DIFERENTE alguem corrigiu a receita. A correcao
+                //                         ENTRA, sobre os caminhos que ainda
+                //                         sao deste pacote.
+                //   SEM fingerprint       registro legado v1, anterior a
+                //                         identidade por closure. NAO SE SABE
+                //                         se corresponde a receita de hoje, e
+                //                         "nao sei provar" nao e "corresponde".
+                //                         Refresca tambem — foi este o caso que
+                //                         manteve o `chmod 4755` do busybox
+                //                         fora do rootfs da semente enquanto a
+                //                         primeira versao deste conserto so
+                //                         olhava o ramo do meio.
                 match meta.get("FINGERPRINT") {
-                    Some(gravado) if gravado != fingerprint => {
-                        anotar_correcao_descartada(&r.name, versao, gravado, fingerprint);
+                    gravado_opt if gravado_opt.map(String::as_str) != Some(fingerprint) => {
+                        let gravado = gravado_opt.map(String::as_str).unwrap_or("legado-v1");
+                        // A SEGUNDA METADE DO CONSERTO. Antes disto a correção
+                        // era só ANOTADA como descartada: o aviso era honesto,
+                        // mas o que a receita mandava nunca chegava ao disco, e
+                        // a única saída era um bootstrap do zero. Foi assim que
+                        // o `chmod 4755` do busybox ficou seis versões fora do
+                        // rootfs de build enquanto a receita o pedia.
+                        //
+                        // Reconstruir é seguro desde que não se retome o que foi
+                        // cedido. O conjunto cedido é exatamente
+                        // `baseline - ativo`, e ele desce daqui para o caminho
+                        // de reconstrução comum, que passa a PULAR esses
+                        // caminhos em vez de reivindicá-los.
+                        cedidos = caminhos_cedidos(ctx, &rec_dir, versao)?;
+                        let motivo = if gravado_opt.is_none() {
+                            "registro legado sem identidade".to_string()
+                        } else {
+                            format!(
+                                "receita mudou ({}… -> {}…)",
+                                &gravado[..12.min(gravado.len())],
+                                &fingerprint[..12.min(fingerprint.len())]
+                            )
+                        };
+                        println!(
+                            "provisório {} {}: {motivo}; refrescando o que ainda é dele, \
+                             {} caminho(s) cedido(s) intocado(s)",
+                            r.name,
+                            versao,
+                            cedidos.len()
+                        );
+                        for (caminho, _) in &cedidos {
+                            println!("  cedido, preservado: {caminho}");
+                        }
+                        // e cai para a reconstrução, abaixo
                     }
-                    _ => println!(
-                        "provisório {} {} já cedeu caminhos; baseline preservado.",
-                        r.name, versao
-                    ),
+                    _ => {
+                        println!(
+                            "provisório {} {} já cedeu caminhos; baseline preservado.",
+                            r.name, versao
+                        );
+                        return Ok(());
+                    }
                 }
-                return Ok(());
             }
             ProvisionalCession::Incoherent => bail!(
                 "{}: cessão provisional incoerente; rode verify e repare os registros antes de reconstruir",
@@ -854,12 +832,20 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> R
         format!("/opt/{}/current", r.name),
     ];
     let mut takeovers = HashSet::new();
+    // Conjunto de consulta rápida do que este pacote já cedeu. No refresh de um
+    // provisional cedido, cada caminho daqui é do SUCESSOR: pular é o ponto
+    // inteiro da operação. Fora desse caso o conjunto é vazio e os dois laços
+    // abaixo se comportam exatamente como antes.
+    let cedidos_set: HashSet<&str> = cedidos.iter().map(|(c, _)| c.as_str()).collect();
     // Ownership é decidido antes de tocar qualquer link e independe de os
     // bytes/alvo atuais coincidirem. Alvo idêntico com outro dono ainda é
     // doublethink; objeto idêntico sem dono não é adotado implicitamente.
     for (cmdname, _) in &pairs {
         let raw_virt = format!("/usr/bin/{cmdname}");
         let virt = canonical_virtual_path(&ctx.root, &raw_virt)?;
+        if cedidos_set.contains(virt.as_str()) {
+            continue;
+        }
         let owners: Vec<&str> = claims
             .iter()
             .filter(|(_, _, set)| set.contains(&virt))
@@ -989,6 +975,13 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> R
         let target = format!("../../opt/{}/current/{}", r.name, rel);
         let raw_virt = format!("/usr/bin/{cmdname}");
         let virt = canonical_virtual_path(&ctx.root, &raw_virt)?;
+        // Cedido: o link em /usr/bin já aponta para o sucessor e o manifesto
+        // ativo não o reivindica. Sobrescrevê-lo aqui apagaria o `ar` do
+        // binutils e o substituiria por um applet do busybox — silenciosamente,
+        // e com dois pacotes achando que são donos do mesmo caminho.
+        if cedidos_set.contains(virt.as_str()) {
+            continue;
+        }
         if takeovers.contains(&virt) {
             let owner = adopt_provisional_path(ctx, &virt, &r.name, &r.supersedes, None)?
                 .ok_or_else(|| {
@@ -1032,6 +1025,10 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> R
         }
     }
 
+    // As linhas cedidas voltam ao baseline exatamente como estavam. Ver a
+    // documentação de `RecordWrite::baseline_extra` para por que o baseline não
+    // pode encolher junto com o ativo.
+    let linhas_cedidas: Vec<String> = cedidos.iter().map(|(_, linha)| linha.clone()).collect();
     write_record(
         ctx,
         &rec_dir,
@@ -1044,6 +1041,7 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> R
             manifest_typed: false,
             source_origin: SourceRecordOrigin::Local,
             journal: None,
+            baseline_extra: (!linhas_cedidas.is_empty()).then_some(&linhas_cedidas),
         },
     )?;
     if explicit {
@@ -2763,19 +2761,39 @@ fn install_source(
                 if explicit {
                     world_add(ctx, &r.name)?;
                 }
-                // Mesma distincao do mundo A, pelo mesmo motivo: fingerprint
-                // igual e rotina; fingerprint diferente e correcao descartada.
+                // Mesma decisão do mundo A, pelo mesmo motivo e com os mesmos
+                // três casos. Aqui os provisionais que já cederam são a
+                // toolchain da semente — binutils, gcc, gmp, mpfr, mpc,
+                // libstdcxx, binutils-cross —, e o gcc chegou a ceder 176 dos
+                // seus 185 caminhos. Antes disto, corrigir a receita de
+                // qualquer um deles era escrever no vazio.
                 let versao = meta.get("VERSION").map(String::as_str).unwrap_or("?");
-                match meta.get("FINGERPRINT") {
-                    Some(gravado) if gravado != fingerprint => {
-                        anotar_correcao_descartada(&r.name, versao, gravado, fingerprint);
-                    }
-                    _ => println!(
+                if meta.get("FINGERPRINT").map(String::as_str) == Some(fingerprint) {
+                    println!(
                         "provisório {} {} já cedeu caminhos; baseline preservado.",
                         r.name, versao
-                    ),
+                    );
+                    return Ok(());
                 }
-                return Ok(());
+                let cedidos = caminhos_cedidos(ctx, &rec_dir, versao)?;
+                let motivo = match meta.get("FINGERPRINT") {
+                    None => "registro legado sem identidade".to_string(),
+                    Some(gravado) => format!(
+                        "receita mudou ({}… -> {}…)",
+                        &gravado[..12.min(gravado.len())],
+                        &fingerprint[..12.min(fingerprint.len())]
+                    ),
+                };
+                println!(
+                    "provisório {} {}: {motivo}; refrescando o que ainda é dele, \
+                     {} caminho(s) cedido(s) intocado(s)",
+                    r.name,
+                    versao,
+                    cedidos.len()
+                );
+                // e cai para a reconstrução; quem preserva os cedidos dali em
+                // diante é o `cedidos_do_registro`, lido de novo no preflight,
+                // na materialização e na escrita do registro.
             }
             ProvisionalCession::Incoherent => bail!(
                 "{}: cessão provisional incoerente; rode verify e repare os registros antes de reconstruir",
@@ -2936,6 +2954,12 @@ fn install_sealed_source(
     }
     let external_directory_index =
         index_directory_claims(&directory_claims, &r.name, &ceded_directory_owners);
+    // O que ESTE pacote já cedeu, quando ele é um provisional sendo refrescado.
+    // Vazio para todo o resto — e é por isso que os três usos abaixo não mudam
+    // o comportamento de nenhum pacote comum.
+    let cedidos = cedidos_do_registro(ctx, &rec_dir)?;
+    let cedidos_set: HashSet<&str> = cedidos.iter().map(|(c, _)| c.as_str()).collect();
+    let linhas_cedidas: Vec<String> = cedidos.iter().map(|(_, linha)| linha.clone()).collect();
     let mut stage_dirs_with_children = HashSet::new();
     for entry in &entries {
         let mut parent = Path::new(&entry.relative).parent();
@@ -2950,6 +2974,13 @@ fn install_sealed_source(
             .get(rel)
             .ok_or_else(|| anyhow::anyhow!("STAGE indexado sem caminho canônico"))?
             .clone();
+        // Já cedido: o dono legítimo é o sucessor, e é ele quem o preflight
+        // encontraria aqui. Sem esta linha o refresh de um provisional cedido
+        // morreria em "doublethink detectado" no primeiro arquivo cedido —
+        // acusando de conflito exatamente a cessão que o registro descreve.
+        if cedidos_set.contains(virt.as_str()) {
+            continue;
+        }
         if let Some((owner, version, directory)) =
             indexed_claim_at_or_above(&external_directory_index, &virt, true)
         {
@@ -3061,6 +3092,9 @@ fn install_sealed_source(
             manifest_typed: true,
             source_origin: origin,
             journal: Some(&mut journal),
+            // Mesmo motivo do mundo A: o ativo encolhe, o baseline não. Ver a
+            // documentação do campo.
+            baseline_extra: (!linhas_cedidas.is_empty()).then_some(&linhas_cedidas),
         },
     ) {
         if let Err(rollback) = journal.rollback() {
@@ -3098,6 +3132,13 @@ fn apply_stage(
     jrnl: &mut Journal,
 ) -> Result<Vec<String>> {
     let rec_dir = ctx.records_dir().join(&r.name);
+    // Mesmo conjunto que o preflight consultou. Aqui ele impede a mutação em
+    // si: sem isto o journal escreveria por cima do arquivo do sucessor e o
+    // manifesto novo reivindicaria de volta o que já não é deste pacote.
+    let cedidos_set: HashSet<String> = cedidos_do_registro(ctx, &rec_dir)?
+        .into_iter()
+        .map(|(caminho, _)| caminho)
+        .collect();
     let old_manifest = if rec_dir.join("meta").is_file() {
         read_manifest_strict(&rec_dir)?
     } else {
@@ -3191,6 +3232,9 @@ fn apply_stage(
             }
         } else {
             let dst = ctx.root.join(rel);
+            if cedidos_set.contains(&canonical_virtual_path(&ctx.root, &virt_path(rel))?) {
+                continue;
+            }
             if entry.is_dir() {
                 let empty = !dirs_with_children.contains(rel);
                 let virt = canonical_virtual_path(&ctx.root, &virt_path(rel))?;
@@ -4421,6 +4465,24 @@ struct RecordWrite<'a> {
     manifest_typed: bool,
     source_origin: SourceRecordOrigin<'a>,
     journal: Option<&'a mut Journal>,
+    /// Linhas que entram SÓ no baseline (`manifest@<versão>`), além do
+    /// manifesto ativo. Apenas o refresh de provisional cedido usa isto.
+    ///
+    /// Normalmente os dois arquivos recebem o mesmo corpo: numa instalação
+    /// limpa o pacote possui tudo o que produziu, e a cessão depois encolhe
+    /// apenas o `manifest`, deixando o baseline como memória do que era dele.
+    /// Ao reconstruir um provisional que JÁ CEDEU, o ativo tem de sair menor —
+    /// senão retomaríamos os caminhos dos sucessores — mas o baseline tem de
+    /// continuar cheio. Se ele encolhesse junto, `provisional_cession_state`
+    /// passaria a responder `NotCeded`, e a PRÓXIMA correção de receita cairia
+    /// no caminho de reconstrução normal, que tentaria reivindicar `ar`, `awk`
+    /// e `strings` de volta e morreria em doublethink.
+    ///
+    /// São as linhas do baseline ANTIGO, copiadas verbatim, e não linhas
+    /// recalculadas: recalcular a integridade de `/usr/bin/ar` hoje leria o
+    /// arquivo do binutils e gravaria o hash DELE dentro do registro do
+    /// busybox. O que o baseline afirma é "quando era meu, era assim".
+    baseline_extra: Option<&'a [String]>,
 }
 
 fn record_kind(kind: Kind) -> &'static str {
@@ -4538,9 +4600,27 @@ fn write_record(
             .collect::<Result<Vec<_>>>()?
     };
     let body = decorated.join("\n") + "\n";
+    // O baseline é o ativo mais as linhas cedidas, quando há. O
+    // MANIFEST_BASELINE_SHA256 acompanha o ARQUIVO manifest@<versão> e não o
+    // manifest ativo — é assim que `provisional_cession_state` o confere, e
+    // divergir aqui deixaria todo registro refrescado "incoerente".
+    let baseline_body = match write.baseline_extra {
+        None => body.clone(),
+        Some(extra) => {
+            let mut linhas: Vec<String> = decorated.clone();
+            for linha in extra {
+                validate_manifest_line_syntax(linha)?;
+                rooted_path(&ctx.root, manifest_path(linha))?;
+                linhas.push(linha.clone());
+            }
+            linhas.sort();
+            linhas.dedup();
+            linhas.join("\n") + "\n"
+        }
+    };
     meta.push_str(&format!(
         "MANIFEST_BASELINE_SHA256={}\n",
-        sha256_bytes(body.as_bytes())
+        sha256_bytes(baseline_body.as_bytes())
     ));
     // Sempre por último: é a única marca que autoriza recovery a concluir uma
     // transação journalizada em vez de revertê-la.
@@ -4554,7 +4634,7 @@ fn write_record(
         (rec_dir.join("manifest"), body.as_bytes()),
         (
             rec_dir.join(format!("manifest@{}", r.version)),
-            body.as_bytes(),
+            baseline_body.as_bytes(),
         ),
         (rec_dir.join("recipe"), r.recipe_bytes.as_slice()),
         (
@@ -4930,6 +5010,55 @@ enum ProvisionalCession {
     NotCeded,
     Intact,
     Incoherent,
+}
+
+/// O que o registro deste pacote diz ter cedido, ou vazio quando não há
+/// registro, quando ele não é provisional, ou quando nada foi cedido.
+///
+/// Existe para que preflight, materialização e escrita do registro no mundo B
+/// consultem A MESMA fonte. Três leituras independentes do par
+/// baseline/ativo divergiriam no primeiro caso de borda, e o sintoma seria um
+/// pacote que passa no preflight e depois apaga o arquivo do sucessor.
+fn cedidos_do_registro(ctx: &Ctx, rec_dir: &Path) -> Result<Vec<(String, String)>> {
+    let Some(meta) = read_meta(rec_dir) else {
+        return Ok(Vec::new());
+    };
+    if meta.get("PROVISIONAL").map(String::as_str) != Some("1") {
+        return Ok(Vec::new());
+    }
+    let Some(versao) = meta.get("VERSION") else {
+        return Ok(Vec::new());
+    };
+    if !rec_dir.join(format!("manifest@{versao}")).is_file() {
+        return Ok(Vec::new());
+    }
+    caminhos_cedidos(ctx, rec_dir, versao)
+}
+
+/// O que este provisional já cedeu: `baseline - ativo`, como pares
+/// (caminho canônico, linha original do baseline).
+///
+/// Só faz sentido depois de `provisional_cession_state` responder `Intact` —
+/// é ela que prova que cada caminho ausente do ativo tem mesmo um sucessor
+/// dono, e não sumiu por corrupção do registro. Chamar isto sem aquela prova
+/// transformaria um manifesto truncado em "cessão", que é exatamente o
+/// contrário do que o registro deve fazer.
+fn caminhos_cedidos(ctx: &Ctx, rec_dir: &Path, versao: &str) -> Result<Vec<(String, String)>> {
+    let ativo = read_manifest_strict(rec_dir)?;
+    let baseline = read_versioned_manifest_strict(rec_dir, versao)?;
+    let ativos: HashSet<&str> = ativo.iter().map(|l| manifest_path(l)).collect();
+    let mut saida = Vec::new();
+    for linha in &baseline {
+        let caminho = manifest_path(linha);
+        if !ativos.contains(caminho) {
+            saida.push((
+                canonical_virtual_path(&ctx.root, caminho)?,
+                linha.clone(),
+            ));
+        }
+    }
+    saida.sort();
+    Ok(saida)
 }
 
 fn provisional_cession_state(
@@ -5401,6 +5530,7 @@ fn migrate_legacy_record(
             manifest_typed: false,
             source_origin: SourceRecordOrigin::Local,
             journal: Some(&mut journal),
+            baseline_extra: None,
         },
     ) {
         if let Err(rollback) = journal.rollback() {
@@ -7860,7 +7990,7 @@ mod tests {
     }
 
     #[test]
-    fn provisional_ja_cedido_fica_congelado_mesmo_com_fingerprint_novo() {
+    fn cessao_provisional_distingue_cessao_legitima_de_truncamento() {
         let n = CNT.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("mt-frozen-v1-{}-{n}", std::process::id()));
         let recipe_dir = root.join("var/lib/minitrue/newspeak/seed");
@@ -7936,26 +8066,120 @@ mod tests {
         )
         .unwrap();
         fs::write(successor.join("manifest"), "/usr/bin/cedido\n").unwrap();
-        install_source(
-            &ctx,
-            &recipe,
-            false,
-            "fingerprint-novo",
-            BinaryPolicy::PreferBinary,
-            None,
+        // ESTE BLOCO JA AFIRMOU O CONTRARIO. Ele chamava install_source com um
+        // fingerprint novo e exigia que NADA mudasse — que o registro ficasse
+        // congelado com "antigo". Era a especificacao do defeito: toda correcao
+        // de receita num provisional cedido morria em silencio, e o teste
+        // guardava esse silencio.
+        //
+        // O que se exige agora e que o conjunto cedido seja IDENTIFICADO com
+        // precisao, porque e dele que o refresh depende para nao retomar o que
+        // ja nao e seu. A reconstrucao em si nao cabe num teste de unidade: ela
+        // roda o build() de verdade, com plano de toolchain e artefato selado.
+        let cedidos = cedidos_do_registro(&ctx, &rec).unwrap();
+        assert_eq!(
+            cedidos.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>(),
+            vec!["/usr/bin/cedido"],
+            "o cedido e exatamente baseline menos ativo"
+        );
+        assert_eq!(
+            cedidos[0].1, "/usr/bin/cedido",
+            "a linha volta VERBATIM do baseline; recalcula-la leria o arquivo \
+             do sucessor e gravaria a integridade DELE no registro do cedente"
+        );
+
+        // Um pacote que nao e provisional nunca tem cedidos, ainda que os
+        // manifestos difiram — a diferenca ali seria corrupcao, nao cessao.
+        let comum = root.join("var/lib/minitrue/records/comum");
+        fs::create_dir_all(&comum).unwrap();
+        fs::write(
+            comum.join("meta"),
+            "RECORD_FORMAT=1\nNAME=comum\nVERSION=1\nWORLD=B\n",
         )
         .unwrap();
-        assert_eq!(
-            read_meta(&rec)
-                .unwrap()
-                .get("FINGERPRINT")
-                .map(String::as_str),
-            Some("antigo")
+        fs::write(comum.join("manifest"), "\n").unwrap();
+        fs::write(comum.join("manifest@1"), "/usr/bin/x\n").unwrap();
+        assert!(
+            cedidos_do_registro(&ctx, &comum).unwrap().is_empty(),
+            "so provisional cede; para o resto a diferenca e defeito"
         );
-        assert_eq!(fs::read(rec.join("manifest")).unwrap(), b"\n");
+
+        // Sem registro nenhum tambem nao ha cedidos — o caminho de instalacao
+        // limpa passa por aqui e nao pode pular nada.
+        assert!(cedidos_do_registro(&ctx, &root.join("var/lib/minitrue/records/inexistente"))
+            .unwrap()
+            .is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// O baseline nao encolhe junto com o ativo no refresh de um provisional
+    /// cedido, e isso NAO e detalhe de contabilidade: se ele encolhesse,
+    /// `provisional_cession_state` passaria a responder `NotCeded` e a proxima
+    /// correcao de receita cairia no caminho de reconstrucao comum, que tentaria
+    /// reivindicar de volta os caminhos dos sucessores e morreria em
+    /// doublethink. O bug seria uma operacao depois do refresh, longe daqui.
+    #[test]
+    fn refresh_encolhe_o_ativo_e_preserva_o_baseline() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-refresh-{}-{n}", std::process::id()));
+        let recipe_dir = root.join("var/lib/minitrue/newspeak/seed");
+        let rec = root.join("var/lib/minitrue/records/seed");
+        fs::create_dir_all(&recipe_dir).unwrap();
+        fs::create_dir_all(&rec).unwrap();
+        fs::create_dir_all(root.join("usr/bin")).unwrap();
+        fs::write(root.join("usr/bin/meu"), b"conteudo").unwrap();
+        fs::write(
+            recipe_dir.join("recipe"),
+            "NAME=seed\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nPROVISIONAL=1\nbuild(){ :; }\n",
+        )
+        .unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let recipe = recipe::load(&ctx, "seed").unwrap();
+
+        let cedida = "/usr/bin/cedido".to_string();
+        let mut manifest = vec!["/usr/bin/meu".to_string()];
+        write_record(
+            &ctx,
+            &rec,
+            &recipe,
+            "B",
+            &mut manifest,
+            RecordWrite {
+                artifact_hash: None,
+                fingerprint: "novo",
+                manifest_typed: false,
+                source_origin: SourceRecordOrigin::Local,
+                journal: None,
+                baseline_extra: Some(std::slice::from_ref(&cedida)),
+            },
+        )
+        .unwrap();
+
+        let ativo = fs::read_to_string(rec.join("manifest")).unwrap();
+        let baseline = fs::read_to_string(rec.join("manifest@1")).unwrap();
+        assert!(ativo.contains("/usr/bin/meu"), "o ativo tem o que e dele");
+        assert!(
+            !ativo.contains("/usr/bin/cedido"),
+            "o ativo NAO pode reivindicar o que foi cedido"
+        );
+        assert!(
+            baseline.contains("/usr/bin/meu") && baseline.contains("/usr/bin/cedido"),
+            "o baseline guarda os dois: e a memoria do que ja foi deste pacote"
+        );
+
+        // O MANIFEST_BASELINE_SHA256 acompanha o ARQUIVO manifest@<versao>, e e
+        // assim que provisional_cession_state o confere. Apontar para o ativo
+        // deixaria todo registro refrescado "incoerente" na operacao seguinte.
+        let meta = read_meta_strict(&rec).unwrap().unwrap();
         assert_eq!(
-            fs::read(rec.join("manifest@1")).unwrap(),
-            b"/usr/bin/cedido\n"
+            meta.get("MANIFEST_BASELINE_SHA256").map(String::as_str),
+            Some(sha256_bytes(baseline.as_bytes()).as_str()),
+            "o hash do baseline e do baseline, nao do ativo"
         );
         let _ = fs::remove_dir_all(&root);
     }
