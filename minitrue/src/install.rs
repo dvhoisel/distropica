@@ -3073,8 +3073,9 @@ fn install_sealed_source(
     }
 
     let mut journal = Journal::begin(ctx, &r.name)?;
-    let mut manifest = match apply_stage(ctx, sealed_artifact, &entries, r, &mut journal) {
-        Ok(manifest) => manifest,
+    let (mut manifest, pulados_por_cessao) =
+        match apply_stage(ctx, sealed_artifact, &entries, r, &mut journal) {
+        Ok(resultado) => resultado,
         Err(error) => {
             if let Err(rollback) = journal.rollback() {
                 return Err(anyhow::anyhow!(
@@ -3084,7 +3085,29 @@ fn install_sealed_source(
             return Err(error);
         }
     };
-    if manifest.is_empty() {
+    // A GUARDA CONTINUA, COM UMA EXCEÇÃO ESTREITA E PROVADA. Ela existe para
+    // pegar build que não produziu nada, e isso continua sendo erro. Mas há um
+    // caso em que manifesto vazio é a resposta CERTA: um provisional que já
+    // cedeu tudo. O binutils da semente é exatamente esse — cedeu os 199
+    // caminhos do baseline ao binutils-glibc, e o que ele ainda possui é o
+    // conjunto vazio. Ele existe apenas como registro.
+    //
+    // Sem a exceção, a primeira reconstrução da árvore parou aqui: o refresh
+    // fez o que devia — pulou tudo o que já era do sucessor — e a guarda leu o
+    // resultado como build quebrado.
+    //
+    // A exceção é estreita porque `pulados_por_cessao > 0` só é verdade quando
+    // o STAGE de fato produziu entradas e TODAS foram puladas por já terem
+    // dono. Uma entrada não cedida produziria claim, e o manifesto não estaria
+    // vazio; então este par de condições não pode encobrir um build vazio de
+    // verdade.
+    if manifest.is_empty() && pulados_por_cessao > 0 {
+        println!(
+            "{} {}: cedeu todos os {} caminhos aos sucessores; \
+             registro atualizado sem payload",
+            r.name, r.version, pulados_por_cessao
+        );
+    } else if manifest.is_empty() {
         if let Err(rollback) = journal.rollback() {
             return Err(anyhow::anyhow!(
                 "STAGE sem payload e rollback também falhou: {rollback}"
@@ -3145,7 +3168,7 @@ fn apply_stage(
     entries: &[SealedStageEntry],
     r: &Recipe,
     jrnl: &mut Journal,
-) -> Result<Vec<String>> {
+) -> Result<(Vec<String>, usize)> {
     let rec_dir = ctx.records_dir().join(&r.name);
     // Mesmo conjunto que o preflight consultou. Aqui ele impede a mutação em
     // si: sem isto o journal escreveria por cima do arquivo do sucessor e o
@@ -3154,6 +3177,10 @@ fn apply_stage(
         .into_iter()
         .map(|(caminho, _)| caminho)
         .collect();
+    // Quantas entradas do STAGE foram puladas por já pertencerem a um sucessor.
+    // O chamador precisa deste número para distinguir "o build não produziu
+    // nada" de "tudo o que ele produziu já é de outro dono".
+    let mut pulados_por_cessao = 0usize;
     let old_manifest = if rec_dir.join("meta").is_file() {
         read_manifest_strict(&rec_dir)?
     } else {
@@ -3248,6 +3275,7 @@ fn apply_stage(
         } else {
             let dst = ctx.root.join(rel);
             if cedidos_set.contains(&canonical_virtual_path(&ctx.root, &virt_path(rel))?) {
+                pulados_por_cessao += 1;
                 continue;
             }
             if entry.is_dir() {
@@ -3332,7 +3360,7 @@ fn apply_stage(
             }
         }
     }
-    Ok(manifest)
+    Ok((manifest, pulados_por_cessao))
 }
 
 /// Materializa um default de fábrica em /etc conforme a política do admin
@@ -7365,7 +7393,9 @@ mod tests {
         let entries = index_sealed_stage(&image).unwrap();
         fs::write(stage.join("usr/bin/tool"), b"VERSAO-B").unwrap();
         let mut journal = Journal::begin(&ctx, "pkg").unwrap();
-        let manifest = apply_stage(&ctx, &image, &entries, &recipe, &mut journal).unwrap();
+        let (manifest, pulados) =
+            apply_stage(&ctx, &image, &entries, &recipe, &mut journal).unwrap();
+        assert_eq!(pulados, 0, "pacote comum não pula caminho por cessão");
 
         assert_eq!(fs::read(root.join("usr/bin/tool")).unwrap(), b"VERSAO-A");
         assert_eq!(
@@ -8451,7 +8481,9 @@ mod tests {
         let (image, _) = sealed_stage_snapshot(&stage, 0).unwrap();
         let entries = index_sealed_stage(&image).unwrap();
         let mut journal = Journal::begin(&ctx, "pkg").unwrap();
-        let manifest = apply_stage(&ctx, &image, &entries, &recipe, &mut journal).unwrap();
+        let (manifest, pulados) =
+            apply_stage(&ctx, &image, &entries, &recipe, &mut journal).unwrap();
+        assert_eq!(pulados, 0, "pacote comum não pula caminho por cessão");
         let installed = root.join("usr/share/pkg/empty");
         assert!(installed.is_dir());
         assert_eq!(
@@ -8477,6 +8509,79 @@ mod tests {
             0o711,
             "rollback não pode podar/recriar pai preexistente"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Um provisional que ja cedeu TUDO nao tem o que instalar, e isso e a
+    /// resposta certa — nao um build quebrado. A primeira reconstrucao da
+    /// arvore parou exatamente aqui: o refresh do binutils da semente pulou os
+    /// 199 caminhos que ja eram do binutils-glibc, o manifesto saiu vazio, e a
+    /// guarda de "nenhuma claim instalavel" leu o vazio como defeito.
+    ///
+    /// O teste prende as duas metades: nada e reivindicado, E o arquivo do
+    /// sucessor sobrevive intacto. A segunda importa mais que a primeira — a
+    /// falha silenciosa seria o cedente sobrescrever o binario do sucessor.
+    #[test]
+    fn provisional_que_cedeu_tudo_nao_reivindica_o_do_sucessor() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-cedeu-tudo-{}-{n}", std::process::id()));
+        let stage = root.join("stage");
+        fs::create_dir_all(stage.join("usr/bin")).unwrap();
+        fs::write(stage.join("usr/bin/ferramenta"), b"do cedente").unwrap();
+        // O arquivo VIVO e o do sucessor, e tem de sair daqui sem um byte mudado.
+        fs::create_dir_all(root.join("usr/bin")).unwrap();
+        fs::write(root.join("usr/bin/ferramenta"), b"DO SUCESSOR").unwrap();
+
+        let recipe_dir = root.join("var/lib/minitrue/newspeak/semente");
+        fs::create_dir_all(&recipe_dir).unwrap();
+        fs::write(
+            recipe_dir.join("recipe"),
+            "NAME=semente\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nPROVISIONAL=1\nbuild(){ :; }\n",
+        )
+        .unwrap();
+
+        // Registro do cedente: baseline com o caminho, manifesto ativo VAZIO.
+        let rec = root.join("var/lib/minitrue/records/semente");
+        fs::create_dir_all(&rec).unwrap();
+        fs::write(
+            rec.join("meta"),
+            "RECORD_FORMAT=1\nNAME=semente\nVERSION=1\nKIND=source\nWORLD=B\nPROVISIONAL=1\n",
+        )
+        .unwrap();
+        // Manifesto vazio e "\n" e nao "": o leitor estrito recusa arquivo de
+        // zero bytes com "arquivo vazio", e o registro real do binutils da
+        // semente e exatamente assim — uma linha em branco.
+        fs::write(rec.join("manifest"), "\n").unwrap();
+        fs::write(rec.join("manifest@1"), "/usr/bin/ferramenta\n").unwrap();
+
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let recipe = recipe::load(&ctx, "semente").unwrap();
+        let (image, _) = sealed_stage_snapshot(&stage, 0).unwrap();
+        let entries = index_sealed_stage(&image).unwrap();
+        let mut journal = Journal::begin(&ctx, "semente").unwrap();
+        let (manifest, pulados) =
+            apply_stage(&ctx, &image, &entries, &recipe, &mut journal).unwrap();
+
+        assert!(
+            manifest.is_empty(),
+            "nao reivindica nada: tudo o que produziu ja e do sucessor"
+        );
+        assert_eq!(
+            pulados, 1,
+            "e o contador explica POR QUE o manifesto saiu vazio; e ele que \
+             autoriza a excecao a guarda de 'nenhuma claim instalavel'"
+        );
+        assert_eq!(
+            fs::read(root.join("usr/bin/ferramenta")).unwrap(),
+            b"DO SUCESSOR",
+            "o cedente nao pode sobrescrever o arquivo de quem o sucedeu"
+        );
+        journal.rollback().unwrap();
         let _ = fs::remove_dir_all(&root);
     }
 
