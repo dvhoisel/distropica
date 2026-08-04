@@ -101,8 +101,6 @@ SHOT=$LOG_DIR/tela.ppm
     -drive "file=$DISK,format=raw,if=none,id=target,snapshot=on" \
     -device virtio-blk-pci,drive=target,bootindex=1 \
     -device virtio-gpu-pci \
-    -device qemu-xhci \
-    -device usb-tablet \
     -nic none \
     -display none \
     -serial "file:$SERIAL" \
@@ -133,50 +131,90 @@ if [ -n "$CLICK" ]; then
     x=${CLICK%,*}
     y=${CLICK#*,}
     case "$x$y" in *[!0-9]*) echo "erro: --click precisa ser X,Y numérico" >&2; exit 1 ;; esac
-    # O PONTEIRO É UM TABLET USB, e não o mouse PS/2 padrão do QEMU. A diferença
-    # é a única coisa que faz este clique ser confiável, e custou duas fotos
-    # erradas para ficar claro.
+    # MALHA FECHADA: mover, fotografar, achar o cursor, corrigir. Nao ha como
+    # mirar em malha aberta com este ponteiro, e a tentativa custou caro.
     #
-    # O PS/2 reporta movimento RELATIVO: não há como dizer "vá para (84,17)", só
-    # "ande tanto". Duas coisas estragam isso, e a segunda esconde a primeira.
-    # A primeira é o protocolo, que codifica o deslocamento em nove bits com
-    # sinal e trunca qualquer valor fora de -256..255 — um 'mouse_move -4000
-    # -4000' anda 256 px e para. A segunda é o WESTON, que aplica aceleração de
-    # ponteiro ao movimento relativo, e cuja curva ENCOLHE deslocamento lento:
-    # medido aqui, pedir 84 px levou o ponteiro a algo perto de 20. O clique
-    # caiu no primeiro lançador do painel e a foto mostrou o FIREFOX aberto —
-    # um aplicativo, só que não o pedido. Isso é pior que não abrir nada, porque
-    # parece sucesso. Quebrar o movimento em passos de 4 px não resolveu: a
-    # curva penaliza justamente o passo pequeno.
+    # O mouse do QEMU e PS/2 e reporta movimento RELATIVO. Dois obstaculos se
+    # somam. O protocolo trunca deslocamento fora de -256..255, daí o
+    # estacionamento no canto ir em muitos passos pequenos. E o weston aplica
+    # aceleracao de ponteiro cuja curva NAO E PREVISIVEL de fora: medido aqui,
+    # pedir 81 px levou o ponteiro a ~20 (encolheu) e pedir 80 px levou a 148
+    # (amplificou). Qualquer fator fixo erra.
     #
-    # O usb-tablet reporta posição ABSOLUTA. O 'mouse_move x y' do monitor passa
-    # a significar a coordenada literal, sem acumulador, sem truncamento de nove
-    # bits e sem aceleração — não há velocidade a acelerar quando o dispositivo
-    # diz onde está. O kernel desta distro tem USB_XHCI_HCD e USB_HID builtin,
-    # entao o tablet e enumerado sem modulo nenhum.
+    # O usb-tablet, que reporta posicao absoluta, resolveria a mira — e nao
+    # serve: com ele o ponteiro CHEGA ao alvo, o icone ate realca, e o botao nao
+    # ativa lancador nenhum. Verificado com o experimento de controle que este
+    # bloco agora torna obrigatorio: clicar no TERMINAL, que obviamente
+    # funciona. Nao abria.
     #
-    # DUAS conexões, e não uma. O socat fecha o socket assim que termina de
-    # escrever e o monitor do QEMU descarta o que ainda não consumiu: mandar
-    # deslocamento e clique na mesma conexão perde o FIM da fila. O sintoma é a
-    # foto mostrar a área de trabalho vazia com o ponteiro parado — igualzinho a
-    # um aplicativo que não abre, que é exatamente o que este clique existe para
-    # decidir. Já aconteceu.
-    # A COORDENADA DO MONITOR NÃO É EM PIXEL. Para dispositivo absoluto o QEMU
-    # usa um espaço fixo de 0..32767 em cada eixo, independente da resolução —
-    # e foi por isso que 'mouse_move 84 17' pôs o ponteiro perto do canto
-    # superior esquerdo em vez do terceiro lançador. O --click continua sendo em
-    # PIXEL, que é o que se lê numa foto; a conversão é feita aqui.
-    #
-    # 1280x800 é a resolução que o virtio-gpu entrega a este kernel, medida no
-    # cabeçalho dos PPM que este mesmo script produz. Se mudar, as fotos saem
-    # com outro tamanho e este par tem de mudar junto — daí a guarda no fim, que
-    # compara o PPM gerado com o que foi assumido aqui.
-    TELA_LARGURA=1280
-    TELA_ALTURA=800
-    ax=$(( x * 32767 / TELA_LARGURA ))
-    ay=$(( y * 32767 / TELA_ALTURA ))
+    # Entao: PS/2 para o botao, malha fechada para a mira. Cada iteracao
+    # fotografa a tela, localiza o cursor pelo brilho (a seta e clara sobre um
+    # fundo escuro) e emite a correcao relativa. Converge em poucas voltas e nao
+    # depende de nenhuma constante da curva.
     monitor() { socat - "UNIX-CONNECT:$MONITOR" >/dev/null 2>&1 || true; }
-    printf 'mouse_move %s %s\n' "$ax" "$ay" | monitor
+    {
+        i=0
+        while [ "$i" -lt 20 ]; do
+            printf 'mouse_move -100 -100\n'
+            i=$((i + 1))
+        done
+    } | monitor
+    sleep 1
+    # Sai do painel antes de comecar: o estacionamento deixa o cursor em (0,0),
+    # que esta DENTRO do painel — e a busca por brilho ignora essa faixa, para
+    # nao confundir a seta com os icones. Sem este empurrao a primeira iteracao
+    # nao acha nada e a malha desiste antes de comecar.
+    printf 'mouse_move 60 200\n' | monitor
+    sleep 1
+    # O ALVO DA MALHA E ABAIXO DO PAINEL, e o painel e alcancado depois.
+    # Motivo: o cursor e localizado por brilho, e dentro do painel os proprios
+    # icones sao claros — a busca acharia um icone em vez da seta. Entao a malha
+    # converge para (x, 60), em area vazia e escura, e so entao um unico
+    # movimento grande para cima leva o ponteiro ao topo. Ele GRUDA em y=0
+    # porque o compositor limita o ponteiro a tela, e y=0 esta dentro do painel
+    # (32 px de altura) — a imprecisao vertical deixa de importar.
+    alvo_y=60
+    mira=0
+    while [ "$mira" -lt 8 ]; do
+        mira=$((mira + 1))
+        rm -f "$LOG_DIR/mira.ppm"
+        printf 'screendump %s\n' "$LOG_DIR/mira.ppm" | monitor
+        n=0
+        while [ ! -s "$LOG_DIR/mira.ppm" ] && [ "$n" -lt 50 ]; do
+            n=$((n + 1)); sleep 0.1
+        done
+        posicao=$(python3 - "$LOG_DIR/mira.ppm" <<'ACHACURSOR'
+import sys
+from PIL import Image
+im = Image.open(sys.argv[1]).convert("L")
+w, h = im.size
+px = im.load()
+# A seta do cursor e o unico grupo de pixels claros fora do painel (y>=34) e
+# fora de qualquer janela; procura-se o pixel mais claro dessa regiao.
+melhor, mx, my = -1, -1, -1
+for y in range(34, h, 2):
+    for x in range(0, w, 2):
+        v = px[x, y]
+        if v > melhor:
+            melhor, mx, my = v, x, y
+print(mx, my, melhor)
+ACHACURSOR
+)
+        set -- $posicao
+        cx=$1; cy=$2; brilho=$3
+        [ "$brilho" -gt 120 ] || { echo "  mira $mira: cursor nao localizado" >&2; break; }
+        dx=$(( x - cx )); dy=$(( alvo_y - cy ))
+        adx=${dx#-}; ady=${dy#-}
+        echo "  mira $mira: cursor em ($cx,$cy); falta ($dx,$dy)"
+        [ "$adx" -le 4 ] && [ "$ady" -le 4 ] && break
+        # Meio passo por vez: a curva amplifica, e passo inteiro oscila.
+        printf 'mouse_move %s %s\n' "$(( dx / 2 ))" "$(( dy / 2 ))" | monitor
+        sleep 1
+    done
+    rm -f "$LOG_DIR/mira.ppm"
+    # Sobe ao painel: dx=0 preserva a coluna que a malha acertou, e o -400
+    # garante o encosto no topo por maior que seja a aceleracao.
+    printf 'mouse_move 0 -400\n' | monitor
     sleep 1
     printf 'mouse_button 1\n' | monitor
     sleep 1
