@@ -34,8 +34,9 @@ MEMORY_MIB=2048
 #
 # Com writethrough cada escrita do convidado chega ao arquivo antes de o write
 # retornar. O aceite fica mais lento e o disco passa a valer como evidencia.
-INSTALL_TIMEOUT=600
-BOOT_TIMEOUT=180
+INSTALL_TIMEOUT=3600
+BOOT_TIMEOUT=1200
+STALL=300
 ACCEL=tcg
 ACTIVE_QEMU_PID=
 TERMINATION_PENDING=
@@ -56,8 +57,17 @@ Opções:
   --qemu ARQ             default: qemu-system-x86_64 do PATH
   --disk-size-mib N      default: 4096 (mínimo: 2048)
   --memory-mib N         default: 2048 (mínimo: 2048)
-  --install-timeout N    segundos para instalar e reiniciar (default: 600)
-  --boot-timeout N       segundos para alcançar o getty (default: 180)
+  --install-timeout N    teto de parede para instalar e reiniciar (default: 3600)
+  --boot-timeout N       teto de parede para alcançar o getty (default: 1200)
+  --stall N              segundos sem UMA LINHA NOVA no log até declarar
+                         travado (default: 300). É este o critério de fato; os
+                         tetos acima são só rede de segurança.
+
+O relógio de parede sozinho não distingue emulador lento de convidado travado,
+e errava para os dois lados: 600s reprovavam uma instalação saudável rodando
+sob `chrt --idle` no pacote 60 de 98, e um convidado de fato pendurado só era
+notado dez minutos depois. O log cresce uma linha por pacote — parar de crescer
+é o sinal, e ele chega em minutos em vez de na hora marcada.
   --accel tcg|kvm        default: tcg; kvm exige /dev/kvm acessível
 
 O primeiro boot usa CD-ROM + /dev/vda e -no-reboot: o reboot emitido pelo
@@ -84,6 +94,7 @@ while [ "$#" -gt 0 ]; do
         --memory-mib) MEMORY_MIB=${2:?}; shift 2 ;;
         --install-timeout) INSTALL_TIMEOUT=${2:?}; shift 2 ;;
         --boot-timeout) BOOT_TIMEOUT=${2:?}; shift 2 ;;
+        --stall) STALL=${2:?}; shift 2 ;;
         --accel) ACCEL=${2:?}; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) fail "opção desconhecida: $1" ;;
@@ -105,12 +116,15 @@ positive_decimal --disk-size-mib "$DISK_SIZE_MIB"
 positive_decimal --memory-mib "$MEMORY_MIB"
 positive_decimal --install-timeout "$INSTALL_TIMEOUT"
 positive_decimal --boot-timeout "$BOOT_TIMEOUT"
+positive_decimal --stall "$STALL"
 [ "$DISK_SIZE_MIB" -ge 2048 ] && [ "$DISK_SIZE_MIB" -le 1048576 ] ||
     fail "--disk-size-mib precisa estar entre 2048 e 1048576"
 [ "$MEMORY_MIB" -ge 2048 ] && [ "$MEMORY_MIB" -le 131072 ] ||
     fail "--memory-mib precisa estar entre 2048 e 131072"
 [ "$INSTALL_TIMEOUT" -ge 1 ] && [ "$INSTALL_TIMEOUT" -le 86400 ] ||
     fail "--install-timeout precisa estar entre 1 e 86400"
+[ "$STALL" -ge 1 ] && [ "$STALL" -le 86400 ] ||
+    { echo "erro: --stall fora de 1..86400" >&2; exit 1; }
 [ "$BOOT_TIMEOUT" -ge 1 ] && [ "$BOOT_TIMEOUT" -le 86400 ] ||
     fail "--boot-timeout precisa estar entre 1 e 86400"
 case "$ACCEL" in
@@ -218,6 +232,7 @@ ACCEL=$ACCEL
 MEMORY_MIB=$MEMORY_MIB
 INSTALL_TIMEOUT=$INSTALL_TIMEOUT
 BOOT_TIMEOUT=$BOOT_TIMEOUT
+STALL=$STALL
 GUEST_DISK=/dev/vda
 NETWORK=none
 EOF
@@ -294,19 +309,40 @@ defer_termination
 ACTIVE_QEMU_PID=$!
 enable_termination
 install_qemu_pid=$ACTIVE_QEMU_PID
+# QUEM DECIDE E O AVANCO DO LOG, e o relogio so faz de backstop. O instalador
+# imprime uma linha por pacote; um convidado travado para de imprimir na hora, e
+# um convidado LENTO nao para. Julgar pelo relogio confundia os dois: 600s
+# reprovaram uma instalacao perfeitamente viva no pacote 60 de 98, so porque
+# rodava sob `chrt --idle`, e o unico jeito de saber que nao era defeito foi ler
+# o log depois de jogar quinze minutos fora.
 install_deadline=$(($(date +%s) + INSTALL_TIMEOUT))
-install_timed_out=no
+install_ultimo_tam=0
+install_ultimo_avanco=$(date +%s)
+install_veredito=
 while process_running "$install_qemu_pid"; do
-    if [ "$(date +%s)" -ge "$install_deadline" ]; then
-        install_timed_out=yes
+    agora=$(date +%s)
+    tam=$(wc -c < "$INSTALL_LOG" 2>/dev/null || echo 0)
+    if [ "$tam" -gt "$install_ultimo_tam" ]; then
+        install_ultimo_tam=$tam
+        install_ultimo_avanco=$agora
+    elif [ "$((agora - install_ultimo_avanco))" -ge "$STALL" ]; then
+        install_veredito=parado
+        cleanup_qemu
+        break
+    fi
+    if [ "$agora" -ge "$install_deadline" ]; then
+        install_veredito=prazo
         cleanup_qemu
         break
     fi
     sleep 1
 done
-if [ "$install_timed_out" = yes ]; then
-    fail "primeiro QEMU excedeu ${INSTALL_TIMEOUT}s (log: $INSTALL_LOG)"
-fi
+case "$install_veredito" in
+    parado)
+        fail "instalação parada: ${STALL}s sem uma linha nova (log: $INSTALL_LOG)" ;;
+    prazo)
+        fail "primeiro QEMU excedeu o teto de ${INSTALL_TIMEOUT}s ainda imprimindo (log: $INSTALL_LOG)" ;;
+esac
 set +e
 wait "$install_qemu_pid"
 install_status=$?
@@ -338,14 +374,29 @@ defer_termination
 "$@" >"$BOOT_LOG" 2>&1 &
 ACTIVE_QEMU_PID=$!
 enable_termination
+# Mesmo criterio da fase 1, e pelo mesmo motivo: um boot pendurado em "waiting
+# for root device" para de imprimir, e esperar o teto inteiro por ele e tempo
+# jogado fora. A diferenca e que aqui a saida boa e uma STRING, e nao o fim do
+# processo — o getty fica vivo de proposito.
 boot_deadline=$(($(date +%s) + BOOT_TIMEOUT))
+boot_ultimo_tam=0
+boot_ultimo_avanco=$(date +%s)
 while process_running "$ACTIVE_QEMU_PID"; do
     if grep -Fq 'distropica login:' "$BOOT_LOG"; then
         break
     fi
-    [ "$(date +%s)" -lt "$boot_deadline" ] || {
+    agora=$(date +%s)
+    tam=$(wc -c < "$BOOT_LOG" 2>/dev/null || echo 0)
+    if [ "$tam" -gt "$boot_ultimo_tam" ]; then
+        boot_ultimo_tam=$tam
+        boot_ultimo_avanco=$agora
+    elif [ "$((agora - boot_ultimo_avanco))" -ge "$STALL" ]; then
         cleanup_qemu
-        fail "segundo boot não alcançou o getty em ${BOOT_TIMEOUT}s (log: $BOOT_LOG)"
+        fail "segundo boot parado: ${STALL}s sem uma linha nova, e sem getty (log: $BOOT_LOG)"
+    fi
+    [ "$agora" -lt "$boot_deadline" ] || {
+        cleanup_qemu
+        fail "segundo boot excedeu o teto de ${BOOT_TIMEOUT}s ainda imprimindo (log: $BOOT_LOG)"
     }
     sleep 1
 done
