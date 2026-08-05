@@ -106,6 +106,43 @@ build() {
         }
     fi
 
+    # A POLÍTICA D-BUS QUE FALTAVA, e ela decide se a ferramenta funciona.
+    #
+    # O connman.conf do upstream libera `root` e `at_console="true"`. O
+    # at_console depende de ConsoleKit ou logind marcarem a sessão como "no
+    # console" — e esta árvore não tem nenhum dos dois. O usuário comum cai na
+    # regra `context="default"`, que NEGA, e o resultado medido em QEMU foi:
+    #
+    #   AccessDenied: Rejected send message ... uid=1000 comm="/usr/bin/miniluv"
+    #   interface="net.connman.Manager" member="GetServices"
+    #
+    # A janela abria, o daemon estava de pé, e nada listava. Sem a mensagem de
+    # erro na interface isso teria sido indistinguível de "não há redes".
+    #
+    # O conserto é o mesmo idioma do iwd, que libera um GRUPO em vez de
+    # depender de sessão: o netdev já existe (criado pelo 04-usuario.sh do
+    # base, gid 98) e a conta `distropica` já é membro dele — foi o que o iwd
+    # exigiu quando a sessão gráfica passou a rodar sem privilégio.
+    #
+    # Arquivo separado e não edição do connman.conf: aquele pertence ao `make
+    # install` e está no manifesto; reescrevê-lo criaria duas verdades. O nome
+    # começa com `zz-` de propósito — o dbus-daemon lê o diretório em ordem
+    # alfabética, e embora regra de grupo tenha precedência sobre
+    # `context="default"`, depender só disso seria contar com um detalhe de
+    # implementação em vez de garantir a ordem.
+    install -Dm644 /dev/stdin \
+        "$STAGE/usr/share/dbus-1/system.d/zz-connman-distropica.conf" <<'POLITICA'
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<!-- Distropica: o at_console do connman.conf nao vale aqui (sem logind nem
+     ConsoleKit). Libera o grupo netdev, do mesmo modo que o iwd libera. -->
+<busconfig>
+    <policy group="netdev">
+        <allow send_destination="net.connman"/>
+    </policy>
+</busconfig>
+POLITICA
+
     # O DAEMON PRECISA DE UM DROP-IN, e esta arvore ja aprendeu isso do jeito
     # caro: a 0.10 saiu com iwgtk compilado, ligado e com lancador no painel, e
     # clicar nele nao fazia nada — porque nada subia o iwd. Nesta distro, daemon
@@ -156,6 +193,16 @@ CONNMANDROP
     # ninguem inicia, que e o defeito mais caro que esta arvore ja teve.
     [ -f "$STAGE/etc/rc.d/rcS.d/09-connman.sh" ] || {
         echo "connman: drop-in de inicializacao nao foi escrito" >&2
+        exit 1
+    }
+
+    # GUARDA 7: a politica que libera o grupo netdev. Sem ela o daemon sobe, a
+    # interface abre, e toda chamada volta AccessDenied — funcionalidade que
+    # nao existe, com a aparencia de existir.
+    grep -q 'group="netdev"' \
+        "$STAGE/usr/share/dbus-1/system.d/zz-connman-distropica.conf" || {
+        echo "connman: politica D-Bus do netdev nao foi escrita; o usuario" >&2
+        echo "         comum nao conseguiria falar com o connmand" >&2
         exit 1
     }
 
