@@ -26,8 +26,9 @@ QEMU=qemu-system-x86_64
 MEMORY_MIB=4096
 SETTLE=90
 ACCEL=kvm
-CLICK=
+CLICKS=
 SETTLE_AFTER=60
+SETTLE_BETWEEN=60
 NIC=none
 
 usage() {
@@ -45,8 +46,18 @@ uso: bootstrap/live/screenshot-qemu --disk INSTALADO.raw --output TELA.ppm \
                      isso a foto mostra a área de trabalho vazia, que é
                      compatível tanto com um Firefox instalado quanto com um
                      Firefox que não roda.
-  --settle-after N   segundos entre o clique e a foto (default: 60). O
+                     REPETÍVEL, na ordem dada: o primeiro clique abre o
+                     aplicativo pelo lançador e o segundo aperta um botão
+                     DENTRO dele. Sem isso não há como fotografar um diálogo —
+                     e um diálogo que ninguém abriu é indistinguível de um
+                     diálogo que não existe.
+  --settle-after N   segundos entre o ÚLTIMO clique e a foto (default: 60). O
                      Firefox sobre softpipe leva bem mais que um segundo.
+  --settle-between N segundos entre um clique e o seguinte (default: 60).
+                     Precisa cobrir a abertura da janela do clique anterior:
+                     clicar onde o botão ESTARÁ, antes de ele estar lá, acerta
+                     o fundo da tela e a foto sai idêntica à de um botão que
+                     não funciona.
   --nic ESPEC        placa de rede a apresentar (default: none). Use
                      'user,model=virtio-net-pci' para dar cabo a VM — sem isso
                      o convidado nao tem interface alguma, e um gerenciador de
@@ -66,8 +77,9 @@ while [ "$#" -gt 0 ]; do
         --output) OUTPUT=${2:?}; shift 2 ;;
         --log-dir) LOG_DIR=${2:?}; shift 2 ;;
         --settle) SETTLE=${2:?}; shift 2 ;;
-        --click) CLICK=${2:?}; shift 2 ;;
+        --click) CLICKS="$CLICKS ${2:?}"; shift 2 ;;
         --settle-after) SETTLE_AFTER=${2:?}; shift 2 ;;
+        --settle-between) SETTLE_BETWEEN=${2:?}; shift 2 ;;
         --nic) NIC=${2:?}; shift 2 ;;
         --memory-mib) MEMORY_MIB=${2:?}; shift 2 ;;
         --accel) ACCEL=${2:?}; shift 2 ;;
@@ -137,10 +149,16 @@ command -v socat >/dev/null 2>&1 || {
     echo "erro: socat é necessário para falar com o monitor do QEMU" >&2
     exit 1
 }
-if [ -n "$CLICK" ]; then
-    x=${CLICK%,*}
-    y=${CLICK#*,}
-    case "$x$y" in *[!0-9]*) echo "erro: --click precisa ser X,Y numérico" >&2; exit 1 ;; esac
+if [ -n "$CLICKS" ]; then
+    # Valida TODAS as coordenadas antes de clicar em qualquer uma. Descobrir no
+    # segundo clique que ele estava malformado significaria jogar fora os
+    # minutos que o primeiro custou.
+    for par in $CLICKS; do
+        case "${par%,*}${par#*,}" in
+            *[!0-9]*) echo "erro: --click precisa ser X,Y numérico: '$par'" >&2; exit 1 ;;
+        esac
+        case "$par" in *,*) ;; *) echo "erro: --click sem vírgula: '$par'" >&2; exit 1 ;; esac
+    done
     # UM TABLET ABSOLUTO E O QMP. Aqui houve, antes, uma malha fechada que
     # fotografava a tela a cada passo, procurava o cursor pelo brilho e emitia
     # correções relativas. Ela era engenhosa e NUNCA ATIVOU UM LANÇADOR — o
@@ -173,6 +191,15 @@ if [ -n "$CLICK" ]; then
     n=0
     while [ ! -S "$QMP" ] && [ "$n" -lt 100 ]; do n=$((n + 1)); sleep 0.1; done
     [ -S "$QMP" ] || { echo "erro: socket QMP não apareceu" >&2; exit 1; }
+    primeiro=sim
+    for par in $CLICKS; do
+        [ "$primeiro" = sim ] || {
+            echo "esperando ${SETTLE_BETWEEN}s até o próximo clique"
+            sleep "$SETTLE_BETWEEN"
+        }
+        primeiro=nao
+        x=${par%,*}
+        y=${par#*,}
     python3 - "$QMP" "$x" "$y" <<'QMPCLICK' || exit 1
 import json
 import socket
@@ -236,7 +263,8 @@ time.sleep(0.15)
 enviar([{"type": "btn", "data": {"down": False, "button": "left"}}])
 print(f"  clique absoluto em ({x},{y}) -> eixo ({ax},{ay})")
 QMPCLICK
-    echo "clicou em ($x,$y); esperando ${SETTLE_AFTER}s pelo aplicativo"
+    done
+    echo "esperando ${SETTLE_AFTER}s pelo aplicativo"
     sleep "$SETTLE_AFTER"
 fi
 
@@ -256,7 +284,7 @@ trap - EXIT INT TERM
 # passa a cair no lugar errado SEM ERRO NENHUM — a foto sai, mostra o desktop
 # intacto, e nada distingue isso de um aplicativo que não abriu. Já custou duas
 # rodadas de dez minutos cada.
-if [ -n "$CLICK" ]; then
+if [ -n "$CLICKS" ]; then
     lida=$(head -c 32 "$SHOT" | tr '\n' ' ' | cut -d' ' -f2,3)
     [ "$lida" = "1280 800" ] || {
         echo "erro: a tela é '$lida', mas a conversão do --click assume 1280 800;" >&2
