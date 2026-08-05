@@ -299,6 +299,21 @@ if ! grep -q '^distropica:' /etc/passwd 2>/dev/null; then
         >> /etc/passwd
     grep -q '^distropica:' /etc/shadow 2>/dev/null ||
         echo 'distropica:!::0:99999:7:::' >> /etc/shadow
+    # SYNC, e este e o conserto do defeito descrito logo abaixo — nao uma
+    # precaucao generica. O '>>' acima escreve num buffer; o ext4 journala a
+    # atualizacao de TAMANHO do inode antes de os DADOS chegarem ao disco. Se a
+    # maquina perde energia nessa janela — e o PRIMEIRO boot e justamente
+    # quando o operador ainda esta reiniciando a VM para ver se funcionou —, o
+    # replay do journal devolve um arquivo do tamanho certo com um buraco de
+    # bytes NUL no lugar da linha. O busybox pula o buraco e a glibc para nele:
+    # 'id -u distropica' responde 1000, 'getent passwd distropica' nao responde
+    # nada, e a sessao grafica sobe como root sem que nada tenha falhado em voz
+    # alta.
+    #
+    # O sync custa uma fracao de segundo UMA VEZ na vida da instalacao, e e a
+    # unica coisa que fecha a janela: o aviso abaixo detecta o estrago depois
+    # de feito, e nao ha conserto automatico seguro para ele.
+    sync
     echo "distropica: conta de usuario 'distropica' criada"
 fi
 # A CONTA TEM DE RESOLVER PELA GLIBC, e nao so pelo busybox. Os dois leem o
@@ -363,6 +378,10 @@ if [ ! -d /home/distropica ]; then
     chmod 0700 /home/distropica
 fi
 unset distropica_uid
+# O segundo sync cobre /etc/group — os grupos de hardware acima entram pelo
+# mesmo '>>' e correm o mesmo risco. Perder a linha do grupo 'seat' custa a
+# sessao grafica inteira, e o modo de falha e o mesmo: silencioso.
+sync
 USUARIODROP
     chmod 0644 "$STAGE/etc/rc.d/rcS.d/04-usuario.sh"
 
