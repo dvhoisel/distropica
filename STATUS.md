@@ -30,6 +30,65 @@ Os hashes QEMU final-v10 e VirtualBox network-v1 abaixo são evidência históri
 anterior à mudança de licença do pacote `base` (revisão funcional `7148ebd`).
 Não são pinos de uma mídia recomposta a partir da árvore licenciada atual.
 
+## Reconstrução com contrato de flags — mídia `0.10-v2`
+
+Árvore inteira reconstruída (131 pacotes) depois que `CFLAGS`/`CXXFLAGS`
+entraram no contrato de build **e na identidade da receita**. Aceite `PASS`,
+instalação offline e segundo boot sem mídia.
+
+```text
+CANAL=98 pacotes; fechamento: 2673 requisito(s), todos com provedor declarado
+CACHE=600 MB                       (era 824 MB)
+ISO=target/distropica-0.10-v2.iso  (683 MiB; era 907 MiB)
+ISO_SHA256=b42a12445d8a6a0db16ffe937f90dbf341ff5d4f58f5e25228c23368fd0182ad
+EFI_SHA256=a9289cb7b022a78f05bdeaffaf422eee2a03b7629af535c70501066759624f5e
+DEPURACAO=3.3 MiB em 386.1 MiB de ELF (0.9%); era 266.0 MiB em 656.0 (40.5%)
+```
+
+**Símbolos de depuração: 266,0 MiB → 3,3 MiB.** A causa não era descuido de
+receita: sem `CFLAGS` no ambiente o autoconf usa o SEU default, `-g -O2`, e
+isso pegou 81 dos 86 pacotes com ELF. Declarar `-O2` consertou os autotools e
+NÃO bastou — o `zig cc` emite depuração por padrão, e sete pacotes que embarcam
+usam toolchain zig, a `glibc` entre eles com 28,7 MiB. Foi preciso `-g0`
+explícito. Resíduo nomeado: `make` 1,50 MiB, `libmpfr` 0,70, `gcc-pass2` 0,67,
+`glibc` 0,22.
+
+As flags entram no fingerprint porque mudam o payload: se não entrassem, dois
+payloads diferentes teriam a mesma identidade e o `REPROCORR` gravado deixaria
+de ser reproduzível. O custo é assumido — invalidou 135 de 135 identidades.
+
+**Armadilha de medição**, para quem for conferir: um binário LINKADO mostra
+`.debug_*` mesmo compilado com `-g0`, herdadas do `crt1.o`/`crti.o`/`crtn.o` da
+glibc, 9 a 11 seções cada, enquanto ELA não for reconstruída. O objeto
+compilado no mesmo comando já sai com zero. Depois da glibc nova: zero nos crt.
+
+O `bootstrap/verifica-0.10` mede as quatro promessas sobre o que EMBARCA, e não
+sobre a árvore de build — que infla o número com toolchain que não vai na mídia.
+
+### `regulatory.db`: instalada, e o boot ainda reclama
+
+O `error -2` no boot **continua** e é esperado. O `cfg80211` é builtin e o
+`regulatory_init_db` roda em `late_initcall`, quando só existe o initramfs; a
+raiz ainda não está montada. Quem carrega de verdade é o `query_regdb_file`,
+por `request_firmware_nowait`, SOB DEMANDA — quando um rádio aparece e um
+domínio é consultado. Em QEMU não há rádio, então essa consulta nunca acontece
+e o sucesso não é observável aqui.
+
+O que ficou provado sem hardware: o `firmware_class` procura em
+`/lib/firmware`, o `/lib` instalado é symlink para `usr/lib`, e
+`/lib/firmware/regulatory.db` e `/usr/lib/firmware/regulatory.db` resolvem para
+o MESMO inode — 6380 bytes, modo 0644. E o certificado que assina o `.p7s` é
+byte a byte o `wens.hex` que este kernel embute. O arquivo certo, no lugar
+certo, com a assinatura certa; falta só o rádio.
+
+### Provisionais voltaram a aceitar correção
+
+Seis provisionais foram refrescados nesta rodada e quatro cederam TUDO —
+`binutils` entregou os 199 caminhos do baseline ao `binutils-glibc` e hoje é só
+registro. Antes deste ciclo, toda correção de receita nos nove provisionais era
+descartada em silêncio; o `chmod 4755` do busybox ficou seis versões inerte
+assim.
+
 ## Evidência integrada atual — `grafica-v1`
 
 A ISO com modo gráfico instala, reinicia sem mídia e **abre o Firefox em
