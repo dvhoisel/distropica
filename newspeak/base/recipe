@@ -439,6 +439,23 @@ $BB mount -t tmpfs    run  /run  2>/dev/null
 $BB mdev -s 2>/dev/null
 [ -f /etc/hostname ] && $BB hostname -F /etc/hostname 2>/dev/null
 $BB ip link set lo up 2>/dev/null
+# QUEM MANDA NA REDE: se o connman estiver instalado, o rcS NAO configura nada.
+#
+# O connmand traz cliente DHCP proprio (gdhcp) e assume o cabo e o Wi-Fi. Dois
+# clientes DHCP na mesma interface disputam o lease, sobrescrevem o
+# /etc/resolv.conf um do outro e produzem uma rede que ora funciona ora nao —
+# um defeito intermitente, que e o pior tipo de defeito para diagnosticar.
+#
+# O teste e a EXISTENCIA do binario, exatamente como o /etc/rc.d/session
+# pergunta pelo distropica-desktop antes de decidir entre sessao grafica e
+# getty. Instalar o pacote e a unica acao que o administrador tomou, e nao faz
+# sentido pedir uma segunda.
+#
+# O laco abaixo fica, e nao e codigo morto: numa arvore sem connman ele
+# continua sendo a unica coisa que da IP a maquina.
+if [ -x /usr/sbin/connmand ]; then
+    echo "distropica: rede sob o connman; rcS nao configura interface"
+else
 for network_path in /sys/class/net/*; do
     [ -e "$network_path" ] || continue
     interface=${network_path##*/}
@@ -480,6 +497,7 @@ for network_path in /sys/class/net/*; do
             done
     fi
 done
+fi
 # Ganchos de inicializacao dos outros pacotes. Existe porque o /etc/inittab e
 # este proprio rcS pertencem ao base, e um pacote que precise subir um daemon
 # no boot — o seatd do modo grafico e o primeiro — nao pode reescrever arquivo
