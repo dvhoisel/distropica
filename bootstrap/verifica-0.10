@@ -129,13 +129,16 @@ def secoes(d):
 
 elf = dbg = 0
 piores = []
+lidos = medidos = 0
 for linha in open(indice, encoding="utf-8"):
     c = linha.split()
     if len(c) < 6:
         continue
+    lidos += 1
     caminho = os.path.join(cache, c[5])
     if not os.path.exists(caminho):
         continue
+    medidos += 1
     bruto = subprocess.run(["zstd", "-dc", caminho], capture_output=True).stdout
     pe = pd = 0
     try:
@@ -159,8 +162,28 @@ for linha in open(indice, encoding="utf-8"):
     if pd:
         piores.append((pd, c[0]))
 
+# MEDIR ZERO NÃO É PASSAR, e esta guarda existe porque o contrário aconteceu.
+# O índice do CANAL EMITIDO tem o mesmo formato de colunas do índice do CACHE e
+# um layout de diretório diferente — no cache o c[5] é o sha do artefato
+# achatado na raiz; no canal emitido não há artefato nenhum naquele caminho.
+# Dado o arquivo errado, o laço acima descartava as 98 linhas em silêncio,
+# `elf` ficava em zero, e a divisão protegida imprimia "0.0 MiB em 0.0 MiB
+# (0.0%)" — que é MENOR que o limite de 5% e portanto passava. Uma ferramenta
+# de verificação que não mede nada e diz que está tudo bem é pior que nenhuma:
+# ela transforma a conferência em carimbo.
+if medidos == 0:
+    print(f"  ERRO: {lidos} linha(s) no índice e NENHUM artefato encontrado sob")
+    print(f"        {cache}")
+    print("        O índice do canal emitido não serve aqui: passe o do cache,")
+    print("        que costuma ser <cache>/channels/<canal>/index.")
+    sys.exit(1)
+if medidos < lidos:
+    print(f"  aviso: {lidos - medidos} de {lidos} artefatos não foram achados e")
+    print("         ficaram fora da medição")
+
 pct = 100.0 * dbg / elf if elf else 0.0
-print(f"  {dbg/2**20:.1f} MiB de depuração em {elf/2**20:.1f} MiB de ELF ({pct:.1f}%)")
+print(f"  {dbg/2**20:.1f} MiB de depuração em {elf/2**20:.1f} MiB de ELF"
+      f" ({pct:.1f}%), sobre {medidos} pacote(s)")
 print("  referência da 0.10 publicada: 266.0 MiB em 656.0 MiB (40.5%)")
 piores.sort(reverse=True)
 for d, n in piores[:5]:
