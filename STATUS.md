@@ -89,6 +89,40 @@ registro. Antes deste ciclo, toda correção de receita nos nove provisionais er
 descartada em silêncio; o `chmod 4755` do busybox ficou seis versões inerte
 assim.
 
+### O `/etc` do root de build estava congelado desde a 0.1
+
+Quatorze arquivos de configuração do `target/e2-strip-rebuild-v2-root` estavam
+parados numa versão antiga, com o `.new` ao lado: `/etc/hostname` dizia
+`airstrip1` e `/etc/os-release` dizia *"Distrópica 0.1 (Airstrip One)"* enquanto
+as receitas já estavam na 0.10. O `04-usuario.sh` instalado ali não tinha o
+grupo `netdev` nem o diagnóstico do `getent`.
+
+O mecanismo é o correto para uma máquina de verdade — arquivo divergente do
+payload se preserva e o novo default vai para `.new` — e vira **catraca** num
+root que ninguém edita à mão: a partir da primeira divergência, toda
+atualização seguinte escreve `.new` de novo e o `/etc` nunca mais converge.
+Falta ao minitrue um caminho para dizer *"quero o do pacote"*.
+
+A mídia **não** foi afetada, e isso foi medido em vez de suposto: o instalador
+materializa o `/etc` num alvo virgem, e o disco instalado da v5 tem o drop-in
+corrente e `netdev:x:98:distropica` no `/etc/group`. O root de build não entra
+na mídia — a live é initramfs, e o sistema instalado sai do canal.
+
+### `sync` depois de criar a conta, e por quê
+
+O `04-usuario.sh` acrescenta a conta ao `/etc/passwd` com `>>` no primeiro boot
+e não forçava nada ao disco. O ext4 journala a atualização de **tamanho** do
+inode antes de os dados chegarem; queda de energia nessa janela devolve um
+arquivo do tamanho certo com um buraco de bytes NUL no lugar da linha. O
+busybox pula o buraco e a glibc para nele — `id -u distropica` responde 1000,
+`getent passwd distropica` não responde nada, e a sessão gráfica sobe como root
+sem que nada tenha falhado em voz alta. O primeiro boot é justamente quando o
+operador ainda está reiniciando a VM para ver se funcionou.
+
+O aviso que a receita já tinha detecta o estrago **depois de feito**. O `sync`
+fecha a janela, custa uma fração de segundo uma vez na vida da instalação, e
+não havia motivo para ele não estar lá.
+
 ## Evidência integrada atual — `grafica-v1`
 
 A ISO com modo gráfico instala, reinicia sem mídia e **abre o Firefox em
