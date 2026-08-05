@@ -17,6 +17,12 @@ void ml_servico_free(MlServico *s)
     g_free(s->tipo);
     g_free(s->estado);
     g_free(s->seguranca);
+    g_free(s->ip_metodo);
+    g_free(s->ip_endereco);
+    g_free(s->ip_mascara);
+    g_free(s->ip_gateway);
+    g_strfreev(s->dns);
+    g_free(s->ip_atual);
     g_free(s);
 }
 
@@ -44,6 +50,35 @@ static MlServico *servico_de_dict(const char *caminho, GVariant *props)
             s->forca = g_variant_get_byte(valor);
         else if (g_str_equal(chave, "Favorite") && g_variant_is_of_type(valor, G_VARIANT_TYPE_BOOLEAN))
             s->favorita = g_variant_get_boolean(valor);
+        else if (g_str_equal(chave, "IPv4.Configuration") &&
+                 g_variant_is_of_type(valor, G_VARIANT_TYPE_VARDICT)) {
+            /* Configuration e nao IPv4: o primeiro e o que o administrador
+             * PEDIU, o segundo e o que o sistema tem agora. Editar deve
+             * partir do pedido, senao um DHCP em curso apareceria como
+             * configuracao manual com o endereco que por acaso chegou. */
+            const char *v;
+            if (g_variant_lookup(valor, "Method", "&s", &v))
+                s->ip_metodo = g_strdup(v);
+            if (g_variant_lookup(valor, "Address", "&s", &v))
+                s->ip_endereco = g_strdup(v);
+            if (g_variant_lookup(valor, "Netmask", "&s", &v))
+                s->ip_mascara = g_strdup(v);
+            if (g_variant_lookup(valor, "Gateway", "&s", &v))
+                s->ip_gateway = g_strdup(v);
+        }
+        else if (g_str_equal(chave, "IPv4") &&
+                 g_variant_is_of_type(valor, G_VARIANT_TYPE_VARDICT)) {
+            /* O dict vem VAZIO enquanto o servico nao tem endereco — desligado,
+             * associando, DHCP sem resposta. Ausencia aqui e informacao, e nao
+             * erro: significa "ainda nao ha IP". */
+            const char *v;
+            if (g_variant_lookup(valor, "Address", "&s", &v))
+                s->ip_atual = g_strdup(v);
+        }
+        else if (g_str_equal(chave, "Nameservers.Configuration") &&
+                 g_variant_is_of_type(valor, G_VARIANT_TYPE_STRING_ARRAY)) {
+            s->dns = g_variant_dup_strv(valor, NULL);
+        }
         else if (g_str_equal(chave, "Security") &&
                  g_variant_is_of_type(valor, G_VARIANT_TYPE_STRING_ARRAY)) {
             /* Security é array de strings; a primeira basta para exibir. */
@@ -64,6 +99,8 @@ static MlServico *servico_de_dict(const char *caminho, GVariant *props)
         s->tipo = g_strdup("desconhecido");
     if (!s->estado)
         s->estado = g_strdup("idle");
+    if (!s->ip_metodo)
+        s->ip_metodo = g_strdup("dhcp");
     return s;
 }
 
@@ -162,6 +199,67 @@ void ml_servico_desconectar(MlApp *app, const char *caminho)
                            ML_SERVICE_IF, "Disconnect", NULL, NULL,
                            G_DBUS_CALL_FLAGS_NONE, 30000, NULL,
                            chamada_simples_pronta, app);
+}
+
+/* Grava a configuracao de IPv4 e os DNS.
+ *
+ * Duas chamadas separadas e nao uma: sao duas propriedades distintas do
+ * ConnMan, e juntá-las numa transacao imaginaria esconderia que a segunda pode
+ * falhar sozinha. Se o endereco entrar e o DNS nao, o usuario precisa saber.
+ *
+ * A doc avisa que "changing these settings will cause a state change of the
+ * service; the service will become unavailable until the new configuration has
+ * been successfully installed" — ou seja, a rede CAI e volta. O
+ * ml_recarregar_servicos do callback mostra essa transicao em vez de congelar
+ * a lista no estado antigo.
+ */
+void ml_servico_configurar_ip(MlApp *app, const char *caminho,
+                              const char *metodo, const char *endereco,
+                              const char *mascara, const char *gateway,
+                              const char *dns)
+{
+    GVariantBuilder b;
+
+    g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
+    g_variant_builder_add(&b, "{sv}", "Method", g_variant_new_string(metodo));
+    if (g_str_equal(metodo, "manual")) {
+        /* Em manual os tres campos vao juntos. Mandar Address sem Netmask faz
+         * o ConnMan recusar com InvalidArguments, e a mensagem nao diz qual
+         * campo faltou. */
+        g_variant_builder_add(&b, "{sv}", "Address",
+                              g_variant_new_string(endereco ? endereco : ""));
+        g_variant_builder_add(&b, "{sv}", "Netmask",
+                              g_variant_new_string(mascara ? mascara : ""));
+        g_variant_builder_add(&b, "{sv}", "Gateway",
+                              g_variant_new_string(gateway ? gateway : ""));
+    }
+    g_dbus_connection_call(app->barramento, ML_SERVICO, caminho,
+                           ML_SERVICE_IF, "SetProperty",
+                           g_variant_new("(sv)", "IPv4.Configuration",
+                                         g_variant_builder_end(&b)),
+                           NULL, G_DBUS_CALL_FLAGS_NONE, 30000, NULL,
+                           chamada_simples_pronta, app);
+
+    /* DNS: lista separada por espaco ou virgula, na ordem de prioridade. Uma
+     * lista VAZIA e um pedido legitimo — significa "volte a usar o que o DHCP
+     * mandar" —, entao nao se pula a chamada quando o campo esta em branco. */
+    {
+        GVariantBuilder d;
+        g_variant_builder_init(&d, G_VARIANT_TYPE("as"));
+        if (dns && *dns) {
+            char **partes = g_strsplit_set(dns, " ,;\t", -1);
+            for (int i = 0; partes[i]; i++)
+                if (*partes[i])
+                    g_variant_builder_add(&d, "s", partes[i]);
+            g_strfreev(partes);
+        }
+        g_dbus_connection_call(app->barramento, ML_SERVICO, caminho,
+                               ML_SERVICE_IF, "SetProperty",
+                               g_variant_new("(sv)", "Nameservers.Configuration",
+                                             g_variant_builder_end(&d)),
+                               NULL, G_DBUS_CALL_FLAGS_NONE, 30000, NULL,
+                               chamada_simples_pronta, app);
+    }
 }
 
 void ml_wifi_ligar(MlApp *app, gboolean ligado)

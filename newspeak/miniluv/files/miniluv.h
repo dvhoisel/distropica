@@ -36,6 +36,21 @@ typedef struct {
     char *seguranca;    /* "psk", "none", "ieee8021x", … */
     guint8 forca;       /* 0–100; 0 para cabo */
     gboolean favorita;  /* já conectada alguma vez */
+
+    /* IPv4.Configuration: o que o ADMINISTRADOR pediu. Não confundir com
+     * IPv4, que é o que o sistema tem agora — os dois divergem enquanto uma
+     * mudança está sendo aplicada, e é a Configuration que se edita. */
+    char *ip_metodo;    /* "dhcp", "manual", "off", "auto", "fixed" */
+    char *ip_endereco;
+    char *ip_mascara;
+    char *ip_gateway;
+    char **dns;         /* Nameservers.Configuration, NULL-terminado */
+
+    /* IPv4 (sem sufixo): o endereço EM USO agora, que é o que o daemon
+     * conseguiu — não o que se pediu. Em DHCP é a única fonte que existe: a
+     * Configuration diz só "dhcp", e uma janela de rede que responde "DHCP" à
+     * pergunta "qual é o meu IP?" não respondeu nada. */
+    char *ip_atual;
 } MlServico;
 
 typedef struct {
@@ -60,6 +75,15 @@ gboolean ml_conectar_barramento(MlApp *app, GError **erro);
 void     ml_recarregar_servicos(MlApp *app);
 void     ml_servico_conectar(MlApp *app, const char *caminho);
 void     ml_servico_desconectar(MlApp *app, const char *caminho);
+/* Grava IPv4.Configuration e Nameservers.Configuration. `metodo` é "dhcp",
+ * "manual" ou "off"; endereço, máscara e gateway só são lidos em "manual" —
+ * mandá-los nos outros modos faz o ConnMan recusar o dicionário inteiro.
+ * `dns` é uma lista separada por espaço ou vírgula, e vazia é um pedido
+ * legítimo: significa "volte a usar o que o DHCP mandar". */
+void     ml_servico_configurar_ip(MlApp *app, const char *caminho,
+                                  const char *metodo, const char *endereco,
+                                  const char *mascara, const char *gateway,
+                                  const char *dns);
 void     ml_wifi_ligar(MlApp *app, gboolean ligado);
 
 /* agente.c */
@@ -68,6 +92,7 @@ void     ml_agente_desregistrar(MlApp *app);
 
 /* janela.c */
 void ml_janela_construir(MlApp *app);
+void ml_janela_editar_ip(MlApp *app, const MlServico *s);
 void ml_janela_atualizar(MlApp *app);
 void ml_janela_erro(MlApp *app, const char *texto);
 
