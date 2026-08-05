@@ -28,6 +28,7 @@ SETTLE=90
 ACCEL=kvm
 CLICK=
 SETTLE_AFTER=60
+NIC=none
 
 usage() {
     cat <<'EOF'
@@ -46,6 +47,11 @@ uso: bootstrap/live/screenshot-qemu --disk INSTALADO.raw --output TELA.ppm \
                      Firefox que não roda.
   --settle-after N   segundos entre o clique e a foto (default: 60). O
                      Firefox sobre softpipe leva bem mais que um segundo.
+  --nic ESPEC        placa de rede a apresentar (default: none). Use
+                     'user,model=virtio-net-pci' para dar cabo a VM — sem isso
+                     o convidado nao tem interface alguma, e um gerenciador de
+                     rede corretamente lista ZERO servicos. Lista vazia sem
+                     placa nao e defeito; e o arnes.
   --memory-mib N     default: 4096
   --accel tcg|kvm    default: kvm
   --ovmf-code ARQ / --ovmf-vars ARQ / --qemu ARQ
@@ -62,6 +68,7 @@ while [ "$#" -gt 0 ]; do
         --settle) SETTLE=${2:?}; shift 2 ;;
         --click) CLICK=${2:?}; shift 2 ;;
         --settle-after) SETTLE_AFTER=${2:?}; shift 2 ;;
+        --nic) NIC=${2:?}; shift 2 ;;
         --memory-mib) MEMORY_MIB=${2:?}; shift 2 ;;
         --accel) ACCEL=${2:?}; shift 2 ;;
         --ovmf-code) OVMF_CODE=${2:?}; shift 2 ;;
@@ -103,7 +110,7 @@ SHOT=$LOG_DIR/tela.ppm
     -device virtio-blk-pci,drive=target,bootindex=1 \
     -device virtio-gpu-pci \
     -device virtio-tablet-pci,id=tablet \
-    -nic none \
+    -nic "$NIC" \
     -display none \
     -serial "file:$SERIAL" \
     -monitor "unix:$MONITOR,server,nowait" \
