@@ -331,6 +331,39 @@ fn snapshot_files(recipe_path: &Path) -> Result<(Option<Vec<u8>>, Option<String>
                 ),
             );
         }
+        // MODO GRAVÁVEL POR GRUPO OU OUTROS É RECUSADO AQUI, e a razão não é
+        // higiene: é que `pack_deterministic` PRESERVA o modo, então ele entra
+        // no fingerprint. Um auxiliar criado sob umask 002 sai 664 no
+        // repositório e chega 644 ao sistema instalado, e as duas identidades
+        // deixam de bater — o `crimestop` recusa a instalação com uma mensagem
+        // sobre fingerprint que não menciona permissão em lugar nenhum.
+        //
+        // O custo medido de descobrir isso pelo caminho longo: uma reconstrução
+        // da árvore, uma mídia composta, e uma hora de aceite até a instalação
+        // falhar dentro do QEMU. A guarda custa uma comparação e dispara ao
+        // CARREGAR a receita, antes de qualquer build.
+        //
+        // 0o022 = bit de escrita de grupo mais bit de escrita de outros. O bit
+        // de execução continua livre: `base/files/udhcpc.script` é 755 de
+        // propósito e atravessa a mídia intacto.
+        let modo = entry.header().mode().unwrap_or(0) & 0o7777;
+        if modo & 0o022 != 0 {
+            let caminho = entry.path().map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "?".into());
+            return fail(
+                2,
+                format!(
+                    "{}/{caminho} tem modo {modo:04o}, gravável por grupo ou outros.\n\
+                     O modo entra no fingerprint e a mídia o normaliza, então a\n\
+                     identidade calculada aqui não bateria com a do sistema\n\
+                     instalado e o crimestop recusaria a instalação.\n\
+                     Conserto: chmod {sugestao} {}/{caminho}",
+                    files.display(),
+                    files.display(),
+                    sugestao = if modo & 0o111 != 0 { "755" } else { "644" },
+                ),
+            );
+        }
     }
     Ok((Some(archive), Some(fingerprint)))
 }
@@ -948,6 +981,7 @@ fn build_fp_from_snapshots(
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static CNT: AtomicU32 = AtomicU32::new(0);
@@ -991,6 +1025,9 @@ mod tests {
             std::fs::create_dir_all(dir.join("files")).unwrap();
             for (name, content) in files {
                 std::fs::write(dir.join("files").join(name), content).unwrap();
+                // Ver a guarda de modo em snapshot_files: 664 seria recusado.
+                std::fs::set_permissions(dir.join("files").join(name),
+                                         std::fs::Permissions::from_mode(0o644)).unwrap();
             }
         }
         let ctx = Ctx {
@@ -1230,6 +1267,57 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A guarda de modo do `files/`. Existe porque o custo de descobrir isto
+    /// pelo caminho longo foi medido: uma árvore reconstruída, uma mídia
+    /// composta e uma hora de aceite até a instalação falhar dentro do QEMU
+    /// com um erro sobre fingerprint que não mencionava permissão.
+    ///
+    /// Prende as duas metades: recusa gravável por grupo, e NÃO recusa o bit de
+    /// execução — `base/files/udhcpc.script` é 755 de propósito.
+    #[test]
+    fn modo_gravavel_por_grupo_no_files_e_recusado() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let raiz = std::env::temp_dir().join(format!("mt-modo-{}-{n}", std::process::id()));
+        let dir = raiz.join("var/lib/minitrue/newspeak/foo");
+        std::fs::create_dir_all(dir.join("files")).unwrap();
+        std::fs::write(
+            dir.join("recipe"),
+            "NAME=foo\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nbuild(){ :; }\n",
+        )
+        .unwrap();
+        let aux = dir.join("files").join("aux.sh");
+        std::fs::write(&aux, "#!/bin/sh\nexit 0\n").unwrap();
+        let ctx = Ctx { root: raiz.clone(), offline: false, tofu: false, jobs: 1 };
+
+        // 755: executável legítimo, tem de passar.
+        std::fs::set_permissions(&aux, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(load(&ctx, "foo").is_ok(), "755 é modo legítimo de auxiliar");
+
+        // 644: o caso comum, também passa.
+        std::fs::set_permissions(&aux, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(load(&ctx, "foo").is_ok());
+
+        // 664: o que o umask 002 produz, e o que quebra a identidade na mídia.
+        // Sem bit de execução, então o conserto sugerido é 644.
+        std::fs::set_permissions(&aux, std::fs::Permissions::from_mode(0o664)).unwrap();
+        let erro = load(&ctx, "foo").unwrap_err().to_string();
+        assert!(erro.contains("0664"), "a mensagem diz o modo achado: {erro}");
+        assert!(erro.contains("chmod 644"), "e sugere o conserto certo: {erro}");
+
+        // 775: executável E gravável por grupo. Aqui a sugestão tem de ser 755,
+        // e não 644 — devolver 644 tiraria o bit de execução de um script que
+        // precisa dele, trocando um defeito por outro.
+        std::fs::set_permissions(&aux, std::fs::Permissions::from_mode(0o775)).unwrap();
+        let erro = load(&ctx, "foo").unwrap_err().to_string();
+        assert!(erro.contains("chmod 755"), "executável mantém o bit: {erro}");
+
+        // 666: gravável por outros também.
+        std::fs::set_permissions(&aux, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(load(&ctx, "foo").is_err());
+
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
     #[test]
     fn fingerprint_estavel_e_sensivel() {
         let base = fp_of("", &[]);
@@ -1264,6 +1352,10 @@ mod tests {
         );
         std::fs::write(dir.join("recipe"), &original).unwrap();
         std::fs::write(files.join("fix.patch"), "patch original\n").unwrap();
+        // 644 explícito: `fs::write` herda o umask do ambiente, e sob 002 sai
+        // 664 — que a guarda de modo do snapshot_files recusa, com razão.
+        std::fs::set_permissions(files.join("fix.patch"),
+                                 std::fs::Permissions::from_mode(0o644)).unwrap();
         let ctx = Ctx {
             root: root.clone(),
             offline: false,
@@ -1279,6 +1371,8 @@ mod tests {
             .unwrap();
         std::fs::write(dir.join("recipe"), original.replace("original", "alterada")).unwrap();
         std::fs::write(files.join("fix.patch"), "patch alterado\n").unwrap();
+        std::fs::set_permissions(files.join("fix.patch"),
+                                 std::fs::Permissions::from_mode(0o644)).unwrap();
 
         assert_eq!(recipe.about, "original");
         assert_eq!(recipe.own_fingerprint().unwrap(), fingerprint);
