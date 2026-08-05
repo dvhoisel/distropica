@@ -2,7 +2,7 @@ NAME=desktop
 VERSION=0.1
 KIND=source
 TOOLCHAIN=none
-DEPS="weston seatd eudev dbus firefox dejavu-fonts adwaita-icon-theme hicolor-icon-theme gtk3 mesa locales busybox alsa-utils iwgtk"
+DEPS="weston seatd eudev dbus firefox dejavu-fonts adwaita-icon-theme hicolor-icon-theme gtk3 mesa locales busybox alsa-utils miniluv"
 ABOUT="A COLA. Tudo o que faz a pilha gráfica virar uma tela em vez de um monte de bibliotecas instaladas: quem sobe o compositor, onde ele acha a configuração, e o que aparece na barra. Receita de montagem, sem SRC — só gera arquivos legíveis. Três peças. (1) /usr/bin/distropica-desktop, o lançador: cria o XDG_RUNTIME_DIR, que o protocolo Wayland exige e sem o qual o weston sai com 'XDG_RUNTIME_DIR not set' e nada mais; sobe o seatd se ninguém o subiu; e exec no weston. (2) quatro drop-ins em /etc/rc.d/rcS.d, que é como um pacote acrescenta trabalho de inicialização sem ser dono do /etc/inittab, que é do base: 01-machine-id.sh, 02-gschemas.sh, 05-udevd.sh e 10-seatd.sh, nesta ordem. O 02-gschemas.sh é o menos evidente e o que custou mais caro: ele compila a base de esquemas do GSettings, e sem ela o backend Wayland do GTK abandona a própria inicialização antes de chegar ao update_xft_settings, que é o único lugar que define a resolução da tela — ela fica em -1, todo tamanho de fonte em pontos passa a ser negativo, e o Firefox abre sem UMA LETRA no próprio chrome enquanto a página ao lado renderiza normalmente. O udevd NÃO é redundante com o mdev, e essa foi a causa da primeira tela preta: o mdev cria os NÓS de dispositivo, mas quem enumera dispositivo de entrada é a libinput, e ela pergunta à libudev — cujo udev_enumerate_scan_devices filtra tudo que não tem entrada na base em /run/udev. Sem udevd, a lista volta vazia com /dev/input/event0 legível ali na frente, e o weston morre com 'no input devices on entering Weston'. (3) /etc/xdg/weston/weston.ini, a configuração do compositor, com o painel e os dois lançadores. O renderizador é o PIXMAN e não o GL, e essa é a decisão que merece explicação: o renderizador GL exige EGL sobre GBM, o que numa árvore com Mesa softpipe significa rasterizar por software e ainda assim depender do gbm achar um driver para a placa — em bochs-drm, virtio ou qualquer máquina sem driver 3D, isso é uma superfície de falha grande em troca de nada, porque o softpipe já é software. O pixman compõe direto no buffer dumb do KMS, sem EGL, sem GBM, e funciona onde o KMS funciona. A Mesa continua instalada e útil: é dela que o GTK e o Firefox tiram GL quando pedem. O terminal é o weston-terminal, único emulador desta árvore."
 LICENSE="GPL-3.0-or-later"
 
@@ -366,14 +366,21 @@ path=/usr/bin/firefox
 icon=/usr/share/icons/Adwaita/32x32/legacy/utilities-terminal.png
 path=/usr/bin/weston-terminal
 
-# Wi-Fi. O iwgtk conversa com o iwd pelo D-Bus; sem lancador ele ficaria
-# instalado e inalcancavel, que e o mesmo que nao existir para quem so tem a
-# tela. O icone vem do Adwaita e nao do proprio iwgtk: ele instala apenas SVG
-# simbolico, e o painel do weston le caminho literal de PNG — nao renderiza
-# SVG nem procura em tema de icones.
+# Rede: cabo e Wi-Fi. O miniluv conversa com o connmand pelo D-Bus; sem
+# lancador ele ficaria instalado e inalcancavel, que e o mesmo que nao existir
+# para quem so tem a tela.
+#
+# SUBSTITUIU O IWGTK, e nao e questao de gosto: o iwgtk comanda o iwd
+# diretamente e o connman tambem o comanda: dois donos do mesmo radio, com o
+# desfecho dependendo de quem falou por ultimo. Com o connman no mundo, quem
+# fala com o iwd e so ele, e o miniluv fala com o connman.
+#
+# O icone vem do Adwaita e o caminho e literal: o painel do weston nao
+# renderiza SVG nem procura em tema de icones. Conferido que este arquivo
+# existe em 32x32/places — nao em legacy/, onde estavam os anteriores.
 [launcher]
-icon=/usr/share/icons/Adwaita/32x32/legacy/network-wireless.png
-path=/usr/bin/iwgtk
+icon=/usr/share/icons/Adwaita/32x32/places/network-workgroup.png
+path=/usr/bin/miniluv
 
 [keyboard]
 keymap_layout=br
@@ -437,8 +444,8 @@ WESTONINI
     # so fica feio, enquanto aqui ele nao faz coisa alguma — publicar isso e
     # publicar uma funcionalidade que nao existe.
     for exigencia in \
-        "iwgtk:/etc/rc.d/rcS.d/06-dbus.sh:sem barramento D-Bus do sistema o iwgtk nao acha o iwd" \
-        "iwgtk:/etc/rc.d/rcS.d/07-iwd.sh:sem o daemon iwd o iwgtk abre e nao lista rede nenhuma"; do
+        "miniluv:/etc/rc.d/rcS.d/06-dbus.sh:sem barramento D-Bus do sistema o miniluv nao acha o connman" \
+        "miniluv:/etc/rc.d/rcS.d/09-connman.sh:sem o daemon connman o miniluv abre e nao lista rede nenhuma"; do
         lancador=${exigencia%%:*}
         resto=${exigencia#*:}
         arquivo=${resto%%:*}

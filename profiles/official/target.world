@@ -23,8 +23,9 @@ nmap
 mtr
 tcpdump
 
-# Wi-Fi. O iwd é o daemon (traz readline pelo iwctl, que é a única interface
-# até o iwgtk existir — ele depende do GTK4, travado no libjpeg cmake-only).
+# Wi-Fi. O iwd é o daemon; quem fala com ele agora é o connman, e não mais uma
+# interface direta — ver o bloco do connman abaixo. O iwctl continua disponível
+# no terminal para diagnóstico.
 # O firmware é a exceção declarada do LICENSING.md: 384 MB de blob sem fonte
 # correspondente, sem o qual o rádio não inicializa em máquina real.
 #
@@ -36,6 +37,21 @@ tcpdump
 iwd
 linux-firmware-wifi
 wireless-regdb
+
+# O gerenciador de conexao. Entra porque a Ethernet era um udhcpc disparado uma
+# vez no boot com -n -q: pegava o lease e SAIA, entao cabo reconectado ou lease
+# expirado deixavam a maquina sem IP ate o proximo boot. O connmand traz cliente
+# DHCP proprio e assume cabo e Wi-Fi.
+#
+# NAO substitui o iwd: com --disable-wifi --enable-iwd ele descarta o plugin do
+# wpa_supplicant e comanda o iwd por D-Bus, entao a arvore segue com UM
+# supplicant criptografico. Medido antes de entrar: das interfaces que o plugin
+# usa, 9 de 9 existem no iwd 3.12; dos metodos, 8 de 8.
+#
+# Ao entrar, ele TIRA a configuracao de rede do rcS — o base pergunta pelo
+# /usr/sbin/connmand e cede. Dois clientes DHCP na mesma placa produziriam uma
+# rede intermitente, que e o pior defeito de diagnosticar.
+connman
 
 # Modo gráfico. UM desejo, e é de propósito: o 'desktop' é o pacote de cola que
 # amarra compositor, navegador, fontes, tema de ícones e a configuração que faz
