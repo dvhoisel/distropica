@@ -1,0 +1,164 @@
+NAME=connman
+VERSION=2.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib dbus libmnl libnftnl readline ncurses iwd"
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf"
+ABOUT="Gerenciador de conexão: cabo e Wi-Fi no mesmo daemon, com perfis, reconexão e prioridade entre interfaces. Entra porque a Ethernet desta árvore era um udhcpc disparado uma vez no boot com -n -q — pegava o lease e SAÍA. Cabo desconectado e reconectado, lease expirado ou roteador reiniciado deixavam a máquina sem IP até o próximo boot, e a própria receita do base já registrava que o conserto exigia um daemon supervisionado. O ConnMan traz cliente DHCP próprio (gdhcp/), então resolve isso sem um terceiro programa. NÃO SUBSTITUI O IWD, e essa é a decisão central: com --disable-wifi --enable-iwd ele descarta o plugin do wpa_supplicant e comanda o iwd que já está aqui pelo D-Bus, de modo que a árvore continua com UM supplicant criptográfico e não dois. A compatibilidade foi medida contra o iwd 3.12 antes de escrever esta receita: das interfaces que o plugin usa, 9 de 9 existem; dos métodos, 8 de 8; dos nomes de erro, 4 de 4. Firewall por nftables e não por iptables, que é o default do upstream: o backend nftables usa libmnl e libnftnl, que a árvore já tem pelo pacote nftables, enquanto o de iptables exigiria xtables, que não temos. WISPr desligado — a detecção de portal cativo exigiria GnuTLS só para isso, e portal cativo se resolve abrindo o navegador. Sem Bluetooth, oFono, neard, dundee e pacrunner: são integrações com daemons que esta árvore não tem. O systemd é opcional no build e só serve para instalar unit files; aqui o daemon sobe por drop-in do rcS, como os demais."
+LICENSE="GPL-2.0-only"
+SRC="https://mirrors.edge.kernel.org/pub/linux/network/connman/connman-$VERSION.tar.xz"
+SHA256=d25c2ddc0b5ad13e986ec35ad765ae8d2f4b7acb47c958a05616c943cd082527
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure \
+        --prefix=/usr \
+        --sysconfdir=/etc \
+        --localstatedir=/var \
+        --libexecdir=/usr/libexec \
+        --runstatedir=/run \
+        --disable-dependency-tracking \
+        --with-firewall=nftables \
+        --disable-wifi \
+        --enable-iwd \
+        --disable-wispr \
+        --disable-bluetooth \
+        --disable-ofono \
+        --disable-neard \
+        --disable-dundee \
+        --disable-pacrunner \
+        --disable-tist \
+        --disable-gadget \
+        --disable-wireguard \
+        --disable-test \
+        --with-systemdunitdir= \
+        --with-tmpfilesdir=
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+
+    # O daemon roda como root e o socket do D-Bus e o barramento de SISTEMA: a
+    # politica em /usr/share/dbus-1/system.d e o que autoriza um cliente comum a
+    # falar com ele. Vem do proprio make install; a guarda abaixo confere.
+
+    # GUARDA 1: o plugin do iwd tem de estar DENTRO do connmand. Sem ele o
+    # ConnMan sobe, gerencia o cabo, e o Wi-Fi simplesmente NAO APARECE —
+    # nenhum erro, nenhuma linha no log, so uma lista sem redes. E o mesmo modo
+    # de falhar do botao de Wi-Fi que nao abria nada, e por isso e a primeira.
+    #
+    # A PROVA E UMA STRING NO BINARIO, e nao um arquivo .so, porque o
+    # Makefile.plugins faz `builtin_modules += iwd`: o plugin e COMPILADO
+    # DENTRO do daemon. A primeira versao desta guarda procurava
+    # plugins/iwd.so, que nunca existe — ela teria derrubado todo build correto.
+    # O CONNMAN_PLUGIN_DEFINE(iwd, "IWD plugin", ...) grava essa descricao.
+    strings "$STAGE/usr/sbin/connmand" 2>/dev/null | grep -qx 'IWD plugin' || {
+        echo "connman: o plugin do iwd nao entrou no connmand" >&2
+        echo "         --enable-iwd foi ignorado; o Wi-Fi ficaria invisivel" >&2
+        exit 1
+    }
+
+    # GUARDA 2: o plugin do wpa_supplicant NAO pode estar junto. Se os dois
+    # forem compilados, dois plugins disputam o mesmo radio e o comportamento
+    # passa a depender da ordem de carregamento. Pela mesma razao da guarda
+    # acima, a prova e a descricao do outro plugin, e nao a ausencia de wifi.so
+    # — que tambem nunca existe, e por isso nao provaria nada.
+    if strings "$STAGE/usr/sbin/connmand" 2>/dev/null \
+        | grep -qx 'WiFi interface plugin'; then
+        echo "connman: o plugin do wpa_supplicant foi compilado apesar do" >&2
+        echo "         --disable-wifi; ele disputaria o radio com o iwd" >&2
+        exit 1
+    fi
+
+    # GUARDA 3: o daemon e o cliente existem e sao ELF.
+    for binario in usr/sbin/connmand usr/bin/connmanctl; do
+        [ -f "$STAGE/$binario" ] || {
+            echo "connman: $binario nao foi produzido" >&2
+            exit 1
+        }
+        head -c 4 "$STAGE/$binario" | grep -q 'ELF' || {
+            echo "connman: $binario nao e ELF" >&2
+            exit 1
+        }
+    done
+
+    # GUARDA 4: nada de unit file de systemd nem de tmpfiles. As duas variaveis
+    # foram passadas VAZIAS ao configure; se o upstream mudar o default e
+    # voltar a instala-los, o manifesto passaria a reivindicar caminhos de um
+    # init que esta arvore nao tem.
+    for intruso in usr/lib/systemd lib/systemd usr/lib/tmpfiles.d; do
+        [ ! -d "$STAGE/$intruso" ] || {
+            echo "connman: $intruso foi instalado; esta arvore nao tem systemd" >&2
+            exit 1
+        }
+    done
+
+    # GUARDA 5: o backend de firewall. O default do upstream e iptables, que
+    # exigiria xtables — que nao temos. Se o --with-firewall for ignorado, o
+    # build so falharia no link, mas um configure futuro poderia cair para
+    # iptables em silencio; a prova e o simbolo do nftables no binario.
+    if command -v readelf >/dev/null 2>&1; then
+        readelf -d "$STAGE/usr/sbin/connmand" 2>/dev/null \
+            | grep -qE 'libmnl|libnftnl' || {
+            echo "connman: connmand nao linka com libmnl/libnftnl; o backend" >&2
+            echo "         de firewall pode ter caido para iptables" >&2
+            exit 1
+        }
+    fi
+
+    # O DAEMON PRECISA DE UM DROP-IN, e esta arvore ja aprendeu isso do jeito
+    # caro: a 0.10 saiu com iwgtk compilado, ligado e com lancador no painel, e
+    # clicar nele nao fazia nada — porque nada subia o iwd. Nesta distro, daemon
+    # que nenhum drop-in inicia e daemon que nao existe.
+    mkdir -p "$STAGE/etc/rc.d/rcS.d"
+    cat > "$STAGE/etc/rc.d/rcS.d/09-connman.sh" <<'CONNMANDROP'
+# Drop-in de inicializacao: o gerenciador de conexao. Sourced pelo rcS do base.
+#
+# E 09 e nao 05: depende do 06-dbus.sh, porque a API dele E o barramento do
+# sistema, e do 07-iwd.sh, porque o plugin de Wi-Fi deste connmand fala com o
+# iwd por D-Bus. Subir antes de qualquer um dos dois o faria sair.
+#
+# --nodaemon NAO e usado: o connmand bifurca sozinho, e o rcS nao tem
+# supervisor. Como o dbus-daemon, ele devolve 0 antes de estar pronto, entao o
+# que decide se subiu e o NOME NO BARRAMENTO e nao o status de saida — a mesma
+# licao que o 06-dbus.sh registra sobre o --fork.
+if [ -x /usr/sbin/connmand ]; then
+    if [ ! -S /run/dbus/system_bus_socket ]; then
+        echo "distropica: sem barramento D-Bus; connman nao sobe" >&2
+    else
+        # Sem redirecao de stderr: se ele tiver o que dizer ao morrer, isso
+        # precisa chegar ao console.
+        /usr/sbin/connmand
+        espera=0
+        while [ "$espera" -lt 40 ]; do
+            if busctl --system list 2>/dev/null | grep -q '^net\.connman ' ||
+               dbus-send --system --dest=org.freedesktop.DBus --print-reply \
+                   /org/freedesktop/DBus org.freedesktop.DBus.ListNames \
+                   2>/dev/null | grep -q 'net\.connman'; then
+                break
+            fi
+            espera=$((espera + 1))
+            sleep 0.1
+        done
+        if [ "$espera" -lt 40 ]; then
+            echo "distropica: connman iniciado (cabo e Wi-Fi pelo iwd)"
+        else
+            echo "distropica: connman NAO registrou net.connman no barramento;" >&2
+            echo "            a rede ficara sem gerenciador" >&2
+        fi
+        unset espera
+    fi
+fi
+CONNMANDROP
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/09-connman.sh"
+
+    # GUARDA 6: o drop-in existe. Sem ele o pacote instala um daemon que
+    # ninguem inicia, que e o defeito mais caro que esta arvore ja teve.
+    [ -f "$STAGE/etc/rc.d/rcS.d/09-connman.sh" ] || {
+        echo "connman: drop-in de inicializacao nao foi escrito" >&2
+        exit 1
+    }
+
+    find "$STAGE" -type d -empty -delete
+    echo "connman: connmand + connmanctl, backend nftables, Wi-Fi pelo iwd"
+}
