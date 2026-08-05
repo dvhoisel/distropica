@@ -1,0 +1,121 @@
+NAME=miniluv
+VERSION=0.1
+KIND=source
+TOOLCHAIN=native
+# cairo e pango saíram: o audit mostrou que nenhum requisito estático os exige
+# depois do --as-needed. O connman FICA embora o audit também não o veja — a
+# dependência dele é de RUNTIME, por D-Bus, e o audit só enxerga ligação
+# estática. Sem o connmand no sistema esta ferramenta abre e não tem com quem
+# falar, que é precisamente o defeito que ela existe para não repetir.
+DEPS="glibc glib gtk4 connman"
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf"
+ABOUT="O Ministério do Amor: a interface gráfica de rede da Distrópica, cabo e Wi-Fi na mesma janela. Escrita aqui porque NÃO EXISTE uma, e isso foi medido antes de decidir: o connman-gtk está arquivado desde 2021 com último release em 2015; o connman-ui é GTK3 com systray; o cmst é Qt; os clientes GTK4 modernos de rede — nm-sidebar, wifi-manager — exigem wlr-layer-shell, que o weston desta árvore não implementa (ele publica apenas xdg_wm_base, conferido no binário instalado). Fala com o connmand pelo barramento de sistema usando o GDBus que já vem no glib, de modo que não custa nenhuma dependência além do que o iwgtk já obriga a ter — e o iwgtk, com seus 6348 linhas de C, é o molde estrutural desta ferramenta. Implementa o agente do ConnMan, que é a parte espinhosa: o RequestInput pede o campo que a rede exigir (Passphrase, Identity, Username), o Cancel pode chegar com o diálogo aberto, e o ReportError chega DEPOIS de o Connect ter devolvido sucesso — é ali que senha errada aparece, e uma interface que não o implementa deixa o usuário achando que conectou. Substitui o iwgtk quando o connman entra: dois clientes comandando o mesmo iwd disputariam o rádio. O nome fecha o conjunto dos ministérios — minitrue retifica registros, minipax instala, miniluv decide quem fala com quem."
+LICENSE="GPL-3.0-or-later"
+
+build() {
+    # Receita de MONTAGEM: sem SRC. A fonte vive em files/ e por isso entra no
+    # FINGERPRINT da receita — o codigo desta ferramenta e parte da identidade
+    # do pacote, e nao um download que poderia mudar sob os pes.
+    cp "$WORK"/miniluv.h "$WORK"/main.c "$WORK"/connman.c \
+       "$WORK"/agente.c "$WORK"/janela.c .
+
+    # -rpath-link: o idioma desta arvore para linkar contra a pilha grafica, e
+    # nao um detalhe. Sem ele o link falha com dezenas de "undefined reference"
+    # em bibliotecas que este programa nem cita — pcre2, epoxy, jpeg, pixman,
+    # freetype —, porque o ld precisa achar as dependencias TRANSITIVAS da
+    # libgtk-4 e da libglib para resolver os simbolos delas. O iwgtk, o weston e
+    # o pango usam exatamente esta linha, pela mesma razao.
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+
+    # -Wall -Wextra -Werror: esta arvore ja perdeu horas com defeitos que o
+    # compilador teria apontado. Aviso vira erro para que nao haja a opcao de
+    # ignorar.
+    #
+    # Sem -O nem -g explicitos: o contrato de build do runner injeta
+    # CFLAGS="-O2 -g0", e repetir aqui criaria uma segunda verdade.
+    for fonte in main connman agente janela; do
+        $CC $CFLAGS -Wall -Wextra -Werror -std=c11 \
+            $(pkg-config --cflags gtk4) \
+            -c "$fonte.c" -o "$fonte.o" || {
+            echo "miniluv: $fonte.c nao compilou" >&2
+            exit 1
+        }
+    done
+    # --as-needed, e o gate de fechamento foi quem exigiu. Sem ele, o
+    # `pkg-config --libs gtk4` manda linkar a pilha inteira — harfbuzz,
+    # gdk-pixbuf, graphene — e todas viram NEEDED do binario mesmo sem este
+    # programa chamar uma funcao delas. O `channel emit` recusou publicar:
+    # "exige libharfbuzz.so.0 … que nao esta em DEPS".
+    #
+    # Havia duas saidas. Declarar as tres em DEPS seria honesto e ERRADO: elas
+    # sao detalhe interno do GTK4, e amarra-las aqui faria este pacote quebrar
+    # quando o GTK trocasse de shaper. Pedir ao ld que descarte o que nao se usa
+    # mantem DEPS descrevendo o que este codigo de fato chama — GTK e GLib.
+    $CC main.o connman.o agente.o janela.o -o miniluv \
+        -Wl,--as-needed $(pkg-config --libs gtk4) $LDFLAGS
+
+    install -Dm755 miniluv "$STAGE/usr/bin/miniluv"
+
+    # O lancador do painel. O weston-desktop-shell le os .desktop de
+    # /usr/share/applications; sem este arquivo a ferramenta existe e nao ha
+    # como abri-la sem terminal.
+    #
+    # Icon= aponta para um nome do tema Adwaita que ESTA na arvore. Nao se usa
+    # SVG: nao ha decodificador de SVG aqui — o gdk-pixbuf foi construido com
+    # -Dbuiltin_loaders=png,gif e sem librsvg —, e um Icon= que aponte para SVG
+    # resulta em lancador sem imagem, que foi exatamente o que aconteceu com o
+    # iwgtk.
+    install -Dm644 /dev/stdin "$STAGE/usr/share/applications/miniluv.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Redes
+Comment=Cabo e Wi-Fi
+Exec=miniluv
+Icon=network-workgroup
+Terminal=false
+Categories=Settings;Network;
+DESKTOP
+
+    # GUARDA 1: o binario existe, e ELF, e e dinamico contra o GTK4. Um binario
+    # que nao linka gtk4 nao desenha nada — e o link silencioso e possivel se o
+    # pkg-config devolver vazio.
+    [ -f "$STAGE/usr/bin/miniluv" ] || {
+        echo "miniluv: binario nao foi produzido" >&2
+        exit 1
+    }
+    readelf -d "$STAGE/usr/bin/miniluv" 2>/dev/null | grep -q 'libgtk-4' || {
+        echo "miniluv: o binario nao linka libgtk-4; o pkg-config falhou em" >&2
+        echo "         silencio e o programa nao desenharia janela nenhuma" >&2
+        readelf -d "$STAGE/usr/bin/miniluv" 2>/dev/null | grep NEEDED >&2
+        exit 1
+    }
+
+    # GUARDA 2: o icone do lancador EXISTE no tema instalado, em PNG. Esta
+    # guarda existe porque a alternativa e um lancador invisivel no painel: o
+    # arquivo .desktop e valido, o programa roda, e o usuario nao tem onde
+    # clicar. Procura-se no tema Adwaita do proprio STAGE do sistema, que ja
+    # esta instalado quando esta receita roda.
+    icone_achado=no
+    for base in "$ROOT/usr/share/icons/Adwaita" "$ROOT/usr/share/icons/hicolor"; do
+        [ -d "$base" ] || continue
+        if find "$base" -name 'network-workgroup*.png' 2>/dev/null | grep -q .; then
+            icone_achado=sim
+            break
+        fi
+    done
+    [ "$icone_achado" = sim ] || {
+        echo "miniluv: nenhum network-workgroup*.png nos temas instalados;" >&2
+        echo "         o lancador apareceria sem imagem no painel" >&2
+        exit 1
+    }
+
+    # GUARDA 3: o .desktop nao pode apontar para SVG, pelo motivo do comentario
+    # acima. Confere o proprio arquivo que acabamos de escrever.
+    grep -q '^Icon=[^.]*$' "$STAGE/usr/share/applications/miniluv.desktop" || {
+        echo "miniluv: Icon= do .desktop tem extensao; use nome de tema" >&2
+        exit 1
+    }
+
+    find "$STAGE" -type d -empty -delete
+    echo "miniluv: $(wc -c < "$STAGE/usr/bin/miniluv") bytes, lancador em Redes"
+}
