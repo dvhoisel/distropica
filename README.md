@@ -3,15 +3,15 @@
 > Uma distribuição Linux distópica. Não instala pacotes: **retifica registros**.
 
 **[Site oficial](https://distropica.com.br/)** ·
-**[Baixar a ISO 0.10 (907 MiB)](https://distropica.com.br/releases/distropica-0.10-x86_64.iso)** ·
-**[SHA-256](https://distropica.com.br/releases/distropica-0.10-x86_64.iso.sha256)** ·
-**[Manifesto](https://distropica.com.br/releases/distropica-0.10-x86_64.iso.manifest)** ·
-**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.10-corresponding-sources.tar.zst)** ·
-**[SHA das fontes](https://distropica.com.br/releases/distropica-0.10-corresponding-sources.tar.zst.sha256)** ·
-**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.10-sources.tsv)** ·
-**[Índice de licenças](https://distropica.com.br/releases/distropica-0.10-licencas.tsv)**
+**[Baixar a ISO 0.11 (684 MiB)](https://distropica.com.br/releases/distropica-0.11-x86_64.iso)** ·
+**[SHA-256](https://distropica.com.br/releases/distropica-0.11-x86_64.iso.sha256)** ·
+**[Manifesto](https://distropica.com.br/releases/distropica-0.11-x86_64.iso.manifest)** ·
+**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.11-corresponding-sources.tar.zst)** ·
+**[SHA das fontes](https://distropica.com.br/releases/distropica-0.11-corresponding-sources.tar.zst.sha256)** ·
+**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.11-sources.tsv)** ·
+**[Índice de licenças](https://distropica.com.br/releases/distropica-0.11-licencas.tsv)**
 
-> **Atenção:** a `0.10` é uma **pré-release de desenvolvimento** para VM UEFI
+> **Atenção:** a `0.11` é uma **pré-release de desenvolvimento** para VM UEFI
 > **64 bits**, e a própria mídia declara isso de si: `PROFILE_CLASS=custom`.
 > O instalador apaga integralmente o dispositivo escolhido. Use um disco virtual
 > descartável e confira o SHA-256 antes do boot.
@@ -64,10 +64,10 @@ nas combinações efetivamente distribuídas.
 Cada ISO, EFI, cache ou canal binário publicado deve vir acompanhado de acesso
 equivalente ao seu bundle de fontes correspondentes: revisão da Distrópica,
 crates Rust vendorizadas, fontes upstream exatas, configurações, patches,
-scripts, licenças e inventário. A imagem custom `0.10` atende essa
-regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-0.10-corresponding-sources.tar.zst),
+scripts, licenças e inventário. A imagem custom `0.11` atende essa
+regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-0.11-corresponding-sources.tar.zst),
 preso à revisão `eb6d32f` e ao SHA-256 da ISO, e acompanha um
-[índice de licenças](https://distropica.com.br/releases/distropica-0.10-licencas.tsv)
+[índice de licenças](https://distropica.com.br/releases/distropica-0.11-licencas.tsv)
 com os 411 textos extraídos de dentro dos próprios artefatos. Todos os 104
 pacotes do inventário declaram licença — não há mais nenhum
 `LICENSE=NOASSERTION`. Oito deles não carregam o texto da licença dentro do

@@ -172,13 +172,13 @@
         <h1>DISTRÓPICA</h1>
         <p class="lead">Uma distribuição Linux distópica. Não instala pacotes: <strong>retifica registros</strong>. Binário do mantenedor primeiro; depois, binário da Distrópica; fonte quando ninguém publica um.</p>
         <div class="actions">
-          <a class="button primary" href="/releases/distropica-0.10-x86_64.iso">Baixar ISO · 907 MiB</a>
-          <a class="button" href="/releases/distropica-0.10-corresponding-sources.tar.zst">Fontes correspondentes</a>
+          <a class="button primary" href="/releases/distropica-0.11-x86_64.iso">Baixar ISO · 684 MiB</a>
+          <a class="button" href="/releases/distropica-0.11-corresponding-sources.tar.zst">Fontes correspondentes</a>
           <a class="button" href="https://github.com/dvhoisel/distropica">Examinar o código</a>
         </div>
         <p class="warning compact"><strong>Antes de baixar:</strong> pré-release de desenvolvimento, não release estável. <strong>O instalador apaga integralmente o disco que você indicar.</strong> Wi-Fi, áudio e sessão gráfica de usuário comum. Nenhum pacote declara licença indefinida. <a href="#download">Aviso completo</a>.</p>
         <div class="facts" aria-label="Características da imagem">
-          <div class="fact"><b>0.10</b><small>pré-release de desenvolvimento</small></div>
+          <div class="fact"><b>0.11</b><small>pré-release de desenvolvimento</small></div>
           <div class="fact"><b>Linux 7.1.4</b><small>kernel da mídia</small></div>
           <div class="fact"><b>GCC 15.3</b><small>toolchain nativa</small></div>
           <div class="fact"><b>GPL-3.0+</b><small>código próprio</small></div>
@@ -215,18 +215,18 @@
         <div class="download">
           <div>
             <h3>ISO UEFI para VirtualBox</h3>
-            <p>A imagem instala um sistema com <strong>modo gráfico</strong>: compositor Weston sobre KMS, Firefox 153 em português, terminal e rede por DHCP. A sessão gráfica roda como a conta comum <code>distropica</code>, não como root. Há <strong>Wi-Fi gerenciável</strong> — daemon iwd e a ferramenta gráfica iwgtk no painel — e <strong>áudio</strong>, com o mixer da ALSA. Junto vão Git, OpenSSH, tmux, strace, file, minicom, Vim, ripgrep, Make, GCC/G++, o Minitrue e o perfil de rede: nftables, WireGuard, nmap, mtr, tcpdump e bash. A raiz é ext4 em tabela GPT. A instalação é <strong>offline</strong>: a mídia carrega os 97 pacotes do canal e não busca nada na rede.</p>
+            <p>A imagem instala um sistema com <strong>modo gráfico</strong>: compositor Weston sobre KMS, Firefox 153 em português, terminal e rede por DHCP. A sessão gráfica roda como a conta comum <code>distropica</code>, não como root. A rede fica a cargo do <strong>ConnMan</strong>, que assume cabo e Wi-Fi com cliente DHCP próprio e comanda o iwd por D-Bus; quem opera é o <strong>miniluv</strong>, a interface gráfica escrita para esta distro, com edição de endereço, máscara, gateway e DNS. Há também <strong>áudio</strong>, com o mixer da ALSA. Junto vão Git, OpenSSH, tmux, strace, file, minicom, Vim, ripgrep, Make, GCC/G++, o Minitrue e o perfil de rede: nftables, WireGuard, nmap, mtr, tcpdump e bash. A raiz é ext4 em tabela GPT. A instalação é <strong>offline</strong>: a mídia carrega os 98 pacotes do canal e não busca nada na rede.</p>
             <div class="actions">
-              <a class="button primary" href="/releases/distropica-0.10-x86_64.iso">Baixar a ISO</a>
-              <a class="button" href="/releases/distropica-0.10-x86_64.iso.sha256">SHA-256</a>
-              <a class="button" href="/releases/distropica-0.10-x86_64.iso.manifest">Manifesto</a>
-              <a class="button" href="/releases/distropica-0.10-corresponding-sources.tar.zst">Fontes correspondentes</a>
-              <a class="button" href="/releases/distropica-0.10-corresponding-sources.tar.zst.sha256">SHA das fontes</a>
-              <a class="button" href="/releases/distropica-0.10-sources.tsv">Inventário</a>
-              <a class="button" href="/releases/distropica-0.10-licencas.tsv">Licenças</a>
+              <a class="button primary" href="/releases/distropica-0.11-x86_64.iso">Baixar a ISO</a>
+              <a class="button" href="/releases/distropica-0.11-x86_64.iso.sha256">SHA-256</a>
+              <a class="button" href="/releases/distropica-0.11-x86_64.iso.manifest">Manifesto</a>
+              <a class="button" href="/releases/distropica-0.11-corresponding-sources.tar.zst">Fontes correspondentes</a>
+              <a class="button" href="/releases/distropica-0.11-corresponding-sources.tar.zst.sha256">SHA das fontes</a>
+              <a class="button" href="/releases/distropica-0.11-sources.tsv">Inventário</a>
+              <a class="button" href="/releases/distropica-0.11-licencas.tsv">Licenças</a>
             </div>
-            <p class="hash"><strong>SHA-256</strong><br>fd91ddbdd24e991cc7ccedec6a2e97c6b1ee75b987158c9ea0cf80c0d02f1289</p>
-            <p class="hash"><strong>SHA-256 das fontes</strong><br>89b6818a729fca491592c5ff576ac474b07c20e1c43a8968bfade7f15ee88f64</p>
+            <p class="hash"><strong>SHA-256</strong><br>3b4a2b6ff7f5c546dc0d61bd24056dbffeae5879dade446f995df64fb5634f1b</p>
+            <p class="hash"><strong>SHA-256 das fontes</strong><br>9c1cd30b542300a27380c8949a8c09c75041ec2049b497330af8de95d226176c</p>
           </div>
           <div>
             <h3>Primeiro boot</h3>
