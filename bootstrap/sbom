@@ -198,9 +198,25 @@ total_arquivos=$entradas
 echo "evidência: $SAIDA"
 echo "  arquivos coletados: $total_arquivos"
 echo "  pacotes com texto:  $(printf '%s\n' $com_texto | sort -u | wc -l)"
-if [ -n "$sem_metadado" ]; then
+# A LISTA É POR PACOTE, e não por linha do inventário. Um pacote de Mundo A
+# aparece DUAS vezes: o binário, que não tem texto de licença dentro, e a fonte
+# correspondente, que tem. Somando por linha, o busybox caía nas duas listas e
+# a mensagem final continuava acusando exatamente o pacote cuja fonte tinha
+# acabado de ser incluída para resolver o problema. Um relatório que denuncia o
+# que já foi consertado ensina a ignorá-lo.
+sem_evidencia=
+for p in $(printf '%s\n' $sem_metadado | sort -u); do
+    achou=nao
+    for q in $com_texto; do
+        [ "$p" = "$q" ] && { achou=sim; break; }
+    done
+    [ "$achou" = sim ] || sem_evidencia="$sem_evidencia $p"
+done
+if [ -n "$sem_evidencia" ]; then
     echo
-    echo "SEM EVIDÊNCIA NO ARTEFATO — precisam da fonte correspondente:" >&2
-    printf '%s\n' $sem_metadado | sort -u | tr '\n' ' ' >&2
+    echo "SEM EVIDÊNCIA ALGUMA — nem no artefato, nem em fonte correspondente:" >&2
+    printf '%s\n' $sem_evidencia | sort -u | tr '\n' ' ' >&2
     echo >&2
+    echo "Para binário copyleft isto é obrigação não cumprida, e não pendência:" >&2
+    echo "declare a fonte em newspeak/<pacote>/fontes-correspondentes." >&2
 fi
