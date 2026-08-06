@@ -3,7 +3,7 @@
 > Uma distribuição Linux distópica. Não instala pacotes: **retifica registros**.
 
 **[Site oficial](https://distropica.com.br/)** ·
-**[Baixar a ISO 0.11 (684 MiB)](https://distropica.com.br/releases/distropica-0.11-x86_64.iso)** ·
+**[Baixar a ISO 0.11 (717 MB)](https://distropica.com.br/releases/distropica-0.11-x86_64.iso)** ·
 **[SHA-256](https://distropica.com.br/releases/distropica-0.11-x86_64.iso.sha256)** ·
 **[Manifesto](https://distropica.com.br/releases/distropica-0.11-x86_64.iso.manifest)** ·
 **[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.11-corresponding-sources.tar.zst)** ·
