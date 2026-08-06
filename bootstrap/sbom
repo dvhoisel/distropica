@@ -74,8 +74,12 @@ registra() { # pacote arquivo-no-bundle rotulo
     total_arquivos=$((total_arquivos + 1))
 }
 
-# Uma linha por fonte no INVENTARIO; a coluna 1 é o pacote e a 5 o sha256.
-while IFS="$(printf '\t')" read -r pacote versao mundo licenca hash origem arquivo; do
+# Uma linha por fonte no INVENTARIO; a coluna 1 é o pacote e a 5 o sha256. A
+# coluna 8 ('upstream' ou 'fonte-correspondente') é lida para não acabar
+# grudada no campo `arquivo` pelo read — o último nome absorve o que sobra, e
+# um campo silenciosamente contaminado é o tipo de coisa que só aparece meses
+# depois, quando alguém confia nele.
+while IFS="$(printf '\t')" read -r pacote versao mundo licenca hash origem arquivo tipo; do
     case "$pacote" in '#'*|'') continue ;; esac
     [ -n "$hash" ] && [ "$hash" != '-' ] || continue
     fonte=$BUNDLE/upstream/$hash

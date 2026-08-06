@@ -167,8 +167,58 @@ pacotes=$(
 pacotes=$(printf '%s\n' $pacotes | sort -u)
 [ -n "$pacotes" ] || { echo "erro: nenhum pacote a empacotar" >&2; exit 1; }
 
+# FONTE CORRESPONDENTE DECLARADA À PARTE.
+#
+# Para um pacote de Mundo A o campo SRC aponta para o BINÁRIO de upstream, e
+# copiá-lo para upstream/ NÃO cumpre a §3 da GPL: quem redistribui binário
+# copyleft tem de acompanhá-lo da fonte. O busybox desta árvore é exatamente
+# esse caso — binário pré-compilado do busybox.net, GPL-2.0-only —, e o
+# LICENSING.md promete a fonte dele desde sempre. O bundle não a entregava, e
+# isso passou por duas publicações (0.9 e 0.10) sem que nada apontasse.
+#
+# A declaração mora num arquivo IRMÃO da receita, e não dentro dela, porque o
+# FINGERPRINT cobre o texto do recipe e 28 pacotes dependem do busybox:
+# acrescentar um campo lá recompilaria glib, ncurses, vim, git e gcc-pass2 sem
+# que uma linha de código mudasse. Conferido com `minitrue fingerprint` antes
+# de escolher o caminho, e não suposto — o hash ficou igual com e sem um
+# arquivo de sonda no diretório da receita.
+coletar_correspondentes() {
+    decl=$(dirname "$receita")/fontes-correspondentes
+    [ -f "$decl" ] || return 0
+    while read -r chash corigem; do
+        case "$chash" in ''|\#*) continue ;; esac
+        [ -n "$corigem" ] || continue
+        if [ -f "$FONTES/$chash" ]; then
+            [ -f "$OUTPUT/upstream/$chash" ] || {
+                cp "$FONTES/$chash" "$OUTPUT/upstream/$chash"
+                copiadas=$((copiadas + 1))
+            }
+            carquivo=upstream/$chash
+            for sidecar in "$FONTES/$chash".minisig "$FONTES/$chash".sig \
+                           "$FONTES/$chash".asc; do
+                [ -f "$sidecar" ] || continue
+                cp "$sidecar" "$OUTPUT/upstream/$(basename "$sidecar")"
+            done
+        else
+            # AUSENTE aqui é grave de um jeito que ausência de fonte comum não
+            # é: significa mídia levando binário copyleft sem a fonte que a
+            # licença exige. Entra na mesma lista de faltantes que já reprova.
+            carquivo='(AUSENTE do cache de fontes)'
+            faltando="$faltando $pacote"
+        fi
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$pacote" "$versao" "$mundo" "$licenca" "$chash" "$corigem" \
+            "$carquivo" fonte-correspondente >> "$inventario"
+    done < "$decl"
+}
+
 inventario=$OUTPUT/INVENTARIO
-printf '# pacote\tversao\tmundo\tlicenca\tsha256\torigem\tarquivo\n' > "$inventario"
+# A coluna 'tipo' distingue a fonte que a receita BAIXA da fonte
+# CORRESPONDENTE declarada a parte. Sem ela, o inventario mostraria duas
+# linhas de busybox com hashes diferentes e nada diria qual e o binario e
+# qual e a fonte que a GPL exige — que e justamente a informacao pela qual
+# alguem abre este arquivo.
+printf '# pacote\tversao\tmundo\tlicenca\tsha256\torigem\tarquivo\ttipo\n' > "$inventario"
 
 faltando=
 noassertion=
@@ -209,7 +259,7 @@ for pacote in $pacotes; do
     src=$(grep '^SRC=' "$receita" | head -1 | cut -d= -f2- | tr -d '"')
     hashes=$(grep '^SHA256=' "$receita" | head -1 | cut -d= -f2- | tr -d '"')
     if [ -z "$src" ]; then
-        printf '%s\t%s\t%s\t%s\t-\t-\t(receita de montagem, sem fonte upstream)\n' \
+        printf '%s\t%s\t%s\t%s\t-\t-\t(receita de montagem, sem fonte upstream)\t-\n' \
             "$pacote" "$versao" "$mundo" "$licenca" >> "$inventario"
         continue
     fi
@@ -235,10 +285,11 @@ for pacote in $pacotes; do
             arquivo='(AUSENTE do cache de fontes)'
             faltando="$faltando $pacote"
         fi
-        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
             "$pacote" "$versao" "$mundo" "$licenca" "$hash" "$url" "$arquivo" \
-            >> "$inventario"
+            upstream >> "$inventario"
     done
+    coletar_correspondentes
 done
 
 # ---- o kernel, que o §8 nomeia expressamente -----------------------------
@@ -272,7 +323,23 @@ exige um bundle diferente, ainda que a árvore seja a mesma.
 
   ARTEFATO      a que mídia isto corresponde, e de que revisão da árvore
   INVENTARIO    uma linha por fonte: pacote, versão, mundo, licença, sha256,
-                a URL de onde veio e onde está aqui dentro
+                a URL de onde veio, onde está aqui dentro, e o TIPO
+
+O tipo é 'upstream' ou 'fonte-correspondente', e a distinção importa. Pacotes
+de Mundo A são instalados a partir de um BINÁRIO publicado pelo upstream, e é
+esse binário que a linha 'upstream' aponta. Quando o binário é copyleft, a
+licença exige também a fonte a partir da qual ele foi construído — e ela vem
+numa segunda linha, marcada 'fonte-correspondente'. É o caso do BusyBox, que a
+mídia carrega como binário estático GPL-2.0-only.
+
+Uma ressalva que não se deve ler nas entrelinhas: a fonte correspondente
+COMPLETA de um binário inclui a configuração com que ele foi construído, e o
+busybox.net não publica o .config dos binários pré-compilados que distribui.
+O que este bundle entrega é a fonte da versão exata, com o sha256 e a
+assinatura destacada que o upstream publica. É substancialmente melhor que
+apontar uma URL, e ainda assim menos que o ideal; o conserto de raiz é a
+distro compilar o próprio BusyBox, e isso está registrado como trabalho a
+fazer.
   distropica-*  a árvore na revisão exata: receitas, configurações, patches e
                 scripts de build — nesta distro a receita é o script
   vendor/       Cargo.lock e crates dos executores estáticos
