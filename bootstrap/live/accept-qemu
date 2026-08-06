@@ -36,7 +36,7 @@ MEMORY_MIB=2048
 # retornar. O aceite fica mais lento e o disco passa a valer como evidencia.
 INSTALL_TIMEOUT=3600
 BOOT_TIMEOUT=1200
-STALL=300
+STALL=1200
 ACCEL=tcg
 ACTIVE_QEMU_PID=
 TERMINATION_PENDING=
@@ -60,8 +60,17 @@ Opções:
   --install-timeout N    teto de parede para instalar e reiniciar (default: 3600)
   --boot-timeout N       teto de parede para alcançar o getty (default: 1200)
   --stall N              segundos sem UMA LINHA NOVA no log até declarar
-                         travado (default: 300). É este o critério de fato; os
+                         travado (default: 1200). É este o critério de fato; os
                          tetos acima são só rede de segurança.
+
+O 1200 é o menor valor PROVADO passar, e não um número escolhido por parecer
+razoável — 300 foi, e reprovou uma instalação saudável no quinto pacote. A
+tentativa de calibrá-lo pelos logs antigos não fecha: as linhas do instalador
+não são carimbadas, só as do kernel, e entre duas marcas de kernel sabe-se
+quantas linhas houve mas não quando. Por isso cada corrida bem-sucedida agora
+IMPRIME o maior silêncio que observou: com algumas medições reais o default
+pode cair para um número defensável, e até lá o valor folgado erra para o lado
+de esperar demais, que é o lado barato.
 
 O relógio de parede sozinho não distingue emulador lento de convidado travado,
 e errava para os dois lados: 600s reprovavam uma instalação saudável rodando
@@ -318,11 +327,15 @@ install_qemu_pid=$ACTIVE_QEMU_PID
 install_deadline=$(($(date +%s) + INSTALL_TIMEOUT))
 install_ultimo_tam=0
 install_ultimo_avanco=$(date +%s)
+install_maior_silencio=0
 install_veredito=
 while process_running "$install_qemu_pid"; do
     agora=$(date +%s)
     tam=$(wc -c < "$INSTALL_LOG" 2>/dev/null || echo 0)
     if [ "$tam" -gt "$install_ultimo_tam" ]; then
+        silencio=$((agora - install_ultimo_avanco))
+        [ "$silencio" -le "$install_maior_silencio" ] ||
+            install_maior_silencio=$silencio
         install_ultimo_tam=$tam
         install_ultimo_avanco=$agora
     elif [ "$((agora - install_ultimo_avanco))" -ge "$STALL" ]; then
@@ -381,6 +394,7 @@ enable_termination
 boot_deadline=$(($(date +%s) + BOOT_TIMEOUT))
 boot_ultimo_tam=0
 boot_ultimo_avanco=$(date +%s)
+boot_maior_silencio=0
 while process_running "$ACTIVE_QEMU_PID"; do
     if grep -Fq 'distropica login:' "$BOOT_LOG"; then
         break
@@ -388,6 +402,9 @@ while process_running "$ACTIVE_QEMU_PID"; do
     agora=$(date +%s)
     tam=$(wc -c < "$BOOT_LOG" 2>/dev/null || echo 0)
     if [ "$tam" -gt "$boot_ultimo_tam" ]; then
+        silencio=$((agora - boot_ultimo_avanco))
+        [ "$silencio" -le "$boot_maior_silencio" ] ||
+            boot_maior_silencio=$silencio
         boot_ultimo_tam=$tam
         boot_ultimo_avanco=$agora
     elif [ "$((agora - boot_ultimo_avanco))" -ge "$STALL" ]; then
@@ -451,3 +468,9 @@ echo "  disco: $DISK"
 echo "  instalação: $INSTALL_LOG"
 echo "  segundo boot: $BOOT_LOG"
 echo "  metadados: $META"
+# O DADO QUE FALTAVA para calibrar o --stall. Sem ele o default continua sendo
+# opinião: 300 pareceu razoável e reprovou uma instalação saudável no quinto
+# pacote. Com algumas corridas verdes registrando o próprio pior silêncio, o
+# número passa a sair de medição.
+echo "  maior silêncio observado: ${install_maior_silencio}s na instalação," \
+     "${boot_maior_silencio}s no boot (limite: ${STALL}s)"
