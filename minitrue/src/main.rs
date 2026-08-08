@@ -176,8 +176,40 @@ fn run() -> anyhow::Result<()> {
         }
     }
 
+    // ROOT ABSOLUTO, e a normalização é AQUI e não em cada uso. Um --root
+    // relativo quebrava o caminho de Mundo A com uma mensagem que acusava o
+    // lugar errado:
+    //
+    //     sh: 1: .: cannot open target/…/tmp/minitrue-work-go/recipe
+    //
+    // O runner de install_pkg faz `current_dir(&work)` e passa RECIPE, PREFIX,
+    // WORK e ROOT no ambiente. Com root relativo, esses caminhos também são
+    // relativos — e passam a ser interpretados a partir do diretório NOVO, que
+    // não é o de onde vieram. Os artefatos escapavam por acidente, porque
+    // passam por canonicalize().
+    //
+    // O Mundo B não sofria, e isso mascarou o defeito: ele monta o ambiente com
+    // caminhos já absolutos. Então `rectify` de fonte funcionava com --root
+    // relativo e `rectify` de binário não, o que faz o defeito parecer do
+    // pacote.
+    //
+    // Absolutiza sem canonicalize DE PROPÓSITO: canonicalize resolve links
+    // simbólicos, e esta árvore tem /lib -> usr/lib e /sbin -> usr/bin. Trocar
+    // o root por sua forma resolvida mudaria o significado de todo caminho
+    // derivado dele, que é conserto maior que o defeito.
+    let root = PathBuf::from(root);
+    let root = if root.is_absolute() {
+        root
+    } else {
+        std::env::current_dir()
+            .map_err(|e| crate::Fail {
+                code: 1,
+                msg: format!("não consegui ler o diretório corrente para resolver --root: {e}"),
+            })?
+            .join(root)
+    };
     let ctx = Ctx {
-        root: PathBuf::from(root),
+        root,
         offline,
         tofu,
         jobs,
