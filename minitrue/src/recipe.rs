@@ -234,7 +234,102 @@ const DUMP_FIELDS: &[&str] = &[
     "HAS_INSTALL",
 ];
 
+/// Os campos de metadado. Uma atribuição a qualquer um deles é avaliada pelo
+/// shell no momento em que a receita é lida — antes de qualquer build, e toda
+/// vez que o minitrue precisa saber a versão de um pacote.
+const CAMPOS_METADADO: &[&str] = &[
+    "NAME",
+    "VERSION",
+    "ABOUT",
+    "LICENSE",
+    "KIND",
+    "SRC",
+    "SHA256",
+    "DEPS",
+    "BUILD_DEPS",
+    "LINKS",
+    "SIG",
+    "SIGSUMS",
+    "SIGKEY",
+    "REPROCORR",
+    "REQUIRES_GLIBC",
+    "PROVISIONAL",
+    "SUPERSEDES",
+    "TOOLCHAIN",
+    "RETRIES",
+];
+
+/// Recusa SUBSTITUIÇÃO DE COMANDO nos campos de metadado.
+///
+/// O minitrue lê uma receita fazendo o shell dar `source` nela e imprimir as
+/// variáveis. Isso significa que uma crase ou um `$(...)` dentro de
+/// `ABOUT="…"` NÃO é texto: é um comando que roda toda vez que alguém pergunta
+/// a versão de um pacote.
+///
+/// Não é hipótese. A receita do `go` desta árvore trazia, no ABOUT, a frase
+/// "o `go` descobre o GOROOT a partir do próprio caminho" — com crases, porque
+/// em texto crase marca código. Ela funcionou por várias construções seguidas e
+/// passou a falhar EXATAMENTE quando o pacote que ela descreve ficou instalado
+/// e o comando `go` apareceu no PATH. O erro que saía era
+/// "receita inválida: Go is a tool for managing Go source code", seguido da
+/// ajuda do compilador — que não aponta para lugar nenhum.
+///
+/// O `$` sozinho continua permitido, e tem de continuar: `SRC="…/$VERSION/…"`
+/// é o idioma da árvore inteira. O que se recusa é `$(` e a crase.
+///
+/// O corpo do `build()` e do `install_pkg()` NÃO é conferido: ali substituição
+/// de comando é o trabalho normal, e ela só roda quando o pacote é construído.
+fn recusa_substituicao_em_metadado(recipe_bytes: &[u8]) -> Result<()> {
+    let texto = String::from_utf8_lossy(recipe_bytes);
+    let mut continuando = false;
+    let mut campo_atual = "";
+    for (n, linha) in texto.lines().enumerate() {
+        let em_metadado = if continuando {
+            true
+        } else {
+            match CAMPOS_METADADO
+                .iter()
+                .find(|c| linha.starts_with(&format!("{c}=")))
+            {
+                Some(c) => {
+                    campo_atual = c;
+                    true
+                }
+                None => false,
+            }
+        };
+        // A continuação por contrabarra é usada de verdade: o SHA256 do rust
+        // ocupa cinco linhas.
+        continuando = em_metadado && linha.ends_with('\\');
+        if !em_metadado {
+            continue;
+        }
+        let ruim = if linha.contains('`') {
+            Some("crase")
+        } else if linha.contains("$(") {
+            Some("$( )")
+        } else {
+            None
+        };
+        if let Some(forma) = ruim {
+            return Err(crate::Fail {
+                code: 2,
+                msg: format!(
+                    "linha {}: {campo_atual} contém substituição de comando ({forma}).\n\
+                     Metadado é lido com `source`, entao isso EXECUTA — e executa a cada\n\
+                     leitura da receita, nao so no build. Se a intencao era citar um\n\
+                     comando no texto, use aspas simples.",
+                    n + 1
+                ),
+            }
+            .into());
+        }
+    }
+    Ok(())
+}
+
 fn evaluate_snapshot(recipe_bytes: &[u8]) -> Result<std::process::Output> {
+    recusa_substituicao_em_metadado(recipe_bytes)?;
     let mut child = Command::new("sh")
         .arg("-e")
         .arg("-s")
