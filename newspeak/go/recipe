@@ -1,0 +1,135 @@
+NAME=go
+VERSION=1.26.5
+KIND=binary
+# Expressão do AGREGADO, e não do Go sozinho: o install_pkg extrai o tarball
+# INTEIRO em /opt, então tudo o que a Google embarca é payload desta distro.
+# Levantado de DENTRO do artefato — 36 arquivos de licença, agrupados pela
+# primeira linha significativa:
+#
+#   BSD-3-Clause   o Go (LICENSE, "Copyright 2009 The Go Authors") e os 14
+#                  vendorizados golang.org/x/{text,sys,crypto,net,mod,
+#                  telemetry,build}, rsc.io/markdown e ianlancetaylor/demangle;
+#                  também o svgpan de Andrea Leofreddi, que tem TRÊS cláusulas
+#                  — conferido, porque a leitura apressada dele é BSD-2
+#   Apache-2.0     github.com/google/pprof, em src/cmd/vendor
+#   MIT            src/runtime/testdata/testgoroutineleakprofile/goker
+#
+# O PATENTS na raiz não é licença: é concessão adicional de patente do Go
+# Authors, e acompanha o BSD-3-Clause. O src/crypto/internal/boring/LICENSE
+# também não acrescenta termo — remete ao LICENSE principal e só passa a valer
+# outra coisa com GOEXPERIMENT=boringcrypto, que esta distro não usa.
+LICENSE="BSD-3-Clause AND Apache-2.0 AND MIT"
+SRC="https://dl.google.com/go/go$VERSION.linux-amd64.tar.gz"
+SHA256=5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
+# A LISTA SAIU DA AUDITORIA, e não de palpite sobre o que um compilador usa.
+#
+#   gcc-pass2  dependência de RUNTIME que a auditoria não enxerga: os binários
+#              do Go são estáticos e não pedem biblioteca dinâmica nenhuma —
+#              `readelf -d` não devolve um único NEEDED. Mas `go build` com cgo
+#              invoca o compilador C, e cgo vem ligado por padrão quando existe
+#              um. Sem gcc-pass2 o Go compila Go puro e falha no primeiro
+#              pacote que use C.
+#   busybox    25 scripts do src/ têm shebang /usr/bin/env, e 3 têm /bin/sh
+#   bash       29 scripts pedem /bin/bash ou /usr/bin/bash
+#   perl       9 geradores de tabela de syscall em src/syscall são Perl. Já
+#              está na mídia por outros motivos, então declará-lo não custa
+#              megabyte nenhum — custaria omiti-lo, que seria afirmar um
+#              fechamento que não fecha
+#
+# GLIBC SAIU DA LISTA depois de medir de novo. Ela entrou porque 10 executáveis
+# de teste em src/debug pediam /lib64/ld-linux-x86-64.so.2 — e esses mesmos
+# arquivos foram podados logo abaixo, por serem ELF de outras arquiteturas. Com
+# eles fora, a auditoria passou a dizer "DEPS declara glibc, mas nenhum
+# requisito estático observado o exige", e ela está certa: os binários do Go são
+# estáticos. Quem precisa de glibc é o gcc-pass2, e ele a declara.
+DEPS="gcc-pass2 busybox bash perl"
+ABOUT="A toolchain oficial do Go, do tarball que a Google publica. Entra como Mundo A porque é a premissa desta distro — binário do mantenedor primeiro — e porque a alternativa é pior do que parece: o compilador do Go é escrito em Go desde a 1.5, então construí-lo da fonte exige um Go anterior, e a cadeia de bootstrap a partir do último compilador em C (go1.4) são dezenas de versões encadeadas. O tarball resolve isso e traz algo que quase nenhum binário de upstream traz: a FONTE COMPLETA da biblioteca padrão e do compilador em src/, 151 dos 263 MB instalados. A obrigação de fonte correspondente, que no BusyBox custou uma release para ser cumprida, aqui já vem satisfeita dentro do próprio artefato. Extrai-se o tarball praticamente inteiro: test/ e api/ ficam, porque tirá-los economizaria 2 MiB comprimidos e quebraria a identidade com o que a Google publica sem resolver nada. Sai apenas o que NÃO PODE funcionar em x86_64 Linux — quatro scripts do shell do Plan 9 e os objetos ELF de mips, sparc64, s390x, riscv64 e arm que servem de fixture aos pacotes debug/elf e debug/dwarf —, porque a auditoria de fechamento, corretamente, não tem como provar closure sobre eles. O binário RELOCA: o 'go' descobre o GOROOT a partir do próprio caminho resolvido, então funciona sob /opt/go/<versão> mesmo tendo sido construído esperando /usr/local/go — conferido, e não suposto. Sem LINKS declarado: o minitrue liga automaticamente tudo o que houver em bin/, que aqui é exatamente 'go' e 'gofmt'; enumerá-los à mão criaria uma segunda verdade que envelheceria sozinha."
+
+install_pkg() {
+    tar -xzf "$DL" --strip-components=1 -C "$PREFIX"
+
+    # O QUE SAI, E POR QUE SÓ ISTO SAI.
+    #
+    # A auditoria de fechamento reprovou 120 exigências deste pacote. A maioria
+    # se resolveu declarando DEPS acima — os scripts do src/ pedem env, bash e
+    # perl, e a árvore tem os três. O que resta abaixo é o que NÃO PODE
+    # funcionar aqui, por construção, e não por falta de pacote:
+    #
+    #   os quatro .rc são scripts do shell do PLAN 9. Não existe /bin/rc nesta
+    #   árvore, não vai existir, e um script que declara um interpretador
+    #   inexistente é um requisito que a auditoria acusa para sempre;
+    #
+    #   os ELF de src/debug/elf/testdata, src/debug/dwarf/testdata e
+    #   src/runtime/pprof/testdata são FIXTURES: objetos de mips, sparc64,
+    #   s390x, riscv64, arm e ppc64le que existem para o pacote debug/elf ter o
+    #   que decodificar em teste. Nada nesta máquina os executa, e a auditoria
+    #   não tem como concluir coisa alguma sobre a closure deles — ela diz
+    #   exatamente isso: "máquina ELF 243 não é x86_64";
+    #
+    #   os race_linux_*.syso de outras arquiteturas são o runtime do detector
+    #   de corrida para máquinas que esta mídia não roda. O de amd64 FICA.
+    #
+    # Nada disso é necessário para compilar Go em x86_64. O src/ da biblioteca
+    # padrão, que é o que o `go build` de fato usa, permanece inteiro.
+    rm -f "$PREFIX/src/all.rc" "$PREFIX/src/clean.rc" \
+          "$PREFIX/src/make.rc" "$PREFIX/src/run.rc"
+    rm -rf "$PREFIX/src/debug/elf/testdata" \
+           "$PREFIX/src/debug/dwarf/testdata" \
+           "$PREFIX/src/runtime/pprof/testdata"
+    rm -rf "$PREFIX/src/crypto/internal/boring/syso"
+    for syso in "$PREFIX"/src/runtime/race/race_linux_*.syso; do
+        case "$syso" in
+            *amd64*) continue ;;
+            *\**)   continue ;;
+        esac
+        rm -f "$syso"
+    done
+
+    # GUARDA 0: a poda tirou o que devia e NÃO tirou o amd64. Sem esta linha, um
+    # padrão mal escrito levaria o runtime do detector de corrida desta própria
+    # máquina, e o sintoma apareceria meses depois, num 'go build -race'.
+    #
+    # O CAMINHO É internal/amd64v1/, e não race_linux_amd64.syso. Escrevi o
+    # segundo por analogia com os vizinhos e o guarda me reprovou na hora: no Go
+    # 1.26 os .syso do topo de src/runtime/race sao TODOS de outras
+    # arquiteturas — arm64, loong64, ppc64le, riscv64, s390x — e o de amd64 vive
+    # sob internal/, dividido em amd64v1 e amd64v3 conforme o nivel de
+    # instrucoes da maquina. A analogia estava errada e a medicao corrigiu.
+    for r in internal/amd64v1/race_linux.syso internal/amd64v3/race_linux.syso; do
+        [ -f "$PREFIX/src/runtime/race/$r" ] || {
+            echo "go: a poda levou $r, que era para ficar" >&2
+            exit 1
+        }
+    done
+
+    # GUARDA 1: o compilador existe e responde. Um tarball truncado extrai sem
+    # erro e só falha no primeiro build, muito depois de alguém poder ligar uma
+    # coisa à outra.
+    [ -x "$PREFIX/bin/go" ] || {
+        echo "go: bin/go nao esta executavel apos extrair" >&2
+        exit 1
+    }
+
+    # GUARDA 2: a FONTE da biblioteca padrão veio junto. É ela que faz a
+    # obrigação de fonte correspondente estar cumprida dentro do artefato, e é
+    # ela que o `go build` usa para compilar a std. Um tarball sem src/ seria
+    # utilizável para rodar e inútil para compilar — e nós o distribuímos
+    # justamente para compilar.
+    [ -f "$PREFIX/src/runtime/proc.go" ] || {
+        echo "go: src/ da biblioteca padrao ausente; este tarball nao serve" >&2
+        exit 1
+    }
+
+    # GUARDA 3: os textos de licença que a expressão LICENSE acima afirma.
+    # Se o upstream reorganizar o vendor e algum sumir, a expressão passa a
+    # mentir — e mentir sobre licença é o defeito que esta arvore menos pode
+    # ter.
+    for lic in LICENSE PATENTS \
+               src/cmd/vendor/github.com/google/pprof/LICENSE \
+               src/cmd/vendor/github.com/google/pprof/third_party/svgpan/LICENSE; do
+        [ -f "$PREFIX/$lic" ] || {
+            echo "go: falta $lic; a expressao LICENSE desta receita nao se sustenta" >&2
+            exit 1
+        }
+    done
+}

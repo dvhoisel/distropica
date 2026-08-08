@@ -1,0 +1,193 @@
+NAME=rust
+VERSION=1.97.1
+KIND=binary
+# Expressão do AGREGADO do que ESTA receita instala, e não do Rust sozinho.
+# Levantado de dentro do artefato:
+#
+#   MIT OR Apache-2.0            o Rust (LICENSE-MIT, LICENSE-APACHE e o
+#                                COPYRIGHT, que abre com "Short version for
+#                                non-lawyers"); é dual, à escolha de quem usa
+#   Apache-2.0 WITH LLVM-exception  o libLLVM-22 que viaja dentro do
+#                                componente rustc — 'Apache License v2.0 with
+#                                LLVM Exceptions', citado no
+#                                share/doc/rust/COPYRIGHT.html do próprio
+#                                artefato
+#   ISC                          3 das 38 crates de terceiros que o cargo
+#                                embarca (share/doc/cargo/LICENSE-THIRD-PARTY);
+#                                as outras 35 são MIT
+#
+# O 'AND' entre elas não é redundância nem excesso de zelo: o binário
+# distribuído contém as três coisas ao mesmo tempo, e reduzir a expressão a
+# "MIT OR Apache-2.0" — que é o que o site do Rust diz — descreveria a
+# linguagem e não o artefato.
+LICENSE="(MIT OR Apache-2.0) AND Apache-2.0 WITH LLVM-exception AND ISC"
+# CINCO COMPONENTES EM .tar.gz, e cada metade dessa frase foi medida.
+#
+# CINCO E NÃO UM: o tarball combinado 'rust-1.97.1-...' traz onze componentes,
+# dos quais nove não instalamos — 879 MB de documentação, 198 MB de llvm-tools,
+# 44 MB de rust-analyzer. Baixá-lo custa 201 MB e obriga o install_pkg a
+# materializar 1,7 GB de staging DENTRO do disco alvo para depois apagar. Os
+# cinco separados somam 213 MB e o staging cai para o que de fato se instala.
+#
+# .tar.gz E NÃO .tar.xz, que seria menor (129 MB): o unxz do BusyBox tem teto de
+# 64 MiB de dicionário compilado, e os tarballs de rustc e de rust-std usam 128
+# MiB. O sintoma, medido no aceite, é 'tar: corrupted data / tar: short read'
+# DEPOIS de o sha256 conferir — ou seja, o arquivo está íntegro e o
+# descompressor é que não dá conta. O BusyBox desta árvore é binário de
+# upstream, então não há como recompilá-lo com outro limite. Os 12 MB a mais em
+# relação ao xz combinado são o preço de a mídia poder instalar o que embarca.
+SRC="https://static.rust-lang.org/dist/2026-07-16/rustc-$VERSION-x86_64-unknown-linux-gnu.tar.gz \
+     https://static.rust-lang.org/dist/2026-07-16/rust-std-$VERSION-x86_64-unknown-linux-gnu.tar.gz \
+     https://static.rust-lang.org/dist/2026-07-16/cargo-$VERSION-x86_64-unknown-linux-gnu.tar.gz \
+     https://static.rust-lang.org/dist/2026-07-16/clippy-$VERSION-x86_64-unknown-linux-gnu.tar.gz \
+     https://static.rust-lang.org/dist/2026-07-16/rustfmt-$VERSION-x86_64-unknown-linux-gnu.tar.gz"
+SHA256="1c441e430c1cca49dff54a8d59c41038bf6f79f7b8756596cb2f36511a015eba \
+        45b927ecf776b9645ca2ed5b287fc6814824a073c30c7c5d5c0ad4425295ecee \
+        90cbeb8adfe8ca0fcbe01a18bd9b99d3e5e98fd29c003032828ebf3ffba0e4ed \
+        66f93a616bc84939e116e960599b3bc122be7b51f6562bad71011a64a9293dc3 \
+        810f7dcfe64bdaf3e10cbe942274f76cdab2ffca813bfafc75e9d86a6809f039"
+# Medido no binário, e não deduzido: rustc, librustc_driver e libLLVM pedem
+# libc/libm/libdl/librt/libpthread (glibc), libgcc_s (gcc-pass2) e libz.so.1
+# (zlib). O símbolo de glibc mais novo que exigem é GLIBC_2.17; esta árvore tem
+# 2.42. O gcc-pass2 entra ainda por um segundo motivo, de runtime e invisível à
+# auditoria: o rustc chama 'cc' para LINKAR, e sem ele todo build falha na
+# última etapa, depois de compilar tudo.
+#   busybox    rust-gdb, rust-gdbgui e rust-lldb sao scripts com shebang
+#              /bin/sh — apontado pela auditoria, nao suposto
+DEPS="glibc gcc-pass2 zlib busybox"
+ABOUT="A toolchain oficial do Rust, dos tarballs que a Rust Foundation publica em static.rust-lang.org. Entra como Mundo A pela premissa da distro — binário do mantenedor primeiro — e porque construí-la da fonte é impraticável aqui por DOIS motivos que se somam: o rustc é escrito em Rust, então exige um rustc anterior para nascer, e carrega o LLVM, que a receita da Mesa desta mesma árvore já recusou com a medida na mão — 'sozinho maior que tudo o que esta distro construiu até aqui somado, e com um build que se mede em horas'. Instala CINCO componentes — rustc, rust-std, cargo, rustfmt e clippy —, que são os do perfil padrão do rustup. Cada um vem no próprio tarball, e não no combinado, por duas razões medidas: o combinado carrega 879 MB de documentação e 198 MB de llvm-tools que esta receita descarta, e obrigaria a materializar 1,7 GB de staging dentro do disco alvo durante a instalação. Cada componente é uma árvore com manifest.in, e é o manifesto do upstream que decide o que se copia — não um 'cp -a' do diretório, que carregaria em silêncio qualquer arquivo que a Rust pusesse ali sem listar. O install.sh do upstream faria a instalação sozinho e não o usamos: ele escreve manifestos de desinstalação com caminhos ABSOLUTOS dentro do payload, o que faria o artefato depender do diretório onde foi construído e quebraria a reprodutibilidade que o REPROCORR desta árvore existe para provar. O binário RELOCA: o rustc acha o sysroot pelo /proc/self/exe, então funciona sob /opt/rust/<versão> — conferido compilando um programa de verdade, e não só lendo --version. Sem LINKS declarado: o minitrue liga tudo que houver em bin/, que aqui são dez comandos, do rustc ao rust-gdb."
+
+install_pkg() {
+    # A ORDEM É A DO SRC, e o minitrue expõe cada artefato como DL_<n>. O
+    # emparelhamento abaixo é manual porque não há como o shell descobri-lo
+    # sozinho, e um deslize aqui instalaria o cargo achando que é o rustc — daí
+    # a guarda que confere o nome do componente dentro do próprio tarball.
+    n=0
+    for dl in "$DL_1" "$DL_2" "$DL_3" "$DL_4" "$DL_5"; do
+        n=$((n + 1))
+        [ -f "$dl" ] || {
+            echo "rust: artefato $n ausente; SRC e SHA256 estao desemparelhados" >&2
+            exit 1
+        }
+
+        dist=$PREFIX/.dist
+        rm -rf "$dist"
+        mkdir -p "$dist"
+        # --strip-components=1 tira o diretorio <componente>-<versao>-<alvo>/
+        # que cada tarball traz na raiz.
+        tar -xzf "$dl" --strip-components=1 -C "$dist"
+
+        # QUEM DIZ O NOME É O TARBALL, e não esta receita. O arquivo
+        # 'components' na raiz nomeia o que veio dentro, e o manifest.in mora em
+        # <nome>/. Escrevi este laço supondo que o manifest.in ficasse na raiz —
+        # a estrutura do tarball de componente é a mesma do combinado — e a
+        # medição corrigiu antes de custar um build. Ler o nome de dentro
+        # dispensa emparelhar SRC com nomes à mão, que é onde um deslize
+        # instalaria o cargo achando que é o rustc.
+        [ -f "$dist/components" ] || {
+            echo "rust: artefato $n nao tem o arquivo 'components'; nao e um componente" >&2
+            exit 1
+        }
+        comp=$(head -1 "$dist/components")
+        [ -n "$comp" ] && [ -f "$dist/$comp/manifest.in" ] || {
+            echo "rust: artefato $n diz ser '$comp' mas nao tem $comp/manifest.in" >&2
+            exit 1
+        }
+
+        while IFS= read -r linha; do
+            case "$linha" in
+                file:*)
+                    rel=${linha#file:}
+                    mkdir -p "$PREFIX/${rel%/*}"
+                    cp -a "$dist/$comp/$rel" "$PREFIX/$rel" || {
+                        echo "rust: manifesto de '$comp' cita $rel, que nao existe" >&2
+                        exit 1
+                    }
+                    ;;
+                dir:*)
+                    rel=${linha#dir:}
+                    mkdir -p "$PREFIX/${rel%/*}"
+                    cp -a "$dist/$comp/$rel" "$PREFIX/$rel" || {
+                        echo "rust: manifesto de '$comp' cita o diretorio $rel" >&2
+                        exit 1
+                    }
+                    ;;
+            esac
+        done < "$dist/$comp/manifest.in"
+
+        # OS TEXTOS DE LICENÇA vão para a raiz do prefixo. NEM TODO componente
+        # traz os três: o rustc tem COPYRIGHT, LICENSE-APACHE e LICENSE-MIT; o
+        # cargo tem os dois LICENSE e um LICENSE-THIRD-PARTY no lugar do
+        # COPYRIGHT. Copiar sem sobrescrever recolhe a união dos cinco, e a
+        # guarda no fim confere que os três essenciais chegaram por alguém.
+        for lic in LICENSE-MIT LICENSE-APACHE COPYRIGHT LICENSE-THIRD-PARTY; do
+            [ -f "$dist/$lic" ] || continue
+            [ -f "$PREFIX/$lic" ] || cp -a "$dist/$lic" "$PREFIX/$lic"
+        done
+
+        rm -rf "$dist"
+    done
+
+    [ -d "$PREFIX/.dist" ] && {
+        echo "rust: o staging .dist sobreviveu ao laco" >&2
+        exit 1
+    }
+
+    # O ÓRFÃO QUE O UPSTREAM DEIXA PARA TRÁS.
+    #
+    # O rust-objcopy vem no manifesto do componente rustc e tem RUNPATH
+    # '$ORIGIN/../lib', que a partir de lib/rustlib/<alvo>/bin/ resolve para
+    # lib/rustlib/<alvo>/lib. O libLLVM que ele exige NÃO está lá: o rustc
+    # instala o dele em lib/, e quem põe uma cópia em lib/rustlib/<alvo>/lib é
+    # o componente llvm-tools — que esta receita, deliberadamente, não instala,
+    # por 198 MB.
+    #
+    # Ou seja: instalar rustc sem llvm-tools deixa um executável que não acha a
+    # própria biblioteca. Foi a auditoria de fechamento que apontou, com todas
+    # as letras: "exige libLLVM.so.22.1-...-stable, sem provedor na closure".
+    #
+    # Das três saídas — pagar os 198 MB, forjar um symlink que finge um layout
+    # que o upstream não tem, ou não distribuir o binário quebrado — a última é
+    # a única que não mente nem cobra caro. Um executável que não roda é pior
+    # que ausência: a ausência se percebe na hora.
+    rm -f "$PREFIX/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-objcopy"
+
+    # GUARDA 1: o compilador e o gerenciador de pacotes existem e são
+    # executáveis. Se o emparelhamento de DL_<n> com SRC estivesse trocado,
+    # faltaria um deles aqui.
+    for b in rustc cargo rustfmt cargo-clippy; do
+        [ -x "$PREFIX/bin/$b" ] || {
+            echo "rust: bin/$b ausente; algum componente nao entrou" >&2
+            exit 1
+        }
+    done
+
+    # GUARDA 2: a biblioteca padrão está no sysroot onde o rustc a procura. Sem
+    # ela o compilador sobe, responde --version, e falha em QUALQUER programa
+    # com "can't find crate for 'std'" — que é o modo de falha mais confuso
+    # possível, porque tudo parece instalado.
+    ls "$PREFIX"/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-*.rlib >/dev/null 2>&1 || {
+        echo "rust: nenhuma libstd-*.rlib no sysroot; nada compilaria" >&2
+        exit 1
+    }
+
+    # GUARDA 3: o libLLVM veio junto. É o maior arquivo do pacote e a razão de
+    # metade da expressão de licença; se ele sumir, o rustc nao linka e a
+    # expressao passa a afirmar a licenca de algo que nao esta la.
+    ls "$PREFIX"/lib/libLLVM*.so* >/dev/null 2>&1 || {
+        echo "rust: libLLVM ausente; o rustc nao teria backend de codigo" >&2
+        exit 1
+    }
+
+    # GUARDA 4: os textos de licença chegaram. Nenhum componente é obrigado a
+    # trazê-los, e a cópia acima é condicional — se todos os cinco vierem sem,
+    # o pacote sai sem licença e ninguém percebe.
+    for lic in LICENSE-MIT LICENSE-APACHE COPYRIGHT; do
+        [ -f "$PREFIX/$lic" ] || {
+            echo "rust: nenhum componente trouxe $lic; nao se distribui sem isso" >&2
+            exit 1
+        }
+    done
+
+    echo "rust: $(du -sm "$PREFIX" | cut -f1) MB instalados, $(ls "$PREFIX/bin" | wc -l) comandos em bin/"
+}

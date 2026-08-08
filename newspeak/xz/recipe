@@ -1,0 +1,114 @@
+NAME=xz
+VERSION=5.8.3
+KIND=source
+TOOLCHAIN=native
+# busybox pelo /bin/sh dos quatro scripts que o pacote instala — xzgrep,
+# xzdiff, xzless e xzmore, adaptados do GNU gzip. Apontado pela auditoria, e é
+# a mesma razão de eles estarem na expressão GPL-2.0-or-later acima: se são
+# instalados, contam.
+DEPS="glibc busybox"
+BUILD_DEPS="gcc-pass2 binutils-glibc make"
+# Expressão do que ESTA receita instala, e não do tarball inteiro. O próprio
+# COPYING do upstream reparte, e a repartição importa:
+#
+#   0BSD             a liblzma e as ferramentas xz, xzdec, lzmadec e lzmainfo
+#   GPL-2.0-or-later os scripts xzgrep, xzdiff, xzless e xzmore, adaptados do
+#                    GNU gzip — e eles SÃO instalados, então entram
+#   LGPL-2.1-or-later o getopt_long do GNU, compilado apenas em sistemas sem um
+#                    utilizável. Esta glibc tem, então ele NÃO entra no binário;
+#                    fica declarado assim mesmo porque a fonte viaja no payload
+#                    de fontes correspondentes e alguém que audite o tarball vai
+#                    encontrá-lo
+#
+# O sistema de build em Autotools tem arquivos sob GPLv2+ e GPLv3+, e o próprio
+# COPYING diz que "these files don't affect the licensing of the binaries being
+# built" — por isso não estão na expressão. O diretório 'extra' não é
+# construído nem instalado.
+LICENSE="0BSD AND GPL-2.0-or-later AND LGPL-2.1-or-later"
+SRC="https://github.com/tukaani-project/xz/releases/download/v$VERSION/xz-$VERSION.tar.gz"
+SHA256=3d3a1b973af218114f4f889bbaa2f4c037deaae0c8e815eec381c3d546b974a0
+# SEIS CAMINHOS SÃO DO BUSYBOX ATÉ AQUI — xz, unxz, xzcat, lzma, unlzma e
+# lzcat. O crimestop recusou a instalação com "doublethink detectado:
+# /usr/bin/lzcat tem donos incompatíveis", e recusou certo: dois pacotes
+# reivindicando o mesmo caminho é o defeito que o manifesto v2 existe para
+# impedir.
+#
+# A cessão se declara AQUI e não no busybox, que só diz PROVISIONAL=1. É como o
+# vim, o ncurses e o findutils já tomam os applets deles, e tem uma vantagem
+# concreta: mexer no recipe do busybox mudaria o FINGERPRINT dele e
+# recompilaria os 32 pacotes que o declaram.
+#
+# A troca é real e não cosmética: o unxz do busybox tem teto de 64 MiB de
+# dicionário; este não tem teto nenhum além da memória da máquina.
+SUPERSEDES="busybox"
+ABOUT="O descompressor de xz que faltava, e ele entrou por um defeito medido e não por completude. O unxz do BusyBox tem teto de 64 MiB de dicionário LZMA2 compilado no binário; os tarballs de rustc e de rust-std da Rust usam 128 MiB. O sintoma, visto no aceite, é 'tar: corrupted data / tar: short read' DEPOIS de o sha256 conferir — ou seja, o arquivo chega íntegro e o descompressor é que não dá conta, o que é o pior tipo de mensagem porque acusa o artefato em vez do leitor. E não havia como contornar recompilando: o BusyBox desta árvore é binário de upstream. A receita do Rust resolveu o caso dela trocando para tarballs .tar.gz, mas isso resolve UM caso e não a classe: no dia em que um upstream publicar só xz com dicionário grande, não há saída. Com este pacote há. Tomado em .tar.gz DE PROPÓSITO, e não no .tar.xz que o mesmo upstream publica menor — depender de xz para descompactar o xz é a mordida na própria cauda que deixa a árvore sem caminho de bootstrap. O hash bate com o pino do Void Linux, conferência independente do sha256 do upstream; vale lembrar que este é o pacote do CVE-2024-3094, em que as versões 5.6.0 e 5.6.1 saíram com porta dos fundos plantada por um mantenedor — que é exatamente por que aqui se pina hash e se confere contra terceiro, em vez de confiar na URL."
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+
+    # --disable-static: nada nesta árvore linka liblzma estaticamente, e o .a
+    # seriam 700 KB de payload que ninguém abre.
+    # --disable-doc: a documentação em HTML do doxygen não se instala aqui; o
+    # que importa é o comando e a biblioteca.
+    ./configure \
+        --prefix=/usr \
+        --disable-static \
+        --disable-doc \
+        --enable-shared
+
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+
+    # GUARDA 1: o comando existe e o ciclo comprimir/descomprimir devolve os
+    # MESMOS BYTES. Um --version provaria que o arquivo existe; isto prova que
+    # ele e a liblzma recem-instalada funcionam juntos.
+    #
+    # O LD_LIBRARY_PATH é obrigatório e me custou um build: o xz do STAGE linka
+    # a liblzma.so que ainda está no STAGE, e não em /usr/lib. Sem apontar onde
+    # ela está, o binário nem sobe e a mensagem de erro fala de compressão, que
+    # não é o problema.
+    #
+    # NÃO se testa aqui o dicionário de 128 MiB, que é a razão de este pacote
+    # existir. Tentei e a tentativa estava errada: o xz REDUZ o dicionário ao
+    # tamanho da entrada para poupar memória, então 64 KiB de amostra jamais
+    # produzem um cabeçalho de 128 MiB, e forçá-lo exigiria comprimir 128 MiB
+    # dentro de um build. A capacidade se prova uma vez, contra um artefato real
+    # que a tenha — está registrada no STATUS —, e não a cada construção.
+    [ -x "$STAGE/usr/bin/xz" ] || {
+        echo "xz: /usr/bin/xz nao foi produzido" >&2
+        exit 1
+    }
+    dd if=/dev/urandom of=amostra.bin bs=1024 count=64 2>/dev/null
+    LD_LIBRARY_PATH="$STAGE/usr/lib" "$STAGE/usr/bin/xz" -c amostra.bin > amostra.xz || {
+        echo "xz: nao comprimiu uma amostra de 64 KiB" >&2
+        exit 1
+    }
+    LD_LIBRARY_PATH="$STAGE/usr/lib" "$STAGE/usr/bin/xz" -dc amostra.xz > amostra.out || {
+        echo "xz: nao descomprimiu o que ele mesmo comprimiu" >&2
+        exit 1
+    }
+    cmp -s amostra.bin amostra.out || {
+        echo "xz: o ciclo comprimir/descomprimir nao devolveu os mesmos bytes" >&2
+        exit 1
+    }
+    rm -f amostra.bin amostra.xz amostra.out
+
+    # GUARDA 2: a biblioteca compartilhada saiu, e é ela que faz um futuro
+    # pacote poder ler xz sem invocar processo. Sem .so, este pacote seria só um
+    # comando.
+    [ -e "$STAGE/usr/lib/liblzma.so" ] || {
+        echo "xz: liblzma.so ausente; --enable-shared nao pegou" >&2
+        exit 1
+    }
+
+    # GUARDA 3: os textos de licença que a expressão acima afirma. O COPYING
+    # principal é um sumário que aponta para os outros; se algum sumir, a
+    # expressao passa a nao ter lastro no proprio artefato.
+    install -Dm644 COPYING          "$STAGE/usr/share/licenses/xz/COPYING"
+    install -Dm644 COPYING.0BSD     "$STAGE/usr/share/licenses/xz/COPYING.0BSD"
+    install -Dm644 COPYING.GPLv2    "$STAGE/usr/share/licenses/xz/COPYING.GPLv2"
+    install -Dm644 COPYING.LGPLv2.1 "$STAGE/usr/share/licenses/xz/COPYING.LGPLv2.1"
+
+    find "$STAGE" -type d -empty -delete
+    echo "xz: $(LD_LIBRARY_PATH="$STAGE/usr/lib" "$STAGE/usr/bin/xz" --version | head -1), liblzma em /usr/lib"
+}
