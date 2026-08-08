@@ -209,10 +209,20 @@ partition_disk() {
     [ "$cache_bytes" -gt 0 ] || rescue "cache.tar da mídia não foi medido"
     disk_bytes=$((disk_sectors * 512))
     root_capacity=$((disk_bytes - root_start * logical_sector))
-    # Reserva 512 MiB além da estimativa: metadados, o journal do ext4 (que
-    # chega a 128 MiB em sistema de arquivos grande), o proprio cache.tar
-    # extraido em /var/tmp durante a instalacao, e a imprecisao da estimativa.
-    required_root=$((cache_bytes * 4 + 536870912))
+    # Reserva 512 MiB além da estimativa: metadados e o journal do ext4, que
+    # chega a 128 MiB em sistema de arquivos grande.
+    #
+    # O TERMO DO CACHE E SEPARADO, e virou separado por medicao. Ele estava
+    # embutido na reserva de 512 MiB, e isso subestimava: durante a instalacao
+    # o cache VIVE NO DISCO ALVO ao mesmo tempo que o sistema instalado cresce,
+    # entao o pico e a SOMA dos dois, e nao o maior deles.
+    #
+    # Medido na midia com as toolchains: cache de 868 MiB, sistema instalado de
+    # 3342 MiB, pico real de ~4210 MiB. A formula antiga dava 3984 — aprovava
+    # um disco onde a instalacao morria com "No space left on device" no pacote
+    # 85 de 99. So nao aparecia antes porque, sem particao de troca, sobrava
+    # disco de sobra para esconder o erro.
+    required_root=$((cache_bytes * 4 + cache_bytes + 536870912))
     [ "$root_capacity" -ge "$required_root" ] ||
         rescue "disco pequeno demais: preciso de ao menos $((required_root / 1048576)) MiB na raiz"
     # A ESP tem 64 MiB; preserve pelo menos 4 MiB para FAT/metadados.
@@ -225,7 +235,72 @@ partition_disk() {
     # que firmware UEFI aceita por tolerância, não por norma. O Minipax já
     # escrevia GPT para compor a IMG; usar o mesmo código aqui mantém o
     # caminho que APAGA DISCO dentro do Rust auditado.
-    /bin/minipax partition --disk "$disk" --esp-mib 64 \
+    # QUANTA SWAP, e a resposta vem da MÁQUINA e não de uma constante. Este
+    # script roda no computador que vai receber o sistema, então ele sabe
+    # quanta RAM existe — coisa que nem a receita nem o compositor da mídia
+    # sabem.
+    #
+    # A regra é o dobro da RAM até 2 GiB, RAM igual entre 2 e 8, e teto de 8
+    # GiB acima disso. É a regra que as distros convergiram depois de anos, e a
+    # razão de o teto existir: swap serve para folga de alocação e para
+    # sobreviver a um pico, não para rodar em disco — uma máquina que precise de
+    # 32 GiB de troca precisa é de mais memória.
+    #
+    # NÃO cobre hibernação, que exigiria swap >= RAM sempre. Esta distro não
+    # hiberna: não há suspend-to-disk configurado, e prometer o tamanho sem o
+    # resto seria gastar disco por uma função que não existe.
+    ram_kb=$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo 2>/dev/null || echo 0)
+    ram_mib=$((ram_kb / 1024))
+    if [ "$ram_mib" -le 0 ]; then
+        swap_mib=0
+        say "nao consegui ler a RAM; instalando sem area de troca" >&2
+    elif [ "$ram_mib" -le 2048 ]; then
+        swap_mib=$((ram_mib * 2))
+    elif [ "$ram_mib" -le 8192 ]; then
+        swap_mib=$ram_mib
+    else
+        swap_mib=8192
+    fi
+
+    # E AGORA O DISCO TEM VOTO. A regra acima olha so a RAM, e sozinha ela
+    # produziu um defeito medido: numa maquina de 2 GiB com disco de 8 GiB ela
+    # pediu 3934 MiB de troca, sobrou 4,1 GB para uma raiz que precisa de mais
+    # que isso, e a instalacao morreu com "No space left on device" no pacote
+    # 85 de 99 — depois de vinte minutos.
+    #
+    # O required_root ja foi calculado acima com a estimativa do cache e 512
+    # MiB de reserva. A troca sai do que SOBRA depois dele, e ainda deixa 20%
+    # de folga sobre esse excedente: um sistema instalado com o disco no limite
+    # e um sistema que nao aceita nem uma atualizacao.
+    # METADE do que sobra depois da raiz necessaria, e nao 80%: o required_root
+    # e uma ESTIMATIVA, e uma estimativa que ja errou por baixo uma vez. Deixar
+    # metade do excedente livre e o que separa "instalou apertado" de "instalou
+    # e ainda aceita a proxima atualizacao".
+    #
+    # Em disco grande este teto nao morde: numa maquina de 8 GiB de RAM com 500
+    # GB de disco, metade do excedente sao centenas de gigabytes e quem manda
+    # volta a ser a regra da RAM, com seu teto de 8 GiB.
+    excedente=$((root_capacity - required_root))
+    if [ "$excedente" -gt 0 ]; then
+        teto_mib=$(( (excedente / 1048576) / 2 ))
+    else
+        teto_mib=0
+    fi
+    if [ "$swap_mib" -gt "$teto_mib" ]; then
+        say "area de troca de ${swap_mib} MiB nao cabe; limitando a ${teto_mib} MiB pelo disco" >&2
+        swap_mib=$teto_mib
+    fi
+    # Abaixo de 128 MiB a troca nao ajuda e ainda tira espaco da raiz.
+    [ "$swap_mib" -ge 128 ] || swap_mib=0
+    # >&2 OBRIGATÓRIO, e não estilo: o stdout DESTA FUNÇÃO é o valor de retorno
+    # dela — ela termina com `echo "$esp $root"` e o chamador lê os caminhos
+    # dali. O `say` escreve em stdout. Sem o redirecionamento, esta linha vira
+    # parte do retorno, e o instalador tenta montar
+    # 'RAM de 1967 MiB; area de troca de 3934 MiB' como se fosse dispositivo.
+    # Medido: foi exatamente isso que aconteceu na primeira tentativa.
+    say "RAM de ${ram_mib} MiB; area de troca de ${swap_mib} MiB" >&2
+
+    /bin/minipax partition --disk "$disk" --esp-mib 64 --swap-mib "$swap_mib" \
         --logical-sector "$logical_sector" >&2 ||
         rescue "minipax partition falhou em $disk"
     partprobe "$disk" 2>/dev/null || true
@@ -252,6 +327,24 @@ partition_disk() {
     # verificação completa em vez de replay. O mke2fs é o estático do
     # initramfs, com seu mke2fs.conf ao lado — o applet do busybox só faz ext2.
     mkfs.ext4 -F -L DISTROPICA_ROOT -m 0 "$root" >&2 || rescue "mkfs.ext4 falhou"
+
+    # A SWAP, quando o minipax a criou. Ela é a partição 3 e pode não existir —
+    # disco pequeno, ou --swap-mib 0 —, e a ausência não é erro: o sistema
+    # instala e roda sem ela. Formatar com rótulo importa porque é POR ELE que o
+    # drop-in de boot a encontra, sem fstab e sem caminho de dispositivo
+    # gravado em lugar nenhum.
+    swap=$(partition_path "$disk" 3)
+    if [ "$swap_mib" -gt 0 ] && [ -b "$swap" ]; then
+        mkswap -L DISTROPICA_SWAP "$swap" >&2 ||
+            rescue "mkswap falhou em $swap"
+        say "area de troca formatada em $swap" >&2
+    elif [ "$swap_mib" -gt 0 ]; then
+        # Pedimos e não veio: ou o disco nao comportou, ou o no de dispositivo
+        # nao apareceu. Nao e motivo para abortar a instalacao, e e motivo para
+        # dizer — um sistema que deveria ter swap e nao tem explica sozinho o
+        # primeiro travamento por falta de memoria.
+        say "area de troca pedida mas ausente em $swap; seguindo sem ela" >&2
+    fi
     echo "$esp $root"
 }
 
