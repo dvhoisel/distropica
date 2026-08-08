@@ -100,3 +100,39 @@ git
 strace
 tmux
 file
+
+# Toolchains de Go e de Rust, e os dois são desejos de TOPO porque nada mais os
+# puxa: nenhuma receita desta árvore compila Go ou Rust, então eles só existem
+# se alguém os pedir. Entram como Mundo A pela premissa da distro — binário do
+# mantenedor primeiro —, e nos dois casos a alternativa não é "compilar da
+# fonte", é "não ter": o compilador do Go é escrito em Go desde a 1.5 e o rustc
+# é escrito em Rust, então ambos exigem uma versão anterior de si mesmos para
+# nascer, e o rustc ainda carrega o LLVM, que a receita da Mesa desta mesma
+# árvore já recusou com a medida na mão.
+#
+# O PREÇO ESTÁ MEDIDO, e é a informação que falta na maioria das listas assim:
+# +46 MB de Go e +213 MB de Rust na ISO. Instalados são 261 e 623 MB. O Rust
+# leva rustc, cargo, rust-std, rustfmt e clippy — o perfil padrão do rustup — e
+# deixa de fora a documentação (879 MB), o llvm-tools (198 MB) e o
+# rust-analyzer (44 MB).
+#
+# O Go traz de brinde algo que quase nenhum binário de upstream traz: a fonte
+# completa da biblioteca padrão, em src/. Ela não é enfeite — é o que o
+# 'go build' de fato compila — e satisfaz, dentro do próprio artefato, a
+# obrigação de fonte correspondente que no BusyBox custou uma release inteira.
+go
+rust
+
+# O xz entrou POR CAUSA dos dois acima, e não por completude. O unxz do BusyBox
+# tem teto de 64 MiB de dicionário LZMA2 compilado no binário; os tarballs de
+# rustc e de rust-std usam 128 MiB. O aceite reprovou com 'tar: corrupted data'
+# DEPOIS de o sha256 conferir — o arquivo íntegro e o descompressor sem
+# fôlego —, e não havia como recompilar o BusyBox, que aqui é binário de
+# upstream.
+#
+# A receita do Rust contornou o caso dela trocando para tarballs .tar.gz. Este
+# pacote resolve a CLASSE: no dia em que um upstream publicar só xz com
+# dicionário grande, a diferença entre embarcá-lo e não poder embarcá-lo é esta
+# linha. Custa 1 MB e assume seis applets do BusyBox — xz, unxz, xzcat, lzma,
+# unlzma e lzcat —, todos com mais fôlego que os que substituem.
+xz
