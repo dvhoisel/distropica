@@ -1,7 +1,7 @@
 use crate::channel;
 use crate::recipe::{self, Kind, Recipe, Toolchain};
 use crate::{fail, fetch, iso_now, Ctx};
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::{CString, OsStr};
@@ -2034,7 +2034,21 @@ fn move_path(src: &Path, dst: &Path) -> Result<()> {
     match fs::rename(src, dst) {
         Ok(()) => return Ok(()),
         Err(e) if e.kind() == ErrorKind::CrossesDevices => {}
-        Err(e) => return Err(e.into()),
+        // O CAMINHO VAI NA MENSAGEM, e isto não é adorno. Este `?` já devolveu
+        // um "Resource busy (os error 16)" pelado no meio de uma instalação de
+        // 99 pacotes: sem dizer qual arquivo, a única saída era eliminar
+        // hipóteses uma a uma — reproduzir no hospedeiro, trocar glibc por
+        // musl, comparar 38 corridas de aceite —, e nenhuma delas apontava o
+        // lugar. Um erro de IO sem o caminho é meio erro.
+        Err(e) => {
+            return Err(e).with_context(|| {
+                format!(
+                    "movendo {} para {}",
+                    src.display(),
+                    dst.display()
+                )
+            })
+        }
     }
 
     let md = fs::symlink_metadata(src)?;
@@ -2485,7 +2499,10 @@ impl Journal {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 self.record_new_intent(dst)?;
             }
-            Err(e) => return Err(e.into()),
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("inspecionando {}", dst.display()))
+            }
         }
         Ok(())
     }
@@ -2495,7 +2512,8 @@ impl Journal {
             self.ensure_dir(parent, fs::Permissions::from_mode(0o755), false, false)?;
         }
         self.stash(dst, false)?;
-        fs::copy(src, dst)?;
+        fs::copy(src, dst)
+            .with_context(|| format!("copiando {} para {}", src.display(), dst.display()))?;
         Ok(())
     }
 
