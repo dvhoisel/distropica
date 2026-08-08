@@ -3270,7 +3270,23 @@ fn apply_stage(
                 let virt = factory_virt;
                 manifest.push(format!("{}  {virt}", entry.integrity(&empty_tree_hash)));
                 // …e é materializado em /etc só se o administrador ainda não decidiu.
-                materialize_etc(jrnl, ctx, &factory, sub)?;
+                // O TERCEIRO PONTO DA COMPARAÇÃO. O old_manifest guarda o
+                // hash da fábrica ANTERIOR — os arquivos de
+                // /usr/share/factory/etc estão no manifesto, ao contrário do
+                // /etc vivo. Sem ele, materialize_etc só podia comparar o /etc
+                // com a fábrica NOVA, e qualquer mudança de receita virava
+                // "modificado pelo administrador".
+                let fabrica_anterior = old_manifest.iter().find_map(|line| {
+                    let alvo = format!("/usr/share/factory/etc/{sub}");
+                    if manifest_path(line) == alvo {
+                        manifest_integrity(line)
+                            .and_then(|tag| tag.strip_prefix("f:"))
+                            .map(|h| h.to_string())
+                    } else {
+                        None
+                    }
+                });
+                materialize_etc(jrnl, ctx, &factory, sub, fabrica_anterior.as_deref())?;
             }
         } else {
             let dst = ctx.root.join(rel);
@@ -3368,7 +3384,13 @@ fn apply_stage(
 /// grava `<arquivo>.new` ao lado e avisa. O /etc vivo não entra no manifesto.
 /// Trata symlinks (ex.: openssl instala /etc/ssl/misc/tsget -> tsget.pl):
 /// materializa-os COMO symlink, nunca por `fs::copy` — que seguiria o link.
-fn materialize_etc(jrnl: &mut Journal, ctx: &Ctx, factory: &Path, sub: &str) -> Result<()> {
+fn materialize_etc(
+    jrnl: &mut Journal,
+    ctx: &Ctx,
+    factory: &Path,
+    sub: &str,
+    fabrica_anterior: Option<&str>,
+) -> Result<()> {
     let live = ctx.root.join("etc").join(sub);
 
     // Default que É symlink: materializa como symlink. `fs::copy` seguiria o
@@ -3414,9 +3436,54 @@ fn materialize_etc(jrnl: &mut Journal, ctx: &Ctx, factory: &Path, sub: &str) -> 
     let live_virt = format!("/etc/{sub}");
     rooted_path(&ctx.root, &live_virt)?;
     let factory_hash = sha256_bytes(&read_regular_nofollow(factory)?);
-    let same = confined_regular_content_hash(&ctx.root, &live_virt)?.as_deref()
-        == Some(factory_hash.as_str());
+    let vivo = confined_regular_content_hash(&ctx.root, &live_virt)?;
+    let same = vivo.as_deref() == Some(factory_hash.as_str());
+
+    // COMPARAÇÃO DE TRÊS PONTOS, e o terceiro é o que faltava.
+    //
+    // Antes desta mudança havia só dois: o /etc vivo e a fábrica NOVA. Com
+    // isso, toda alteração de receita fazia os dois diferirem, e o minitrue
+    // lia essa diferença como edição do administrador — escrevia `.new` e
+    // preservava o arquivo. O efeito não era "catraca depois da primeira
+    // divergência": era SEMPRE, já na primeira mudança de receita, para
+    // qualquer arquivo de /etc. Um arquivo materializado uma vez nunca mais
+    // recebia atualização.
+    //
+    // Medido duas vezes nesta árvore. No root de build, 14 arquivos parados na
+    // era 0.1 — /etc/hostname dizia `airstrip1` e /etc/os-release dizia
+    // "Distrópica 0.1 (Airstrip One)" enquanto as receitas estavam na 0.10. E
+    // depois, no bump para 0.11, o /etc/os-release recusou o número novo mesmo
+    // tendo sido igualado à fábrica 0.10 na mão.
+    //
+    // O terceiro ponto é o hash da fábrica ANTERIOR, que o manifesto do
+    // registro já guardava — os arquivos de /usr/share/factory/etc entram no
+    // manifesto, e é só o /etc vivo que não entra. Se o arquivo vivo é
+    // IDÊNTICO à fábrica anterior, ninguém o editou: o default muda e o vivo
+    // acompanha. Se difere das duas, aí sim houve edição, e o `.new` é a
+    // resposta certa.
+    //
+    // Sem fábrica anterior — instalação nova, ou registro v1 sem a entrada —
+    // cai no comportamento antigo, que é o conservador: preserva e avisa.
     if !same {
+        // SELO CONTRA SELO, e não hash de conteúdo contra selo. O `f:` do
+        // manifesto não é o sha256 do arquivo: é
+        // sha256("minitrue-regular-integrity-v2\0" + modo + hash + xattrs).
+        // A primeira versão desta comparação confrontava o selo do manifesto
+        // com o hash de conteúdo do arquivo vivo — duas grandezas diferentes,
+        // que nunca coincidem. O sintoma era a correção não fazer efeito
+        // nenhum, que é pior que não ter escrito: parece implementado.
+        //
+        // Os xattrs entram vazios porque um arquivo de /etc materializado da
+        // fábrica não os carrega; se um dia carregar, o selo diverge e a
+        // decisão cai no lado conservador — preserva e avisa.
+        if let (Some(anterior), Some(conteudo)) = (fabrica_anterior, vivo.as_deref()) {
+            let modo_vivo = fs::symlink_metadata(&live)?.permissions().mode() & 0o7777;
+            let selo_vivo = regular_integrity(modo_vivo, conteudo);
+            if anterior == selo_vivo {
+                jrnl.place_file(&live, factory)?;
+                return Ok(());
+            }
+        }
         let new = live.with_file_name(format!(
             "{}.new",
             live.file_name().unwrap().to_string_lossy()
@@ -8230,6 +8297,74 @@ mod tests {
     }
 
     /// materialize_etc trata symlink em /etc — regressão do openssl (instala
+    /// A COMPARAÇÃO DE TRÊS PONTOS. Sem o terceiro — o selo da fábrica
+    /// ANTERIOR — o /etc congelava na primeira mudança de receita: comparava-se
+    /// o arquivo vivo com a fábrica NOVA, os dois diferiam por definição, e o
+    /// minitrue lia isso como edição do administrador. Medido na árvore: 14
+    /// arquivos parados na era 0.1, com /etc/hostname dizendo `airstrip1`
+    /// enquanto as receitas estavam na 0.10.
+    ///
+    /// Os dois lados importam igualmente, e por isso estão no mesmo teste: o
+    /// default tem de andar quando ninguém mexeu, e a edição do administrador
+    /// tem de sobreviver quando alguém mexeu.
+    #[test]
+    fn materialize_etc_tres_pontos() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-3p-{}-{n}", std::process::id()));
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let fab = root.join("usr/share/factory/etc/exemplo.conf");
+        mkparent(&fab).unwrap();
+        let live = root.join("etc/exemplo.conf");
+        let mut jrnl = Journal::begin(&ctx, "test").unwrap();
+
+        // v1 chega num /etc vazio: materializa direto.
+        fs::write(&fab, b"versao=1\n").unwrap();
+        materialize_etc(&mut jrnl, &ctx, &fab, "exemplo.conf", None).unwrap();
+        assert_eq!(fs::read_to_string(&live).unwrap(), "versao=1\n");
+
+        // O selo da fábrica v1, que é o que o manifesto guardaria.
+        let modo_v1 = fs::symlink_metadata(&fab).unwrap().permissions().mode() & 0o7777;
+        let selo_v1 = regular_integrity(modo_v1, &sha256_bytes(b"versao=1\n"));
+
+        // LADO A: a receita muda para v2 e NINGUÉM editou o vivo. O default
+        // anda e não há .new.
+        fs::write(&fab, b"versao=2\n").unwrap();
+        materialize_etc(&mut jrnl, &ctx, &fab, "exemplo.conf", Some(&selo_v1)).unwrap();
+        assert_eq!(
+            fs::read_to_string(&live).unwrap(),
+            "versao=2\n",
+            "o /etc devia acompanhar a receita quando ninguem o editou"
+        );
+        assert!(
+            !root.join("etc/exemplo.conf.new").exists(),
+            "nao se escreve .new quando nao houve edicao"
+        );
+
+        // LADO B: agora o administrador edita, e a receita vai para v3. A
+        // edicao sobrevive e o default novo fica ao lado.
+        fs::write(&live, b"versao=2\nlocal=sim\n").unwrap();
+        let selo_v2 = regular_integrity(modo_v1, &sha256_bytes(b"versao=2\n"));
+        fs::write(&fab, b"versao=3\n").unwrap();
+        materialize_etc(&mut jrnl, &ctx, &fab, "exemplo.conf", Some(&selo_v2)).unwrap();
+        assert_eq!(
+            fs::read_to_string(&live).unwrap(),
+            "versao=2\nlocal=sim\n",
+            "a edicao do administrador tem de sobreviver"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("etc/exemplo.conf.new")).unwrap(),
+            "versao=3\n",
+            "o default novo vai para .new"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// /etc/ssl/misc/tsget -> tsget.pl, e o alvo ainda não existe na fábrica
     /// quando o link é materializado, pela ordem alfabética da walk). O bug era
     /// `fs::copy` seguir o link e estourar ENOENT.
@@ -8250,7 +8385,7 @@ mod tests {
         // default que é symlink, com ALVO AUSENTE na fábrica (ordem da walk)
         let link = fdir.join("tsget");
         symlink("tsget.pl", &link).unwrap();
-        materialize_etc(&mut jrnl, &ctx, &link, "ssl/misc/tsget")
+        materialize_etc(&mut jrnl, &ctx, &link, "ssl/misc/tsget", None)
             .expect("symlink em /etc não deve dar ENOENT");
         let live = root.join("etc/ssl/misc/tsget");
         let md = fs::symlink_metadata(&live).expect("live materializado");
@@ -8258,7 +8393,7 @@ mod tests {
         assert_eq!(fs::read_link(&live).unwrap(), PathBuf::from("tsget.pl"));
 
         // idempotente: 2ª chamada, mesmo link, sem erro e sem `.new`
-        materialize_etc(&mut jrnl, &ctx, &link, "ssl/misc/tsget").expect("idempotente");
+        materialize_etc(&mut jrnl, &ctx, &link, "ssl/misc/tsget", None).expect("idempotente");
         assert!(
             !root.join("etc/ssl/misc/tsget.new").exists(),
             "sem .new quando o link é igual"
@@ -8268,7 +8403,7 @@ mod tests {
         let freg = root.join("usr/share/factory/etc/ssl/openssl.cnf");
         mkparent(&freg).unwrap();
         fs::write(&freg, b"# cnf\n").unwrap();
-        materialize_etc(&mut jrnl, &ctx, &freg, "ssl/openssl.cnf").unwrap();
+        materialize_etc(&mut jrnl, &ctx, &freg, "ssl/openssl.cnf", None).unwrap();
         assert_eq!(
             fs::read_to_string(root.join("etc/ssl/openssl.cnf")).unwrap(),
             "# cnf\n"
@@ -8280,7 +8415,7 @@ mod tests {
         fs::write(&factory_dangling, b"novo-default\n").unwrap();
         let live_dangling = root.join("etc/app.conf");
         symlink("alvo-ausente", &live_dangling).unwrap();
-        materialize_etc(&mut jrnl, &ctx, &factory_dangling, "app.conf").unwrap();
+        materialize_etc(&mut jrnl, &ctx, &factory_dangling, "app.conf", None).unwrap();
         assert_eq!(
             fs::read_link(&live_dangling).unwrap(),
             PathBuf::from("alvo-ausente")
@@ -8298,7 +8433,7 @@ mod tests {
         let fifo_name = CString::new(live_fifo.as_os_str().as_bytes()).unwrap();
         // SAFETY: CString válida; caminho está dentro do root temporário.
         assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
-        materialize_etc(&mut jrnl, &ctx, &factory_fifo, "pipe.conf").unwrap();
+        materialize_etc(&mut jrnl, &ctx, &factory_fifo, "pipe.conf", None).unwrap();
         assert!(fs::symlink_metadata(&live_fifo)
             .unwrap()
             .file_type()
