@@ -192,12 +192,34 @@ for name in $wanted; do
         rm -rf "$OUTPUT"
         exit 1
     }
-    hash=$(sed -n 's/^SHA256=//p' "$recipe" | head -1)
-    [ -n "$hash" ] || continue
+    # TODOS os hashes, e não o primeiro. O SHA256 de uma receita é uma LISTA
+    # separada por espaço, e pode ocupar várias linhas com contrabarra de
+    # continuação — o rust traz cinco componentes assim. A versão anterior desta
+    # linha fazia `sed ... | head -1` e colhia
+    #
+    #     "1c441e430c1cca...eba \
+    #
+    # com aspa e contrabarra, um nome de arquivo que não existe em cache nenhum.
+    # O erro saía como "artefatos do Mundo A ausentes: rust", que acusa o cache
+    # em vez da leitura — e os cinco arquivos estavam lá o tempo todo.
+    #
+    # O awk junta da linha do SHA256 até a primeira que não continue, e o tr
+    # limpa aspas e contrabarras.
+    hashes=$(awk '/^SHA256=/{p=1} p{print; if ($0 !~ /\\$/) exit}' "$recipe" |
+             sed 's/^SHA256=//' | tr -d '"\\' )
+    [ -n "$hashes" ] || continue
     achou=no
     for source in $SOURCE_CACHE; do
-        [ -e "$source/$hash" ] || continue
-        cp "$source/$hash" "$OUTPUT/$hash"
+        # Todos ou nenhum: um pacote de Mundo A com cinco artefatos e quatro no
+        # cache instalaria pela metade, e o defeito só apareceria no boot.
+        completo=sim
+        for h in $hashes; do
+            [ -e "$source/$h" ] || { completo=nao; break; }
+        done
+        [ "$completo" = sim ] || continue
+        for h in $hashes; do
+            cp "$source/$h" "$OUTPUT/$h"
+        done
         # TODAS as assinaturas associadas, e não só a de nome óbvio. O minitrue
         # indexa o sidecar por sha256(hash_do_artefato + chave + URL) — ver
         # signature_cache_name em minitrue/src/fetch.rs — e NÃO pelo hash do
