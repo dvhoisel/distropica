@@ -14,6 +14,16 @@ BUSYBOX_URL=https://www.busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/
 E2FSPROGS_VERSION=1.47.4
 E2FSPROGS_URL=https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v${E2FSPROGS_VERSION}/e2fsprogs-${E2FSPROGS_VERSION}.tar.xz
 E2FSPROGS_SHA256=fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b
+# ncurses e util-linux vêm em par: o cfdisk é uma interface de texto, e quem a
+# desenha é a ncursesw. Os dois hashes foram conferidos contra terceiros — o do
+# ncurses bate com o pino do Void Linux E com a receita newspeak/ncurses desta
+# árvore; o do util-linux, com o sha256sums.asc assinado do kernel.org.
+NCURSES_VERSION=6.6
+NCURSES_URL=https://ftp.gnu.org/gnu/ncurses/ncurses-${NCURSES_VERSION}.tar.gz
+NCURSES_SHA256=355b4cbbed880b0381a04c46617b7656e362585d52e9cf84a67e2009b749ff11
+UTIL_LINUX_VERSION=2.42.2
+UTIL_LINUX_URL=https://mirrors.edge.kernel.org/pub/linux/utils/util-linux/v2.42/util-linux-${UTIL_LINUX_VERSION}.tar.xz
+UTIL_LINUX_SHA256=03a05d3adf9602ef128f2da05b84b3205ce60c351e5737c0370f74000679ce8a
 RUST_TARGET=x86_64-unknown-linux-musl
 EPOCH=${SOURCE_DATE_EPOCH:-1704067200}
 JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)}
@@ -29,6 +39,9 @@ LINUX_TAR=${DISTROPICA_LINUX_TAR:-}
 BUSYBOX=${DISTROPICA_BUSYBOX:-}
 MINIPAX_BIN=${MINIPAX:-}
 MINITRUE_BIN=${MINITRUE:-}
+E2FSPROGS_TAR=${DISTROPICA_E2FSPROGS_TAR:-}
+NCURSES_TAR=${DISTROPICA_NCURSES_TAR:-}
+UTIL_LINUX_TAR=${DISTROPICA_UTIL_LINUX_TAR:-}
 
 usage() {
     cat <<'EOF'
@@ -41,13 +54,26 @@ uso: bootstrap/live/build-efi --output BOOTX64.EFI [opções]
   --keep-work         preserva o diretório temporário
   --linux-tar ARQ     linux-7.1.4.tar.xz já baixado
   --busybox ARQ       BusyBox x86_64-musl estático já baixado
+  --e2fsprogs-tar ARQ e2fsprogs já baixado (mke2fs/e2fsck estáticos)
+  --ncurses-tar ARQ   ncurses já baixado (a interface do cfdisk)
+  --util-linux-tar ARQ util-linux já baixado (cfdisk e sfdisk estáticos)
   --minipax ARQ       Minipax x86_64-musl estático já compilado
   --minitrue ARQ      Minitrue x86_64-musl estático já compilado
   --install-device D  autoriza instalação automática nesse disco no boot
   --jobs N            paralelismo do kernel
 
-Sem os arquivos opcionais, baixa Linux/BusyBox com hashes pinados e compila
+Sem os arquivos opcionais, baixa tudo com hashes pinados e compila
 Minipax/Minitrue para x86_64-unknown-linux-musl. A saída não é sobrescrita.
+
+O COMPILADOR C MUSL é insumo obrigatório e não vem deste script: mke2fs,
+e2fsck, ncursesw, cfdisk e sfdisk são compilados estáticos porque o initramfs
+não tem glibc. Ele é procurado, nesta ordem, em E2FS_CC, depois nos comandos
+x86_64-linux-musl-gcc e musl-gcc do PATH. Não havendo nenhum, exporte
+
+    ZIG=/caminho/para/zig
+
+e o script monta um invólucro `zig cc -target x86_64-linux-musl`. Esta árvore
+traz o zig em /opt/zig/<versão>/zig de um rootfs Distrópica construído.
 EOF
 }
 
@@ -59,6 +85,9 @@ while [ "$#" -gt 0 ]; do
         --keep-work) KEEP_WORK=yes; shift ;;
         --linux-tar) LINUX_TAR=${2:?}; shift 2 ;;
         --busybox) BUSYBOX=${2:?}; shift 2 ;;
+        --e2fsprogs-tar) E2FSPROGS_TAR=${2:?}; shift 2 ;;
+        --ncurses-tar) NCURSES_TAR=${2:?}; shift 2 ;;
+        --util-linux-tar) UTIL_LINUX_TAR=${2:?}; shift 2 ;;
         --minipax) MINIPAX_BIN=${2:?}; shift 2 ;;
         --minitrue) MINITRUE_BIN=${2:?}; shift 2 ;;
         --install-device) INSTALL_DEVICE=${2:?}; shift 2 ;;
@@ -387,6 +416,116 @@ E2FS_SRC=$(build_static_mke2fs)
 require_static "$E2FS_SRC/misc/mke2fs"
 require_static "$E2FS_SRC/e2fsck/e2fsck"
 
+# ncursesw estático, insumo do cfdisk e de mais nada.
+#
+# --with-fallbacks É OBRIGATÓRIO, e não afinação: o initramfs não tem
+# /usr/share/terminfo, então uma ncurses que dependa da base em disco não
+# desenha uma única linha. Os sete terminais listados ficam COMPILADOS no
+# binário; `linux` cobre o console da máquina real e `vt100`/`xterm` cobrem
+# serial e emulador, que é como o aceite roda.
+build_static_ncursesw() {
+    NCURSES_TAR=${NCURSES_TAR:-$WORK/ncurses-${NCURSES_VERSION}.tar.gz}
+    [ -f "$NCURSES_TAR" ] || fetch "$NCURSES_URL" "$NCURSES_TAR"
+    check_hash "$NCURSES_SHA256" "$NCURSES_TAR"
+    nc_src=$WORK/ncurses-${NCURSES_VERSION}
+    nc_prefix=$WORK/ncursesw-prefix
+    rm -rf -- "$nc_src" "$nc_prefix"
+    mkdir -p "$nc_src" "$nc_prefix"
+    tar -xzf "$NCURSES_TAR" -C "$nc_src" --strip-components=1
+    nc_cc=$(select_e2fs_cc)
+    echo "ncursesw estático: compilando com $nc_cc" >&2
+    (
+        cd "$nc_src"
+        CC="$nc_cc" CFLAGS="-Os" ./configure \
+            --host=x86_64-linux-musl \
+            --prefix="$nc_prefix" \
+            --without-shared --with-normal --enable-widec \
+            --without-cxx --without-cxx-binding --without-ada \
+            --without-manpages --without-progs --without-tests \
+            --without-debug --disable-db-install --enable-termcap \
+            --with-fallbacks=linux,vt100,vt220,xterm,xterm-256color,screen,ansi \
+            >/dev/null
+        make -j"$JOBS" >/dev/null
+        make install >/dev/null
+    ) || { echo "erro: não compilei a ncursesw estática" >&2; exit 1; }
+    # O -ltinfo que o configure do util-linux insiste em pedir resolve AQUI.
+    # Ver o comentário em build_static_cfdisk sobre por que isto não é gambiarra.
+    ln -sf libncursesw.a "$nc_prefix/lib/libtinfo.a"
+    echo "$nc_prefix"
+}
+
+# cfdisk, fdisk e sfdisk estáticos.
+#
+# O BusyBox tem `fdisk` e ele NÃO ESCREVE GPT — é por isso que o particionamento
+# automático vive no Rust do minipax. Para o instalador oferecer particionamento
+# MANUAL, porém, é preciso um particionador de verdade, e o cfdisk é o que
+# existe: interface de texto, entende GPT, e cabe em 0,9 MiB estático.
+#
+# Os três vêm juntos porque a opção do configure é `--enable-fdisks`, no plural,
+# e governa os três. O sfdisk paga o próprio peso: é o particionador
+# SCRIPTÁVEL, e é por ele que um layout se descreve em texto em vez de byte a
+# byte.
+build_static_cfdisk() {
+    ncw_prefix=$(build_static_ncursesw)
+    UTIL_LINUX_TAR=${UTIL_LINUX_TAR:-$WORK/util-linux-${UTIL_LINUX_VERSION}.tar.xz}
+    [ -f "$UTIL_LINUX_TAR" ] || fetch "$UTIL_LINUX_URL" "$UTIL_LINUX_TAR"
+    check_hash "$UTIL_LINUX_SHA256" "$UTIL_LINUX_TAR"
+    ul_src=$WORK/util-linux-${UTIL_LINUX_VERSION}
+    rm -rf -- "$ul_src"
+    mkdir -p "$ul_src"
+    tar -xJf "$UTIL_LINUX_TAR" -C "$ul_src" --strip-components=1
+    ul_cc=$(select_e2fs_cc)
+    echo "cfdisk estático: compilando com $ul_cc" >&2
+    (
+        cd "$ul_src"
+        # --enable-fdisks, NO PLURAL. O `--enable-cfdisk` que a intuição sugere
+        # não existe, e o autoconf o aceita com um "unrecognized options" no
+        # meio de trezentas linhas — a mesma armadilha que o comentário do
+        # mke2fs acima descreve, e na qual se cai de novo se não se CONFERIR a
+        # saída. Por isso a conferência logo abaixo é parte do build, e não
+        # zelo: um configure que ignora uma opção produz um make que não
+        # produz nada e devolve zero.
+        #
+        # --disable-all-programs desliga também as BIBLIOTECAS, então libfdisk,
+        # libsmartcols, libblkid e libuuid voltam explicitamente. Sem elas o
+        # configure para com "libfdisk is needed to build fdisk".
+        CC="$ul_cc" \
+        CFLAGS="-Os -I$ncw_prefix/include -I$ncw_prefix/include/ncursesw" \
+        LDFLAGS="-static -s -L$ncw_prefix/lib" \
+        NCURSESW_CFLAGS="-I$ncw_prefix/include/ncursesw" \
+        NCURSESW_LIBS="-L$ncw_prefix/lib -lncursesw" \
+        ./configure \
+            --host=x86_64-linux-musl \
+            --disable-shared --enable-static \
+            --disable-all-programs --enable-fdisks \
+            --enable-libfdisk --enable-libsmartcols \
+            --enable-libblkid --enable-libuuid \
+            --disable-nls --without-systemd --without-udev \
+            --without-python --without-readline \
+            --without-tinfo --with-ncursesw \
+            > "$WORK/util-linux-configure.log" 2>&1
+        # O configure NÃO honra o NCURSES_LIBS que se passa: ele o recalcula do
+        # `ncursesw6-config` DO HOSPEDEIRO, e de lá vem um `-ltinfo` que não
+        # existe no nosso prefixo musl. O link do libtinfo.a para a
+        # libncursesw.a, feito em build_static_ncursesw, resolve — e resolve
+        # honestamente, porque nesta compilação (--with-normal, sem
+        # --with-termlib) as funções de terminfo ESTÃO dentro da libncursesw.
+        nao_reconhecidas=$(grep -c 'unrecognized options' \
+            "$WORK/util-linux-configure.log" || true)
+        if [ "${nao_reconhecidas:-0}" -ne 0 ]; then
+            echo "erro: o configure do util-linux ignorou opções:" >&2
+            grep 'unrecognized options' "$WORK/util-linux-configure.log" >&2
+            exit 1
+        fi
+        make -j"$JOBS" >/dev/null
+    ) || { echo "erro: não compilei o cfdisk estático" >&2; exit 1; }
+    echo "$ul_src"
+}
+
+UTIL_LINUX_SRC=$(build_static_cfdisk)
+require_static "$UTIL_LINUX_SRC/cfdisk"
+require_static "$UTIL_LINUX_SRC/sfdisk"
+
 INITROOT=$WORK/initramfs
 rm -rf -- "$INITROOT"
 mkdir -p "$INITROOT/bin" "$INITROOT/dev" "$INITROOT/etc" "$INITROOT/proc" \
@@ -399,6 +538,12 @@ cp "$MINITRUE_BIN" "$INITROOT/bin/minitrue"
 cp "$REPO/bootstrap/live/init" "$INITROOT/init"
 cp "$E2FS_SRC/misc/mke2fs" "$INITROOT/bin/mke2fs"
 cp "$E2FS_SRC/e2fsck/e2fsck" "$INITROOT/bin/e2fsck"
+# cfdisk para o particionamento MANUAL do instalador; sfdisk porque é o mesmo
+# build e é ele que permite descrever um layout em texto. O fdisk do util-linux
+# fica de fora: o do BusyBox já cobre o pouco que se faz sem GPT, e cada
+# megabyte no initramfs é carregado pelo firmware a cada boot.
+cp "$UTIL_LINUX_SRC/cfdisk" "$INITROOT/bin/cfdisk"
+cp "$UTIL_LINUX_SRC/sfdisk" "$INITROOT/bin/sfdisk"
 # mke2fs lê os perfis de recurso daqui; sem o arquivo ele cai em defaults
 # compilados e não liga o conjunto de features do ext4.
 cp "$E2FS_SRC/misc/mke2fs.conf" "$INITROOT/etc/mke2fs.conf"
