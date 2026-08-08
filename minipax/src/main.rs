@@ -11,7 +11,8 @@ const USAGE: &str = r#"minipax — o Ministério da Paz
 uso:
   minipax install --target DIR --profile DIR [opções]
   minipax install-media --source DIR --target DIR [opções]
-  minipax partition --disk DISPOSITIVO [--esp-mib N] [--logical-sector N]
+  minipax partition --disk DISPOSITIVO [--esp-mib N] [--swap-mib N]
+      [--logical-sector N]
   minipax media build --profile DIR --mode online|offline \
       --format img|iso --boot-efi ARQ --output ARQ [opções]
   minipax lock --profile DIR [opções]
@@ -300,6 +301,10 @@ fn run_media(args: Vec<String>) -> Result<()> {
 fn run_partition(args: Vec<String>) -> Result<()> {
     let mut disk: Option<PathBuf> = None;
     let mut esp_mib: u64 = 64;
+    // ZERO por default, e o default é deliberado: quem sabe quanta swap fazer é
+    // quem conhece a RAM da máquina, e isso é o instalador — que roda NELA e lê
+    // o /proc/meminfo. Um número fixo aqui seria chute para toda máquina.
+    let mut swap_mib: u64 = 0;
     let mut sector: u64 = minipax::partition::DEFAULT_SECTOR;
     let mut index = 0;
     while index < args.len() {
@@ -318,17 +323,38 @@ fn run_partition(args: Vec<String>) -> Result<()> {
                     .parse()
                     .map_err(|_| anyhow::anyhow!("--logical-sector exige número"))?
             }
+            // Zero desliga a swap. É opção e não default porque quem instala
+            // numa máquina com muita RAM e disco apertado tem motivo legítimo
+            // para não querer uma.
+            "--swap-mib" => {
+                swap_mib = take_value(&args, &mut index, &option)?
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("--swap-mib exige número"))?
+            }
             other => bail!("opção desconhecida {other:?}"),
         }
         index += 1;
     }
     let disk = disk.ok_or_else(|| anyhow::anyhow!("partition exige --disk"))?;
-    let ((esp_first, esp_last), (root_first, root_last)) =
-        minipax::partition::write_layout(&disk, esp_mib, sector)?;
+    let ((esp_first, esp_last), (root_first, root_last), swap) =
+        minipax::partition::write_layout(&disk, esp_mib, swap_mib, sector)?;
     // Saída legível por script: o instalador confere os setores que pediu.
     println!("ESP_FIRST_LBA={esp_first}");
     println!("ESP_LAST_LBA={esp_last}");
     println!("ROOT_FIRST_LBA={root_first}");
     println!("ROOT_LAST_LBA={root_last}");
+    // A swap SEMPRE sai, mesmo ausente: um script que lê estas linhas precisa
+    // distinguir "não pedi" de "pedi e não coube", e uma linha faltando é
+    // indistinguível de uma versão antiga do minipax.
+    match swap {
+        Some((first, last)) => {
+            println!("SWAP_FIRST_LBA={first}");
+            println!("SWAP_LAST_LBA={last}");
+        }
+        None => {
+            println!("SWAP_FIRST_LBA=");
+            println!("SWAP_LAST_LBA=");
+        }
+    }
     Ok(())
 }

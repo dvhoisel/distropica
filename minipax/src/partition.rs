@@ -35,6 +35,12 @@ const TYPE_ESP: [u8; 16] = [
 const TYPE_LINUX: [u8; 16] = [
     0xaf, 0x3d, 0xc6, 0x0f, 0x83, 0x84, 0x72, 0x47, 0x8e, 0x79, 0x3d, 0x69, 0xd8, 0x47, 0x7d, 0xe4,
 ];
+/// `0657FD6D-A4AB-43C4-84E5-0933C84B4F4F` — Linux swap. O tipo importa: é por
+/// ele que o drop-in de boot ACHA a área de troca, sem precisar de fstab nem de
+/// um caminho de dispositivo gravado em lugar nenhum.
+const TYPE_SWAP: [u8; 16] = [
+    0x6d, 0xfd, 0x57, 0x06, 0xab, 0xa4, 0xc4, 0x43, 0x84, 0xe5, 0x09, 0x33, 0xc8, 0x4b, 0x4f, 0x4f,
+];
 
 fn put_u32(buffer: &mut [u8], at: usize, value: u32) {
     buffer[at..at + 4].copy_from_slice(&value.to_le_bytes());
@@ -99,11 +105,29 @@ fn entry(kind: [u8; 16], guid: [u8; 16], first: u64, last: u64, name: &str) -> [
     raw
 }
 
-/// Escreve um GPT com ESP + raiz Linux sobre `target`, apagando o que houver.
+/// Escreve um GPT com ESP + raiz Linux + swap sobre `target`, apagando o que
+/// houver.
 ///
-/// `esp_mib` dimensiona a ESP; a raiz recebe todo o resto do disco. Devolve
-/// (primeiro setor, último setor) de cada partição, na ordem ESP, raiz.
-pub fn write_layout(target: &Path, esp_mib: u64, sector: u64) -> Result<((u64, u64), (u64, u64))> {
+/// `esp_mib` dimensiona a ESP e `swap_mib` a área de troca; a RAIZ recebe todo
+/// o resto do disco. Devolve (primeiro setor, último setor) de cada partição,
+/// na ordem ESP, raiz, swap.
+///
+/// A ORDEM FÍSICA É ESP, RAIZ, SWAP, e a swap fica no fim do disco de
+/// propósito. Não é preferência estética: o `bootstrap/live/init` acha a raiz
+/// como partição 2, e pôr a swap no meio a empurraria para 3 — mudança que não
+/// compra nada e quebra o instalador. Em disco de estado sólido a posição
+/// física é indiferente, e em disco rotativo a swap no fim é o que se faz há
+/// trinta anos.
+///
+/// `swap_mib` igual a zero não cria a partição, e o retorno traz `None`. Isso
+/// não é um caso de teste: é o disco pequeno demais para pagar uma área de
+/// troca, e um sistema sem swap é preferível a um que não coube.
+pub fn write_layout(
+    target: &Path,
+    esp_mib: u64,
+    swap_mib: u64,
+    sector: u64,
+) -> Result<((u64, u64), (u64, u64), Option<(u64, u64)>)> {
     if !matches!(sector, 512 | 1024 | 2048 | 4096) {
         bail!("setor lógico não suportado: {sector}");
     }
@@ -131,12 +155,31 @@ pub fn write_layout(target: &Path, esp_mib: u64, sector: u64) -> Result<((u64, u
     let esp_last = esp_first + esp_sectors - 1;
     let root_first = esp_last + 1;
     // 64 MiB é o mesmo piso que o instalador já exigia da raiz.
-    if root_first + (64 * 1024 * 1024 / sector) > last_usable {
+    let piso_raiz = 64 * 1024 * 1024 / sector;
+    if root_first + piso_raiz > last_usable {
         bail!(
             "disco de {} MiB não comporta ESP de {esp_mib} MiB mais uma raiz utilizável",
             total_bytes / (1024 * 1024)
         );
     }
+
+    // A SWAP SÓ EXISTE SE SOBRAR RAIZ DEPOIS DELA, e o piso da raiz é o mesmo
+    // que já valia. Um disco que só comporta ESP + swap não é um disco onde se
+    // instala esta distro; recusar a swap e seguir é melhor que recusar a
+    // instalação por causa de uma área de troca.
+    let swap_sectors = if swap_mib == 0 {
+        0
+    } else {
+        swap_mib * 1024 * 1024 / sector
+    };
+    let (root_last, swap) = if swap_sectors > 0
+        && root_first + piso_raiz + swap_sectors <= last_usable
+    {
+        let swap_first = last_usable - swap_sectors + 1;
+        (swap_first - 1, Some((swap_first, last_usable)))
+    } else {
+        (last_usable, None)
+    };
 
     let mut entries = vec![0u8; ENTRY_COUNT as usize * ENTRY_SIZE as usize];
     entries[..128].copy_from_slice(&entry(
@@ -150,9 +193,18 @@ pub fn write_layout(target: &Path, esp_mib: u64, sector: u64) -> Result<((u64, u
         TYPE_LINUX,
         random_guid()?,
         root_first,
-        last_usable,
+        root_last,
         "DISTROPICA ROOT",
     ));
+    if let Some((swap_first, swap_last)) = swap {
+        entries[256..384].copy_from_slice(&entry(
+            TYPE_SWAP,
+            random_guid()?,
+            swap_first,
+            swap_last,
+            "DISTROPICA SWAP",
+        ));
+    }
     let mut crc = Crc32::new();
     crc.update(&entries);
     let entries_crc = crc.finalize();
@@ -211,12 +263,57 @@ pub fn write_layout(target: &Path, esp_mib: u64, sector: u64) -> Result<((u64, u
     file.sync_all()
         .context("sincronizando a tabela de partições no dispositivo")?;
 
-    Ok(((esp_first, esp_last), (root_first, last_usable)))
+    Ok(((esp_first, esp_last), (root_first, root_last), swap))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A swap fica no FIM do disco e a raiz recua para deixá-la caber; a raiz
+    /// continua sendo a partição 2, que é o que o instalador assume.
+    #[test]
+    fn escreve_swap_no_fim_sem_mexer_no_indice_da_raiz() {
+        let path = std::env::temp_dir().join(format!("minipax-swap-{}", std::process::id()));
+        let file = File::create(&path).unwrap();
+        file.set_len(1024 * 1024 * 1024).unwrap();
+        drop(file);
+
+        let ((_, esp_last), (root_first, root_last), swap) =
+            write_layout(&path, 64, 128, DEFAULT_SECTOR).unwrap();
+        let (swap_first, swap_last) = swap.expect("swap de 128 MiB cabe em 1 GiB");
+        assert_eq!(root_first, esp_last + 1, "a raiz segue logo apos a ESP");
+        assert_eq!(swap_first, root_last + 1, "a swap comeca onde a raiz acaba");
+        assert_eq!(
+            swap_last - swap_first + 1,
+            128 * 1024 * 1024 / DEFAULT_SECTOR,
+            "a swap nao tem o tamanho pedido"
+        );
+
+        let raw = std::fs::read(&path).unwrap();
+        let entries = &raw[1024..1024 + 384];
+        assert_eq!(&entries[..16], &TYPE_ESP);
+        assert_eq!(&entries[128..144], &TYPE_LINUX, "a raiz precisa ser a 2");
+        assert_eq!(&entries[256..272], &TYPE_SWAP, "a swap precisa ser a 3");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Disco pequeno: a swap cede, a instalação continua. O contrário —
+    /// recusar a instalação por causa da area de troca — seria trocar um
+    /// sistema sem swap por nenhum sistema.
+    #[test]
+    fn swap_grande_demais_cede_o_lugar_a_raiz() {
+        let path = std::env::temp_dir().join(format!("minipax-swap-nao-{}", std::process::id()));
+        let file = File::create(&path).unwrap();
+        file.set_len(200 * 1024 * 1024).unwrap();
+        drop(file);
+
+        let (_, (root_first, root_last), swap) =
+            write_layout(&path, 64, 4096, DEFAULT_SECTOR).unwrap();
+        assert!(swap.is_none(), "swap de 4 GiB nao cabe em disco de 200 MiB");
+        assert!(root_last > root_first, "a raiz precisa sobreviver");
+        std::fs::remove_file(&path).ok();
+    }
 
     #[test]
     fn escreve_gpt_com_esp_e_raiz() {
@@ -226,8 +323,9 @@ mod tests {
         file.set_len(1024 * 1024 * 1024).unwrap();
         drop(file);
 
-        let ((esp_first, esp_last), (root_first, root_last)) =
-            write_layout(&path, 64, DEFAULT_SECTOR).unwrap();
+        let ((esp_first, esp_last), (root_first, root_last), swap) =
+            write_layout(&path, 64, 0, DEFAULT_SECTOR).unwrap();
+        assert!(swap.is_none(), "swap_mib=0 nao deve criar particao");
         assert_eq!(esp_first, 1024 * 1024 / DEFAULT_SECTOR);
         assert_eq!(esp_last - esp_first + 1, 64 * 1024 * 1024 / DEFAULT_SECTOR);
         assert_eq!(root_first, esp_last + 1);
@@ -258,15 +356,15 @@ mod tests {
         file.set_len(80 * 1024 * 1024).unwrap();
         drop(file);
         assert!(
-            write_layout(&path, 8, DEFAULT_SECTOR).is_err(),
+            write_layout(&path, 8, 0, DEFAULT_SECTOR).is_err(),
             "ESP minúscula deveria falhar"
         );
         assert!(
-            write_layout(&path, 64, DEFAULT_SECTOR).is_err(),
+            write_layout(&path, 64, 0, DEFAULT_SECTOR).is_err(),
             "disco sem espaço para raiz deveria falhar"
         );
         assert!(
-            write_layout(&path, 64, 999).is_err(),
+            write_layout(&path, 64, 0, 999).is_err(),
             "setor lógico inválido deveria falhar"
         );
         std::fs::remove_file(&path).ok();
