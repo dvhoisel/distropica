@@ -94,6 +94,20 @@ if [ -n "$sessao_home" ] && [ -d "$sessao_home" ]; then
 fi
 unset sessao_home
 
+# O PATH DA SESSAO GRAFICA, e ele precisa ser posto AQUI porque o /etc/profile
+# nao alcanca este caminho: aquele arquivo e lido por shell de LOGIN, e o
+# terminal do weston abre shell interativo comum, que herda o ambiente do
+# compositor — que herda deste script, que herda do init. Sem esta linha, quem
+# abre o terminal grafico tem um PATH diferente de quem entra pelo console, e a
+# diferenca so aparece quando um comando funciona num e nao no outro.
+#
+# Mesma lista e mesma ordem do /etc/profile. Sao duas verdades sobre o mesmo
+# fato, o que e ruim; e a alternativa — ler o /etc/profile daqui — seria pior,
+# porque este script roda como root ANTES da queda de privilegio e importaria
+# num contexto o ambiente montado para outro.
+PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+
 if [ -x /usr/bin/distropica-desktop ]; then
     for card in /dev/dri/card*; do
         [ -e "$card" ] || continue
@@ -217,6 +231,59 @@ passwd = ssx root.root
 BBCONF
     chmod 0644 "$STAGE/etc/busybox.conf"
 
+    cat > "$STAGE/etc/profile" <<'PROFILE'
+# /etc/profile — o ambiente de um shell de LOGIN.
+#
+# ESTE ARQUIVO NAO EXISTIA, e a ausencia dele custava duas coisas.
+#
+# Sem ele o PATH vinha do default compilado no BusyBox — /usr/local/bin:/bin:
+# /usr/bin — e isso deixava de fora:
+#
+#   /sbin e /usr/sbin, com 837 executaveis desta arvore. O sistema funcionava
+#   porque o rcS e os drop-ins chamam tudo por caminho absoluto, mas quem
+#   digitasse 'poweroff' ou 'connmand' no console recebia "not found";
+#
+#   $HOME/.local/bin, que e onde TODO instalador moderno de ferramenta de
+#   usuario deposita binario — o do Claude Code e o do Codex entre eles.
+#   Instalar qualquer um deles nesta distro terminava com o programa no disco,
+#   funcionando, e invisivel para o shell.
+#
+# A ORDEM IMPORTA e nao e alfabetica: o que o usuario instalou vem PRIMEIRO,
+# para que uma versao mais nova em $HOME preceda a do sistema; depois
+# /usr/local/bin, que e o territorio do administrador; depois o sistema.
+PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+
+# O prompt diz QUEM e ONDE, e o '#' contra '$' distingue root de conta comum —
+# que nesta distro e a diferenca entre poder reescrever o /usr e nao poder.
+if [ "$(id -u 2>/dev/null || echo 0)" = 0 ]; then
+    PS1='\u@\h:\w# '
+else
+    PS1='\u@\h:\w$ '
+fi
+export PS1
+
+# Diretorios do XDG, declarados em vez de deixados ao default de cada programa.
+# Sem eles cada ferramenta escolhe o proprio canto e o /home vira um deposito de
+# pontos-arquivo sem dono.
+XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
+XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+XDG_STATE_HOME=${XDG_STATE_HOME:-$HOME/.local/state}
+XDG_CACHE_HOME=${XDG_CACHE_HOME:-$HOME/.cache}
+export XDG_DATA_HOME XDG_CONFIG_HOME XDG_STATE_HOME XDG_CACHE_HOME
+
+# DROP-INS, pelo mesmo motivo do /etc/rc.d/rcS.d: um pacote que precise por
+# variavel no ambiente nao pode reescrever ESTE arquivo sem colidir com o base,
+# que e o dono dele. Deposita um .sh ali e pronto. O laco tolera o diretorio
+# vazio ou ausente — o base NAO o cria, porque diretorio vazio vira claim de
+# arvore no manifesto v2 e bloquearia quem fosse depositar o primeiro.
+for perfil_d in /etc/profile.d/*.sh; do
+    [ -r "$perfil_d" ] && . "$perfil_d"
+done
+unset perfil_d
+PROFILE
+    chmod 0644 "$STAGE/etc/profile"
+
     mkdir -p "$STAGE/etc/acpi/PWRF"
     cat > "$STAGE/etc/acpi/PWRF/00000080" <<'PWRBTN'
 #!/bin/sh
@@ -240,6 +307,52 @@ PWRBTN
     chmod 0755 "$STAGE/etc/acpi/PWRF/00000080"
 
     mkdir -p "$STAGE/etc/rc.d/rcS.d"
+    cat > "$STAGE/etc/rc.d/rcS.d/02-swap.sh" <<'SWAPDROP'
+# Drop-in de inicializacao: a area de troca. Sourced pelo rcS do base.
+#
+# 02 e cedo de proposito: quanto antes a swap entra, menos chance de o boot
+# esbarrar em falta de memoria antes dela existir — e o que vem depois neste
+# diretorio (dbus, iwd, connman, seatd, weston) e justamente o que aloca.
+#
+# ACHA PELO ROTULO, e nao por caminho de dispositivo. Nada aqui grava
+# /dev/sda3 nem /dev/vda3 num arquivo: o instalador formata com
+# 'mkswap -L DISTROPICA_SWAP' e este laco procura esse rotulo. A diferenca
+# aparece no dia em que o disco muda de nome — de sda para nvme0n1, de vda para
+# sda ao migrar de virtualizador — e um fstab com caminho fixo deixaria a
+# maquina sem troca sem dizer por que.
+#
+# NAO HAVER SWAP NAO E ERRO. Instalacoes anteriores a esta mudanca nao tem
+# nenhuma, disco pequeno recusa a particao, e o sistema roda sem ela.
+if [ -x /sbin/swapon ] || [ -x /usr/sbin/swapon ] || command -v swapon >/dev/null 2>&1; then
+    swap_dev=
+    for bloco in /sys/class/block/*; do
+        nome=$(basename "$bloco")
+        # Discos inteiros nao tem 'partition'; so as particoes tem. Sem este
+        # filtro o blkid seria chamado no disco todo, que e leitura inutil.
+        [ -f "$bloco/partition" ] || continue
+        rotulo=$(blkid -s LABEL -o value "/dev/$nome" 2>/dev/null)
+        tipo=$(blkid -s TYPE -o value "/dev/$nome" 2>/dev/null)
+        if [ "$rotulo" = DISTROPICA_SWAP ] && [ "$tipo" = swap ]; then
+            swap_dev=/dev/$nome
+            break
+        fi
+    done
+    unset bloco nome rotulo tipo
+    if [ -n "$swap_dev" ]; then
+        if swapon "$swap_dev" 2>/dev/null; then
+            # O tamanho sai junto porque 'ligou' sem numero nao permite notar
+            # que a particao ficou de 8 MiB por um erro de calculo.
+            echo "distropica: area de troca ligada em $swap_dev ($(awk -v d="$swap_dev" \
+                '$1 == d { printf "%d MiB", $3 / 1024 }' /proc/swaps 2>/dev/null))"
+        else
+            echo "distropica: swapon falhou em $swap_dev; seguindo sem troca" >&2
+        fi
+    fi
+    unset swap_dev
+fi
+SWAPDROP
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/02-swap.sh"
+
     cat > "$STAGE/etc/rc.d/rcS.d/08-acpid.sh" <<'ACPIDROP'
 # Drop-in de inicializacao: o escutador de eventos ACPI. Sourced pelo rcS.
 #
