@@ -126,8 +126,36 @@ boot_installed() {
     exec switch_root /newroot /sbin/init
 }
 
-find_media() {
-    for device in /dev/sr* /dev/vd*[0-9] /dev/sd*[0-9] /dev/nvme*n*p*; do
+# A VARREDURA INCLUI O DISCO INTEIRO, e nao so as particoes. Isto foi medido, e
+# e o segundo defeito que impedia a instalacao por pendrive — independente da
+# espera do find_media, e escondido atras dela.
+#
+# A ISO que o minipax compoe e hibrida: tem GPT com tres particoes (32 KiB de
+# descritores, a ESP de 64 MiB, e o payload), e ALEM disso um ISO9660 que comeca
+# no offset 0 do arquivo inteiro. Gravada num pendrive com dd, ela vira /dev/sdb
+# com sdb1, sdb2 e sdb3 — e o sistema de arquivos que tem o
+# distropica/media.meta nao esta em NENHUMA delas: esta no /dev/sdb.
+#
+# A lista antiga so casava particoes (/dev/sd*[0-9]), entao num pendrive ela
+# montava a ESP, nao achava o media.meta, e desistia. Medido em QEMU com a ISO
+# ligada como usb-storage:
+#
+#   2.939  sda: sda1 sda2 sda3
+#          distropica-init: payload da mídia não encontrado
+#
+# O disco estava la, enumerado e visivel, e a busca passou por ele sem olhar.
+# Num CD isso nunca aparecia: /dev/sr0 JA e o dispositivo inteiro, e e por ele
+# que o aceite em QEMU sempre entrou.
+#
+# As particoes continuam vindo primeiro: e o caminho provado, e o formato img do
+# minipax poe o payload numa delas. O disco inteiro e a segunda tentativa, nao a
+# primeira. Montar um disco interno por engano nao acontece — o que decide nao e
+# a montagem, e a presenca do media.meta.
+varre_media() {
+    for device in /dev/sr* /dev/vd*[0-9] /dev/sd*[0-9] /dev/nvme*n*p* \
+                  /dev/mmcblk*p* \
+                  /dev/vd[a-z] /dev/sd[a-z] /dev/sd[a-z][a-z] \
+                  /dev/nvme*n[0-9] /dev/mmcblk[0-9]; do
         [ -b "$device" ] || continue
         umount /media 2>/dev/null || true
         if mount -o ro "$device" /media 2>/dev/null &&
@@ -138,6 +166,48 @@ find_media() {
         fi
     done
     umount /media 2>/dev/null || true
+    return 1
+}
+
+# A BUSCA ESPERA, e isto foi medido em máquina de verdade.
+#
+# Um pendrive USB não está pronto quando o init começa. Numa Positivo com
+# controlador OHCI, o log do kernel conta a história inteira:
+#
+#   2.864  distropica-init: payload da mídia nao encontrado
+#          distropica-init: caindo no shell de resgate
+#   3.010  scsi 6:0:0:0: Direct-Access  Generic Flash Disk
+#   3.051  sdb: sdb1 sdb2
+#
+# O instalador desistiu 150 ms ANTES de o disco de onde ele bootou existir.
+# A varredura única encontrou só a sda5 do disco interno, não achou o payload,
+# e caiu no resgate. Em QEMU isso nunca aparece: o virtio-blk está pronto antes
+# do primeiro processo, e por isso 39 corridas de aceite passaram sem tocar
+# neste defeito.
+#
+# O `mdev -s` dentro do laço é o que faz diferença: o nó /dev/sdb1 só existe
+# depois que alguém o cria, e sem repetir a varredura de nós o dispositivo pode
+# estar pronto no kernel e invisível no /dev.
+#
+# 30 s é teto, e não espera fixa: assim que a mídia aparece a função devolve. O
+# preço de errar para mais é meio minuto na pior das hipóteses; o de errar para
+# menos é a máquina não instalar, que foi o que aconteceu.
+find_media() {
+    achado=$(varre_media) && { echo "$achado"; return 0; }
+    limite=$(( $(cut -d. -f1 /proc/uptime) + 30 ))
+    anunciado=nao
+    while [ "$(cut -d. -f1 /proc/uptime)" -lt "$limite" ]; do
+        if [ "$anunciado" = nao ]; then
+            # O aviso vai para o console porque o silêncio aqui é
+            # indistinguível de travamento — e quem está olhando a tela precisa
+            # saber que vale esperar em vez de desligar na tomada.
+            say "aguardando a midia aparecer (USB leva alguns segundos)" >&2
+            anunciado=sim
+        fi
+        sleep 1
+        mdev -s 2>/dev/null || true
+        achado=$(varre_media) && { echo "$achado"; return 0; }
+    done
     return 1
 }
 
