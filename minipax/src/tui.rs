@@ -45,6 +45,35 @@ mod ansi {
     pub const APAGA_LINHA: &str = "\x1b[K";
 }
 
+/// Largura da barra de realce.
+///
+/// FIXA, e não medida com TIOCGWINSZ: um console de 80 colunas é o piso de
+/// tudo o que esta distro roda, e uma barra de 76 mais os dois espaços de
+/// margem fecham nele sem quebrar linha. Medir a janela daria uma barra mais
+/// bonita num framebuffer largo e uma barra QUEBRADA em qualquer console que
+/// mentisse o tamanho — e um menu que quebra linha some com o item de baixo.
+const LARGURA: usize = 76;
+
+/// Pinta a linha inteira em vídeo inverso, preenchida até a largura.
+///
+/// O REALCE É A SELEÇÃO, e isto foi aprendido numa foto de hardware real. A
+/// primeira versão marcava o item escolhido só com um '>' e deixava o RODAPÉ em
+/// vídeo inverso; numa lista de um item — uma máquina, um disco, o caso comum —
+/// a tela mostrava um '>' discreto e uma barra brilhante embaixo, e o operador
+/// leu o que estava brilhando como sendo o que estava selecionado. Concluiu, com
+/// razão, que o disco não estava selecionado.
+///
+/// Agora há exatamente UMA coisa realçada na tela, e ela é a escolha.
+fn realce(texto: &str) -> String {
+    let mut s = String::from(ansi::INVERSO);
+    s.push_str(texto);
+    for _ in texto.chars().count()..LARGURA {
+        s.push(' ');
+    }
+    s.push_str(ansi::NORMAL);
+    s
+}
+
 /// Tecla lida do console, já traduzida.
 ///
 /// As setas chegam como três bytes (`ESC [ A`), e ler byte a byte sem
@@ -72,6 +101,16 @@ pub struct Terminal {
     /// diante de uma leitura vazia: no console ela é o VTIME expirando e a
     /// espera continua; num roteiro de teste é o fim do roteiro.
     tty: bool,
+    /// Quantas teclas já chegaram. Aparece no rodapé como um marcador que gira,
+    /// e não é enfeite.
+    ///
+    /// Num menu de um item só — que é o caso comum: uma máquina, um disco —
+    /// apertar seta não muda nada na tela. Ali "a interface travou" e "a tecla
+    /// não chega até aqui" são visualmente IDÊNTICOS, e essa dúvida custou uma
+    /// viagem a hardware de verdade para ser levantada e não pôde ser resolvida
+    /// à distância. Com o marcador, uma tecla apertada move alguma coisa,
+    /// sempre — inclusive as que o menu ignora.
+    teclas: u64,
 }
 
 impl Terminal {
@@ -106,6 +145,7 @@ impl Terminal {
             entrada: Box::new(std::io::stdin()),
             saida: Box::new(std::io::stdout()),
             tty: true,
+            teclas: 0,
         };
         t.escreve(ansi::CURSOR_OCULTO)?;
         Ok(t)
@@ -141,10 +181,16 @@ impl Terminal {
             buf.push_str("\r\n");
         }
         buf.push_str("\r\n");
-        buf.push_str(ansi::INVERSO);
+        // O rodapé é TEXTO SIMPLES, e deixou de ser barra invertida de
+        // propósito: enquanto ele brilhava, era ele que parecia a seleção. O
+        // único vídeo inverso desta tela é o item escolhido.
         buf.push_str("  ");
         buf.push_str(rodape);
-        buf.push_str(ansi::NORMAL);
+        // ASCII puro de propósito: o console do Linux desenha estes quatro em
+        // qualquer fonte, e um caractere bonito que vira caixinha branca não
+        // serve para dizer "sua tecla chegou".
+        buf.push_str("  ");
+        buf.push(['|', '/', '-', '\\'][(self.teclas % 4) as usize]);
         buf.push_str(ansi::APAGA_LINHA);
         buf.push_str("\r\n");
         self.escreve(&buf)
@@ -181,6 +227,9 @@ impl Terminal {
         let Some(primeiro) = self.le_byte()? else {
             return Ok(Tecla::Esc);
         };
+        // Uma tecla lógica, uma contagem — a seta chega em três bytes e não
+        // pode girar o marcador três vezes.
+        self.teclas = self.teclas.wrapping_add(1);
         match primeiro {
             b'\r' | b'\n' => Ok(Tecla::Enter),
             0x7f | 0x08 => Ok(Tecla::Backspace),
@@ -252,7 +301,10 @@ impl Terminal {
             }
             for (i, (rotulo, detalhe)) in itens.iter().enumerate() {
                 if i == atual {
-                    linhas.push(format!("> {}. {rotulo}", i + 1));
+                    // O '>' fica, junto com o realce: numa tela onde o vídeo
+                    // inverso saia estranho — console serial, emulador pobre —
+                    // ele continua dizendo qual é o item.
+                    linhas.push(realce(&format!("> {}. {rotulo}", i + 1)));
                     if !detalhe.is_empty() {
                         linhas.push(detalhe.clone());
                     }
@@ -400,6 +452,12 @@ impl Write for Tela {
 
 #[cfg(test)]
 impl Tela {
+    /// A saída com as sequências ANSI intactas. Só serve para o que É a
+    /// sequência: provar que o realce está no item certo.
+    pub fn bruto(&self) -> String {
+        String::from_utf8_lossy(&self.0.borrow()).to_string()
+    }
+
     /// Tudo o que foi desenhado, com as sequências ANSI removidas — o que o
     /// teste quer conferir é o TEXTO que o operador leria, e um `\x1b[2J` no
     /// meio da string só atrapalha o `contains`.
@@ -439,6 +497,7 @@ impl Terminal {
             entrada: Box::new(std::io::Cursor::new(roteiro.to_vec())),
             saida: Box::new(tela.clone()),
             tty: false,
+            teclas: 0,
         };
         (term, tela)
     }
@@ -559,6 +618,103 @@ mod tests {
     fn confirmacao_tolera_espaco_em_volta() {
         let (mut t, _) = Terminal::de_roteiro(b" sda \r");
         assert!(t.confirma_digitando("t", &[], "sda").unwrap());
+    }
+
+    /// O QUE BRILHA É O ITEM ESCOLHIDO, e mais nada.
+    ///
+    /// Este teste nasce de uma foto: numa lista de um disco só, o item vinha
+    /// marcado com um '>' discreto e o RODAPÉ vinha em vídeo inverso. Quem
+    /// olhou a tela leu a barra brilhante como sendo a seleção, viu que ela não
+    /// estava no disco, e concluiu que nada estava selecionado. Estava certo
+    /// sobre o que a tela dizia.
+    #[test]
+    fn o_realce_marca_o_item_escolhido_e_nao_o_rodape() {
+        let itens = vec!["/dev/sda  8,5 GB".to_string(), "/dev/sdb  1,0 TB".to_string()];
+        let (mut t, tela) = Terminal::de_roteiro(b"\x1b");
+        assert_eq!(t.menu("escolha do disco", &[], &itens).unwrap(), None);
+        drop(t);
+
+        let bruto = tela.bruto();
+        let mut realcadas: Vec<String> = Vec::new();
+        for linha in bruto.split("\r\n") {
+            if linha.contains(ansi::INVERSO) {
+                // o texto entre o INVERSO e o NORMAL
+                let dentro = linha
+                    .split(ansi::INVERSO)
+                    .nth(1)
+                    .and_then(|r| r.split(ansi::NORMAL).next())
+                    .unwrap_or("");
+                realcadas.push(dentro.trim_end().to_string());
+            }
+        }
+        assert_eq!(realcadas.len(), 1, "mais de uma coisa brilhando: {realcadas:?}");
+        assert!(
+            realcadas[0].contains("/dev/sda"),
+            "o realce não está no item escolhido: {:?}",
+            realcadas[0]
+        );
+        assert!(
+            !bruto
+                .split("\r\n")
+                .any(|l| l.contains("Enter escolhe") && l.contains(ansi::INVERSO)),
+            "o rodapé voltou a brilhar e disputa a atenção com a seleção"
+        );
+    }
+
+    /// A barra precisa ser BARRA: preenchida até a largura, e não só o texto
+    /// invertido. Um realce que termina onde o nome do disco termina fica
+    /// diferente em cada item e não lê como seleção.
+    #[test]
+    fn o_realce_preenche_a_linha_inteira() {
+        let itens = vec!["curto".to_string(), "um item bem mais comprido".to_string()];
+        let (mut t, tela) = Terminal::de_roteiro(b"\x1b");
+        let _ = t.menu("t", &[], &itens).unwrap();
+        drop(t);
+        let bruto = tela.bruto();
+        let barra = bruto
+            .split(ansi::INVERSO)
+            .nth(1)
+            .and_then(|r| r.split(ansi::NORMAL).next())
+            .expect("nenhuma barra desenhada");
+        assert_eq!(barra.chars().count(), LARGURA, "barra com largura irregular");
+    }
+
+    /// O marcador do rodapé precisa MUDAR a cada tecla, inclusive numa tecla
+    /// que o menu ignora. É a única evidência que o operador tem, num menu de
+    /// um item só, de que o teclado chega até aqui — e foi a falta dela que
+    /// tornou "travou" e "não recebe tecla" indistinguíveis em hardware real.
+    #[test]
+    fn marcador_do_rodape_gira_a_cada_tecla() {
+        let itens = vec!["um".to_string()];
+        // 'x' não faz nada no menu; a tela tem de mudar mesmo assim.
+        let (mut t, tela) = Terminal::de_roteiro(b"xx\r");
+        assert_eq!(t.menu("t", &[], &itens).unwrap(), Some(0));
+        drop(t);
+        let visto = tela.texto();
+        let marcadores: String = visto
+            .lines()
+            .filter(|l| l.contains("Enter escolhe"))
+            .filter_map(|l| l.trim_end().chars().last())
+            .collect();
+        // Três quadros desenhados: o inicial e um por tecla ignorada.
+        assert_eq!(marcadores, "|/-", "o marcador não girou: {marcadores:?}");
+    }
+
+    /// Uma seta são três bytes e UMA tecla: o marcador não pode girar três
+    /// vezes, senão ele deixa de contar teclas e passa a contar bytes.
+    #[test]
+    fn seta_gira_o_marcador_uma_vez_so() {
+        let itens = vec!["um".to_string(), "dois".to_string()];
+        let (mut t, tela) = Terminal::de_roteiro(b"\x1b[B\r");
+        assert_eq!(t.menu("t", &[], &itens).unwrap(), Some(1));
+        drop(t);
+        let marcadores: String = tela
+            .texto()
+            .lines()
+            .filter(|l| l.contains("Enter escolhe"))
+            .filter_map(|l| l.trim_end().chars().last())
+            .collect();
+        assert_eq!(marcadores, "|/", "a seta girou o marcador mais de uma vez");
     }
 
     /// Roteiro que acaba no meio devolve Esc, e não gira para sempre. Sem isto
