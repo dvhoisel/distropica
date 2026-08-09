@@ -221,18 +221,158 @@ cmdline_value() {
     return 1
 }
 
-choose_disk() {
-    selected=$(cmdline_value distropica.install 2>/dev/null || true)
-    if [ -n "$selected" ]; then
-        echo "$selected"
-        return 0
+# A ESTIMATIVA DA RAIZ virou funcao porque agora tem TRES leitores: o
+# particionamento automatico, a triagem de particoes do instalador de texto, e a
+# conferencia da raiz escolhida a mao. Tres copias da mesma formula e como se
+# descobre tarde que uma delas ficou para tras — foi o mesmo raciocinio que
+# tirou o 2048 fixo do calculo do primeiro setor utilizavel.
+#
+# O fator 4 sai de MEDICAO: cache de 664 MiB produziu uma arvore de 2096 MiB
+# (razao 3,16), e o resto e margem. O termo separado do cache existe porque
+# durante a instalacao o cache VIVE NO DISCO ALVO ao mesmo tempo que o sistema
+# cresce: o pico e a soma dos dois, e nao o maior deles.
+raiz_minima_bytes() {
+    cache_bytes=$(wc -c < /media/distropica/cache.tar 2>/dev/null || echo 0)
+    case "$cache_bytes" in
+        ""|*[!0-9]*) return 1 ;;
+    esac
+    [ "$cache_bytes" -gt 0 ] || return 1
+    echo $((cache_bytes * 4 + cache_bytes + 536870912))
+}
+
+# A decisao de ONDE e COMO instalar. Preenche as variaveis abaixo e nao escreve
+# nada em stdout — de proposito.
+#
+# A VERSAO ANTERIOR ERA UMA FUNCAO QUE ECOAVA O DISCO, e o chamador a lia com
+# `$( )`. Isso nao sobrevive ao instalador de texto por uma razao de shell e nao
+# de gosto: `$( )` roda em subshell, e variavel atribuida em subshell morre com
+# ele. Como a rota manual precisa devolver quatro coisas (ESP, raiz, troca e se
+# formata a ESP), e nao uma, a saida passou a ser variavel global.
+ROTA=
+INSTALL_DISCO=
+INSTALL_ESP=
+INSTALL_RAIZ=
+INSTALL_TROCA=
+FORMATAR_ESP=sim
+
+# O CAMINHO E PARAMETRO, com o de producao como default. Nao e generalidade
+# gratuita: e o que permite provar esta funcao contra arquivos de amostra sem
+# forjar um /run. O init sempre a chama sem argumento.
+le_decisao() {
+    arquivo=${1:-/run/distropica-instalacao}
+    [ -f "$arquivo" ] && [ ! -L "$arquivo" ] ||
+        rescue "o instalador nao gravou a decisao"
+    [ "$(sed -n '1p' "$arquivo")" = 'DISTROPICA_INSTALL_FORMAT=1' ] ||
+        rescue "decisao de instalacao em formato desconhecido"
+    while IFS='=' read -r chave valor; do
+        case "$chave" in
+            ROTA) ROTA=$valor ;;
+            DISCO) INSTALL_DISCO=$valor ;;
+            ESP) INSTALL_ESP=$valor ;;
+            RAIZ) INSTALL_RAIZ=$valor ;;
+            TROCA) INSTALL_TROCA=$valor ;;
+            FORMATAR_ESP) FORMATAR_ESP=$valor ;;
+        esac
+    done < "$arquivo"
+
+    # Conferir aqui o que o Rust ja conferiu NAO e redundancia inutil: o que o
+    # init executa e este arquivo, e nao a tela que o produziu. Se um dia algo
+    # mais escrever nele, e este bloco que decide se o disco vai ser apagado.
+    case "$ROTA" in
+        disco-inteiro|manual) ;;
+        *) rescue "rota de instalacao desconhecida: $ROTA" ;;
+    esac
+    case "$INSTALL_DISCO" in
+        /dev/?*) ;;
+        *) rescue "disco fora de /dev na decisao: $INSTALL_DISCO" ;;
+    esac
+    [ -b "$INSTALL_DISCO" ] || rescue "$INSTALL_DISCO nao e dispositivo de bloco"
+    if [ "$ROTA" = manual ]; then
+        for escolhida in "$INSTALL_ESP" "$INSTALL_RAIZ"; do
+            case "$escolhida" in
+                /dev/?*) ;;
+                *) rescue "particao fora de /dev na decisao: $escolhida" ;;
+            esac
+            [ -b "$escolhida" ] || rescue "$escolhida nao e dispositivo de bloco"
+        done
+        [ "$INSTALL_ESP" != "$INSTALL_RAIZ" ] ||
+            rescue "ESP e raiz sao a mesma particao"
+        if [ -n "$INSTALL_TROCA" ]; then
+            [ -b "$INSTALL_TROCA" ] ||
+                rescue "$INSTALL_TROCA nao e dispositivo de bloco"
+            [ "$INSTALL_TROCA" != "$INSTALL_ESP" ] &&
+            [ "$INSTALL_TROCA" != "$INSTALL_RAIZ" ] ||
+                rescue "a area de troca repete outra particao"
+        fi
+        case "$FORMATAR_ESP" in
+            sim|nao) ;;
+            *) rescue "FORMATAR_ESP invalido: $FORMATAR_ESP" ;;
+        esac
     fi
+}
+
+# O prompt digitado da 0.11, mantido como REDE e nao como caminho principal.
+#
+# Ele existe porque um defeito no instalador de texto nao pode custar a
+# instalacao: sem isto, um erro na TUI derruba a maquina no shell de resgate, e
+# quem esta na frente dela ja gravou o pendrive e reiniciou. Com isto, o pior
+# caso volta a ser exatamente o que a 0.11 fazia.
+prompt_disk_antigo() {
     say "nenhum disco foi autorizado pelo kernel cmdline" >&2
     fdisk -l >&2 2>/dev/null || true
     echo "Digite o dispositivo inteiro a APAGAR (ex.: /dev/vda), ou 'shell':" >&2
     read -r selected
     [ "$selected" != shell ] || rescue "instalação não autorizada"
-    echo "$selected"
+    ROTA=disco-inteiro
+    INSTALL_DISCO=$selected
+}
+
+decide_instalacao() {
+    selected=$(cmdline_value distropica.install 2>/dev/null || true)
+    if [ -n "$selected" ]; then
+        ROTA=disco-inteiro
+        INSTALL_DISCO=$selected
+        return 0
+    fi
+
+    # Os dois numeros que o instalador de texto usa para triar particoes. Sao
+    # medidos AQUI, na midia, e passados adiante: o Rust nao tem como saber o
+    # tamanho deste EFI nem deste cache, e um default no Rust seria um palpite
+    # se fingindo de medicao.
+    efi_bytes=$(wc -c < /media/EFI/BOOT/BOOTX64.EFI 2>/dev/null || echo 0)
+    raiz_minima=$(raiz_minima_bytes) ||
+        rescue "nao consegui estimar o tamanho minimo da raiz"
+
+    rm -f -- /run/distropica-instalacao
+    # </dev/console >/dev/console: a TUI DESENHA no stdout e LE do stdin, e o
+    # console e o unico lugar onde os dois fazem sentido. Sem isto, uma midia
+    # cujo /dev/console e a serial deixaria o operador diante de um monitor
+    # preto, com a interface indo para um cabo que nao existe.
+    #
+    # O STATUS E COLHIDO NO `||`, e nao depois de um `if`. Por POSIX, um `if`
+    # cujo comando falhou e que nao tem `else` devolve ZERO — o `$?` depois do
+    # `fi` seria o do `if`, e nao o do minipax. O codigo 2, que e a desistencia
+    # deliberada do operador, nunca chegaria aqui, e desistir viraria "instalador
+    # falhou" seguido do prompt antigo que ele acabou de recusar.
+    status=0
+    /bin/minipax install-disk \
+        --saida /run/distropica-instalacao \
+        --sysfs /sys/class/block \
+        --midia "/dev/$(whole_disk_name "$media_device")" \
+        --efi-bytes "$efi_bytes" \
+        --esp-mib 64 \
+        --raiz-minima-bytes "$raiz_minima" \
+        --cfdisk /bin/cfdisk \
+        </dev/console >/dev/console 2>&1 || status=$?
+    if [ "$status" = 0 ]; then
+        le_decisao
+        return 0
+    fi
+    # 2 e desistencia deliberada do operador, e desistir nao e defeito: nao ha
+    # o que consertar nem por que insistir num prompt que ele acabou de recusar.
+    [ "$status" != 2 ] || rescue "instalacao cancelada pelo operador"
+    say "o instalador de texto falhou (codigo $status); voltando ao modo digitado"
+    prompt_disk_antigo
 }
 
 partition_disk() {
@@ -269,30 +409,20 @@ partition_disk() {
     # arvore de 2096 MiB (razao 3,16), e o resto e margem. Errar para MAIS aqui
     # e barato (recusa um disco pequeno que talvez coubesse); errar para menos
     # seria apagar o disco e encher no meio.
-    cache_bytes=$(wc -c < /media/distropica/cache.tar 2>/dev/null || echo 0)
     efi_bytes=$(wc -c < /media/EFI/BOOT/BOOTX64.EFI 2>/dev/null || echo 0)
-    for measured_size in "$disk_sectors" "$cache_bytes" "$efi_bytes"; do
+    for measured_size in "$disk_sectors" "$efi_bytes"; do
         case "$measured_size" in
             ""|*[!0-9]*) rescue "não determinei os tamanhos antes do particionamento" ;;
         esac
     done
-    [ "$cache_bytes" -gt 0 ] || rescue "cache.tar da mídia não foi medido"
     disk_bytes=$((disk_sectors * 512))
     root_capacity=$((disk_bytes - root_start * logical_sector))
-    # Reserva 512 MiB além da estimativa: metadados e o journal do ext4, que
-    # chega a 128 MiB em sistema de arquivos grande.
-    #
-    # O TERMO DO CACHE E SEPARADO, e virou separado por medicao. Ele estava
-    # embutido na reserva de 512 MiB, e isso subestimava: durante a instalacao
-    # o cache VIVE NO DISCO ALVO ao mesmo tempo que o sistema instalado cresce,
-    # entao o pico e a SOMA dos dois, e nao o maior deles.
-    #
-    # Medido na midia com as toolchains: cache de 868 MiB, sistema instalado de
-    # 3342 MiB, pico real de ~4210 MiB. A formula antiga dava 3984 — aprovava
-    # um disco onde a instalacao morria com "No space left on device" no pacote
-    # 85 de 99. So nao aparecia antes porque, sem particao de troca, sobrava
-    # disco de sobra para esconder o erro.
-    required_root=$((cache_bytes * 4 + cache_bytes + 536870912))
+    # A formula mora em raiz_minima_bytes(), que tem tres leitores. Ver o
+    # comentario la: 512 MiB de reserva para journal e metadados, e o termo do
+    # cache separado porque durante a instalacao os dois ocupam o disco ao mesmo
+    # tempo.
+    required_root=$(raiz_minima_bytes) ||
+        rescue "cache.tar da mídia não foi medido"
     [ "$root_capacity" -ge "$required_root" ] ||
         rescue "disco pequeno demais: preciso de ao menos $((required_root / 1048576)) MiB na raiz"
     # A ESP tem 64 MiB; preserve pelo menos 4 MiB para FAT/metadados.
@@ -418,12 +548,23 @@ partition_disk() {
     echo "$esp $root"
 }
 
-# A senha e pedida ANTES do caminho do disco, e o motivo nao e so de gosto:
-# assim TODA a interacao humana acontece antes de qualquer escrita, e a partir
-# do disco escolhido a instalacao corre sozinha. Na ordem anterior a senha era
-# pedida no fim, ja com o disco apagado — quem se distraisse e voltasse depois
+# A senha e a ULTIMA pergunta, e vem logo antes da primeira escrita destrutiva.
+#
+# O invariante que importa nunca mudou: nenhum `mkfs` roda enquanto houver algo
+# a perguntar. Ele existe por uma falha concreta — numa ordem antiga a senha era
+# pedida no fim, ja com o disco apagado, e quem se distraisse e voltasse depois
 # encontrava a maquina parada num prompt, com o disco antigo destruido e o
 # sistema novo pela metade.
+#
+# O QUE MUDOU FOI A POSICAO RELATIVA AO INSTALADOR DE TEXTO. Ela vinha antes da
+# escolha do disco, e isso funcionava quando a escolha era uma linha digitada;
+# com uma tela cheia, o operador era recebido por um "Nova senha de root:" solto,
+# sem contexto nenhum, antes de saber sequer se havia disco onde instalar. Agora
+# ele escolhe tudo primeiro e a senha fecha a sequencia.
+#
+# Na rota manual o cfdisk ja gravou uma tabela de particoes quando chegamos
+# aqui, mas isso e escrita do operador, dentro de outro programa, e por vontade
+# dele — nenhum sistema de arquivos foi formatado ainda.
 #
 # Colher cedo permite tambem nao CARREGAR a senha em claro pela instalacao
 # inteira: ela e cifrada no ato, aqui, e o que atravessa e apenas o hash. O
@@ -543,11 +684,97 @@ validate_media() {
     say "mídia validada; nenhum disco foi alterado"
 }
 
+# TUDO O QUE PODE REPROVAR A ROTA MANUAL, e nada que escreva.
+#
+# Esta funcao existe separada da que formata por causa de ONDE ela e chamada:
+# logo depois da decisao e ANTES da senha. Uma ESP sem FAT, uma raiz pequena
+# demais ou uma particao no disco da propria midia sao erros do operador, e
+# erro do operador tem de aparecer enquanto ele ainda esta escolhendo — nao
+# depois de digitar a senha duas vezes, e muito menos depois do primeiro mkfs.
+#
+# O teste de montar a ESP preservada e o exemplo que justifica tudo isso: uma
+# particao marcada como "EFI System" no cfdisk mas nunca formatada nao tem FAT
+# nenhum, e sem este teste o sintoma so apareceria no `mount` da ESP, com a raiz
+# ja formatada e o sistema anterior ja destruido.
+confere_particoes_escolhidas() {
+    [ "$ROTA" = manual ] || return 0
+
+    midia_inteiro=$(whole_disk_name "$media_device")
+    for escolhida in "$INSTALL_ESP" "$INSTALL_RAIZ" $INSTALL_TROCA; do
+        [ -b "$escolhida" ] || rescue "$escolhida não é dispositivo de bloco"
+        [ "$(whole_disk_name "$escolhida")" != "$midia_inteiro" ] ||
+            rescue "recusei formatar uma partição do disco que contém a própria mídia"
+    done
+
+    # A raiz precisa caber o sistema. O instalador de texto ja recusa uma
+    # particao pequena, e esta conferencia continua aqui porque quem executa e
+    # este script: se um dia a decisao vier de outro lugar, e este `[ ]` que
+    # impede a instalacao de morrer com ENOSPC no pacote 85.
+    raiz_nome=${INSTALL_RAIZ#/dev/}
+    raiz_setores=$(cat "/sys/class/block/$raiz_nome/size" 2>/dev/null || echo 0)
+    case "$raiz_setores" in
+        ""|*[!0-9]*) rescue "não medi a partição raiz $INSTALL_RAIZ" ;;
+    esac
+    preciso=$(raiz_minima_bytes) || rescue "cache.tar da mídia não foi medido"
+    # sysfs expõe `size` sempre em setores de 512 bytes, inclusive em 4Kn.
+    [ $((raiz_setores * 512)) -ge "$preciso" ] ||
+        rescue "a raiz escolhida tem menos que os $((preciso / 1048576)) MiB necessários"
+
+    efi_bytes=$(wc -c < /media/EFI/BOOT/BOOTX64.EFI 2>/dev/null || echo 0)
+    esp_nome=${INSTALL_ESP#/dev/}
+    esp_setores=$(cat "/sys/class/block/$esp_nome/size" 2>/dev/null || echo 0)
+    case "$esp_setores" in
+        ""|*[!0-9]*) rescue "não medi a ESP $INSTALL_ESP" ;;
+    esac
+    [ $((esp_setores * 512)) -ge $((efi_bytes + 4194304)) ] ||
+        rescue "a ESP escolhida não comporta o BOOTX64.EFI com folga de FAT"
+
+    if [ "$FORMATAR_ESP" = nao ]; then
+        mkdir -p /run/esp-teste
+        mount -t vfat -o ro "$INSTALL_ESP" /run/esp-teste 2>/dev/null ||
+            rescue "a ESP $INSTALL_ESP não tem FAT montável; refaça escolhendo formatá-la"
+        umount /run/esp-teste || rescue "não desmontei a ESP de teste"
+        say "ESP $INSTALL_ESP tem FAT montável; será preservada"
+    fi
+    say "partições escolhidas conferidas; nada foi escrito ainda"
+}
+
+# A rota manual: as particoes ja existem, feitas pelo operador no cfdisk, e o
+# que falta e formata-las. Toda recusa possivel ja aconteceu em
+# confere_particoes_escolhidas; daqui para baixo so ha escrita.
+formata_particoes_escolhidas() {
+    if [ "$FORMATAR_ESP" = sim ]; then
+        mkfs.vfat -n DISTROPICA_ESP "$INSTALL_ESP" >&2 || rescue "mkfs.vfat falhou"
+    else
+        say "preservando o conteúdo da ESP $INSTALL_ESP"
+    fi
+
+    mkfs.ext4 -F -L DISTROPICA_ROOT -m 0 "$INSTALL_RAIZ" >&2 || rescue "mkfs.ext4 falhou"
+
+    if [ -n "$INSTALL_TROCA" ]; then
+        mkswap -L DISTROPICA_SWAP "$INSTALL_TROCA" >&2 ||
+            rescue "mkswap falhou em $INSTALL_TROCA"
+        say "area de troca formatada em $INSTALL_TROCA"
+    else
+        say "instalando sem area de troca, como escolhido"
+    fi
+}
+
 install_system() {
-    disk=$1
-    partitions=$(partition_disk "$disk")
-    esp=${partitions%% *}
-    root=${partitions#* }
+    disk=$INSTALL_DISCO
+    case "$ROTA" in
+        disco-inteiro)
+            partitions=$(partition_disk "$disk")
+            esp=${partitions%% *}
+            root=${partitions#* }
+            ;;
+        manual)
+            formata_particoes_escolhidas
+            esp=$INSTALL_ESP
+            root=$INSTALL_RAIZ
+            ;;
+        *) rescue "rota de instalação desconhecida: $ROTA" ;;
+    esac
     mount "$root" /target || rescue "não montei $root"
 
     # A instalacao acontece DIRETO no disco montado, e nao numa copia em RAM.
@@ -630,7 +857,8 @@ fi
 media_device=$(find_media) || rescue "payload da mídia não encontrado"
 say "payload encontrado em $media_device"
 validate_media
+decide_instalacao
+confere_particoes_escolhidas
 ask_root_password
-install_disk=$(choose_disk)
-install_system "$install_disk"
+install_system
 rescue "o instalador retornou inesperadamente"
