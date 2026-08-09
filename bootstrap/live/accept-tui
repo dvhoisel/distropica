@@ -223,9 +223,9 @@ echo "accept-tui:   instalador de texto aberto no console"
 digita '\r'
 espera 'particionamento' 60 || falha "a tela de particionamento não veio"
 digita '\r'
-espera 'digite vda para confirmar' 60 || falha "a confirmação não veio"
+espera 'Enter APAGA o disco' 60 || falha "a confirmação não veio"
 echo "accept-tui:   confirmando a destruição de /dev/vda"
-digita 'vda\r'
+digita '\r'
 espera 'INSTALLATION COMPLETE' "$CENARIO_TIMEOUT" ||
     falha "a instalação pela rota automática não terminou"
 echo "accept-tui:   cenário 1 OK — instalou pelo instalador de texto"
@@ -275,9 +275,9 @@ espera 'partição raiz' 60 || falha "a tela da raiz não veio"
 digita '\r'
 espera 'área de troca' 60 || falha "a tela da área de troca não veio"
 digita '1'
-espera 'digite vda para confirmar' 60 || falha "a confirmação manual não veio"
+espera 'Enter FORMATA as partições' 60 || falha "a confirmação manual não veio"
 echo "accept-tui:   confirmando o plano manual"
-digita 'vda\r'
+digita '\r'
 espera 'INSTALLATION COMPLETE' "$CENARIO_TIMEOUT" ||
     falha "a instalação pela rota manual não terminou"
 echo "accept-tui:   cenário 2 OK — instalou pelas partições escolhidas à mão"

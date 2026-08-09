@@ -728,6 +728,26 @@ validate_media() {
 confere_particoes_escolhidas() {
     [ "$ROTA" = manual ] || return 0
 
+    # A TABELA PRECISA SER GPT, e isto se confere lendo o disco — nao a saida
+    # do sfdisk. A assinatura 'EFI PART' esta no comeco do segundo setor
+    # LOGICO, e comparar oito bytes nao depende de idioma, de versao do
+    # util-linux nem de o cfdisk ter sido compilado com NLS.
+    #
+    # Vale porque esta distro so arranca por UEFI: o firmware procura a ESP
+    # numa GPT. Um rotulo MBR pode ate funcionar em algumas maquinas, por
+    # tolerancia do firmware, e falhar silenciosamente na seguinte — e o
+    # sintoma seria "instalou e nao boota", que e o pior de diagnosticar.
+    disco_nome=${INSTALL_DISCO#/dev/}
+    setor_logico=$(cat "/sys/class/block/$disco_nome/queue/logical_block_size" 2>/dev/null || echo 512)
+    case "$setor_logico" in
+        512|1024|2048|4096) ;;
+        *) rescue "tamanho de setor lógico não suportado: $setor_logico" ;;
+    esac
+    assinatura=$(dd if="$INSTALL_DISCO" bs=1 skip="$setor_logico" count=8 2>/dev/null)
+    [ "$assinatura" = "EFI PART" ] ||
+        rescue "$INSTALL_DISCO não tem tabela GPT; refaça no cfdisk escolhendo o rótulo gpt"
+    say "tabela GPT confirmada em $INSTALL_DISCO"
+
     midia_inteiro=$(whole_disk_name "$media_device")
     for escolhida in "$INSTALL_ESP" "$INSTALL_RAIZ" $INSTALL_TROCA; do
         [ -b "$escolhida" ] || rescue "$escolhida não é dispositivo de bloco"
