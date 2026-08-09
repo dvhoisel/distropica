@@ -27,7 +27,36 @@ say() {
     fi
 }
 
+# O PRINTK PINTA POR CIMA DA TELA, e diante de uma interface de tela cheia isso
+# nao e ruido: e a interface sendo destruida. Medido em VirtualBox — o
+# instalador desenhou a lista de discos e, aos 124 s, cinco linhas de
+# 'clocksource: Marking clocksource tsc unstable' escreveram por cima dela, com
+# o operador no meio de uma escolha que apaga disco.
+#
+# Silenciar so a parte INTERATIVA, e nao o boot inteiro: um `quiet` no cmdline
+# apagaria tambem as linhas do arranque, que sao o diagnostico de quem tenta
+# entender por que a maquina nao instalou — foi lendo exatamente essas linhas
+# que os dois defeitos da busca de midia apareceram.
+#
+# As mensagens nao se perdem: elas continuam no buffer do kernel e no /dev/kmsg.
+# O que muda aqui e so quem as ESCREVE no console.
+printk_original=
+silencia_kernel() {
+    [ -w /proc/sys/kernel/printk ] || return 0
+    printk_original=$(cut -f1 /proc/sys/kernel/printk 2>/dev/null || echo)
+    echo 1 > /proc/sys/kernel/printk 2>/dev/null || true
+}
+
+restaura_kernel() {
+    [ -n "${printk_original:-}" ] || return 0
+    echo "$printk_original" > /proc/sys/kernel/printk 2>/dev/null || true
+    printk_original=
+}
+
 rescue() {
+    # Quem cai aqui quer ver TUDO: se o console estava silenciado por causa da
+    # tela do instalador, devolve-se o nivel antes de qualquer mensagem.
+    restaura_kernel
     say "$*"
     say "caindo no shell de resgate; saia para reiniciar"
     setsid cttyhack sh || true
@@ -857,8 +886,13 @@ fi
 media_device=$(find_media) || rescue "payload da mídia não encontrado"
 say "payload encontrado em $media_device"
 validate_media
+# A janela de silencio comeca aqui e acaba antes de instalar: durante a
+# instalacao as mensagens do kernel voltam a ser diagnostico util, e o que
+# escreve na tela ali sao linhas, nao uma interface.
+silencia_kernel
 decide_instalacao
 confere_particoes_escolhidas
 ask_root_password
+restaura_kernel
 install_system
 rescue "o instalador retornou inesperadamente"
