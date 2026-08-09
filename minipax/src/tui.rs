@@ -83,6 +83,10 @@ fn realce(texto: &str) -> String {
 pub enum Tecla {
     Cima,
     Baixo,
+    /// Seta para a esquerda. VOLTAR, e sinônimo de Esc em toda tela — quem
+    /// navega por setas espera que a da esquerda desfaça a da direita, e não
+    /// que só o Esc sirva.
+    Esquerda,
     Enter,
     Esc,
     Backspace,
@@ -204,10 +208,17 @@ impl Terminal {
     fn le_byte(&mut self) -> Result<Option<u8>> {
         let mut b = [0u8; 1];
         loop {
-            match self.entrada.read(&mut b)? {
-                1 => return Ok(Some(b[0])),
-                _ if self.tty => continue,
-                _ => return Ok(None),
+            match self.entrada.read(&mut b) {
+                Ok(1) => return Ok(Some(b[0])),
+                // Console: leitura vazia é o VTIME expirando, e a espera segue.
+                Ok(_) if self.tty => continue,
+                // Roteiro de teste: vazio aqui é o fim de verdade.
+                Ok(_) => return Ok(None),
+                // A PAUSA ENTRE TECLAS de um roteiro. Num console ela é tempo
+                // passando; aqui é um `WouldBlock`, e significa a mesma coisa:
+                // nada AGORA, mas ainda há o que vir.
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(e) => return Err(e.into()),
             }
         }
     }
@@ -216,16 +227,28 @@ impl Terminal {
     /// dentro do VTIME, o ESC era um Esc solto.
     fn le_byte_curto(&mut self) -> Result<Option<u8>> {
         let mut b = [0u8; 1];
-        match self.entrada.read(&mut b)? {
-            1 => Ok(Some(b[0])),
-            _ => Ok(None),
+        match self.entrada.read(&mut b) {
+            Ok(1) => Ok(Some(b[0])),
+            Ok(_) => Ok(None),
+            // Pausa entre teclas: para o desempate do ESC ela vale exatamente
+            // como o VTIME expirando — o ESC era um Esc solto.
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(e) => Err(e.into()),
         }
     }
 
     /// Lê uma tecla, traduzindo as sequências de escape das setas.
     pub fn tecla(&mut self) -> Result<Tecla> {
         let Some(primeiro) = self.le_byte()? else {
-            return Ok(Tecla::Esc);
+            // SÓ ACONTECE FORA DE UM CONSOLE: num tty não existe fim de
+            // entrada, e o `le_byte` fica esperando. Aqui é o roteiro de um
+            // teste que acabou no meio da sessão.
+            //
+            // Devolver Esc neste ponto era o que escondia laço infinito: a tela
+            // pedia tecla, recebia Esc, voltava para a tela anterior, pedia
+            // tecla de novo — e a suíte PENDURAVA em vez de reprovar. Erro aqui
+            // faz o teste falhar dizendo o que faltou.
+            anyhow::bail!("o roteiro de teclas acabou no meio da sessão");
         };
         // Uma tecla lógica, uma contagem — a seta chega em três bytes e não
         // pode girar o marcador três vezes.
@@ -241,6 +264,7 @@ impl Terminal {
                 Some(b'[') => match self.le_byte_curto()? {
                     Some(b'A') => Ok(Tecla::Cima),
                     Some(b'B') => Ok(Tecla::Baixo),
+                    Some(b'D') => Ok(Tecla::Esquerda),
                     _ => Ok(Tecla::Outra),
                 },
                 Some(_) => Ok(Tecla::Outra),
@@ -252,14 +276,17 @@ impl Terminal {
         }
     }
 
-    /// Tela de aviso: mostra e espera o Enter. Serve para erro e para
-    /// explicação — um instalador que recusa uma escolha sem dizer por quê
-    /// parece quebrado.
-    pub fn aviso(&mut self, titulo: &str, linhas: &[String]) -> Result<()> {
-        self.quadro(titulo, linhas, "Enter continua")?;
+    /// Tela de aviso: mostra, e diz se o operador seguiu ou voltou.
+    ///
+    /// `true` = Enter, siga; `false` = Esc ou seta esquerda, volte. Nas telas de
+    /// erro os dois dão no mesmo e o retorno é ignorado; nas de explicação —
+    /// a do cfdisk é a que importa — voltar é uma saída legítima.
+    pub fn aviso(&mut self, titulo: &str, linhas: &[String]) -> Result<bool> {
         loop {
+            self.quadro(titulo, linhas, "Enter continua · Esc volta")?;
             match self.tecla()? {
-                Tecla::Enter | Tecla::Esc => return Ok(()),
+                Tecla::Enter => return Ok(true),
+                Tecla::Esc | Tecla::Esquerda => return Ok(false),
                 _ => {}
             }
         }
@@ -299,25 +326,41 @@ impl Terminal {
             if !intro.is_empty() {
                 linhas.push(String::new());
             }
+            // A ALTURA DE CADA ITEM NÃO DEPENDE DE QUAL ESTÁ ESCOLHIDO, e isto
+            // é requisito e não estilo.
+            //
+            // A primeira versão só desenhava a linha de detalhe SOB O ITEM EM
+            // FOCO. O resultado é que o item 2 ficava numa linha quando o 1
+            // estava escolhido e noutra quando ele próprio estava: a lista
+            // dançava embaixo do dedo de quem aperta a seta, e o alvo se move
+            // enquanto se mira nele. É o mesmo defeito que o `disco.rs` já
+            // evitava na horizontal ao ordenar os discos por nome — "uma ordem
+            // que dança faz o operador escolher o disco errado" —, e ele voltou
+            // pela vertical.
+            //
+            // Se ALGUM item tem detalhe, TODOS ganham a linha, ainda que vazia.
+            // Como a linha existe de qualquer jeito, mostrar o detalhe custa
+            // zero em altura e informa mais que deixá-la em branco.
+            let com_detalhe = itens.iter().any(|(_, d)| !d.is_empty());
             for (i, (rotulo, detalhe)) in itens.iter().enumerate() {
                 if i == atual {
                     // O '>' fica, junto com o realce: numa tela onde o vídeo
                     // inverso saia estranho — console serial, emulador pobre —
                     // ele continua dizendo qual é o item.
                     linhas.push(realce(&format!("> {}. {rotulo}", i + 1)));
-                    if !detalhe.is_empty() {
-                        linhas.push(detalhe.clone());
-                    }
                 } else {
                     linhas.push(format!("  {}. {rotulo}", i + 1));
                 }
+                if com_detalhe {
+                    linhas.push(detalhe.clone());
+                }
             }
-            self.quadro(titulo, &linhas, "setas movem · Enter escolhe · Esc cancela")?;
+            self.quadro(titulo, &linhas, "setas movem · Enter escolhe · Esc volta")?;
             match self.tecla()? {
                 Tecla::Cima => atual = if atual == 0 { itens.len() - 1 } else { atual - 1 },
                 Tecla::Baixo => atual = (atual + 1) % itens.len(),
                 Tecla::Enter => return Ok(Some(atual)),
-                Tecla::Esc => return Ok(None),
+                Tecla::Esc | Tecla::Esquerda => return Ok(None),
                 Tecla::Char(c) if c.is_ascii_digit() => {
                     let n = c as usize - '0' as usize;
                     if n >= 1 && n <= itens.len() {
@@ -356,7 +399,7 @@ impl Terminal {
             self.quadro(titulo, &linhas, "Enter confirma · Esc cancela")?;
             match self.tecla()? {
                 Tecla::Enter => return Ok(Some(valor)),
-                Tecla::Esc => return Ok(None),
+                Tecla::Esc | Tecla::Esquerda => return Ok(None),
                 Tecla::Backspace => {
                     valor.pop();
                 }
@@ -366,21 +409,51 @@ impl Terminal {
         }
     }
 
-    /// Confirmação explícita por PALAVRA DIGITADA, e não por tecla.
+    /// Joga fora o que já estava digitado, antes de a tela pedir uma tecla.
     ///
-    /// Onde se apaga disco não se usa "s/n": uma tecla errada num console é
-    /// barata demais para uma operação irreversível. O operador digita a
-    /// palavra que a tela mostra, e só ela vale.
-    pub fn confirma_digitando(
+    /// Existe por causa de UMA tecla: o Enter que trouxe o operador até aqui.
+    /// Num console, a tecla apertada antes de a tela ser desenhada fica na fila
+    /// do terminal e é entregue assim que alguém lê — então um Enter repetido,
+    /// ou segurado meio segundo a mais, atravessaria a confirmação sem que
+    /// ninguém tivesse lido o que ela diz. Numa tela que apaga disco isso não é
+    /// um incômodo, é a confirmação deixando de existir.
+    ///
+    /// Sem tty não há fila nem tempo: um roteiro de teste entrega tudo de uma
+    /// vez, e descartar ali comeria a tecla que o próprio teste quer mandar.
+    /// Por isso o descarte é só no console de verdade — mesma regra do
+    /// `suspenso`.
+    fn descarta_pendentes(&mut self) -> Result<()> {
+        if !self.tty {
+            return Ok(());
+        }
+        // O VTIME de 100 ms é o que define "não havia mais nada": a leitura
+        // curta volta vazia quando a fila secou.
+        while self.le_byte_curto()?.is_some() {}
+        Ok(())
+    }
+
+    /// Confirmação de uma tecla para a escrita destrutiva.
+    ///
+    /// O Enter confirma e QUALQUER OUTRA COISA não: o Esc cancela, e as demais
+    /// teclas são ignoradas com a tela redesenhada — o marcador do rodapé gira,
+    /// mostrando que a tecla chegou e não valeu.
+    ///
+    /// O que protege aqui não é a fricção de digitar, é o `descarta_pendentes`:
+    /// a tecla que veio ANTES desta tela nunca a atravessa.
+    pub fn confirma_com_enter(
         &mut self,
         titulo: &str,
         intro: &[String],
-        palavra: &str,
+        rodape: &str,
     ) -> Result<bool> {
-        let rotulo = format!("digite {palavra} para confirmar");
-        match self.campo(titulo, intro, &rotulo, "", false)? {
-            Some(resposta) => Ok(resposta.trim() == palavra),
-            None => Ok(false),
+        self.quadro(titulo, intro, rodape)?;
+        self.descarta_pendentes()?;
+        loop {
+            match self.tecla()? {
+                Tecla::Enter => return Ok(true),
+                Tecla::Esc | Tecla::Esquerda => return Ok(false),
+                _ => self.quadro(titulo, intro, rodape)?,
+            }
         }
     }
 
@@ -483,6 +556,69 @@ impl Tela {
     }
 }
 
+/// Entrega um roteiro de teclas COMO UM CONSOLE ENTREGA, e não colado.
+///
+/// A diferença é o Esc. Num console, entre uma tecla e a seguinte passa tempo,
+/// e é esse tempo que diz que o ESC recebido era um Esc solto e não o começo de
+/// uma seta. Um `Cursor` entrega tudo de uma vez: o roteiro "Esc, Enter" virava
+/// os bytes `1b 0d`, o desempate lia o `0d` como parte de uma sequência de
+/// escape, e o Enter sumia — um defeito do teste que aparecia como defeito do
+/// programa.
+///
+/// Aqui, entre teclas, o `read` devolve `WouldBlock`: nada agora, mais coisa
+/// depois. É o análogo exato do VTIME expirando.
+#[cfg(test)]
+pub struct Roteiro {
+    teclas: std::collections::VecDeque<std::collections::VecDeque<u8>>,
+    atual: std::collections::VecDeque<u8>,
+    pausa: bool,
+}
+
+/// Fatia bytes em teclas pela mesma regra que o `tecla()` usa para juntá-los:
+/// `ESC [ x` é uma tecla; qualquer outro byte é uma tecla.
+#[cfg(test)]
+fn fatia_em_teclas(bytes: &[u8]) -> Vec<Vec<u8>> {
+    let mut teclas = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b && i + 2 < bytes.len() && bytes[i + 1] == b'[' {
+            teclas.push(bytes[i..i + 3].to_vec());
+            i += 3;
+        } else {
+            teclas.push(vec![bytes[i]]);
+            i += 1;
+        }
+    }
+    teclas
+}
+
+#[cfg(test)]
+impl Read for Roteiro {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if self.atual.is_empty() {
+            if self.pausa {
+                self.pausa = false;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "pausa entre teclas",
+                ));
+            }
+            match self.teclas.pop_front() {
+                Some(t) => self.atual = t,
+                None => return Ok(0),
+            }
+        }
+        buf[0] = self.atual.pop_front().expect("tecla não vazia");
+        if self.atual.is_empty() {
+            self.pausa = true;
+        }
+        Ok(1)
+    }
+}
+
 #[cfg(test)]
 impl Terminal {
     /// Terminal de teste: lê o roteiro de teclas e escreve numa `Tela`.
@@ -494,7 +630,14 @@ impl Terminal {
         let tela = Tela::default();
         let term = Terminal {
             original: None,
-            entrada: Box::new(std::io::Cursor::new(roteiro.to_vec())),
+            entrada: Box::new(Roteiro {
+                teclas: fatia_em_teclas(roteiro)
+                    .into_iter()
+                    .map(std::collections::VecDeque::from)
+                    .collect(),
+                atual: std::collections::VecDeque::new(),
+                pausa: false,
+            }),
             saida: Box::new(tela.clone()),
             tty: false,
             teclas: 0,
@@ -536,10 +679,26 @@ mod tests {
     /// engolia a tecla seguinte.
     #[test]
     fn esc_solto_nao_engole_a_tecla_seguinte() {
+        // Esc, depois 'x', depois Enter: TRÊS teclas, e o Esc não come nenhuma.
+        //
+        // A primeira versão deste teste afirmava o contrário — que o Esc virava
+        // `Outra` e levava o 'x' junto — porque o leitor de teste entregava os
+        // bytes colados e o desempate do ESC via o 'x' como parte da sequência.
+        // O nome do teste prometia uma coisa e a asserção travava a outra.
         let (mut t, _) = Terminal::de_roteiro(b"\x1bx\r");
-        // ESC seguido de algo que não é '[': não é seta, e não é o 'x'.
-        assert_eq!(t.tecla().unwrap(), Tecla::Outra);
+        assert_eq!(t.tecla().unwrap(), Tecla::Esc);
+        assert_eq!(t.tecla().unwrap(), Tecla::Char('x'));
         assert_eq!(t.tecla().unwrap(), Tecla::Enter);
+    }
+
+    /// A seta continua sendo UMA tecla: três bytes que chegam juntos, sem pausa
+    /// entre eles. É o outro lado da mesma regra.
+    #[test]
+    fn seta_continua_sendo_uma_tecla_so() {
+        let (mut t, _) = Terminal::de_roteiro(b"\x1b[B\x1b[D\x1b");
+        assert_eq!(t.tecla().unwrap(), Tecla::Baixo);
+        assert_eq!(t.tecla().unwrap(), Tecla::Esquerda);
+        assert_eq!(t.tecla().unwrap(), Tecla::Esc);
     }
 
     #[test]
@@ -591,21 +750,22 @@ mod tests {
         assert!(!visto.contains("abc"), "a senha vazou para a tela");
     }
 
-    /// A confirmação só aceita a palavra EXATA. Um "sim", um "s", ou o nome de
-    /// outro disco não podem passar.
+    /// Enter confirma; Esc cancela; qualquer outra tecla não decide nada.
     #[test]
-    fn confirmacao_exige_a_palavra_exata() {
+    fn confirmacao_so_aceita_enter() {
         for (roteiro, esperado) in [
-            (&b"sda\r"[..], true),
-            (&b"sdb\r"[..], false),
-            (&b"s\r"[..], false),
-            (&b"sim\r"[..], false),
-            (&b"\r"[..], false),
+            (&b"\r"[..], true),
+            (&b"\n"[..], true),
             (&b"\x1b"[..], false),
+            // teclas que não são nem uma coisa nem outra: a tela insiste, e a
+            // decisão é a do Enter que vem depois.
+            (&b"s\r"[..], true),
+            (&b"x\x1b"[..], false),
+
         ] {
             let (mut t, _) = Terminal::de_roteiro(roteiro);
             assert_eq!(
-                t.confirma_digitando("t", &[], "sda").unwrap(),
+                t.confirma_com_enter("t", &[], "Enter APAGA o disco · Esc volta").unwrap(),
                 esperado,
                 "roteiro {:?}",
                 String::from_utf8_lossy(roteiro)
@@ -613,11 +773,20 @@ mod tests {
         }
     }
 
-    /// Espaço em volta não pode reprovar quem digitou certo.
+    /// A tela precisa dizer o que o Enter FAZ. Um rodapé com "Enter confirma"
+    /// não distingue esta tela de todas as outras em que Enter só avança.
     #[test]
-    fn confirmacao_tolera_espaco_em_volta() {
-        let (mut t, _) = Terminal::de_roteiro(b" sda \r");
-        assert!(t.confirma_digitando("t", &[], "sda").unwrap());
+    fn a_confirmacao_diz_que_o_enter_apaga() {
+        let (mut t, tela) = Terminal::de_roteiro(b"\x1b");
+        let _ = t.confirma_com_enter(
+            "confirmação",
+            &["Vai ser APAGADO: /dev/sda".into()],
+            "Enter APAGA o disco · Esc volta",
+        );
+        drop(t);
+        let visto = tela.texto();
+        assert!(visto.contains("Enter APAGA"), "o rodapé não diz o que o Enter faz");
+        assert!(visto.contains("Esc volta"));
     }
 
     /// O QUE BRILHA É O ITEM ESCOLHIDO, e mais nada.
@@ -659,6 +828,63 @@ mod tests {
                 .any(|l| l.contains("Enter escolhe") && l.contains(ansi::INVERSO)),
             "o rodapé voltou a brilhar e disputa a atenção com a seleção"
         );
+    }
+
+    /// A LISTA NÃO PODE DANÇAR: cada item mora sempre na mesma linha, seja
+    /// qual for o item escolhido.
+    ///
+    /// A primeira versão desenhava o detalhe só sob o item em foco, e com isso
+    /// o item 2 ficava numa linha quando o 1 estava escolhido e subia uma
+    /// quando ele próprio estava. Quem segura a seta vê o alvo se mexer
+    /// enquanto mira nele — e é assim que se escolhe o disco errado.
+    #[test]
+    fn a_posicao_dos_itens_nao_muda_com_a_selecao() {
+        let itens = vec![
+            ("Usar o disco inteiro".to_string(), "     apaga TUDO".to_string()),
+            ("Particionar eu mesmo".to_string(), "     abre o cfdisk".to_string()),
+        ];
+
+        // Duas telas: uma com o item 1 escolhido, outra com o 2.
+        let mut linhas_por_quadro: Vec<Vec<String>> = Vec::new();
+        for roteiro in [&b"\x1b"[..], &b"\x1b[B\x1b"[..]] {
+            let (mut t, tela) = Terminal::de_roteiro(roteiro);
+            let _ = t.menu_detalhado("t", &[], &itens).unwrap();
+            drop(t);
+            // Só o ÚLTIMO quadro interessa: cada tecla redesenha a tela
+            // inteira depois de um LIMPA_TELA, então os anteriores são história.
+            let texto = tela.texto();
+            let ultimo = texto.rsplit(ansi::LIMPA_TELA).next().unwrap_or("").to_string();
+            linhas_por_quadro.push(ultimo.lines().map(|l| l.trim_end().to_string()).collect());
+        }
+
+        let linha_de = |quadro: &Vec<String>, agulha: &str| -> usize {
+            quadro
+                .iter()
+                .position(|l| l.contains(agulha))
+                .unwrap_or_else(|| panic!("não achei {agulha:?} em {quadro:?}"))
+        };
+        for agulha in ["Usar o disco inteiro", "Particionar eu mesmo", "Enter escolhe"] {
+            assert_eq!(
+                linha_de(&linhas_por_quadro[0], agulha),
+                linha_de(&linhas_por_quadro[1], agulha),
+                "{agulha:?} mudou de linha ao mover a seleção"
+            );
+        }
+    }
+
+    /// Num menu SEM detalhe nenhum, não se gasta uma linha em branco por item:
+    /// a regra é "a altura não depende da seleção", e não "sempre duas linhas".
+    #[test]
+    fn menu_sem_detalhe_nao_ganha_linhas_vazias() {
+        let itens = vec!["um".to_string(), "dois".to_string(), "tres".to_string()];
+        let (mut t, tela) = Terminal::de_roteiro(b"\x1b");
+        let _ = t.menu("t", &[], &itens).unwrap();
+        drop(t);
+        let quadro = tela.texto();
+        let ultimo = quadro.rsplit(ansi::LIMPA_TELA).next().unwrap_or("");
+        let um = ultimo.lines().position(|l| l.contains("1. um")).unwrap();
+        let dois = ultimo.lines().position(|l| l.contains("2. dois")).unwrap();
+        assert_eq!(dois - um, 1, "apareceu linha em branco entre itens sem detalhe");
     }
 
     /// A barra precisa ser BARRA: preenchida até a largura, e não só o texto
@@ -717,12 +943,14 @@ mod tests {
         assert_eq!(marcadores, "|/", "a seta girou o marcador mais de uma vez");
     }
 
-    /// Roteiro que acaba no meio devolve Esc, e não gira para sempre. Sem isto
-    /// um teste mal escrito trava a suíte inteira.
+    /// Roteiro que acaba no meio REPROVA, e não gira para sempre nem finge um
+    /// Esc. Um teste que fica sem teclas está incompleto, e dizer isso é a
+    /// diferença entre uma falha em milissegundos e uma suíte pendurada.
     #[test]
-    fn fim_do_roteiro_e_esc() {
+    fn fim_do_roteiro_reprova_em_vez_de_pendurar() {
         let (mut t, _) = Terminal::de_roteiro(b"");
-        assert_eq!(t.tecla().unwrap(), Tecla::Esc);
+        let erro = t.tecla().unwrap_err().to_string();
+        assert!(erro.contains("acabou no meio"), "mensagem: {erro}");
     }
 
     /// A `Tela` precisa devolver texto legível: se as sequências ANSI ficassem,
