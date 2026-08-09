@@ -1,5 +1,7 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use minipax::install::{self, InstallOptions};
+use minipax::install_disk::{self, Exigencias};
+use minipax::tui::Terminal;
 use minipax::media::{self, MediaFormat, MediaMode, MediaOptions};
 use minipax::media_install::{self, MediaInstallOptions};
 use minipax::profile::{ProfileOverrides, ResolvedProfile};
@@ -13,6 +15,8 @@ uso:
   minipax install-media --source DIR --target DIR [opções]
   minipax partition --disk DISPOSITIVO [--esp-mib N] [--swap-mib N]
       [--logical-sector N]
+  minipax install-disk --saida ARQ [--sysfs DIR] [--midia DISPOSITIVO]
+      [--efi-bytes N] [--esp-mib N] [--raiz-minima-bytes N] [--cfdisk ARQ]
   minipax media build --profile DIR --mode online|offline \
       --format img|iso --boot-efi ARQ --output ARQ [opções]
   minipax lock --profile DIR [opções]
@@ -23,6 +27,17 @@ opções de perfil:
   --overlay DIR     substitui overlay/ e torna o perfil custom
   --newspeak DIR    árvore de receitas (ou DISTROPICA_NEWSPEAK)
   --cache DIR       offline: cache fechado; online: config+índice de canal
+
+opções de install-disk (o instalador de texto da mídia viva):
+  --saida ARQ       onde gravar a decisão; precisa não existir
+  --sysfs DIR       default: /sys/class/block
+  --midia DISP      disco da própria mídia, que nunca é oferecido; repetível
+  --efi-bytes N     tamanho do BOOTX64.EFI, para dimensionar a ESP mínima
+  --esp-mib N       ESP que a rota automática cria (default: 64)
+  --raiz-minima-bytes N  raiz mínima estimada pelo instalador
+  --cfdisk ARQ      default: /bin/cfdisk
+
+Sai 0 com a decisão gravada, 2 quando o operador desiste, 1 em erro.
 
 opções de instalação:
   --minitrue ARQ    binário minitrue (ou MINITRUE)
@@ -76,6 +91,9 @@ fn run() -> Result<()> {
         // Particionamento GPT do alvo (SPEC-0008): o caminho destrutivo fica
         // no Rust auditado, não num script guiando o fdisk do busybox.
         "partition" => run_partition(args),
+        // O instalador de texto. Ele NÃO escreve em disco: decide e grava a
+        // decisão num arquivo, e quem apaga continua sendo o caminho auditado.
+        "install-disk" => run_install_disk(args),
         other => bail!("comando desconhecido {other:?}\n\n{USAGE}"),
     }
 }
@@ -356,5 +374,101 @@ fn run_partition(args: Vec<String>) -> Result<()> {
             println!("SWAP_LAST_LBA=");
         }
     }
+    Ok(())
+}
+
+/// `minipax install-disk --saida /run/decisao --efi-bytes N --raiz-minima-bytes N`
+///
+/// O instalador de texto. Ele decide QUAL disco e COMO, grava a decisão e sai;
+/// quem apaga é o init, pelo caminho que já era auditado.
+///
+/// A SAÍDA VAI PARA ARQUIVO, e não para o stdout, porque o stdout aqui é a
+/// TELA: a TUI desenha nele. Um comando que escrevesse a decisão em stdout
+/// obrigaria quem chama a capturá-lo — e capturar o stdout apagaria a interface
+/// do console, deixando o operador diante de uma tela preta esperando teclas.
+fn run_install_disk(args: Vec<String>) -> Result<()> {
+    let mut saida: Option<PathBuf> = None;
+    let mut sysfs = PathBuf::from("/sys/class/block");
+    let mut cfdisk = PathBuf::from("/bin/cfdisk");
+    let mut midias: Vec<PathBuf> = Vec::new();
+    let mut efi_bytes: Option<u64> = None;
+    let mut raiz_minima: Option<u64> = None;
+    let mut esp_mib: u64 = 64;
+    let mut index = 0;
+    while index < args.len() {
+        let option = args[index].clone();
+        let numero = |v: String, quem: &str| -> Result<u64> {
+            v.parse()
+                .map_err(|_| anyhow::anyhow!("{quem} exige número em bytes"))
+        };
+        match option.as_str() {
+            "--saida" => saida = Some(take_value(&args, &mut index, &option)?.into()),
+            "--sysfs" => sysfs = take_value(&args, &mut index, &option)?.into(),
+            "--cfdisk" => cfdisk = take_value(&args, &mut index, &option)?.into(),
+            // Repetível: uma mídia pode aparecer por mais de um caminho, e
+            // oferecer o disco da própria mídia como alvo destruiria a
+            // instalação em curso.
+            "--midia" => midias.push(take_value(&args, &mut index, &option)?.into()),
+            "--efi-bytes" => {
+                efi_bytes = Some(numero(take_value(&args, &mut index, &option)?, "--efi-bytes")?)
+            }
+            "--raiz-minima-bytes" => {
+                raiz_minima = Some(numero(
+                    take_value(&args, &mut index, &option)?,
+                    "--raiz-minima-bytes",
+                )?)
+            }
+            "--esp-mib" => {
+                esp_mib = take_value(&args, &mut index, &option)?
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("--esp-mib exige número"))?
+            }
+            other => bail!("opção desconhecida {other:?}"),
+        }
+        index += 1;
+    }
+    let saida = saida.ok_or_else(|| anyhow::anyhow!("install-disk exige --saida"))?;
+    // OS DOIS MÍNIMOS SÃO OBRIGATÓRIOS, e não têm default. Eles são os números
+    // que decidem se uma partição serve; um default aqui seria um palpite
+    // fingindo ser medição, e envelheceria em silêncio conforme o EFI e o
+    // payload crescessem. Quem chama sabe os dois — o init os mede na mídia.
+    let exig = Exigencias {
+        efi_bytes: efi_bytes
+            .ok_or_else(|| anyhow::anyhow!("install-disk exige --efi-bytes (tamanho do EFI)"))?,
+        esp_automatica_bytes: esp_mib * 1024 * 1024,
+        raiz_minima_bytes: raiz_minima.ok_or_else(|| {
+            anyhow::anyhow!("install-disk exige --raiz-minima-bytes (raiz mínima estimada)")
+        })?,
+    };
+
+    // O terminal vive num escopo próprio para ser LARGADO antes do
+    // `process::exit`: o Drop dele é quem devolve o console ao modo normal, e
+    // `exit` não roda destrutores. Sair daqui com o console em modo cru deixaria
+    // o shell de resgate sem eco, que é justamente onde alguém iria procurar
+    // socorro.
+    let decisao = {
+        let mut term = Terminal::abrir()?;
+        install_disk::executar(&mut term, &sysfs, &midias, &exig, &cfdisk)?
+    };
+
+    let Some(decisao) = decisao else {
+        eprintln!("minipax: instalação cancelada pelo operador");
+        std::process::exit(2);
+    };
+    // create_new: recusa sobrescrever e recusa seguir link. O caminho vem de
+    // quem chama, e um link plantado ali faria a decisão ser escrita noutro
+    // lugar — em /run, num initramfs, isso é paranoia barata.
+    let mut arquivo = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&saida)
+        .with_context(|| format!("gravando a decisão em {}", saida.display()))?;
+    use std::io::Write as _;
+    arquivo
+        .write_all(decisao.serializa().as_bytes())
+        .with_context(|| format!("gravando a decisão em {}", saida.display()))?;
+    arquivo
+        .sync_all()
+        .with_context(|| format!("sincronizando {}", saida.display()))?;
     Ok(())
 }

@@ -1,9 +1,12 @@
+pub mod disco;
 pub mod install;
+pub mod install_disk;
 pub mod media;
 pub mod media_install;
 pub mod partition;
 pub mod profile;
 pub mod tree;
+pub mod tui;
 
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};

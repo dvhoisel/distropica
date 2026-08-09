@@ -11,7 +11,8 @@ anyhow = "1"
 crc32fast = "1"
 fatfs = "0.3.6"
 hex = "0.4"
-rustix = { version = "1", features = ["fs"] }
+# termios entra pela TUI do instalador: modo cru sem crate nova. Ver src/tui.rs.
+rustix = { version = "1", features = ["fs", "termios"] }
 sha2 = "0.10"
 tar = "0.4"
 tempfile = "3"
