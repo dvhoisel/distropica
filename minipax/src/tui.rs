@@ -446,8 +446,19 @@ impl Terminal {
         intro: &[String],
         rodape: &str,
     ) -> Result<bool> {
-        self.quadro(titulo, intro, rodape)?;
+        // DESCARTAR ANTES DE DESENHAR, e a ordem é o conserto.
+        //
+        // Na primeira versão a tela era desenhada e só então o descarte rodava,
+        // por 100 ms. Quem apertasse Enter nesse intervalo — ou, no aceite, um
+        // roteiro que reage assim que vê a tela no log — tinha a tecla comida, e
+        // o instalador ficava parado na confirmação para sempre. Foi medido: o
+        // marcador do rodapé parou em duas teclas com três enviadas.
+        //
+        // Descartando antes, a fronteira passa a ser exata: o que veio enquanto
+        // a tela ANTERIOR estava no ar não conta, e tudo o que vier depois desta
+        // aparecer conta — por mais rápido que venha.
         self.descarta_pendentes()?;
+        self.quadro(titulo, intro, rodape)?;
         loop {
             match self.tecla()? {
                 Tecla::Enter => return Ok(true),
