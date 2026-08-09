@@ -1,0 +1,290 @@
+#!/bin/sh
+# Aceite do instalador de texto e da busca pela mídia.
+#
+# POR QUE ISTO NAO CABE NO accept-qemu: aquele script boota o firmware a partir
+# da ISO, e para o firmware bootar a ISO ela precisa estar la desde que a maquina
+# liga. Justamente por isso ele nunca exercita o caso que quebrou a instalacao
+# num PC de verdade — a midia que AINDA NAO EXISTE quando o init comeca. E, como
+# o EFI de teste dele embute distropica.install=, ele tambem nunca chega ao
+# instalador de texto.
+#
+# A saida e carregar o kernel direto com -kernel. O BOOTX64.EFI e um bzImage com
+# stub EFI: o QEMU o carrega sem firmware e sem dispositivo de arranque nenhum, e
+# o cmdline passa a vir do -append. Com isso a midia deixa de ser obrigatoria no
+# arranque e pode ser LIGADA DEPOIS, pelo monitor, como um pendrive de verdade.
+#
+# O que este aceite cobre e o outro nao:
+#   · a espera do find_media, com a midia aparecendo depois do init comecar;
+#   · a busca no DISCO INTEIRO, sem a qual um pendrive nunca e achado;
+#   · o instalador de texto num console de verdade, dirigido por teclas;
+#   · a rota manual: cfdisk abrindo, saindo, e o terminal voltando inteiro;
+#   · a instalacao pela rota manual, com particoes escolhidas a mao.
+#
+# O que ele NAO cobre, e continua sendo do accept-qemu: o firmware achar e
+# bootar a ISO. Os dois sao necessarios; nenhum substitui o outro.
+set -eu
+umask 022
+
+EFI=
+ISO=
+DISK=
+LOG_DIR=
+QEMU=${QEMU_SYSTEM_X86_64:-}
+DISK_SIZE_MIB=8192
+MEMORY_MIB=2048
+ATRASO=8
+# O teto por cenario e generoso porque a instalacao roda em tcg. Quem de fato
+# reprova e a falta de avanco: cada `espera` tem seu proprio prazo, e um
+# convidado travado estoura o da tela que nao chegou, dizendo QUAL nao chegou.
+CENARIO_TIMEOUT=5400
+QPID=
+OFFSET=1
+LOG=
+
+usage() {
+    cat <<'EOF'
+uso: bootstrap/live/accept-tui --efi ARQ --iso ARQ --disk NOVO.raw \
+       --log-dir NOVO-DIR [opções]
+
+  --efi ARQ           BOOTX64.EFI; carregado direto como bzImage (-kernel)
+  --iso ARQ           a mídia, ligada como pendrive USB
+  --disk NOVO.raw     base dos discos alvo; precisa não existir
+  --log-dir NOVO-DIR  diretório novo para logs e sockets
+  --atraso N          segundos até ligar a mídia no cenário 1 (default: 8)
+  --disk-size-mib N   default: 8192
+  --memory-mib N      default: 2048
+  --qemu ARQ          default: qemu-system-x86_64 do PATH
+
+Dois cenários, cada um com seu disco:
+  1. mídia atrasada + rota "usar o disco inteiro", até INSTALLATION COMPLETE
+  2. mídia presente + rota manual: cfdisk abre, sai, e a instalação segue
+     com as partições escolhidas à mão
+EOF
+}
+
+falha() {
+    echo "accept-tui: $*" >&2
+    exit 1
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --efi) EFI=${2:?}; shift 2 ;;
+        --iso) ISO=${2:?}; shift 2 ;;
+        --disk) DISK=${2:?}; shift 2 ;;
+        --log-dir) LOG_DIR=${2:?}; shift 2 ;;
+        --atraso) ATRASO=${2:?}; shift 2 ;;
+        --disk-size-mib) DISK_SIZE_MIB=${2:?}; shift 2 ;;
+        --memory-mib) MEMORY_MIB=${2:?}; shift 2 ;;
+        --qemu) QEMU=${2:?}; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) falha "opção desconhecida: $1" ;;
+    esac
+done
+
+for obrigatorio in EFI ISO DISK LOG_DIR; do
+    eval "valor=\$$obrigatorio"
+    [ -n "$valor" ] || { usage >&2; falha "--$(echo "$obrigatorio" | tr 'A-Z_' 'a-z-') é obrigatório"; }
+done
+[ -f "$EFI" ] || falha "EFI inexistente: $EFI"
+[ -f "$ISO" ] || falha "ISO inexistente: $ISO"
+[ ! -e "$LOG_DIR" ] || falha "log-dir já existe: $LOG_DIR"
+[ -z "$QEMU" ] && QEMU=$(command -v qemu-system-x86_64 || true)
+[ -n "$QEMU" ] && [ -x "$QEMU" ] || falha "qemu-system-x86_64 ausente (use --qemu)"
+command -v socat >/dev/null 2>&1 || falha "socat é necessário para ligar a mídia pelo monitor"
+case "$DISK_SIZE_MIB" in *[!0-9]*|"") falha "--disk-size-mib inválido" ;; esac
+[ "$DISK_SIZE_MIB" -ge 2048 ] || falha "--disk-size-mib mínimo é 2048"
+
+mkdir -p "$LOG_DIR"
+EFI=$(CDPATH= cd -- "$(dirname -- "$EFI")" && pwd -P)/$(basename -- "$EFI")
+ISO=$(CDPATH= cd -- "$(dirname -- "$ISO")" && pwd -P)/$(basename -- "$ISO")
+LOG_DIR=$(CDPATH= cd -- "$LOG_DIR" && pwd -P)
+
+encerra_qemu() {
+    [ -n "$QPID" ] || return 0
+    kill -0 "$QPID" 2>/dev/null || return 0
+    kill -TERM "$QPID" 2>/dev/null || true
+    espera_morte=0
+    while kill -0 "$QPID" 2>/dev/null && [ "$espera_morte" -lt 10 ]; do
+        sleep 1
+        espera_morte=$((espera_morte + 1))
+    done
+    kill -KILL "$QPID" 2>/dev/null || true
+    wait "$QPID" 2>/dev/null || true
+    QPID=
+}
+
+trap 'encerra_qemu; exit 130' HUP INT TERM
+trap 'encerra_qemu' EXIT
+
+# Espera um texto APARECER NO LOG a partir de onde a ultima espera parou.
+#
+# O avanco do OFFSET e o que torna isto confiavel: a TUI redesenha a tela
+# inteira a cada tecla, entao o texto de uma tela anterior continua no arquivo
+# para sempre. Sem a marca d'agua, esperar pela segunda tela casaria na hora com
+# a primeira, e o roteiro andaria sozinho batendo em telas erradas.
+espera() {
+    alvo=$1
+    prazo=$2
+    limite=$(( $(date +%s) + prazo ))
+    while [ "$(date +%s)" -lt "$limite" ]; do
+        if tail -c "+$OFFSET" "$LOG" 2>/dev/null | grep -aq -- "$alvo"; then
+            OFFSET=$(( $(wc -c < "$LOG") + 1 ))
+            return 0
+        fi
+        if ! kill -0 "$QPID" 2>/dev/null; then
+            echo "accept-tui: o QEMU morreu esperando por: $alvo" >&2
+            return 1
+        fi
+        sleep 1
+    done
+    echo "accept-tui: tempo esgotado esperando por: $alvo" >&2
+    return 1
+}
+
+# %b e nao %s: assim o roteiro escreve '\r' e sai um carriage return de fato.
+# Com %s sairiam os dois caracteres literais, a TUI leria uma barra invertida
+# seguida de um 'r', e o menu andaria para um item que ninguem escolheu.
+digita() {
+    printf '%b' "$1" >&3
+}
+
+# Um cenario inteiro: sobe o QEMU, devolve o FIFO de teclas no descritor 3.
+sobe() {
+    cenario=$1
+    disco=$2
+    ligar_depois=$3   # sim = a midia entra pelo monitor, depois do arranque
+
+    LOG=$LOG_DIR/cenario$cenario.log
+    MON=$LOG_DIR/cenario$cenario.sock
+    TECLAS=$LOG_DIR/cenario$cenario.teclas
+    OFFSET=1
+    rm -f -- "$TECLAS" "$MON"
+    mkfifo "$TECLAS"
+
+    set -- "$QEMU" \
+        -machine "pc,accel=tcg" -cpu qemu64 -smp 2 -m "$MEMORY_MIB" \
+        -kernel "$EFI" \
+        -append 'console=ttyS0,115200 panic=-1 rdinit=/init distropica.test=1' \
+        -drive "if=none,id=alvo,format=raw,cache=writethrough,file=$disco" \
+        -device virtio-blk-pci,drive=alvo \
+        -drive "if=none,id=midia,format=raw,readonly=on,file=$ISO" \
+        -device qemu-xhci,id=xhci \
+        -nic none -display none \
+        -monitor "unix:$MON,server,nowait" -serial stdio \
+        -rtc base=2024-01-01T00:00:00,clock=vm -no-reboot
+    if [ "$ligar_depois" = nao ]; then
+        set -- "$@" -device usb-storage,drive=midia,bus=xhci.0,id=pendrive
+    fi
+
+    "$@" < "$TECLAS" > "$LOG" 2>&1 &
+    QPID=$!
+    # O FIFO so abre para escrita quando alguem o abre para leitura; o QEMU faz
+    # isso ao subir, e os dois se encontram aqui.
+    exec 3> "$TECLAS"
+}
+
+liga_midia() {
+    cen=$1
+    printf 'device_add usb-storage,drive=midia,bus=xhci.0,id=pendrive\n' |
+        socat - "UNIX-CONNECT:$LOG_DIR/cenario$cen.sock" >/dev/null 2>&1 ||
+        falha "não consegui ligar a mídia pelo monitor do cenário $cen"
+}
+
+fecha() {
+    exec 3>&-
+    encerra_qemu
+}
+
+# ---------------------------------------------------------------------------
+# Cenário 1: a mídia chega atrasada, e o operador usa o disco inteiro.
+# ---------------------------------------------------------------------------
+D1=$DISK
+[ ! -e "$D1" ] || falha "disco já existe: $D1"
+truncate -s "${DISK_SIZE_MIB}M" "$D1"
+
+echo "accept-tui: cenário 1/2: mídia atrasada em ${ATRASO}s + rota de disco inteiro"
+sobe 1 "$D1" sim
+
+# A espera precisa ser ANUNCIADA antes de a mídia existir. Se esta linha não
+# aparecer, ou o init achou algo que não devia, ou a busca não espera.
+espera 'aguardando a midia aparecer' 120 ||
+    falha "o init não anunciou a espera pela mídia"
+echo "accept-tui:   o init está esperando pela mídia, como deve"
+sleep "$ATRASO"
+liga_midia 1
+espera 'payload encontrado em /dev/sda' 120 ||
+    falha "a mídia foi ligada e o init não a achou (busca no disco inteiro?)"
+echo "accept-tui:   mídia ligada depois do arranque e encontrada"
+
+espera 'mídia validada' 900 || falha "a mídia não passou na validação"
+espera 'escolha do disco' 300 || falha "o instalador de texto não abriu"
+echo "accept-tui:   instalador de texto aberto no console"
+digita '\r'
+espera 'particionamento' 60 || falha "a tela de particionamento não veio"
+digita '\r'
+espera 'digite vda para confirmar' 60 || falha "a confirmação não veio"
+echo "accept-tui:   confirmando a destruição de /dev/vda"
+digita 'vda\r'
+espera 'INSTALLATION COMPLETE' "$CENARIO_TIMEOUT" ||
+    falha "a instalação pela rota automática não terminou"
+echo "accept-tui:   cenário 1 OK — instalou pelo instalador de texto"
+fecha
+
+# ---------------------------------------------------------------------------
+# Cenário 2: rota manual. O disco já vem com uma GPT para que o cfdisk abra
+# direto na tabela, e não no diálogo de "escolha o tipo de rótulo" — que é
+# outra tela, com outras teclas, e não é o que se quer provar aqui.
+# ---------------------------------------------------------------------------
+D2=${DISK%.raw}-manual.raw
+[ ! -e "$D2" ] || falha "disco já existe: $D2"
+truncate -s "${DISK_SIZE_MIB}M" "$D2"
+sfdisk --quiet "$D2" >/dev/null 2>&1 <<EOF || falha "não preparei a GPT do cenário 2"
+label: gpt
+start=2048, size=131072, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B
+start=133120, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4
+EOF
+
+echo "accept-tui: cenário 2/2: rota manual com cfdisk"
+sobe 2 "$D2" nao
+
+espera 'payload encontrado' 300 || falha "a mídia não foi encontrada no cenário 2"
+espera 'mídia validada' 900 || falha "a mídia não passou na validação"
+espera 'escolha do disco' 300 || falha "o instalador de texto não abriu"
+digita '\r'
+espera 'particionamento' 60 || falha "a tela de particionamento não veio"
+digita '2'
+espera 'Vou abrir o cfdisk' 60 || falha "o aviso do cfdisk não veio"
+echo "accept-tui:   abrindo o cfdisk"
+digita '\r'
+# O cfdisk desenha por cima de tudo; o que se procura é o disco no cabeçalho
+# dele. Se isto não vier, ou o binário não está no initramfs, ou o terminfo não
+# serve para o console.
+espera 'Disk: /dev/vda' 120 || falha "o cfdisk não desenhou nada no console"
+echo "accept-tui:   cfdisk desenhou; saindo dele com [Quit]"
+digita 'q'
+# De volta na TUI: as partições já existem, então ela vai direto perguntar qual
+# é a ESP. Isto prova o suspenso(): o terminal voltou ao modo cru inteiro.
+espera 'partição EFI' 120 ||
+    falha "a TUI não retomou depois do cfdisk (terminal não voltou?)"
+echo "accept-tui:   a TUI retomou o controle do terminal"
+digita '\r'
+espera 'Formatar ou aproveitar' 60 || falha "a pergunta sobre a ESP não veio"
+digita '2'
+espera 'partição raiz' 60 || falha "a tela da raiz não veio"
+digita '\r'
+espera 'área de troca' 60 || falha "a tela da área de troca não veio"
+digita '1'
+espera 'digite vda para confirmar' 60 || falha "a confirmação manual não veio"
+echo "accept-tui:   confirmando o plano manual"
+digita 'vda\r'
+espera 'INSTALLATION COMPLETE' "$CENARIO_TIMEOUT" ||
+    falha "a instalação pela rota manual não terminou"
+echo "accept-tui:   cenário 2 OK — instalou pelas partições escolhidas à mão"
+fecha
+
+echo "accept-tui: PASS"
+echo "  cenário 1 (mídia atrasada, disco inteiro): $LOG_DIR/cenario1.log"
+echo "  cenário 2 (rota manual, cfdisk):           $LOG_DIR/cenario2.log"
+echo "  discos: $D1"
+echo "          $D2"
