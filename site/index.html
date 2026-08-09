@@ -7,6 +7,9 @@
   <meta name="description" content="Distrópica: uma distribuição Linux que não instala pacotes — retifica registros.">
   <meta name="robots" content="index, follow, max-image-preview:large">
   <link rel="canonical" href="https://distropica.com.br/">
+  <link rel="icon" href="/favicon.ico" sizes="32x32">
+  <link rel="icon" href="/distropica-icone-v1.png" type="image/png" sizes="180x180">
+  <link rel="apple-touch-icon" href="/distropica-icone-v1.png">
   <meta property="og:locale" content="pt_BR">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Distrópica">
@@ -55,7 +58,11 @@
       min-height: 4rem; display: flex; align-items: center;
       justify-content: space-between; gap: 1.5rem;
     }
-    .wordmark { text-decoration: none; letter-spacing: .16em; font-weight: 800; }
+    /* O logo entra com width/height escritos no HTML e altura fixa no CSS: o
+       navegador reserva o espaço antes de a imagem chegar, e o cabeçalho não
+       pula quando ela carrega. */
+    .wordmark { display: inline-flex; text-decoration: none; }
+    .wordmark img { display: block; height: 2rem; width: auto; }
     .navlinks { display: flex; gap: 1.25rem; font-size: .8rem; }
     .navlinks a { color: var(--muted); text-decoration: none; }
     .navlinks a:hover { color: var(--ink); }
@@ -73,11 +80,11 @@
       content: ""; width: .55rem; height: .55rem; border-radius: 50%;
       background: var(--green); box-shadow: 0 0 1rem rgba(155,183,122,.45);
     }
-    h1 {
-      margin: 1.25rem 0 .5rem; max-width: 10ch;
-      font: 900 clamp(3.7rem, 13vw, 9rem)/.86 system-ui, sans-serif;
-      letter-spacing: -.075em; text-transform: uppercase;
-    }
+    /* O h1 continua sendo h1: o logo entra DENTRO dele, e o texto alternativo
+       da imagem é o que dá nome ao título. Trocar o elemento por uma <img>
+       solta tiraria da página o único cabeçalho de primeiro nível que ela tem. */
+    h1 { margin: 1.75rem 0 .5rem; }
+    h1 img { display: block; width: min(100%, 42rem); height: auto; }
     .lead {
       max-width: 50rem; margin: 1.75rem 0 0; color: var(--muted);
       font-size: clamp(1rem, 2vw, 1.25rem);
@@ -157,7 +164,8 @@
 <body>
   <header>
     <nav class="wrap" aria-label="Navegação principal">
-      <a class="wordmark" href="#inicio">DISTRÓPICA</a>
+      <a class="wordmark" href="#inicio"><img src="/distropica-logo-v1.png"
+         alt="Distrópica — início" width="315" height="84" decoding="async"></a>
       <div class="navlinks">
         <a href="#premissas">Premissas</a>
         <a href="#download">Download</a>
@@ -169,7 +177,8 @@
     <div class="hero">
       <div class="wrap">
         <div class="eyebrow">protótipo instalável · x86_64 · UEFI</div>
-        <h1>DISTRÓPICA</h1>
+        <h1><img src="/distropica-logo-grande-v1.png" alt="Distrópica"
+            width="1280" height="341" fetchpriority="high" decoding="async"></h1>
         <p class="lead">Uma distribuição Linux distópica. Não instala pacotes: <strong>retifica registros</strong>. Binário do mantenedor primeiro; depois, binário da Distrópica; fonte quando ninguém publica um.</p>
         <div class="actions">
           <a class="button primary" href="/releases/distropica-0.11-x86_64.iso">Baixar ISO · 717 MB</a>
