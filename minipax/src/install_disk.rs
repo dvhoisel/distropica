@@ -233,12 +233,21 @@ pub fn linhas_de_destruicao(alvo: &Disco) -> Vec<String> {
 
 /// Confirmação da escrita destrutiva.
 ///
-/// Exige o NOME DO DISCO digitado, e não um "s/n". Duas razões: uma tecla
-/// errada num console é barata demais para uma operação irreversível, e
-/// digitar `sda` obriga o operador a olhar de novo para QUAL disco escolheu —
-/// que é justamente o erro que se quer impedir, e que um "sim" não impede.
+/// UMA TECLA, e o cuidado mudou de lugar. A versão anterior exigia o nome do
+/// disco digitado; a fricção era real e o ganho, menor do que parecia — quem
+/// digita `sda` no automático está copiando o que a tela mostra, não conferindo
+/// de novo qual disco escolheu.
+///
+/// O que impede o acidente agora é o `confirma_com_enter` descartar o que já
+/// estava na fila do terminal: o Enter que trouxe o operador até aqui não
+/// atravessa esta tela. Sem isso, um Enter repetido apagaria o disco sem que
+/// ninguém tivesse lido o aviso — e AÍ sim a confirmação seria decorativa.
 pub fn confirmar_destruicao(term: &mut Terminal, alvo: &Disco) -> Result<bool> {
-    term.confirma_digitando("confirmação", &linhas_de_destruicao(alvo), &alvo.nome)
+    term.confirma_com_enter(
+        "confirmação",
+        &linhas_de_destruicao(alvo),
+        "Enter APAGA o disco · Esc volta",
+    )
 }
 
 /// O resultado de filtrar partições para um papel.
@@ -336,6 +345,41 @@ pub fn linhas_do_plano_manual(
     l
 }
 
+/// As linhas do aviso que antecede o cfdisk.
+///
+/// Função pura pelo mesmo motivo das outras telas deste módulo: é TEXTO QUE
+/// PRECISA ESTAR CERTO, e texto se testa. Aqui o risco é concreto — o operador
+/// está numa máquina que ainda não tem sistema e não pode pesquisar o que o
+/// cfdisk está perguntando em inglês.
+pub fn linhas_do_aviso_cfdisk(alvo: &Disco, exig: &Exigencias) -> Vec<String> {
+    vec![
+        format!("Vou abrir o cfdisk em {}.", alvo.caminho().display()),
+        String::new(),
+        "O cfdisk é outro programa e fala inglês. Duas perguntas dele:".into(),
+        "  · tipo de rótulo (label): escolha SEMPRE gpt. Esta distro só".into(),
+        "    arranca por UEFI, e o firmware procura a ESP numa GPT.".into(),
+        "  · \"Device already contains a gpt signature. Remove it?\":".into(),
+        "    responda Yes. É uma tabela velha; a nova substitui.".into(),
+        String::new(),
+        "Crie, no mínimo:".into(),
+        format!(
+            "  · EFI System — ao menos {} (64 MiB é folgado)",
+            disco::tamanho_legivel(exig.esp_minima())
+        ),
+        format!(
+            "  · Linux filesystem para a raiz — ao menos {}",
+            disco::tamanho_legivel(exig.raiz_minima_bytes)
+        ),
+        format!(
+            "  · Linux swap, se quiser troca — ao menos {}",
+            disco::tamanho_legivel(TROCA_MINIMA)
+        ),
+        String::new(),
+        "NADA do que você fizer lá vale até escolher [Write] e digitar".into(),
+        "'yes'. Sair com [Quit] não grava coisa alguma.".into(),
+    ]
+}
+
 /// Relê o disco depois que o cfdisk gravou.
 ///
 /// A ESPERA EXISTE porque a tabela nova chega ao sysfs pelo BLKRRPART que o
@@ -364,9 +408,16 @@ fn reler_disco(sysfs: &Path, nome: &str, esperar: bool) -> Result<Disco> {
 
 /// A rota manual inteira: cfdisk, atribuição e confirmação.
 ///
-/// Devolve `None` quando o operador desiste ou volta — e voltar é comum aqui,
-/// porque descobrir no meio da atribuição que faltou uma partição é
-/// exatamente o que deve mandar de volta ao cfdisk.
+/// É UMA MÁQUINA DE PASSOS, e não uma sequência de `?`, porque Esc precisa
+/// voltar UMA tela — não a instalação inteira. Na versão anterior, um Esc na
+/// tela da raiz descartava também a ESP e o "formatar ou preservar" já
+/// escolhidos, e jogava o operador de volta na lista de discos: quem errou a
+/// última escolha pagava por todas.
+///
+/// Voltar do primeiro passo sai da rota manual e devolve à escolha de
+/// particionamento. O passo do cfdisk é o primeiro de propósito: voltar da
+/// atribuição significa "quero mexer nas partições de novo", e é exatamente ali
+/// que se reabre o cfdisk.
 pub fn rota_manual(
     term: &mut Terminal,
     sysfs: &Path,
@@ -375,168 +426,206 @@ pub fn rota_manual(
     cfdisk: &Path,
 ) -> Result<Option<Decisao>> {
     let esp_minima = exig.esp_minima();
-    term.aviso(
-        "cfdisk",
-        &[
-            format!("Vou abrir o cfdisk em {}.", alvo.caminho().display()),
-            String::new(),
-            "O cfdisk é outro programa: ao sair dele você volta para cá.".into(),
-            "NADA que você fizer lá vale até você escolher [Write] e".into(),
-            "digitar 'yes' — sair com [Quit] não grava coisa alguma.".into(),
-            String::new(),
-            "Você precisa de, no mínimo:".into(),
-            format!(
-                "  · uma partição EFI System de ao menos {}",
-                disco::tamanho_legivel(esp_minima)
-            ),
-            format!(
-                "  · uma partição para a raiz de ao menos {}",
-                disco::tamanho_legivel(exig.raiz_minima_bytes)
-            ),
-            "  · opcionalmente, uma para a área de troca".into(),
-        ],
-    )?;
+    let mut alvo = alvo.clone();
+    let mut esp: Option<Particao> = None;
+    let mut formatar_esp = false;
+    let mut raiz: Option<Particao> = None;
+    let mut troca: Option<Particao> = None;
+    let mut passo = 0u8;
 
-    let caminho = alvo.caminho();
-    let status = term.suspenso(|| {
-        std::process::Command::new(cfdisk)
-            .arg(&caminho)
-            .status()
-            .with_context(|| format!("não consegui executar {}", cfdisk.display()))
-    })??;
-    if !status.success() {
-        term.aviso(
-            "cfdisk",
-            &[
-                format!("O cfdisk terminou com erro ({status})."),
-                String::new(),
-                "Nenhuma decisão foi tomada. Você pode tentar de novo.".into(),
-            ],
-        )?;
-        return Ok(None);
-    }
-
-    let alvo = reler_disco(sysfs, &alvo.nome, true)?;
-    if alvo.particoes.len() < 2 {
-        term.aviso(
-            "partições",
-            &[
-                format!(
-                    "{} tem {} partição(ões), e eu preciso de ao menos duas:",
-                    alvo.caminho().display(),
-                    alvo.particoes.len()
-                ),
-                "uma EFI System e uma para a raiz.".into(),
-                String::new(),
-                "Se você criou as partições no cfdisk mas não gravou com".into(),
-                "[Write], elas não existem. Tente de novo.".into(),
-            ],
-        )?;
-        return Ok(None);
-    }
-
-    // ESP
-    let triagem_esp = triar(&alvo.particoes, esp_minima, &[]);
-    let Some(esp) = escolher_papel(
-        term,
-        "partição EFI (ESP)",
-        &[
-            "Qual partição o firmware vai ler para arrancar?".to_string(),
-            format!("Precisa de ao menos {} para o BOOTX64.EFI.", disco::tamanho_legivel(esp_minima)),
-        ],
-        &triagem_esp,
-    )?
-    else {
-        return Ok(None);
-    };
-
-    // Formatar a ESP ou preservá-la. NÃO é pergunta de estilo: numa máquina com
-    // outro sistema instalado, a ESP é compartilhada, e formatá-la apaga o
-    // carregador do outro sistema. Quem escolheu particionar à mão é
-    // exatamente quem sabe responder isto — e quem mais perde se não for
-    // perguntado.
-    let escolha = term.menu_detalhado(
-        "ESP",
-        &[
-            format!("/dev/{} vai ser a partição EFI.", esp.nome),
-            String::new(),
-            "Formatar ou aproveitar o que já está lá?".to_string(),
-        ],
-        &[
-            (
-                "Preservar o conteúdo".to_string(),
-                "     obrigatório se houver outro sistema arrancando por ela".to_string(),
-            ),
-            (
-                "Formatar em FAT32".to_string(),
-                "     apaga tudo, inclusive carregadores de outros sistemas".to_string(),
-            ),
-        ],
-    )?;
-    let formatar_esp = match escolha {
-        Some(0) => false,
-        Some(1) => true,
-        _ => return Ok(None),
-    };
-
-    // Raiz
-    let triagem_raiz = triar(&alvo.particoes, exig.raiz_minima_bytes, &[esp.nome.clone()]);
-    let Some(raiz) = escolher_papel(
-        term,
-        "partição raiz",
-        &[
-            "Qual partição recebe o sistema?".to_string(),
-            format!(
-                "Ela será formatada em ext4 e precisa de ao menos {}.",
-                disco::tamanho_legivel(exig.raiz_minima_bytes)
-            ),
-        ],
-        &triagem_raiz,
-    )?
-    else {
-        return Ok(None);
-    };
-
-    // Troca — opcional, e a opção de não ter vem PRIMEIRO: é a escolha segura.
-    let usadas = vec![esp.nome.clone(), raiz.nome.clone()];
-    let triagem_troca = triar(&alvo.particoes, TROCA_MINIMA, &usadas);
-    let mut itens: Vec<(String, String)> = vec![(
-        "Sem área de troca".to_string(),
-        "     o sistema instala e roda; perde a folga em pico de memória".to_string(),
-    )];
-    itens.extend(itens_de_particao(&triagem_troca));
-    let mut intro = vec![
-        "Alguma partição para área de troca?".to_string(),
-        format!("Menor que {} não compensa.", disco::tamanho_legivel(TROCA_MINIMA)),
-    ];
-    if !triagem_troca.recusadas.is_empty() {
-        intro.push(String::new());
-        intro.push("Fora da lista:".to_string());
-        for r in &triagem_troca.recusadas {
-            intro.push(format!("  {r}"));
+    loop {
+        match passo {
+            // 0 — aviso e cfdisk
+            0 => {
+                if !term.aviso("cfdisk", &linhas_do_aviso_cfdisk(&alvo, exig))? {
+                    return Ok(None);
+                }
+                let caminho = alvo.caminho();
+                let status = term.suspenso(|| {
+                    std::process::Command::new(cfdisk)
+                        .arg(&caminho)
+                        .status()
+                        .with_context(|| format!("não consegui executar {}", cfdisk.display()))
+                })??;
+                if !status.success() {
+                    term.aviso(
+                        "cfdisk",
+                        &[
+                            format!("O cfdisk terminou com erro ({status})."),
+                            String::new(),
+                            "Nenhuma decisão foi tomada. Você pode tentar de novo.".into(),
+                        ],
+                    )?;
+                    continue;
+                }
+                alvo = reler_disco(sysfs, &alvo.nome, true)?;
+                if alvo.particoes.len() < 2 {
+                    term.aviso(
+                        "partições",
+                        &[
+                            format!(
+                                "{} tem {} partição(ões), e eu preciso de ao menos duas:",
+                                alvo.caminho().display(),
+                                alvo.particoes.len()
+                            ),
+                            "uma EFI System e uma para a raiz.".into(),
+                            String::new(),
+                            "Se você criou as partições no cfdisk mas não gravou com".into(),
+                            "[Write], elas não existem. Tente de novo.".into(),
+                        ],
+                    )?;
+                    continue;
+                }
+                passo = 1;
+            }
+            // 1 — qual é a ESP
+            1 => {
+                let triagem = triar(&alvo.particoes, esp_minima, &[]);
+                match escolher_papel(
+                    term,
+                    "partição EFI (ESP)",
+                    &[
+                        "Qual partição o firmware vai ler para arrancar?".to_string(),
+                        format!(
+                            "Precisa de ao menos {} para o BOOTX64.EFI.",
+                            disco::tamanho_legivel(esp_minima)
+                        ),
+                    ],
+                    &triagem,
+                )? {
+                    Some(p) => {
+                        esp = Some(p);
+                        passo = 2;
+                    }
+                    None => passo = 0,
+                }
+            }
+            // 2 — formatar a ESP ou preservá-la
+            //
+            // NÃO é pergunta de estilo: numa máquina com outro sistema instalado
+            // a ESP é compartilhada, e formatá-la apaga o carregador do outro
+            // sistema. Quem escolheu particionar à mão é exatamente quem sabe
+            // responder isto — e quem mais perde se não for perguntado.
+            2 => {
+                let nome = esp.as_ref().expect("ESP escolhida no passo 1").nome.clone();
+                match term.menu_detalhado(
+                    "ESP",
+                    &[
+                        format!("/dev/{nome} vai ser a partição EFI."),
+                        String::new(),
+                        "Formatar ou aproveitar o que já está lá?".to_string(),
+                    ],
+                    &[
+                        (
+                            "Preservar o conteúdo".to_string(),
+                            "     obrigatório se houver outro sistema arrancando por ela"
+                                .to_string(),
+                        ),
+                        (
+                            "Formatar em FAT32".to_string(),
+                            "     apaga tudo, inclusive carregadores de outros sistemas"
+                                .to_string(),
+                        ),
+                    ],
+                )? {
+                    Some(0) => {
+                        formatar_esp = false;
+                        passo = 3;
+                    }
+                    Some(1) => {
+                        formatar_esp = true;
+                        passo = 3;
+                    }
+                    _ => passo = 1,
+                }
+            }
+            // 3 — qual é a raiz
+            3 => {
+                let usada = esp.as_ref().expect("ESP escolhida").nome.clone();
+                let triagem = triar(&alvo.particoes, exig.raiz_minima_bytes, &[usada]);
+                match escolher_papel(
+                    term,
+                    "partição raiz",
+                    &[
+                        "Qual partição recebe o sistema?".to_string(),
+                        format!(
+                            "Ela será formatada em ext4 e precisa de ao menos {}.",
+                            disco::tamanho_legivel(exig.raiz_minima_bytes)
+                        ),
+                    ],
+                    &triagem,
+                )? {
+                    Some(p) => {
+                        raiz = Some(p);
+                        passo = 4;
+                    }
+                    None => passo = 2,
+                }
+            }
+            // 4 — área de troca, opcional. A opção de NÃO ter vem primeiro: é a
+            // escolha segura, e é a que o Enter pega sem mover nada.
+            4 => {
+                let usadas = vec![
+                    esp.as_ref().expect("ESP escolhida").nome.clone(),
+                    raiz.as_ref().expect("raiz escolhida").nome.clone(),
+                ];
+                let triagem = triar(&alvo.particoes, TROCA_MINIMA, &usadas);
+                let mut itens: Vec<(String, String)> = vec![(
+                    "Sem área de troca".to_string(),
+                    "     o sistema instala e roda; perde a folga em pico de memória".to_string(),
+                )];
+                itens.extend(itens_de_particao(&triagem));
+                let mut intro = vec![
+                    "Alguma partição para área de troca?".to_string(),
+                    format!(
+                        "Menor que {} não compensa.",
+                        disco::tamanho_legivel(TROCA_MINIMA)
+                    ),
+                ];
+                if !triagem.recusadas.is_empty() {
+                    intro.push(String::new());
+                    intro.push("Fora da lista:".to_string());
+                    for r in &triagem.recusadas {
+                        intro.push(format!("  {r}"));
+                    }
+                }
+                match term.menu_detalhado("área de troca", &intro, &itens)? {
+                    Some(0) => {
+                        troca = None;
+                        passo = 5;
+                    }
+                    Some(i) => {
+                        troca = Some(triagem.servem[i - 1].clone());
+                        passo = 5;
+                    }
+                    None => passo = 3,
+                }
+            }
+            // 5 — confirmação
+            _ => {
+                let esp_p = esp.as_ref().expect("ESP escolhida");
+                let raiz_p = raiz.as_ref().expect("raiz escolhida");
+                let mut linhas =
+                    linhas_do_plano_manual(esp_p, formatar_esp, raiz_p, troca.as_ref());
+                linhas.insert(0, format!("Disco: {}", alvo.resumo()));
+                linhas.insert(1, String::new());
+                if term.confirma_com_enter(
+                    "confirmação",
+                    &linhas,
+                    "Enter FORMATA as partições · Esc volta",
+                )? {
+                    return Ok(Some(Decisao::Manual {
+                        disco: alvo.caminho().display().to_string(),
+                        esp: format!("/dev/{}", esp_p.nome),
+                        formatar_esp,
+                        raiz: format!("/dev/{}", raiz_p.nome),
+                        troca: troca.as_ref().map(|t| format!("/dev/{}", t.nome)),
+                    }));
+                }
+                passo = 4;
+            }
         }
     }
-    let troca = match term.menu_detalhado("área de troca", &intro, &itens)? {
-        None => return Ok(None),
-        Some(0) => None,
-        Some(i) => Some(triagem_troca.servem[i - 1].clone()),
-    };
-
-    // Confirmação
-    let mut linhas = linhas_do_plano_manual(&esp, formatar_esp, &raiz, troca.as_ref());
-    linhas.insert(0, format!("Disco: {}", alvo.resumo()));
-    linhas.insert(1, String::new());
-    if !term.confirma_digitando("confirmação", &linhas, &alvo.nome)? {
-        return Ok(None);
-    }
-
-    Ok(Some(Decisao::Manual {
-        disco: alvo.caminho().display().to_string(),
-        esp: format!("/dev/{}", esp.nome),
-        formatar_esp,
-        raiz: format!("/dev/{}", raiz.nome),
-        troca: troca.map(|t| format!("/dev/{}", t.nome)),
-    }))
 }
 
 /// Uma tela de "qual partição faz este papel", já com a explicação das que
@@ -577,11 +666,26 @@ fn escolher_papel(
     }
 }
 
+/// As linhas da tela de desistência.
+pub fn linhas_de_desistencia() -> Vec<String> {
+    vec![
+        "Desistir da instalação?".to_string(),
+        String::new(),
+        "Nada foi escrito em disco algum: sair agora não deixa rastro.".to_string(),
+        "A máquina cai num shell de resgate, e reiniciar a traz de volta".to_string(),
+        "para cá.".to_string(),
+    ]
+}
+
 /// O instalador inteiro: escolhe disco, rota, e devolve a decisão.
 ///
-/// O laço volta à lista de discos sempre que uma etapa é cancelada, em vez de
-/// abortar. Cancelar uma escolha intermediária quer dizer "não era essa", e não
-/// "desisti de instalar"; só o Esc na lista de discos é desistência.
+/// ESC E SETA-ESQUERDA VOLTAM UMA TELA, e desistir é uma tela à parte.
+///
+/// A versão anterior tratava Esc na lista de discos como desistência imediata:
+/// dois Esc — um para sair de uma tela, outro sem querer — derrubavam a máquina
+/// no shell de resgate, que ainda por cima se parece com uma instalação
+/// quebrada. Sair da primeira tela é a única saída que não tem "tela anterior",
+/// e por isso é a única que pergunta.
 pub fn executar(
     term: &mut Terminal,
     sysfs: &Path,
@@ -591,34 +695,45 @@ pub fn executar(
 ) -> Result<Option<Decisao>> {
     loop {
         let Some(alvo) = escolher_disco(term, sysfs, excluir)? else {
-            return Ok(None);
-        };
-        let Some(rota) = escolher_rota(term, &alvo)? else {
+            if term.confirma_com_enter(
+                "desistir",
+                &linhas_de_desistencia(),
+                "Enter desiste · Esc volta para a lista",
+            )? {
+                return Ok(None);
+            }
             continue;
         };
-        match rota {
-            Rota::DiscoInteiro => {
-                if let Err(motivo) = cabe_disco_inteiro(&alvo, exig) {
-                    term.aviso(
-                        "disco pequeno demais",
-                        &[
-                            motivo,
-                            String::new(),
-                            "Escolha outro disco, ou parta este à mão se quiser".into(),
-                            "aproveitar espaço já existente.".into(),
-                        ],
-                    )?;
-                    continue;
+        // Laço da rota: voltar daqui devolve à lista de discos, e voltar de
+        // dentro de uma rota devolve a esta escolha — uma tela por vez.
+        loop {
+            let Some(rota) = escolher_rota(term, &alvo)? else {
+                break;
+            };
+            match rota {
+                Rota::DiscoInteiro => {
+                    if let Err(motivo) = cabe_disco_inteiro(&alvo, exig) {
+                        term.aviso(
+                            "disco pequeno demais",
+                            &[
+                                motivo,
+                                String::new(),
+                                "Escolha outro disco, ou parta este à mão se quiser".into(),
+                                "aproveitar espaço já existente.".into(),
+                            ],
+                        )?;
+                        continue;
+                    }
+                    if confirmar_destruicao(term, &alvo)? {
+                        return Ok(Some(Decisao::DiscoInteiro {
+                            disco: alvo.caminho().display().to_string(),
+                        }));
+                    }
                 }
-                if confirmar_destruicao(term, &alvo)? {
-                    return Ok(Some(Decisao::DiscoInteiro {
-                        disco: alvo.caminho().display().to_string(),
-                    }));
-                }
-            }
-            Rota::Manual => {
-                if let Some(d) = rota_manual(term, sysfs, &alvo, exig, cfdisk)? {
-                    return Ok(Some(d));
+                Rota::Manual => {
+                    if let Some(d) = rota_manual(term, sysfs, &alvo, exig, cfdisk)? {
+                        return Ok(Some(d));
+                    }
                 }
             }
         }
@@ -754,6 +869,45 @@ mod tests {
         );
     }
 
+    /// O aviso precisa responder as perguntas do cfdisk ANTES de o operador
+    /// ficar sozinho com elas: ele está numa máquina que ainda não tem sistema
+    /// e não tem como pesquisar o que "Device already contains a gpt signature"
+    /// quer dizer.
+    #[test]
+    fn o_aviso_do_cfdisk_antecipa_as_perguntas_e_os_minimos() {
+        let d = disco_de_teste(vec![]);
+        let texto = linhas_do_aviso_cfdisk(&d, &exigencias()).join("\n");
+
+        // O rótulo TEM de ser gpt — o init recusa o disco depois se não for, e
+        // descobrir isso já no cfdisk custa uma volta inteira.
+        assert!(texto.contains("gpt"), "não diz o tipo de rótulo:\n{texto}");
+        // A pergunta da assinatura velha, com a resposta.
+        assert!(texto.contains("signature"), "não antecipa a pergunta da assinatura");
+        assert!(texto.contains("Yes"), "antecipa a pergunta e não dá a resposta");
+        // Os três tipos de partição, com o nome que o cfdisk usa.
+        for tipo in ["EFI System", "Linux filesystem", "Linux swap"] {
+            assert!(texto.contains(tipo), "falta o tipo {tipo:?}");
+        }
+        // Os três mínimos, DERIVADOS das exigências e não digitados: um número
+        // copiado à mão aqui envelheceria calado no dia em que o EFI crescesse,
+        // e o teste passaria afirmando um valor que a tela não mostra mais.
+        let e = exigencias();
+        for (quem, bytes) in [
+            ("ESP", e.esp_minima()),
+            ("raiz", e.raiz_minima_bytes),
+            ("troca", TROCA_MINIMA),
+        ] {
+            let esperado = disco::tamanho_legivel(bytes);
+            assert!(
+                texto.contains(&esperado),
+                "falta o mínimo da {quem} ({esperado}):\n{texto}"
+            );
+        }
+        // E o que faz tudo isso valer.
+        assert!(texto.contains("[Write]") && texto.contains("'yes'"),
+                "não diz que sem gravar nada vale");
+    }
+
     /// A serialização é o contrato com o init. Toda chave sai sempre.
     #[test]
     fn serializacao_traz_todas_as_chaves() {
@@ -848,7 +1002,7 @@ mod tests {
     /// "disco inteiro", e o nome digitado confirma.
     #[test]
     fn sessao_automatica_devolve_o_disco_escolhido() {
-        let (d, tela, raiz) = sessao(b"\r\rsda\r", DISCO_GRANDE);
+        let (d, tela, raiz) = sessao(b"\r\r\r", DISCO_GRANDE);
         assert_eq!(
             d,
             Some(Decisao::DiscoInteiro { disco: "/dev/sda".into() })
@@ -858,10 +1012,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&raiz);
     }
 
-    /// Esc na lista de discos é desistência, e desistir não instala nada.
+    /// Desistir exige DUAS teclas: o Esc abre a tela de desistência e o Enter
+    /// a confirma. Um Esc solto na primeira tela não pode mais derrubar a
+    /// máquina no shell de resgate.
     #[test]
-    fn esc_na_lista_de_discos_desiste() {
-        let (d, _, raiz) = sessao(b"\x1b", DISCO_GRANDE);
+    fn desistir_pede_confirmacao() {
+        let (d, _, raiz) = sessao(b"\x1b\r", DISCO_GRANDE);
         assert_eq!(d, None);
         let _ = std::fs::remove_dir_all(&raiz);
     }
@@ -870,9 +1026,14 @@ mod tests {
     /// e o Esc seguinte encerra sem decisão — este é o teste que impede a
     /// confirmação de virar decorativa.
     #[test]
-    fn nome_errado_na_confirmacao_nao_instala() {
-        let (d, _, raiz) = sessao(b"\r\rsdb\r\x1b", DISCO_GRANDE);
-        assert_eq!(d, None, "confirmação com o nome de OUTRO disco instalou");
+    fn esc_na_confirmacao_nao_instala_e_volta_uma_tela() {
+        //  \r      escolhe o disco
+        //  \r      escolhe "usar o disco inteiro"
+        //  \x1b    Esc na confirmação: não instala, volta para a rota
+        //  \x1b    Esc na rota: volta para a lista de discos
+        //  \x1b\r  Esc na lista, e Enter confirmando a desistência
+        let (d, _, raiz) = sessao(b"\r\r\x1b\x1b\x1b\r", DISCO_GRANDE);
+        assert_eq!(d, None, "a confirmação recusada instalou assim mesmo");
         let _ = std::fs::remove_dir_all(&raiz);
     }
 
@@ -880,12 +1041,12 @@ mod tests {
     /// tela, e o instalador volta à lista em vez de morrer.
     #[test]
     fn disco_pequeno_e_recusado_e_o_laco_continua() {
-        let (d, tela, raiz) = sessao(b"\r\r\r\x1b", 2 * 1024 * 1024 * 1024);
+        let (d, tela, raiz) = sessao(b"\r\r\r\x1b\x1b\r", 2 * 1024 * 1024 * 1024);
         assert_eq!(d, None);
         let visto = tela.texto();
         assert!(visto.contains("2,1 GB"), "falta o tamanho do disco:\n{visto}");
         assert!(visto.contains("4,3 GB"), "falta o quanto seria preciso:\n{visto}");
-        assert!(!visto.contains("digite sda para confirmar"), "chegou a oferecer a destruição");
+        assert!(!visto.contains("Enter APAGA o disco"), "chegou a oferecer a destruição");
         let _ = std::fs::remove_dir_all(&raiz);
     }
 
@@ -900,7 +1061,7 @@ mod tests {
         //  \r   raiz = sda2 (único item ≥ 4 GiB fora a ESP)
         //  2    troca = sda3 (item 0 é "sem área de troca")
         //  sda\r confirma
-        let (d, tela, raiz) = sessao(b"\r2\r\r2\r2sda\r", DISCO_GRANDE);
+        let (d, tela, raiz) = sessao(b"\r2\r\r2\r2\r", DISCO_GRANDE);
         assert_eq!(
             d,
             Some(Decisao::Manual {
@@ -922,7 +1083,7 @@ mod tests {
     /// valor se perde no caminho.
     #[test]
     fn sessao_manual_preserva_a_esp_quando_pedido() {
-        let (d, _, raiz) = sessao(b"\r2\r\r\r\r1sda\r", DISCO_GRANDE);
+        let (d, _, raiz) = sessao(b"\r2\r\r\r\r1\r", DISCO_GRANDE);
         match d {
             Some(Decisao::Manual { formatar_esp, troca, .. }) => {
                 assert!(!formatar_esp, "a ESP seria formatada mesmo tendo escolhido preservar");
