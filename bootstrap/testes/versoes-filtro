@@ -1,0 +1,63 @@
+#!/bin/sh
+# Os casos que corrigiram o filtro do `bootstrap/versoes`, travados como teste.
+#
+# Cada linha aqui nasceu de um ERRO do script, achado ao rodá-lo contra a árvore
+# de verdade. Não são casos inventados: são as versões reais que o upstream
+# publicava no dia, e o veredito que o script deu errado antes de aprender.
+#
+# O par wayland/libdrm é o que mais importa: são o MESMO HOST, o mesmo
+# gitlab.freedesktop.org, e usam esquemas opostos. Qualquer regra por host
+# quebra um dos dois.
+set -u
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+TMP=${TMPDIR:-/tmp}/distropica-teste-versoes.$$
+trap 'rm -f "$TMP"' EXIT
+
+sed -n '/^filtra_candidatos()/,/^}/p' "$REPO/bootstrap/versoes"  > "$TMP"
+sed -n '/^maior()/,/^}/p'             "$REPO/bootstrap/versoes" >> "$TMP"
+. "$TMP"
+
+falhas=0
+teste() {  # nome pin familia esperado candidatos...
+    nome=$1; pin=$2; fam=$3; esperado=$4; shift 4
+    got=$(printf '%s\n' "$@" | filtra_candidatos "$pin" "$fam" | maior)
+    if [ "$got" = "$esperado" ]; then
+        printf '  ok      %-12s %-10s -> %s\n' "$nome" "$pin" "$got"
+    else
+        printf '  FALHOU  %-12s %-10s -> %s (esperava %s)\n' \
+            "$nome" "$pin" "${got:-vazio}" "$esperado"
+        falhas=$((falhas + 1))
+    fi
+}
+
+# 1.25.0 é RELEASE com minor ímpar; o rc é o 1.25.91, de 1.26. Tratar minor
+# ímpar como desenvolvimento aqui descartaria uma versão estável.
+teste wayland    1.25.0   nao 1.26.0   1.26.0 1.25.91 1.25.0 1.24.91 1.24.0 1.23.0
+
+# Mesmo host do wayland, esquema oposto: o micro só conta. A regra "micro >= 90
+# é rc" devolvia 2.4.89 para um pacote pinado em 2.4.134.
+teste libdrm     2.4.134  nao 2.4.134  2.4.134 2.4.133 2.4.89
+
+# GNOME: 2.89 é série de desenvolvimento. Sem a regra por família, o script
+# mandava adotar o 2.89.3.
+teste glib       2.88.2   sim 2.88.3   2.89.3 2.89.0 2.88.3 2.88.2
+
+# Minor ímpar que NÃO é desenvolvimento. Deduzir a convenção dos números
+# descartava o 2.11.1, que é release.
+teste minicom    2.10     nao 2.11.1   2.11.1 2.11 2.10 2.9
+
+# Tag de data no meio das tags de versão: o sort -V a põe acima de tudo.
+teste fontconfig 2.18.1   nao 2.18.3   20021030 2.18.3 2.18.2
+
+# O sufixo de patch do OpenSSH é versão estável, não pré-lançamento.
+teste openssh    10.4p1   nao 10.4p1   10.4p1 10.3p1 9.9p2
+
+# Data como versão inteira, e um candidato que não pode ser confundido com ela.
+teste firmware   20260622 nao 20260622 20260622 20260519 20260405
+
+echo
+if [ "$falhas" -gt 0 ]; then
+    echo "$falhas caso(s) falharam"
+    exit 1
+fi
+echo "todos os casos passaram"

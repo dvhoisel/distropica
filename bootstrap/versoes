@@ -117,57 +117,57 @@ maior() {
         sort -V | tail -1
 }
 
-# FILTRA CANDIDATOS À LUZ DA VERSÃO PINADA, e não à luz de uma convenção fixa.
+# FILTRA CANDIDATOS, e cada regra tem uma origem diferente de autoridade.
 #
-# Uma convenção circula nos upstreams desta árvore, e ela é LOCAL:
+# Três esquemas convivem nos upstreams desta árvore, e eu errei ao tratá-los
+# como um só. As correções vieram todas de olhar os dados de cada projeto:
 #
-#   minor ímpar = série de desenvolvimento  (glib 2.89, wayland 1.25)
+#   glib      2.88.2 2.88.3 2.89.0 ... 2.89.3     minor ímpar = desenvolvimento
+#   wayland   1.24.0 1.24.91 1.25.0 1.25.91 1.26.0   micro >= 90 = rc do minor+1
+#   libdrm    2.4.130 ... 2.4.134                 nenhum dos dois; só conta
+#   minicom   2.9 2.10 2.11 2.11.1                nenhum dos dois; só conta
 #
-# Aplicá-la a todo mundo foi o primeiro erro deste script: o minicom 2.11.1 é
-# release estável e ficava de fora porque o minor 11 é ímpar.
+# O wayland desfaz a leitura ingênua: 1.25.0 é RELEASE, com minor ímpar, e é o
+# 1.25.91 que é rc — de 1.26. Aplicar "minor ímpar = dev" ali descartaria uma
+# versão estável. E aplicar "micro >= 90 = rc" ao libdrm descarta o 2.4.134, que
+# é o topo da série.
 #
-# HOUVE UMA SEGUNDA REGRA, "micro >= 90 é release candidate", e ela SAIU por ser
-# redundante e perigosa. Redundante porque os rc do wayland e do GNOME moram na
-# série de minor ímpar — o 1.25.91 é rc de 1.26, e o filtro de minor ímpar já o
-# descarta. Perigosa porque projetos que apenas contam o micro chegam lá: o
-# libdrm 2.4.134 era descartado como pré-lançamento, e o script devolvia 2.4.89
-# como "a versão mais nova" de um pacote pinado em 2.4.134.
+# Daí as três regras terem fontes distintas:
 #
-# QUEM DECIDE SE A CONVENÇÃO VALE É A FAMÍLIA DO UPSTREAM, e não uma dedução a
-# partir dos números. Tentei deduzir — "pinado com minor par e existe candidato
-# ímpar acima" — e a dedução erra: o minicom 2.10 tem minor par por coincidência
-# e o 2.11.1 é release estável, mas a regra o descartava como desenvolvimento.
+#   MAGNITUDE — vale para todos, e não é convenção: um candidato cujo primeiro
+#   componente tem muito mais dígitos que o pinado é tag de data no meio das
+#   tags de versão. Foi o 20021030 "atualizando" o fontconfig 2.18.1.
 #
-# Os números não distinguem "2.89 é dev do glib" de "2.11 é release do minicom".
-# O que distingue é o PROJETO, e o GNOME não publica esse fato de forma legível:
-# há um LATEST-IS-2.88.3 dentro da série 2.88, mas nada diz qual série é
-# estável. Então a convenção passa a valer por família — GNOME e freedesktop, os
-# dois que de fato a usam — e não por adivinhação.
+#   MINOR ÍMPAR — vale por FAMÍLIA, e só o GNOME. Os números não distinguem
+#   "2.89 é dev do glib" de "2.11 é release do minicom", e o GNOME não publica o
+#   fato de forma legível: há LATEST-IS-2.88.3 dentro da série 2.88, mas nada diz
+#   qual série é estável.
 #
-# Dentro dessas famílias a versão pinada ainda ensina uma coisa: se ela própria
-# tem minor ímpar, o projeto abandonou o esquema (ou já está numa série de
-# desenvolvimento, que é outro problema) e nada se filtra.
-#
-# A terceira regra não é convenção, é sanidade: um candidato cujo primeiro
-# componente tem muito mais dígitos que o pinado não é versão nova, é outra
-# coisa — uma tag de data no meio das tags de versão. Foi assim que o fontconfig
-# 2.18.1 "subiu" para 20021030, uma tag de 2002 que o `sort -V` põe no topo.
-filtra_candidatos() {  # versao_pinada [convencao]
-    awk -F. -v pin="$1" -v fam="${2:-nao}" '
-        BEGIN {
+#   MICRO >= 90 — vale para todos, mas SÓ QUANDO OS DADOS PROVAM: X.Y.Z com
+#   Z >= 90 é rc se, e somente se, existir candidato X.(Y+1).*. É o que separa o
+#   wayland 1.25.91 (existe 1.26.0) do libdrm 2.4.134 (não existe 2.5.x). A
+#   regra deixa de ser palpite sobre o projeto e passa a ser leitura do conjunto.
+filtra_candidatos() {  # versao_pinada [gnome]
+    awk -F. -v pin="$1" -v gnome="${2:-nao}" '
+        {
+            linha[++n] = $0
+            split($0, v, ".")
+            if (v[1] != "" && v[2] != "") maior_minor[v[1]] = \
+                (v[2] + 0 > maior_minor[v[1]] + 0) ? v[2] + 0 : maior_minor[v[1]] + 0
+        }
+        END {
             split(pin, p, ".")
             digitos_pin = length(p[1])
-            # a convenção só entra na família certa E se o pino for par
-            usa = (fam == "sim" && p[2] != "" && p[2] % 2 == 0)
-        }
-        {
-            split($0, v, ".")
-            # sanidade de magnitude: vale para TODOS. Um candidato cujo primeiro
-            # componente tem muito mais dígitos que o pinado é tag de data, não
-            # versão nova — foi o 20021030 que "atualizava" o fontconfig 2.18.1.
-            if (length(v[1]) > digitos_pin + 1) next
-            if (usa && v[2] != "" && v[2] % 2 == 1) next
-            print
+            usa_impar = (gnome == "sim" && p[2] != "" && p[2] % 2 == 0)
+            for (i = 1; i <= n; i++) {
+                split(linha[i], v, ".")
+                if (length(v[1]) > digitos_pin + 1) continue
+                if (usa_impar && v[2] != "" && v[2] % 2 == 1) continue
+                # rc só quando existe minor acima no mesmo major
+                if (v[3] != "" && v[3] + 0 >= 90 && \
+                    maior_minor[v[1]] + 0 > v[2] + 0) continue
+                print linha[i]
+            }
         }'
 }
 
@@ -209,7 +209,7 @@ de_gitlab_fdo() {  # url, versao pinada
     [ -n "$proj" ] || return 1
     busca "https://gitlab.freedesktop.org/api/v4/projects/$proj/repository/tags?per_page=100" |
         grep -oE '"name":"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' |
-        sed 's/^[vV]//; s/^[A-Za-z_-]*-//' | filtra_candidatos "$2" sim | maior
+        sed 's/^[vV]//; s/^[A-Za-z_-]*-//' | filtra_candidatos "$2" | maior
 }
 
 de_kernel_org() {  # url
@@ -295,12 +295,10 @@ de_gitlab() {  # url, versao pinada
     id=$(printf '%s' "$1" | sed -n 's|.*/api/v4/projects/\([0-9]*\)/.*|\1|p')
     [ -n "$id" ] && proj=$id
     [ -n "$proj" ] || return 1
-    conv=nao
-    case "$host" in *freedesktop.org) conv=sim ;; esac
     busca "https://$host/api/v4/projects/$proj/repository/tags?per_page=100" |
         grep -oE '"name":"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' |
         sed 's/^[vV]//; s/^[A-Za-z_-]*-//' |
-        filtra_candidatos "$2" "$conv" | maior
+        filtra_candidatos "$2" | maior
 }
 
 # O cacert.pem carrega a data de extracao no cabecalho, e e essa data que a
