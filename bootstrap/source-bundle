@@ -182,6 +182,27 @@ pacotes=$(printf '%s\n' $pacotes | sort -u)
 # que uma linha de código mudasse. Conferido com `minitrue fingerprint` antes
 # de escolher o caminho, e não suposto — o hash ficou igual com e sem um
 # arquivo de sonda no diretório da receita.
+# Lê um campo do recipe juntando as linhas terminadas em '\'.
+campo_continuado() {
+    awk -v chave="$2" '
+        $0 ~ "^" chave "=" { dentro = 1 }
+        dentro {
+            linha = $0
+            sub(/^[A-Za-z0-9_]+=/, "", linha)
+            cont = (linha ~ /\\[[:space:]]*$/)
+            sub(/\\[[:space:]]*$/, "", linha)
+            gsub(/"/, "", linha)
+            texto = texto " " linha
+            if (!cont) {
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", texto)
+                gsub(/[[:space:]]+/, " ", texto)
+                print texto
+                exit
+            }
+        }
+    ' "$1"
+}
+
 coletar_correspondentes() {
     decl=$(dirname "$receita")/fontes-correspondentes
     [ -f "$decl" ] || return 0
@@ -256,8 +277,22 @@ for pacote in $pacotes; do
     # SRC e SHA256 são listas paralelas separadas por espaço (mathlibs-glibc
     # traz três tarballs), e a única variável que aparece no SRC desta árvore
     # é $VERSION — conferido em toda a newspeak antes de assumir isto.
-    src=$(grep '^SRC=' "$receita" | head -1 | cut -d= -f2- | tr -d '"')
-    hashes=$(grep '^SHA256=' "$receita" | head -1 | cut -d= -f2- | tr -d '"')
+    #
+    # A LEITURA JUNTA CONTINUAÇÕES DE LINHA, e isto foi um defeito de verdade.
+    # A versão anterior era `grep '^SRC=' | head -1`, que pega só a PRIMEIRA
+    # linha do campo. O rust escreve cinco tarballs em cinco linhas com '\' no
+    # fim, e o resultado foi um bundle com o primeiro artefato, um item de hash
+    # literalmente igual a '\', e os outros quatro simplesmente ausentes.
+    #
+    # O sintoma foi um aviso que apontava para o lugar errado — "fonte ausente
+    # do cache para: rust" — quando a fonte estava no cache e quem não sabia
+    # lê-la era este script. Custou uma ida ao upstream atrás de um arquivo que
+    # já estava aqui.
+    #
+    # Ninguém tinha percebido porque até então todo recipe com múltiplas fontes
+    # escrevia tudo numa linha só.
+    src=$(campo_continuado "$receita" SRC)
+    hashes=$(campo_continuado "$receita" SHA256)
     if [ -z "$src" ]; then
         printf '%s\t%s\t%s\t%s\t-\t-\t(receita de montagem, sem fonte upstream)\t-\n' \
             "$pacote" "$versao" "$mundo" "$licenca" >> "$inventario"
