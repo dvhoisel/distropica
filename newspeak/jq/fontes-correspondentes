@@ -1,0 +1,26 @@
+# Fonte correspondente do jq.
+#
+# POR QUE ESTE ARQUIVO EXISTE. O jq desta árvore é KIND=binary — o SRC aponta
+# para o `jq-linux-amd64`, o executável solto que a release publica. O bundle
+# copiava esse binário para upstream/ como se fosse a fonte, o mesmo buraco do
+# busybox, do rust e do firefox.
+#
+# E AQUI A OBRIGAÇÃO É DE LICENÇA, e não só de política. O LICENSE da receita é
+# "MIT AND BSD-2-Clause AND ICU AND LGPL-2.1-or-later": o componente LGPL exige,
+# pela §6, que quem distribui o binário disponibilize a fonte correspondente.
+# Dos sete pacotes que o `bootstrap/sbom` acusou sem evidência, o jq era o
+# citado por nome na tarefa de licenciamento justamente por isto.
+#
+# O QUE ESTE ARQUIVO NÃO RESOLVE. O binário publicado pela release é construído
+# pela infraestrutura do projeto jq, e o que se entrega aqui é a fonte da versão
+# exata — não a configuração daquela build. Mesma ressalva dos outros três.
+#
+# POR QUE FORA DA RECEITA. O FINGERPRINT cobre o TEXTO da receita. Conferido
+# para o jq antes de escrever, e não herdado dos casos anteriores.
+#
+# O sha256 foi conferido contra o `sha256sum.txt` que a própria release publica,
+# antes de o arquivo entrar no cache.
+#
+# FORMATO: linhas de '<sha256>  <url>'. Comentários com '#'. Os arquivos
+# precisam estar no cache de fontes do rootfs para entrarem no bundle.
+71b8d6e8f5fe81f6c6d0d110e3892251f6ce76ed095abd315e26e6e1193af3af  https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-1.8.2.tar.gz
