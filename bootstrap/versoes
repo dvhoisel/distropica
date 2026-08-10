@@ -138,10 +138,14 @@ maior() {
 #   componente tem muito mais dígitos que o pinado é tag de data no meio das
 #   tags de versão. Foi o 20021030 "atualizando" o fontconfig 2.18.1.
 #
-#   MINOR ÍMPAR — vale por FAMÍLIA, e só o GNOME. Os números não distinguem
-#   "2.89 é dev do glib" de "2.11 é release do minicom", e o GNOME não publica o
-#   fato de forma legível: há LATEST-IS-2.88.3 dentro da série 2.88, mas nada diz
-#   qual série é estável.
+#   MINOR ÍMPAR — vale por FAMÍLIA: GNOME e Perl, os dois que esta árvore usa.
+#   Os números não distinguem "2.89 é dev do glib" de "2.11 é release do
+#   minicom", e nenhum dos dois publica o fato de forma legível — no GNOME há
+#   LATEST-IS-2.88.3 dentro da série 2.88, mas nada diz qual série é estável.
+#
+#   A lista de famílias cresce por DESCOBERTA, e cada entrada custou um erro: o
+#   Perl entrou porque o conferidor mandou a árvore para o 5.45.1, que é série
+#   de desenvolvimento — o CPAN lista 5.43.x e 5.45.x ao lado do 5.44.0 estável.
 #
 #   MICRO >= 90 — vale para todos, mas SÓ QUANDO OS DADOS PROVAM: X.Y.Z com
 #   Z >= 90 é rc se, e somente se, existir candidato X.(Y+1).*. É o que separa o
@@ -267,6 +271,18 @@ de_kernel_org() {  # url
 # lista, e procura o maior '<nome>-<versão>.tar.*'. Serve para ftp.gnu.org,
 # x.org, netfilter, tcpdump, alsa, cairo, busybox e a maioria dos tarballs
 # clássicos.
+# O Perl usa o mesmo esquema do GNOME e não está no download.gnome.org: o CPAN
+# lista 5.43.x e 5.45.x (desenvolvimento) ao lado do 5.44.0 (estável). Sem esta
+# entrada o conferidor mandava a árvore para o 5.45.1, uma série de
+# desenvolvimento, que a P7 proíbe com todas as letras.
+de_cpan() {  # url, versao pinada
+    dir=${1%/*}/
+    busca "$dir" |
+        grep -oE 'perl-[0-9]+(\.[0-9]+)+\.tar\.[a-z]+' |
+        sed 's/^perl-//; s/\.tar\..*$//' |
+        filtra_candidatos "$2" sim | maior
+}
+
 de_listagem() {  # url
     dir=${1%/*}/
     base=$(basename "$1")
@@ -364,6 +380,7 @@ upstream_de() {  # url, versao pinada
         *git.zx2c4.com/*)            de_cgit "$1" ;;
         *curl.se/ca/*)               de_curl_ca ;;
         *busybox.net/downloads/binaries/*) de_busybox_bin ;;
+        *cpan.org/src/*)             de_cpan "$1" "$2" ;;
         *)                           de_listagem "$1" ;;
     esac
 }

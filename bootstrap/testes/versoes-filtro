@@ -81,6 +81,11 @@ tag libdrm-2.4.134         2.4.134
 tag v1.26.0                1.26.0
 tag 1.8.2                  1.8.2          # já normalizada, não se mexe
 
+# O Perl usa o mesmo esquema do GNOME, e não está no download.gnome.org: o
+# conferidor mandava a árvore para o 5.45.1, que é desenvolvimento. A estável é
+# a de minor par.
+teste perl       5.42.0   sim 5.44.0   5.45.1 5.44.0 5.43.11 5.43.6 5.42.0
+
 # E o beta precisa morrer no filtro seguinte, não aqui.
 teste xkbcommon  1.13.2   nao 1.13.2   1.14.0-beta1 1.13.2 1.12.0
 
