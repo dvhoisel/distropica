@@ -1,0 +1,37 @@
+# Fonte correspondente do Rust.
+#
+# POR QUE ESTE ARQUIVO EXISTE. O rust desta árvore é KIND=binary: a mídia leva
+# os cinco tarballs pré-compilados que a rust-lang.org publica (rustc, rust-std,
+# cargo, clippy, rustfmt), e nenhum deles carrega a fonte do compilador dentro.
+# O `bootstrap/source-bundle` da 0.12 reprovou por isso, com todas as letras:
+# "fonte ausente do cache para: rust; o bundle está INCOMPLETO e não satisfaz o
+# §8".
+#
+# POR QUE O GO NÃO PRECISA DISTO. O tarball do Go traz o `src/` inteiro dentro,
+# então a fonte já viaja com o binário e o bundle a encontra sozinho. A
+# diferença é do upstream, não da árvore.
+#
+# ISTO NÃO É OBRIGAÇÃO DE LICENÇA, E MESMO ASSIM É OBRIGAÇÃO. O rust é
+# "(MIT OR Apache-2.0) AND Apache-2.0 WITH LLVM-exception AND ISC" — licenças
+# permissivas, que não exigem fonte de quem redistribui binário. O caso é
+# diferente do busybox, que é GPL-2.0 e onde a §3 obriga. O que obriga aqui é a
+# política desta distro: o §8 da SPEC-0011 e a promessa que o LICENSING.md faz
+# ao leitor. Uma promessa que só vale quando a licença já obrigaria não é
+# promessa nenhuma.
+#
+# POR QUE FORA DA RECEITA. O FINGERPRINT cobre o TEXTO da receita, e mudá-la
+# recompilaria o pacote sem que uma linha de código tivesse mudado. Conferido
+# antes de escolher, e não herdado do caso do busybox: o `minitrue fingerprint
+# rust` devolveu f873154cb34e85a2... com e sem um arquivo de sonda neste
+# diretório.
+#
+# O QUE ESTE ARQUIVO NÃO RESOLVE. A fonte correspondente completa de um binário
+# inclui a configuração com que ele foi construído, e a rust-lang.org não
+# publica o `config.toml` dos artefatos que distribui. O que se entrega é a
+# fonte da versão exata, com o sha256 conferido contra o publicado pelo upstream
+# e a assinatura destacada que ele oferece. É substancialmente melhor que nada e
+# ainda assim menos que o ideal — a mesma ressalva que vale para o busybox.
+#
+# FORMATO: linhas de '<sha256>  <url>'. Comentários com '#'. Os arquivos
+# precisam estar no cache de fontes do rootfs para entrarem no bundle.
+0ed06fdaffd4722a7702e0b4eebfafc897ab8f513e8e1b247cdd7e5c6df6ded2  https://static.rust-lang.org/dist/2026-07-16/rustc-1.97.1-src.tar.xz
