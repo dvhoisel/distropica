@@ -15,6 +15,7 @@ trap 'rm -f "$TMP"' EXIT
 
 sed -n '/^filtra_candidatos()/,/^}/p' "$REPO/bootstrap/versoes"  > "$TMP"
 sed -n '/^maior()/,/^}/p'             "$REPO/bootstrap/versoes" >> "$TMP"
+sed -n '/^normaliza_tag()/,/^}/p'     "$REPO/bootstrap/versoes" >> "$TMP"
 . "$TMP"
 
 falhas=0
@@ -54,6 +55,34 @@ teste openssh    10.4p1   nao 10.4p1   10.4p1 10.3p1 9.9p2
 
 # Data como versão inteira, e um candidato que não pode ser confundido com ela.
 teste firmware   20260622 nao 20260622 20260622 20260519 20260405
+
+# ---------------------------------------------------------------------------
+# Nomes de tag, e a versão que sai deles.
+#
+# Estes quatro produziram um erro particularmente traiçoeiro: o script comparava
+# a versão pinada com o NOME DA TAG, concluía que diferiam, e acusava como
+# atrasados três pacotes que já estavam atuais. "expat 2.8.2 -> R_2_8_2" é a
+# própria versão, com o nome da tag em volta.
+# ---------------------------------------------------------------------------
+tag() {  # entrada esperado
+    got=$(printf '%s\n' "$1" | normaliza_tag)
+    if [ "$got" = "$2" ]; then
+        printf '  ok      tag %-24s -> %s\n' "$1" "$got"
+    else
+        printf '  FALHOU  tag %-24s -> %s (esperava %s)\n' "$1" "${got:-vazio}" "$2"
+        falhas=$((falhas + 1))
+    fi
+}
+
+tag R_2_8_2                2.8.2          # expat: versão em underscores
+tag pcre2-10.47            10.47          # o NOME do projeto tem dígito
+tag xkbcommon-1.14.0-beta1 1.14.0-beta1   # prefixo sai; o beta fica para o filtro
+tag libdrm-2.4.134         2.4.134
+tag v1.26.0                1.26.0
+tag 1.8.2                  1.8.2          # já normalizada, não se mexe
+
+# E o beta precisa morrer no filtro seguinte, não aqui.
+teste xkbcommon  1.13.2   nao 1.13.2   1.14.0-beta1 1.13.2 1.12.0
 
 echo
 if [ "$falhas" -gt 0 ]; then

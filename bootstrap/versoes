@@ -171,6 +171,24 @@ filtra_candidatos() {  # versao_pinada [gnome]
         }'
 }
 
+# NORMALIZA UM NOME DE TAG PARA UMA VERSÃO, e cada regra aqui veio de um caso
+# real que o script leu errado contra a árvore.
+#
+#   R_2_8_2        expat: versão inteira em underscores, prefixada por letra
+#   pcre2-10.47    o NOME do projeto tem dígito, e um strip de [A-Za-z_-]* não
+#                  o alcança — a versão saía como "pcre2-10.47"
+#   xkbcommon-1.14.0-beta1   prefixo com hífen, e sufixo de pré-lançamento
+#   libdrm-2.4.134           prefixo com hífen, caso comum
+#   v1.26.0                  prefixo de uma letra
+normaliza_tag() {
+    sed -e 's/^[vV]\([0-9]\)/\1/' |
+        # versão toda em underscores atrás de um prefixo alfabético (R_2_8_2)
+        sed -e 's/^[A-Za-z][A-Za-z]*_\([0-9][0-9_]*\)$/\1/' -e '/^[0-9][0-9_]*$/ s/_/./g' |
+        # prefixo <nome>- onde o nome pode conter dígitos; repete até a string
+        # começar por dígito, o que resolve pcre2- e xkbcommon- de uma vez
+        sed -e ':a' -e 's/^[^0-9][^-]*-//' -e 'ta'
+}
+
 # ---------------------------------------------------------------------------
 # Tratadores por upstream. Cada um imprime a versão estável mais nova, ou nada.
 # ---------------------------------------------------------------------------
@@ -180,19 +198,36 @@ de_github() {   # url, versao pinada
     [ -n "$caminho" ] || return 1
     # A API de releases devolve o mais novo NÃO pré-lançamento. Onde o projeto
     # não usa releases, cai nas tags.
+    # A tag do release passa pelo MESMO normalizador e pelo MESMO filtro das
+    # tags soltas. A primeira versão normalizava só o caminho de fallback, e o
+    # resultado foi o script mandando atualizar o expat 2.8.2 para "R_2_8_2" e o
+    # pcre2 10.47 para "pcre2-10.47" — a própria versão pinada, com o nome da
+    # tag em volta.
     v=$(busca "https://api.github.com/repos/$caminho/releases/latest" |
-        sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+        sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1 |
+        normaliza_tag | filtra_candidatos "$2" | maior)
     [ -n "$v" ] || v=$(busca "https://api.github.com/repos/$caminho/tags?per_page=100" |
         grep -oE '"name": *"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' |
-        sed 's/^[vV]//; s/^[A-Za-z_-]*-//' | filtra_candidatos "$2" | maior)
-    printf '%s' "$v" | sed 's/^[vV]//; s/^[A-Za-z_-]*-//'
+        normaliza_tag | filtra_candidatos "$2" | maior)
+    printf '%s' "$v"
+}
+
+# A SÉRIE PINADA NA URL LIMITA OS CANDIDATOS, e isto não é detalhe do GNOME: é
+# como esta árvore expressa "quero o GTK 3, não o GTK 4". A receita gtk3 aponta
+# para .../sources/gtk/3.24/gtk-3.24.52.tar.xz, e o cache.json do pacote `gtk`
+# traz TODAS as séries — sem a restrição, o script mandava atualizar o gtk3 para
+# 4.22.4, que nesta árvore é outro pacote, com outra receita.
+serie_da_url() {  # url
+    printf '%s' "$1" | sed -n 's|.*/sources/[^/]*/\([0-9][0-9.]*\)/.*|\1|p'
 }
 
 de_gnome() {    # url, versao pinada
     pkg=$(printf '%s' "$1" | sed -n 's|.*/sources/\([^/]*\)/.*|\1|p')
     [ -n "$pkg" ] || return 1
+    serie=$(serie_da_url "$1")
     busca "https://download.gnome.org/sources/$pkg/cache.json" |
         tr ',' '\n' | grep -oE '"[0-9]+(\.[0-9]+)+"' | tr -d '"' |
+        { [ -n "$serie" ] && grep "^$serie\." || cat; } |
         filtra_candidatos "$2" sim | maior
 }
 
@@ -297,8 +332,7 @@ de_gitlab() {  # url, versao pinada
     [ -n "$proj" ] || return 1
     busca "https://$host/api/v4/projects/$proj/repository/tags?per_page=100" |
         grep -oE '"name":"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' |
-        sed 's/^[vV]//; s/^[A-Za-z_-]*-//' |
-        filtra_candidatos "$2" | maior
+        normaliza_tag | filtra_candidatos "$2" | maior
 }
 
 # O cacert.pem carrega a data de extracao no cabecalho, e e essa data que a
