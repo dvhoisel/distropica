@@ -1,0 +1,408 @@
+#!/bin/sh
+# Confere a versão pinada de CADA receita contra o estável mais novo do upstream.
+#
+# Exigência de publicação da SPEC-0011 §7.1, e o mecanismo que faltava à P7. A
+# premissa "sempre o estável mais recente" existia desde a SPEC-0001 e foi
+# violada em silêncio: a 0.12 saiu com o kernel 7.1.4 enquanto o kernel.org
+# publicava o 7.1.8. Nada acusou, porque nenhum guarda da árvore olha para FORA
+# dela — a receita não sabe que existe versão mais nova, os aceites provam que a
+# mídia instala e não que está atual, e o `channel emit` audita fechamento de
+# dependências, não idade. Este script olha.
+#
+# TRÊS VEREDITOS, E OS TRÊS APARECEM:
+#
+#   atual        pinado == estável mais novo
+#   atrasado     há estável mais novo, e nenhuma ressalva registrada
+#   pinado       há estável mais novo E existe newspeak/<pkg>/versao-pinada
+#                explicando por quê — a ressalva pragmática da P7
+#   ?            NAO CONFERIDO: o upstream não publica índice legível
+#
+# O '?' É A CATEGORIA PERIGOSA e por isso é listada por nome no fim, nunca
+# somada num total. Um relatório que diz "112 de 135 conferidos" e cala sobre os
+# 23 faz parecer conferido o que não foi.
+#
+# A RESSALVA MORA FORA DA RECEITA pelo mesmo motivo do `fontes-correspondentes`:
+# o FINGERPRINT cobre o texto do recipe, e acrescentar um campo lá recompilaria
+# o pacote e tudo o que depende dele sem que uma linha de código mudasse.
+set -u
+umask 022
+LC_ALL=C
+export LC_ALL
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+TSV=
+SO_PROBLEMAS=no
+CACHE=${VERSOES_CACHE:-${TMPDIR:-/tmp}/distropica-versoes-cache}
+ESPERA=25
+
+usage() {
+    cat <<'EOF'
+uso: bootstrap/versoes [--tsv ARQ] [--so-problemas] [--espera N]
+
+  --tsv ARQ       grava o relatório legível por máquina
+  --so-problemas  imprime só o que não está atual
+  --espera N      segundos de teto por consulta (default: 25)
+
+Sai 0 quando tudo está atual ou pinado com motivo; 1 quando há atrasado sem
+ressalva; 2 quando algo não pôde ser conferido. O maior vence.
+
+O cache de respostas vive em $TMPDIR/distropica-versoes-cache e evita repetir
+consulta na mesma sessão. Apague-o para forçar releitura.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --tsv) TSV=${2:?}; shift 2 ;;
+        --so-problemas) SO_PROBLEMAS=sim; shift ;;
+        --espera) ESPERA=${2:?}; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "erro: opção desconhecida: $1" >&2; usage >&2; exit 1 ;;
+    esac
+done
+
+command -v curl >/dev/null 2>&1 || { echo "erro: curl é necessário" >&2; exit 1; }
+mkdir -p "$CACHE"
+
+# Lê um campo do recipe juntando as linhas terminadas em '\'. Mesma regra do
+# `source-bundle`, e pela mesma razão: o rust escreve cinco fontes em cinco
+# linhas, e um `grep | head -1` lê só a primeira.
+campo() {
+    awk -v chave="$2" '
+        $0 ~ "^" chave "=" { dentro = 1 }
+        dentro {
+            linha = $0
+            sub(/^[A-Za-z0-9_]+=/, "", linha)
+            cont = (linha ~ /\\[[:space:]]*$/)
+            sub(/\\[[:space:]]*$/, "", linha)
+            gsub(/"/, "", linha)
+            texto = texto " " linha
+            if (!cont) {
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", texto)
+                gsub(/[[:space:]]+/, " ", texto)
+                print texto
+                exit
+            }
+        }
+    ' "$1"
+}
+
+# Busca com cache. A chave é o sha256 da URL — nomes de arquivo derivados da URL
+# esbarram em '/' e em limite de tamanho.
+busca() {
+    url=$1
+    chave=$(printf '%s' "$url" | sha256sum | cut -d' ' -f1)
+    if [ -f "$CACHE/$chave" ]; then
+        cat "$CACHE/$chave"
+        return 0
+    fi
+    if curl -fsSL --max-time "$ESPERA" -H 'User-Agent: distropica-versoes' \
+            -o "$CACHE/$chave.tmp" "$url" 2>/dev/null; then
+        mv "$CACHE/$chave.tmp" "$CACHE/$chave"
+        cat "$CACHE/$chave"
+        return 0
+    fi
+    rm -f "$CACHE/$chave.tmp"
+    return 1
+}
+
+# Maior versão de uma lista, por ordenação de versão. Descarta o que tiver cara
+# de pré-lançamento: a P7 é EDGE, não bleeding edge — nada de rc, beta, alpha,
+# pre ou snapshot de git.
+maior() {
+    grep -vE '(^|[-.])(rc|alpha|beta|pre|dev|snapshot|nightly)[-.0-9]*$' |
+        # o sufixo de patch do OpenSSH ('10.4p1') é versão estável, não
+        # pré-lançamento — recusá-lo punha o openssh em "não conferido".
+        grep -E '^[0-9]+(\.[0-9]+)*([a-z][0-9]+)?$' |
+        sort -V | tail -1
+}
+
+# FILTRA CANDIDATOS À LUZ DA VERSÃO PINADA, e não à luz de uma convenção fixa.
+#
+# Uma convenção circula nos upstreams desta árvore, e ela é LOCAL:
+#
+#   minor ímpar = série de desenvolvimento  (glib 2.89, wayland 1.25)
+#
+# Aplicá-la a todo mundo foi o primeiro erro deste script: o minicom 2.11.1 é
+# release estável e ficava de fora porque o minor 11 é ímpar.
+#
+# HOUVE UMA SEGUNDA REGRA, "micro >= 90 é release candidate", e ela SAIU por ser
+# redundante e perigosa. Redundante porque os rc do wayland e do GNOME moram na
+# série de minor ímpar — o 1.25.91 é rc de 1.26, e o filtro de minor ímpar já o
+# descarta. Perigosa porque projetos que apenas contam o micro chegam lá: o
+# libdrm 2.4.134 era descartado como pré-lançamento, e o script devolvia 2.4.89
+# como "a versão mais nova" de um pacote pinado em 2.4.134.
+#
+# QUEM DECIDE SE A CONVENÇÃO VALE É A FAMÍLIA DO UPSTREAM, e não uma dedução a
+# partir dos números. Tentei deduzir — "pinado com minor par e existe candidato
+# ímpar acima" — e a dedução erra: o minicom 2.10 tem minor par por coincidência
+# e o 2.11.1 é release estável, mas a regra o descartava como desenvolvimento.
+#
+# Os números não distinguem "2.89 é dev do glib" de "2.11 é release do minicom".
+# O que distingue é o PROJETO, e o GNOME não publica esse fato de forma legível:
+# há um LATEST-IS-2.88.3 dentro da série 2.88, mas nada diz qual série é
+# estável. Então a convenção passa a valer por família — GNOME e freedesktop, os
+# dois que de fato a usam — e não por adivinhação.
+#
+# Dentro dessas famílias a versão pinada ainda ensina uma coisa: se ela própria
+# tem minor ímpar, o projeto abandonou o esquema (ou já está numa série de
+# desenvolvimento, que é outro problema) e nada se filtra.
+#
+# A terceira regra não é convenção, é sanidade: um candidato cujo primeiro
+# componente tem muito mais dígitos que o pinado não é versão nova, é outra
+# coisa — uma tag de data no meio das tags de versão. Foi assim que o fontconfig
+# 2.18.1 "subiu" para 20021030, uma tag de 2002 que o `sort -V` põe no topo.
+filtra_candidatos() {  # versao_pinada [convencao]
+    awk -F. -v pin="$1" -v fam="${2:-nao}" '
+        BEGIN {
+            split(pin, p, ".")
+            digitos_pin = length(p[1])
+            # a convenção só entra na família certa E se o pino for par
+            usa = (fam == "sim" && p[2] != "" && p[2] % 2 == 0)
+        }
+        {
+            split($0, v, ".")
+            # sanidade de magnitude: vale para TODOS. Um candidato cujo primeiro
+            # componente tem muito mais dígitos que o pinado é tag de data, não
+            # versão nova — foi o 20021030 que "atualizava" o fontconfig 2.18.1.
+            if (length(v[1]) > digitos_pin + 1) next
+            if (usa && v[2] != "" && v[2] % 2 == 1) next
+            print
+        }'
+}
+
+# ---------------------------------------------------------------------------
+# Tratadores por upstream. Cada um imprime a versão estável mais nova, ou nada.
+# ---------------------------------------------------------------------------
+
+de_github() {   # url, versao pinada
+    caminho=$(printf '%s' "$1" | sed -n 's|^https\?://github\.com/\([^/]*\)/\([^/]*\)/.*|\1/\2|p')
+    [ -n "$caminho" ] || return 1
+    # A API de releases devolve o mais novo NÃO pré-lançamento. Onde o projeto
+    # não usa releases, cai nas tags.
+    v=$(busca "https://api.github.com/repos/$caminho/releases/latest" |
+        sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+    [ -n "$v" ] || v=$(busca "https://api.github.com/repos/$caminho/tags?per_page=100" |
+        grep -oE '"name": *"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' |
+        sed 's/^[vV]//; s/^[A-Za-z_-]*-//' | filtra_candidatos "$2" | maior)
+    printf '%s' "$v" | sed 's/^[vV]//; s/^[A-Za-z_-]*-//'
+}
+
+de_gnome() {    # url, versao pinada
+    pkg=$(printf '%s' "$1" | sed -n 's|.*/sources/\([^/]*\)/.*|\1|p')
+    [ -n "$pkg" ] || return 1
+    busca "https://download.gnome.org/sources/$pkg/cache.json" |
+        tr ',' '\n' | grep -oE '"[0-9]+(\.[0-9]+)+"' | tr -d '"' |
+        filtra_candidatos "$2" sim | maior
+}
+
+de_pypi() {     # url
+    pkg=$(printf '%s' "$1" | sed -n 's|.*/packages/source/./\([^/]*\)/.*|\1|p')
+    [ -n "$pkg" ] || pkg=$(printf '%s' "$1" | sed -n 's|.*/\([A-Za-z0-9_.-]*\)-[0-9].*|\1|p')
+    [ -n "$pkg" ] || return 1
+    busca "https://pypi.org/pypi/$pkg/json" |
+        sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' | head -1
+}
+
+de_gitlab_fdo() {  # url, versao pinada
+    proj=$(printf '%s' "$1" | sed -n 's|^https\?://gitlab\.freedesktop\.org/\([^/]*\)/\([^/]*\)/.*|\1%2F\2|p')
+    [ -n "$proj" ] || return 1
+    busca "https://gitlab.freedesktop.org/api/v4/projects/$proj/repository/tags?per_page=100" |
+        grep -oE '"name":"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' |
+        sed 's/^[vV]//; s/^[A-Za-z_-]*-//' | filtra_candidatos "$2" sim | maior
+}
+
+de_kernel_org() {  # url
+    case "$1" in
+        # O releases.json vem indentado em várias linhas, e um sed de uma linha
+        # não o lê — foi assim que o kernel caiu em "não conferido" no primeiro
+        # ensaio, justamente o pacote que motivou este script. Achatar antes de
+        # casar resolve sem precisar de um analisador de JSON.
+        # '/pub/linux/kernel/v' e nao '*linux-*': o linux-firmware mora no
+        # mesmo host e casava com o padrao largo, recebendo a versao do KERNEL
+        # como se fosse a sua — 7.1.8 contra um pino de 20260622.
+        */pub/linux/kernel/v*)
+            busca 'https://www.kernel.org/releases.json' | tr -d ' \n' |
+                sed -n 's/.*"latest_stable":{"version":"\([^"]*\)".*/\1/p' | head -1 ;;
+        *) de_listagem "$1" ;;
+    esac
+}
+
+# O caminho GENÉRICO, e o que cobre mais receitas: pega o diretório-pai da URL,
+# lista, e procura o maior '<nome>-<versão>.tar.*'. Serve para ftp.gnu.org,
+# x.org, netfilter, tcpdump, alsa, cairo, busybox e a maioria dos tarballs
+# clássicos.
+de_listagem() {  # url
+    dir=${1%/*}/
+    base=$(basename "$1")
+    # o nome do pacote é tudo antes do primeiro '-<dígito>'
+    nome=$(printf '%s' "$base" | sed -n 's/^\(.*\)-[0-9].*/\1/p')
+    [ -n "$nome" ] || return 1
+    busca "$dir" |
+        grep -oE "$nome-[0-9][0-9A-Za-z.]*\.(tar\.[a-z0-9]+|tgz|zip)" |
+        sed "s/^$nome-//; s/\.\(tar\..*\|tgz\|zip\)$//" |
+        maior
+}
+
+de_go() {
+    busca 'https://go.dev/dl/?mode=json' |
+        grep -oE '"go[0-9]+(\.[0-9]+)+"' | tr -d '"' | sed 's/^go//' | maior
+}
+
+de_zig() {
+    busca 'https://ziglang.org/download/index.json' |
+        grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"' | maior
+}
+
+# O canal estavel do Rust e um TOML, e a versao que interessa esta no bloco
+# [pkg.rust] — nao no `version` do topo, que e o formato do arquivo.
+de_rust() {
+    busca 'https://static.rust-lang.org/dist/channel-rust-stable.toml' |
+        awk '/^\[pkg\.rust\]/{d=1;next} d && /^version *=/{
+                 gsub(/[^0-9.]/," "); split($0,a," "); print a[1]; exit }'
+}
+
+# O best_release.json do SourceForge devolve o caminho do arquivo recomendado;
+# a versao sai do proprio caminho.
+de_sourceforge() {  # url
+    proj=$(printf '%s' "$1" | sed -n 's|.*sourceforge\.net/projects/\([^/]*\)/.*|\1|p')
+    [ -n "$proj" ] || proj=$(printf '%s' "$1" | sed -n 's|.*downloads\.sourceforge\.net/\([^/]*\)/.*|\1|p')
+    [ -n "$proj" ] || return 1
+    busca "https://sourceforge.net/projects/$proj/best_release.json" |
+        grep -oE '"filename": *"[^"]*"' | head -1 |
+        grep -oE '/[0-9]+(\.[0-9]+)+/' | tr -d '/' | maior
+}
+
+de_sourcehut() {  # url
+    caminho=$(printf '%s' "$1" | sed -n 's|^https\?://git\.sr\.ht/\(~[^/]*/[^/]*\)/.*|\1|p')
+    [ -n "$caminho" ] || return 1
+    busca "https://git.sr.ht/$caminho/refs" |
+        grep -oE 'refs/[0-9]+(\.[0-9]+)+' | sed 's|refs/||' | maior
+}
+
+de_cgit() {  # url
+    raiz=$(printf '%s' "$1" | sed -n 's|^\(https\?://[^/]*/[^/]*\)/.*|\1|p')
+    [ -n "$raiz" ] || return 1
+    busca "$raiz/refs/tags" |
+        grep -oE '>v?[0-9]+(\.[0-9]+)+<' | tr -d '><v' | maior
+}
+
+# Qualquer GitLab: o caminho do projeto sai da URL, e as tags da API.
+de_gitlab() {  # url, versao pinada
+    host=$(printf '%s' "$1" | sed -n 's|^https\?://\([^/]*\)/.*|\1|p')
+    proj=$(printf '%s' "$1" | sed -n 's|^https\?://[^/]*/\([^/]*\)/\([^/]*\)/.*|\1%2F\2|p')
+    # A API generic-packages traz o id numerico no lugar do caminho.
+    id=$(printf '%s' "$1" | sed -n 's|.*/api/v4/projects/\([0-9]*\)/.*|\1|p')
+    [ -n "$id" ] && proj=$id
+    [ -n "$proj" ] || return 1
+    conv=nao
+    case "$host" in *freedesktop.org) conv=sim ;; esac
+    busca "https://$host/api/v4/projects/$proj/repository/tags?per_page=100" |
+        grep -oE '"name":"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' |
+        sed 's/^[vV]//; s/^[A-Za-z_-]*-//' |
+        filtra_candidatos "$2" "$conv" | maior
+}
+
+# O cacert.pem carrega a data de extracao no cabecalho, e e essa data que a
+# receita pina como VERSION.
+de_curl_ca() {
+    busca 'https://curl.se/ca/cacert.pem' | head -8 |
+        sed -n 's/.*as of: \(.*\) GMT.*/\1/p' | head -1 |
+        while read -r d; do date -u -d "$d" +%Y-%m-%d 2>/dev/null; done
+}
+
+de_busybox_bin() {
+    busca 'https://www.busybox.net/downloads/binaries/' |
+        grep -oE '[0-9]+\.[0-9]+\.[0-9]+-x86_64-linux-musl' |
+        sed 's/-x86_64.*//' | maior
+}
+
+upstream_de() {  # url, versao pinada
+    case "$1" in
+        *github.com/*)               de_github "$1" "$2" ;;
+        *download.gnome.org/*)       de_gnome "$1" "$2" ;;
+        *pypi.org/*|*files.pythonhosted.org/*) de_pypi "$1" ;;
+        *gitlab.*|*salsa.debian.org/*) de_gitlab "$1" "$2" ;;
+        *kernel.org/*)               de_kernel_org "$1" ;;
+        *dl.google.com/go/*)         de_go ;;
+        *ziglang.org/*)              de_zig ;;
+        *static.rust-lang.org/*)     de_rust ;;
+        *sourceforge.net/*)          de_sourceforge "$1" ;;
+        *git.sr.ht/*)                de_sourcehut "$1" ;;
+        *git.zx2c4.com/*)            de_cgit "$1" ;;
+        *curl.se/ca/*)               de_curl_ca ;;
+        *busybox.net/downloads/binaries/*) de_busybox_bin ;;
+        *)                           de_listagem "$1" ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+
+atrasados=
+naoconferidos=
+pinados=
+atuais=0
+[ -n "$TSV" ] && printf '# pacote\tpinada\tupstream\tveredito\tmotivo\n' > "$TSV"
+
+for receita in "$REPO"/newspeak/*/recipe; do
+    pacote=$(basename "$(dirname "$receita")")
+    versao=$(grep -m1 '^VERSION=' "$receita" | cut -d= -f2- | tr -d '"')
+    src=$(campo "$receita" SRC)
+    url=$(printf '%s' "$src" | cut -d' ' -f1)
+    url=$(printf '%s' "$url" | sed "s/\${VERSION}/$versao/g; s/\$VERSION/$versao/g")
+
+    if [ -z "$versao" ] || [ -z "$url" ]; then
+        veredito='-'; nova='-'; motivo='receita de montagem, sem fonte upstream'
+        [ -n "$TSV" ] && printf '%s\t%s\t%s\t%s\t%s\n' \
+            "$pacote" "${versao:--}" "-" "$veredito" "$motivo" >> "$TSV"
+        continue
+    fi
+
+    nova=$(upstream_de "$url" "$versao" 2>/dev/null | head -1)
+    decl="$REPO/newspeak/$pacote/versao-pinada"
+    motivo=
+    if [ -z "$nova" ]; then
+        veredito='?'
+        naoconferidos="$naoconferidos $pacote"
+    elif [ "$nova" = "$versao" ]; then
+        veredito=atual
+        atuais=$((atuais + 1))
+    elif [ "$(printf '%s\n%s\n' "$versao" "$nova" | sort -V | tail -1)" = "$versao" ]; then
+        # pinado é MAIOR que o que o índice devolveu: quase sempre índice
+        # incompleto ou nome de pacote mal deduzido. Não é "atual".
+        veredito='?'
+        naoconferidos="$naoconferidos $pacote"
+    elif [ -f "$decl" ]; then
+        veredito=pinado
+        motivo=$(grep -v '^#' "$decl" | grep -v '^[[:space:]]*$' | head -1)
+        pinados="$pinados $pacote"
+    else
+        veredito=atrasado
+        atrasados="$atrasados $pacote"
+    fi
+
+    [ -n "$TSV" ] && printf '%s\t%s\t%s\t%s\t%s\n' \
+        "$pacote" "$versao" "${nova:--}" "$veredito" "$motivo" >> "$TSV"
+    if [ "$SO_PROBLEMAS" = no ] || [ "$veredito" != atual ]; then
+        printf '  %-9s %-22s %-14s %s\n' "$veredito" "$pacote" "$versao" "${nova:-—}"
+    fi
+done
+
+echo
+printf 'atual: %d\n' "$atuais"
+if [ -n "$pinados" ]; then
+    printf 'pinado com motivo registrado:%s\n' "$pinados"
+fi
+if [ -n "$atrasados" ]; then
+    printf 'ATRASADO, sem ressalva:%s\n' "$atrasados"
+fi
+# LISTADO POR NOME, e não somado. Ver o cabeçalho: é a categoria que finge
+# cobertura quando vira número.
+if [ -n "$naoconferidos" ]; then
+    printf 'NAO CONFERIDO — o upstream não deu resposta legível:%s\n' "$naoconferidos"
+fi
+[ -n "$TSV" ] && echo "relatório: $TSV"
+
+if [ -n "$naoconferidos" ]; then exit 2; fi
+if [ -n "$atrasados" ]; then exit 1; fi
+exit 0

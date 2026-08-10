@@ -1,0 +1,19 @@
+# Versão pinada abaixo do estável mais novo, pela ressalva pragmática da P7.
+#
+# O 5.4.1 tem uma regressão que QUEBRA A COMPILAÇÃO DO GCC nesta árvore. Está
+# registrado na SPEC-0005 como precedente do próprio bootstrap, e é o caso que a
+# P7 cita ao dizer que "edge nunca embarca o comprovadamente quebrado — o fim
+# (um sistema que funciona) vence a letra (a versão mais nova)".
+#
+# ESTE ARQUIVO EXISTE PARA QUE O ATRASO SEJA DECLARADO, e não confundido com
+# esquecimento. Sem ele, o `bootstrap/versoes` acusa "atrasado sem ressalva" a
+# cada release, e quem lê não tem como distinguir uma decisão de um descuido.
+#
+# Fora da receita pelo mesmo motivo do `fontes-correspondentes`: o FINGERPRINT
+# cobre o texto do recipe, e o gawk é BUILD_DEPS de meia árvore.
+#
+# REVISAR quando sair um 5.4.x novo: a regressão pode ter sido corrigida, e aí
+# esta ressalva deixa de valer e o pino sobe.
+#
+# FORMATO: a primeira linha não-comentário é o motivo que o relatório mostra.
+5.4.1 regride e quebra a compilacao do gcc (SPEC-0005); revisar a cada 5.4.x
