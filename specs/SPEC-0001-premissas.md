@@ -184,6 +184,14 @@ motivo registrado. Precedente do próprio bootstrap: **gawk 5.3.2**, porque o
 comprovadamente quebrado — o fim (um sistema que funciona) vence a letra (a
 versão mais nova).
 
+**Como isto é FEITO CUMPRIR.** A P7 é verificável e foi violada em silêncio: a
+0.12 saiu com o kernel 7.1.4 enquanto o kernel.org já publicava o 7.1.8. Nada na
+árvore acusou, porque nenhum guarda olhava para fora dela — a receita não sabe
+que existe versão mais nova, os aceites provam que a mídia instala e não que
+está atual, e o `channel emit` audita fechamento de dependências, não idade.
+Desde então, conferir a versão de TODO software empacotado é exigência de
+publicação, e não etapa opcional: SPEC-0011 §7.1.
+
 Tema: o **presente eterno**. Não se cultua a versão "antiga, estável e
 testada" — isso seria preservar o passado. Retifica-se para o agora.
 

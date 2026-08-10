@@ -186,6 +186,51 @@ a cada roll. Também falta o `channel refresh` que valida o índice, apresenta a
 mudança e só então avança explicitamente o snapshot local. A publicação de um
 canal oficial continua ausente.
 
+## 7.1 Exigência de publicação: conferir a versão de TODO software empacotado
+
+**Antes de publicar qualquer mídia, a árvore inteira é conferida contra o
+upstream de cada componente.** Não é recomendação nem etapa opcional do
+checklist: uma mídia cuja árvore não foi conferida não está pronta para
+publicar, do mesmo jeito que uma sem bundle de fontes correspondente não está.
+
+### Por que isto virou exigência escrita
+
+A P7 (SPEC-0001) já mandava pinar o estável mais recente. Ela foi violada em
+silêncio: a **0.12 foi publicada com o kernel 7.1.4 enquanto o kernel.org já
+publicava o 7.1.8**, e nada na árvore acusou — nem receita, nem aceite, nem o
+`channel emit`. A premissa existia, a mídia saiu contra ela, e a violação só
+apareceu porque um humano perguntou.
+
+Uma premissa sem verificação é uma intenção. O que separa as duas é isto:
+
+- a receita pina a versão, e nada nela sabe que existe uma versão mais nova;
+- os aceites provam que a mídia INSTALA, e nunca que ela está ATUAL;
+- o `channel emit` audita o FECHAMENTO das dependências, não a idade delas.
+
+Nenhum dos três guardas existentes olha para fora da árvore. Este olha.
+
+### O que a conferência precisa produzir
+
+Para cada receita da `newspeak/`, uma linha com: a versão pinada, a versão
+estável mais nova do upstream, e o veredito. Três desfechos, e os três precisam
+aparecer:
+
+- **atual** — pinado é igual ao estável mais novo;
+- **atrasado** — há estável mais novo; exige subir, ou registrar a ressalva
+  pragmática da P7 (regressão comprovada) NA RECEITA, com o motivo;
+- **não conferido** — o upstream não publica um índice legível. Esta é a
+  categoria perigosa: ela precisa ser **listada por nome**, e não somada num
+  total. Um relatório que diz "112 de 120 conferidos" e cala sobre os oito faz
+  parecer conferido o que não foi.
+
+### A ressalva pragmática continua valendo
+
+A P7 permite pinar versão anterior quando o estável-mais-novo regride —
+precedente do gawk 5.3.2. O que a exigência acrescenta é que essa decisão passa
+a ser **explícita e datada na receita**, e não a consequência de ninguém ter
+olhado. "Atrasado sem motivo registrado" e "pinado por regressão" deixam de ser
+indistinguíveis.
+
 ## 8. Conjunto publicável e fontes correspondentes
 
 O repositório da Distrópica é `GPL-3.0-or-later` para seu conteúdo próprio,
