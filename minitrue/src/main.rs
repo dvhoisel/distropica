@@ -1,3 +1,4 @@
+mod arvore;
 mod attest;
 mod audit;
 mod channel;
