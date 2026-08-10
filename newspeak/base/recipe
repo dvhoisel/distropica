@@ -687,7 +687,7 @@ HOST
     cat > "$STAGE/etc/os-release" <<'OSREL'
 NAME="Distropica"
 ID=distropica
-PRETTY_NAME="Distropica 0.12-pre (edge/rolling)"
+PRETTY_NAME="Distropica 0.12 (edge/rolling)"
 VERSION="rolling"
 # O numero da MIDIA, e nao da distro. VERSION continua "rolling" porque a
 # premissa e essa: nao ha versao do sistema a que se atualizar, ha o estado
@@ -696,17 +696,14 @@ VERSION="rolling"
 # e o campo que a especificacao do os-release reserva justamente para isso em
 # distro rolling. Numerar o VERSION seria prometer uma serie de versoes que
 # esta distro nao tem.
-# O SUFIXO -pre É NOVO NESTA ÁRVORE, e existe por uma razão estreita: esta
-# imagem vai para uma máquina FÍSICA antes de ser publicada, e uma mídia que se
-# apresentasse como "0.11" seria um segundo artefato reivindicando a identidade
-# do primeiro — a 0.11 publicada é o sha256 3b4a2b6f, e nenhum outro arquivo
-# pode dizer que é ela.
+# Numeração só muda ao PUBLICAR, e é o que está acontecendo aqui: o sufixo -pre
+# que esta imagem carregou enquanto era candidata sai no ato da publicação.
 #
-# A regra da árvore continua: numeração só muda ao PUBLICAR. O -pre resolve a
-# tensão sem gastar o número — a imagem diz a verdade sobre o que é, e o 0.12
-# fica reservado para quando ela provar que instala em hardware de verdade.
-# Ao publicar, o sufixo sai.
-BUILD_ID="0.12-pre"
+# O -pre existiu por uma razão estreita e vale registrar: uma mídia de teste que
+# se apresentasse como "0.11" seria um segundo artefato reivindicando a
+# identidade do primeiro — a 0.11 publicada é o sha256 3b4a2b6f, e nenhum outro
+# arquivo pode dizer que é ela.
+BUILD_ID="0.12"
 ANSI_COLOR="1;30"
 HOME_URL="https://github.com/dvhoisel/distropica"
 OSREL
