@@ -1,0 +1,38 @@
+# Fonte correspondente do Firefox.
+#
+# POR QUE ESTE ARQUIVO EXISTE. O firefox desta árvore é KIND=binary: a mídia
+# leva o binário que a Mozilla publica, e o campo SRC aponta para ele. O bundle
+# de fontes copiava esse mesmo BINÁRIO para upstream/ e dava o item por
+# cumprido — o mesmo buraco que o busybox tinha até a 0.11.
+#
+# ELE PASSOU DESPERCEBIDO POR UM MOTIVO QUE VALE REGISTRAR. Firefox é Mundo A, e
+# Mundo A não entra no índice do canal: viaja como artefato endereçado por
+# sha256, coletado à parte pelo `cache-from-channel`. Procurá-lo no índice do
+# canal devolve "não está lá" — e foi essa a leitura errada que me fez dizer, na
+# véspera da publicação da 0.12, que o firefox não era distribuído. É: ele chega
+# pelo DEPS do `desktop`, que está no target.world.
+#
+# A OBRIGAÇÃO. MPL-2.0, §3.2: quem distribui o Executable Form deve
+# disponibilizar a Source Code Form da mesma versão, sob a MPL. Não é o regime
+# da GPL — não há exigência de scripts de build nem de configuração — mas
+# também não é nulo, e o LICENSING.md desta distro promete fonte correspondente
+# sem qualificar por família de licença.
+#
+# O QUE ESTE ARQUIVO NÃO RESOLVE. O binário que a mídia carrega é a build
+# oficial da Mozilla, pt-BR, e o que se entrega aqui é a fonte da versão exata —
+# não a configuração com que aquela build foi feita, que a Mozilla não publica
+# ao lado do artefato. Mesma ressalva do busybox e do rust: substancialmente
+# melhor que nada, e menos que o ideal.
+#
+# POR QUE FORA DA RECEITA. O FINGERPRINT cobre o TEXTO da receita, e mexer nela
+# recompilaria o pacote sem que nada tivesse mudado. Conferido para o firefox e
+# não herdado dos outros casos: `minitrue fingerprint firefox` devolveu
+# 6bdfe1f7f3229f63... com e sem um arquivo de sonda neste diretório.
+#
+# O sha256 abaixo foi conferido contra o SHA256SUMS que a Mozilla publica em
+# archive.mozilla.org/pub/firefox/releases/153.0.1/, antes de o arquivo entrar
+# no cache. A assinatura destacada (.asc) veio junto e viaja no bundle.
+#
+# FORMATO: linhas de '<sha256>  <url>'. Comentários com '#'. Os arquivos
+# precisam estar no cache de fontes do rootfs para entrarem no bundle.
+ac586cfe4573cd02a0b96dd496ae28da0157a9fcc6530ede6b1decfd2a3fb512  https://archive.mozilla.org/pub/firefox/releases/153.0.1/source/firefox-153.0.1.source.tar.xz
