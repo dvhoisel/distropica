@@ -1,11 +1,11 @@
 NAME=locales
-VERSION=2.42
+VERSION=2.44
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
 BUILD_DEPS="glibc gettext"
 SRC="https://ftp.gnu.org/gnu/glibc/glibc-$VERSION.tar.xz"
-SHA256=d1775e32e4628e64ef930f435b67bb63af7599acb6be2b335b9f19f16509f17f
+SHA256="37f600f2bef3c5e8300147059568b2a2e40a7ad6ccc65ce942556d49429cc667"
 ABOUT="Tudo o que é derivado do glibc e depende do gettext. São duas coisas, e a segunda existe por uma restrição de bootstrap: o glibc NÃO PODE depender do gettext, porque o gettext precisa do gcc-pass2, que precisa do glibc — declarar seria ciclo. Mas o build do glibc não é hermético, e procura msgfmt no ambiente: no dia em que o gettext entrou na árvore por causa do GTK, o glibc começou a compilar 39 catálogos libc.mo que nunca compilava antes, mudando o payload sem mudar a receita nem o fingerprint. A resposta foi pinar MSGFMT=: no glibc, fixando o estado que sempre valeu, e passar os catálogos para cá — este pacote já depende do glibc e pode declarar o gettext sem ciclo nenhum. Compila só o catálogo pt_BR, e não os 39: a árvore gera dois locales, não 369, e entregar tradução de idioma que ninguém pediu seria incoerente. Baixa o tarball do glibc porque agora precisa do po/ dele; a versão continua acompanhando a do glibc porque é dele que vem toda a entrada. Antes disso a árvore tinha as 369 definições de locale e o localedef, mas nenhum locale COMPILADO — /usr/lib/locale estava vazio, e por isso nem o comando locale rodava; qualquer programa que chamasse setlocale caía silenciosamente para o C. Gera dois: pt_BR.UTF-8, que é o pedido, e C.UTF-8, que é o C de sempre mas capaz de UTF-8 — sem ele, um programa em ambiente neutro trunca acento. Usa --no-archive de propósito: o padrão do localedef é acumular tudo num único /usr/lib/locale/locale-archive, arquivo mutável e compartilhado que dois pacotes escreveriam por cima um do outro e que nenhum manifesto consegue reivindicar honestamente. Em diretórios separados, cada arquivo tem dono e hash. A saída é determinística: duas execuções dão bytes idênticos, verificado antes de escrever esta receita."
 LICENSE="LGPL-2.1-or-later"
 

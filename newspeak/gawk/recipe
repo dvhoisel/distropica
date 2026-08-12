@@ -4,11 +4,17 @@ KIND=source
 DEPS="busybox"
 # Toma o applet homônimo do busybox (awk) — SPEC-0003 §7.
 SUPERSEDES="busybox"
-BUILD_DEPS=binutils
+BUILD_DEPS="binutils make"
 ABOUT="AWK do GNU; a glibc e o gerador de opções do gcc usam scripts awk que o busybox não cobre. PINADO em 5.3.2 de propósito: o 5.4.1 tem uma regressão — um elemento de array não-inicializado comparado a \"\" e depois concatenado vira \"0\" (quebra optc-gen.awk do gcc; SPEC-0005 §4). 5.3.2 é sadio."
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/gawk/gawk-$VERSION.tar.xz"
 SHA256=f8c3486509de705192138b00ef2c00bbbdd0e84c30d5c07d23fc73a9dc4cc9cc
+# Chave extraída do keyring oficial https://ftp.gnu.org/gnu/gnu-keyring.gpg;
+# signer observado e primária D1967C63788713177D861ED7DF597815937EC0D2.
+SIG_1="https://ftp.gnu.org/gnu/gawk/gawk-5.3.2.tar.xz.sig"
+SIG_EPOCH_1=1786460504
+SIGKEY_1="files/upstream-release.asc"
+SIGKEY_FP_1=D1967C63788713177D861ED7DF597815937EC0D2
 
 build() {
     tar -xJf "$DL" --strip-components=1

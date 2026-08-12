@@ -27,6 +27,13 @@ BUILD_DEPS="gcc-pass2 binutils-glibc make"
 LICENSE="0BSD AND GPL-2.0-or-later AND LGPL-2.1-or-later"
 SRC="https://github.com/tukaani-project/xz/releases/download/v$VERSION/xz-$VERSION.tar.gz"
 SHA256=3d3a1b973af218114f4f889bbaa2f4c037deaae0c8e815eec381c3d546b974a0
+# Certificado publicado pela página oficial https://tukaani.org/xz/ em
+# https://tukaani.org/misc/lasse_collin_pubkey.txt; signer observado e
+# primária 3690C240CE51B4670D30AD1C38EE757D69184620.
+SIG_1="https://github.com/tukaani-project/xz/releases/download/v5.8.3/xz-5.8.3.tar.gz.sig"
+SIG_EPOCH_1=1786460504
+SIGKEY_1="files/upstream-release.asc"
+SIGKEY_FP_1=3690C240CE51B4670D30AD1C38EE757D69184620
 # SEIS CAMINHOS SÃO DO BUSYBOX ATÉ AQUI — xz, unxz, xzcat, lzma, unlzma e
 # lzcat. O crimestop recusou a instalação com "doublethink detectado:
 # /usr/bin/lzcat tem donos incompatíveis", e recusou certo: dois pacotes

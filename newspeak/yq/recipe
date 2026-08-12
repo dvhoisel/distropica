@@ -1,5 +1,5 @@
 NAME=yq
-VERSION=4.53.2
+VERSION=4.53.3
 KIND=binary
 ABOUT="processador YAML/JSON/XML de linha de comando; pacote opcional online-only, instalado a partir do executável Linux x86_64 estático publicado pelo upstream"
 # Binário Go estático. O grafo de módulos está gravado DENTRO do executável
@@ -16,7 +16,7 @@ ABOUT="processador YAML/JSON/XML de linha de comando; pacote opcional online-onl
 #   MPL-2.0       hashicorp/hcl, que é o único copyleft do conjunto
 LICENSE="MIT AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND MPL-2.0"
 SRC="https://github.com/mikefarah/yq/releases/download/v$VERSION/yq_linux_amd64"
-SHA256=d56bf5c6819e8e696340c312bd70f849dc1678a7cda9c2ad63eebd906371d56b
+SHA256="fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
 LINKS="yq=bin/yq"
 
 install_pkg() {

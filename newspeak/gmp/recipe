@@ -9,11 +9,17 @@ PROVISIONAL=1
 # ("provisório X já cedeu caminhos; baseline preservado") — e com razão:
 # reconstruir retomaria os arquivos do sucessor. Os erros de auditoria que
 # ela resolve permanecem na árvore atual como dívida de bootstrap.
-BUILD_DEPS="m4 binutils"
+BUILD_DEPS="m4 binutils make busybox"
 ABOUT="aritmética de inteiros/racionais de precisão arbitrária; dependência de build do gcc (usada in-tree pelo gcc, mas verificável como pacote isolado). Precisa de m4 (asm) e do nm do binutils (configure)"
 LICENSE="LGPL-3.0-or-later OR GPL-2.0-or-later"
 SRC="https://ftp.gnu.org/gnu/gmp/gmp-$VERSION.tar.xz"
 SHA256=a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
+# A assinatura RSA/SHA-512 verifica exatamente no instante autenticado de sua
+# criação, mas o certificado está expirado no instante de revisão. A página
+# oficial do GMP, posterior à expiração, continua publicando a primária exata.
+# O waiver v2 prende assinatura, cert histórico, endosso e todos os epochs; o
+# motor normal continua recusando a mesma assinatura no REVIEW_EPOCH.
+SIG_UNSAFE_WAIVER="files/assinatura-insegura"
 
 build() {
     tar -xJf "$DL" --strip-components=1

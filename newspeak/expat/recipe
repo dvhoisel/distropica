@@ -1,13 +1,13 @@
 NAME=expat
-VERSION=2.8.2
+VERSION=2.8.3
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
 BUILD_DEPS="make gcc-pass2 binutils-glibc"
 ABOUT="Parser XML em fluxo. Está embaixo de duas coisas que a pilha gráfica exige: a fontconfig, que lê seus arquivos de configuração em XML, e o wayland-scanner, que gera código a partir dos protocolos descritos em XML. É o parser XML mais enxuto que resolve os dois, e por isso está aqui em vez de libxml2 — que traria HTTP, FTP, XPath e XSLT para ler dois arquivos de configuração. Sem o xmlwf, ferramenta de linha de comando que só serve para validar XML à mão."
 LICENSE=MIT
-SRC="https://github.com/libexpat/libexpat/releases/download/R_2_8_2/expat-$VERSION.tar.xz"
-SHA256=3ad89b8588e6644bd4e49981480d48b21289eebbcd4f0a1a4afb1c29f99b6ab4
+SRC="https://github.com/libexpat/libexpat/releases/download/R_2_8_3/expat-$VERSION.tar.xz"
+SHA256="f6256df90c906773d344da084402b7d3e4f22ed41b1a59c989098a83d3ea0c85"
 
 build() {
     tar -xJf "$DL" --strip-components=1

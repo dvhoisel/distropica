@@ -1,13 +1,13 @@
 NAME=perl
-VERSION=5.42.0
+VERSION=5.44.0
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
-BUILD_DEPS="gcc-pass2 binutils-glibc"
-ABOUT="Perl. Build-tool, não superfície da distro: o kernel o exige (scripts/gen_oid_registry gera lib/oid_registry_data.c — '/bin/sh: perl: not found' no fim do build), e o OID_REGISTRY é puxado por NFS/SMB/crypto (desligar seria pior que ter a ferramenta). Também é dependência do openssl (Configure é perl) e de muito userspace vindouro. Mesma categoria de flex/bison/elfutils. Edge (P7): 5.42.0 é o stable mais recente do CPAN."
+BUILD_DEPS="gcc-pass2 binutils-glibc make"
+ABOUT="Perl. Build-tool, não superfície da distro: o kernel o exige (scripts/gen_oid_registry gera lib/oid_registry_data.c — '/bin/sh: perl: not found' no fim do build), e o OID_REGISTRY é puxado por NFS/SMB/crypto (desligar seria pior que ter a ferramenta). Também é dependência do openssl (Configure é perl) e de muito userspace vindouro. Mesma categoria de flex/bison/elfutils. Edge (P7): $VERSION é o stable mais recente do CPAN."
 LICENSE="Artistic-1.0-Perl OR GPL-1.0-or-later"
 SRC="https://www.cpan.org/src/5.0/perl-$VERSION.tar.xz"
-SHA256=73cf6cc1ea2b2b1c110a18c14bbbc73a362073003893ffcedc26d22ebdbdd0c3
+SHA256="505cf43912e9480495c344c70260452e32aa2a73c546a026b3f100053b23ce91"
 
 build() {
     tar -xJf "$DL" --strip-components=1
@@ -26,7 +26,7 @@ build() {
     make install.perl DESTDIR="$STAGE"
 
     # O install cria aliases do executável e dos utilitários por hardlink
-    # (perl/perl5.42.0 e perlbug/perlthanks). O manifesto mundo-B ainda não
+    # (perl/perl$VERSION e perlbug/perlthanks). O manifesto mundo-B ainda não
     # representa esses grupos; sele cada nome como arquivo regular independente,
     # um por execução, pois separar um caminho altera o nlink dos restantes.
     find "$STAGE" -type f -links +1 -exec sh -ec '

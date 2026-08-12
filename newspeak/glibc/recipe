@@ -1,13 +1,24 @@
 NAME=glibc
-VERSION=2.42
+VERSION=2.44
 KIND=source
 TOOLCHAIN=cross
 RETRIES=50
-BUILD_DEPS="gcc binutils-cross linux-headers binutils bison gawk python"
-ABOUT="A ABI glibc — o divisor de águas do Estágio 2. COMPILA com o gcc da passada 1 (verificado 2026-07-19): libc.so.6 (2.42), ld-linux-x86-64.so.2, libm/libpthread/libdl saem como ELFs válidos. python é BUILD_DEP (a glibc exige Python no build). Ressalvas: o gcc-passada-1 (feito por zig cc/clang) é flaky — ICE segfault aleatório na math; um loop de make atravessa. O único não-compilável é links-dso-program.cc (helper de teste C++; pass-1 é só C). Falta fechar: make install no rootfs, symlinks do ld.so, e a passada 2 do gcc (que traz C++ e um gcc estável)."
+BUILD_DEPS="gcc binutils-cross linux-headers binutils bison gawk python make"
+ABOUT="A ABI glibc — o divisor de águas do Estágio 2. COMPILA com o gcc da passada 1 (verificado 2026-07-19): libc.so.6 ($VERSION), ld-linux-x86-64.so.2, libm/libpthread/libdl saem como ELFs válidos. python é BUILD_DEP (a glibc exige Python no build). Ressalvas: o gcc-passada-1 (feito por zig cc/clang) é flaky — ICE segfault aleatório na math; um loop de make atravessa. O único não-compilável é links-dso-program.cc (helper de teste C++; pass-1 é só C). Falta fechar: make install no rootfs, symlinks do ld.so, e a passada 2 do gcc (que traz C++ e um gcc estável)."
 LICENSE="LGPL-2.1-or-later AND GPL-2.0-or-later"
 SRC="https://ftp.gnu.org/gnu/glibc/glibc-$VERSION.tar.xz"
-SHA256=d1775e32e4628e64ef930f435b67bb63af7599acb6be2b335b9f19f16509f17f
+SHA256="37f600f2bef3c5e8300147059568b2a2e40a7ad6ccc65ce942556d49429cc667"
+# Certificado obtido pelo WKD autenticado do release manager em
+# https://gentoo.org/.well-known/openpgpkey/hu/8g1asyidnr9kpu9kygke9t13rqysc7bs?l=dilfridge;
+# objeto de transporte WKD integral: 350497 bytes,
+# SHA256=41c9d83a195695194d1bbffa86d7761f3f9a6cb2c60d2629bd256272c163e6f8.
+# O escopo lógico é exatamente 1 Cert sob a primária pinada; certificações WoT
+# externas não ampliam a aceitação. Signer observado
+# FD19E6D31B192EE4DC63EAD3DC2B16215ED5412A, primária abaixo.
+SIG_1="https://ftp.gnu.org/gnu/glibc/glibc-2.44.tar.xz.sig"
+SIG_EPOCH_1=1786460504
+SIGKEY_1="files/upstream-release.asc"
+SIGKEY_FP_1=35B17DF5752577CA0C541CEB94BFDF4484AD142F
 
 build() {
     tar -xJf "$DL" --strip-components=1

@@ -1,0 +1,30 @@
+--- a/configure
++++ b/configure
+@@ -22462,6 +22462,12 @@
+         have_bzip2=yes
+ fi
+ 
++# Distrópica: bzip2 pertence somente à closure do GIMP. Mesmo quando um
++# rootfs já o contém, a identidade de python-glibc não pode ganhar _bz2 nem
++# dados de configuração diferentes sob o mesmo fingerprint.
++have_bzip2=no
++BZIP2_CFLAGS=
++BZIP2_LIBS=
+ 
+ pkg_failed=no
+ { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for liblzma" >&5
+--- a/configure.ac
++++ b/configure.ac
+@@ -5502,6 +5502,12 @@
+   ])
+ ])
+ 
++dnl Distrópica: bzip2 pertence somente à closure do GIMP. Mantenha este
++dnl payload idêntico em rootfs base e GIMP, independentemente da detecção.
++have_bzip2=no
++BZIP2_CFLAGS=
++BZIP2_LIBS=
++
+ PKG_CHECK_MODULES([LIBLZMA], [liblzma], [have_liblzma=yes], [
+   WITH_SAVE_ENV([
+     CPPFLAGS="$CPPFLAGS $LIBLZMA_CFLAGS"

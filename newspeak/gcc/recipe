@@ -10,11 +10,17 @@ DEPS="binutils gmp mpfr mpc"
 # PREFIXADOS ao gerar a libgcc do alvo. A aresta faltava, e a prova pelo
 # rectify rodou num rootfs já com as ferramentas cross (resíduo da investigação
 # manual) — declarar torna o grafo honesto para o E2-clean a frio (SPEC-0005).
-BUILD_DEPS="linux-headers gawk binutils-cross"
+BUILD_DEPS="linux-headers gawk binutils-cross make"
 ABOUT="O compilador C/C++ da passada 1 (cross x86_64-distropica-linux-gnu, --without-headers). Constrói cc1 + cc1plus + libgcc mínima com zig cc; a glibc 2.42 é compilada por ele, e o cc1plus habilita a passada 2. gawk 5.3.2 (o 5.4.1 gera options.cc malformado); gcov-tool fora de LANGUAGES; cc1/xgcc estáticos (LDFLAGS=-static); --disable-lto (o ld estático não faz dlopen do plugin). Consertos GCC×musl verificados 2026-07-19: (a) patch no gcc/configure neutralizando o fallback '#define rlim_t long'; (b) cache vars gcc_cv_have_decl_*/ac_cv_have_decl_*=yes p/ os decls que a musl declara mas a configure mis-detecta (senão system.h/libiberty.h criam fallbacks que colidem — sbrk(int)×intptr_t, vasprintf noexcept, strstr); (c) mathlibs isoladas da glibc (com a glibc instalada, --with-gmp=/usr injetaria -I/usr/include e o stdio.h da glibc quebraria o <cstdio> do libc++). libstdc++ NÃO entra aqui (--without-headers); vem após a glibc."
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/gcc/gcc-$VERSION/gcc-$VERSION.tar.xz"
 SHA256=fa59c1beef8995f27c4d71c1df227587189315d3e6faff1bb4306e61b0c530eb
+# Chave extraída do keyring oficial https://ftp.gnu.org/gnu/gnu-keyring.gpg;
+# signer observado 7F74F97C103468EE5D750B583AB00996FC26A641, primária abaixo.
+SIG_1="https://ftp.gnu.org/gnu/gcc/gcc-15.3.0/gcc-15.3.0.tar.xz.sig"
+SIG_EPOCH_1=1786460504
+SIGKEY_1="files/upstream-release.asc"
+SIGKEY_FP_1=13975A70E63C361C73AE69EF6EEB81F8981C74C7
 
 build() {
     tar -xJf "$DL" --strip-components=1

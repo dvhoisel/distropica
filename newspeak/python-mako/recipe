@@ -1,5 +1,5 @@
 NAME=python-mako
-VERSION=1.3.12
+VERSION=1.4.1
 KIND=source
 TOOLCHAIN=native
 DEPS="python-glibc python-markupsafe"
@@ -7,7 +7,7 @@ BUILD_DEPS="python-glibc"
 ABOUT="Motor de template que compila o template para código Python antes de executá-lo. Está aqui porque a Mesa não é só C: boa parte do que ela compila é gerada no build a partir de templates — tabelas de despacho de GL, tabelas de formato de pixel, os wrappers da API. Sem o Mako o meson da Mesa para na configuração com erro explícito, não é opcional nem contornável por flag. Python puro; a única dependência é o markupsafe, que veio junto por isso e por nada mais."
 LICENSE=MIT
 SRC="https://pypi.org/packages/source/M/Mako/mako-$VERSION.tar.gz"
-SHA256=9f778e93289bd410bb35daadeb4fc66d95a746f0b75777b942088b7fd7af550a
+SHA256="d7904710b662996425a21627710c4777c45053146942cf8a7aebf757c92b8c27"
 
 build() {
     tar -xzf "$DL" --strip-components=1

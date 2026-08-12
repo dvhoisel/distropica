@@ -1,43 +1,80 @@
 NAME=linux
-VERSION=7.1.4
+VERSION=7.1.8
 KIND=source
 TOOLCHAIN=native
-BUILD_DEPS="gcc-pass2 binutils-glibc flex bison elfutils perl openssl"
-ABOUT="O kernel. Mundo B por necessidade: o kernel.org só publica FONTE — não há binário oficial (um kernel é sempre específico de um .config), e binários de distro são inelegíveis (SPEC-0001 §2, SPEC-0007). Edge (P7): 7.1.4 é o stable mais recente do kernel.org (não um LTS). Compilado com o gcc NATIVO do E2. MÓDULOS ASSINADOS: agora que o openssl existe (ver newspeak/openssl), religamos o SYSTEM_TRUSTED_KEYRING que o E3 teve de DESLIGAR e ativamos MODULE_SIG_FORCE — o kernel gera sua chave via 'openssl req', embute o certificado do 'Ministério da Verdade' no chaveiro builtin, assina os módulos no install (sign-file) e RECUSA qualquer .ko não-assinado. Fecha a dívida escrita no comentário do E3. HOSTLDFLAGS -rpath-link: extract-cert/sign-file/objtool linkam libcrypto/libelf (→ libz transitivo) e o ld nativo não resolve o transitivo sozinho (mesmo padrão do mathlibs/E2)."
+BUILD_DEPS="gcc-pass2 binutils-glibc flex bison elfutils perl openssl make"
+ABOUT="O kernel. Mundo B por necessidade: o kernel.org só publica FONTE — não há binário oficial (um kernel é sempre específico de um .config), e binários de distro são inelegíveis (SPEC-0001 §2, SPEC-0007). Edge (P7): acompanha o stable mais recente do kernel.org, não um LTS congelado. Compilado com o gcc NATIVO do E2. MÓDULOS ASSINADOS REPRODUTÍVEIS: MODULE_SIG_FORCE confia em certificado público fixo; o build produz .ko unsigned determinístico, confere hash/cobertura e reaplica com sign-file -s um CMS público pinado por módulo. Nenhuma chave privada entra no worktree, rootfs ou build. HOSTLDFLAGS -rpath-link permite a extract-cert/sign-file/objtool resolver libcrypto/libelf e libz transitiva."
 LICENSE="GPL-2.0-only"
 SRC="https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$VERSION.tar.xz"
-SHA256=1c63922a119675d38e3ae0f8f6ee07f15c41a786ab9ed66563749bb8c9a08e2e
+SHA256="ff01dcb449279d5b4cfccdb01fee639cf5ff1803f1749a77844dd33915422c49"
+# Certificado obtido do WKD oficial kernel.org:
+# https://kernel.org/.well-known/openpgpkey/hu/ew8uiogxwri7d3fuioqgt7u1d5sngorx?l=autosigner
+# signer observado e primária B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1.
+SIGSUMS="https://cdn.kernel.org/pub/linux/kernel/v7.x/sha256sums.asc"
+SIGSUMS_EPOCH=1786460504
+SIGKEY_1="files/upstream-release.asc"
+SIGKEY_FP_1=B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1
 
 build() {
     tar -xJf "$DL" --strip-components=1
     # O Kbuild não deriva o banner de SOURCE_DATE_EPOCH sozinho. Fixar também
     # identidade e sequência evita vazar usuário/hostname do builder na imagem.
-    KBUILD_BUILD_TIMESTAMP=$(date -u -d "@$SOURCE_DATE_EPOCH" '+%a %b %e %T UTC %Y')
+    # usr/gen_initramfs.sh reconverte este texto com `date -d` antes de passar
+    # o epoch a gen_init_cpio. O builder usa o date do BusyBox: ele aceita a
+    # forma ISO abaixo, mas nao "Mon Jan ... UTC ..."; ao rejeitar a forma
+    # longa, o script upstream silencia a falha e o CPIO recebe time(NULL).
+    KBUILD_BUILD_TIMESTAMP=$(date -u -d "@$SOURCE_DATE_EPOCH" '+%Y-%m-%d %H:%M:%S')
     KBUILD_BUILD_USER=distropica
     KBUILD_BUILD_HOST=builder
     KBUILD_BUILD_VERSION=1
     export KBUILD_BUILD_TIMESTAMP KBUILD_BUILD_USER KBUILD_BUILD_HOST \
         KBUILD_BUILD_VERSION
-    # A autoridade que assina os módulos: o certificado leva CN "Ministério da
-    # Verdade". certs/Makefile copia este template p/ certs/x509.genkey e roda
-    # 'openssl req' sobre ele (gera certs/signing_key.pem). O CN aparece no
-    # chaveiro builtin do kernel — é quem o kernel passa a confiar.
-    sed -i -e 's/^#O = .*/O = Distropica/' \
-           -e 's/^CN = .*/CN = Ministerio da Verdade/' certs/default_x509.genkey
+    parsed_build_epoch=$(date -d "$KBUILD_BUILD_TIMESTAMP" +%s 2>/dev/null) || {
+        echo 'FATAL: date do builder nao parseia KBUILD_BUILD_TIMESTAMP'
+        exit 1
+    }
+    [ "$parsed_build_epoch" = "$SOURCE_DATE_EPOCH" ] || {
+        echo 'FATAL: KBUILD_BUILD_TIMESTAMP nao volta ao SOURCE_DATE_EPOCH'
+        exit 1
+    }
+    # Autoridade PUBLICA e bundle detached produzidos offline. Esses dois hashes
+    # sao pinos explicitos alem do fingerprint de files/: o certificado entra no
+    # kernel antes de os .ko existirem, e o manifesto prende hash unsigned + CMS
+    # de cada modulo. A chave RSA usada uma vez para gerar o bundle foi criada
+    # fora do worktree/rootfs e destruida antes da publicacao destes arquivos.
+    module_cert_sha256=935d49c7e9012fc92c13f19ca99862dd118589afd27cdbc19e6ca82c3e2834ed
+    module_manifest_sha256=30742e62dbb3ed046b65ffb600afb7c06876936011f31848e6222ee484fbb52c
+    module_bundle=../module-signing/bundle
+    module_apply=../module-signing/apply-signatures
+    [ "$(sha256sum "$module_bundle/certificate.pem" | awk '{print $1}')" = \
+        "$module_cert_sha256" ] || {
+        echo 'FATAL: certificado publico de modulos diverge'; exit 1;
+    }
+    [ "$(sha256sum "$module_bundle/manifest" | awk '{print $1}')" = \
+        "$module_manifest_sha256" ] || {
+        echo 'FATAL: manifesto publico de modulos diverge'; exit 1;
+    }
+    install -m644 "$module_bundle/certificate.pem" \
+        certs/distropica-module-signing.pem
     # Config base x86_64 (EFI_STUB + virtio + 9p/ext4 builtin → o boot 9p do E3
-    # segue). O defconfig JÁ traz SYSTEM_TRUSTED_KEYRING=y (via CFG80211/REGDB);
-    # o E3 teve de DESLIGÁ-LO porque certs/extract-cert linka -lcrypto e não
-    # havia openssl. Agora há — então, em vez de desligar, LIGAMOS assinatura de
-    # módulo por cima do defconfig.
+    # segue). O defconfig JÁ traz SYSTEM_TRUSTED_KEYRING=y (via CFG80211/REGDB).
+    # MODULE_SIG_ALL fica desligado de proposito: assinar automaticamente faria
+    # o Kbuild exigir uma chave privada durante toda reproducao. O caminho
+    # customizado abaixo e somente o PEM publico; por isso certs/Makefile nao
+    # aciona a regra especial que gera certs/signing_key.pem.
     make defconfig
-    # Dois olddefconfig: MODULE_SIG (tem prompt, dep MODULES=y satisfeita)
-    # primeiro destrava as subopções (MODULE_SIG_ALL=y, HASH="sha512",
-    # KEY="certs/signing_key.pem", KEY_TYPE_RSA — tudo em default); depois
-    # ligamos FORCE (recusar não-assinado). (sed, não scripts/config: este é
-    # #!/bin/bash e o rootfs só tem sh.)
+    # Dois olddefconfig: MODULE_SIG primeiro destrava as subopcoes; depois
+    # fixamos FORCE, SHA-512, assinatura automatica desligada e a autoridade
+    # publica. (sed, nao scripts/config: este e #!/bin/bash e o rootfs so tem sh.)
     sed -i 's/^# CONFIG_MODULE_SIG is not set/CONFIG_MODULE_SIG=y/' .config
     make olddefconfig
-    sed -i 's/^# CONFIG_MODULE_SIG_FORCE is not set/CONFIG_MODULE_SIG_FORCE=y/' .config
+    sed -i \
+        -e 's/^# CONFIG_MODULE_SIG_FORCE is not set/CONFIG_MODULE_SIG_FORCE=y/' \
+        -e 's/^CONFIG_MODULE_SIG_ALL=y/# CONFIG_MODULE_SIG_ALL is not set/' \
+        -e 's|^CONFIG_MODULE_SIG_KEY=.*|CONFIG_MODULE_SIG_KEY="certs/distropica-module-signing.pem"|' \
+        -e 's|^CONFIG_SYSTEM_TRUSTED_KEYS=.*|CONFIG_SYSTEM_TRUSTED_KEYS=""|' \
+        -e 's|^CONFIG_SYSTEM_REVOCATION_KEYS=.*|CONFIG_SYSTEM_REVOCATION_KEYS=""|' \
+        .config
     make olddefconfig
     # Perfil de rede e confinamento do alvo. Anexar e reconciliar é mais
     # robusto que sed sobre "# CONFIG_X is not set": símbolo cuja dependência
@@ -173,22 +210,31 @@ CONFIG_SND_PCM=y
 CONFIG_SND_HDA_INTEL=y
 CONFIG_SND_HDA=y
 CONFIG_SND_HDA_GENERIC=y
-# Os DOIS guarda-chuvas, e nao os modelos um a um. No Kconfig do 7.1 eles sao
-# declarados com 'menuconfig' e nao com 'config', o que me levou a concluir que
-# nao existiam e a enumerar dez ALC* mais dois HDMI_* no lugar deles. Enumerar
-# NAO FUNCIONA: sem o guarda-chuva ligado os simbolos por modelo sao invisiveis,
-# o olddefconfig os descarta em silencio, e o kernel sai com um unico codec (o
-# generic). Cada menuconfig, ligado, ja habilita todos os drivers abaixo dele.
+# Os guarda-chuvas Realtek/HDMI/Cirrus habilitam os modelos que escondem sob
+# `menuconfig`. Os demais codecs HDA sao `config` independentes e PRECISAM ser
+# pedidos um a um: depender apenas do parser generic deixa de aplicar quirks de
+# pinos/amp em maquinas Analog Devices, IDT/Sigmatel, VIA e Conexant — a placa
+# enumera, mas a saida analogica pode continuar muda.
 CONFIG_SND_HDA_CODEC_REALTEK=y
 CONFIG_SND_HDA_CODEC_HDMI=y
+CONFIG_SND_HDA_CODEC_CIRRUS=y
+CONFIG_SND_HDA_CODEC_CS8409=y
+CONFIG_SND_HDA_CODEC_ANALOG=y
+CONFIG_SND_HDA_CODEC_SIGMATEL=y
+CONFIG_SND_HDA_CODEC_VIA=y
+CONFIG_SND_HDA_CODEC_CONEXANT=y
+CONFIG_SND_HDA_CODEC_SENARYTECH=y
+CONFIG_SND_HDA_CODEC_CA0110=y
+CONFIG_SND_HDA_CODEC_CMEDIA=y
+CONFIG_SND_HDA_CODEC_CM9825=y
 CONFIG_SND_INTEL8X0=y
 CONFIG_SND_ENS1371=y
 CONFIG_SND_USB_AUDIO=y
 KCONFIG
     make olddefconfig
-    # Guarda: o Ministério EXIGE assinatura. Aborta AQUI se um pilar caiu — em vez
-    # de descobrir no boot que um .ko não-assinado teria carregado.
-    for s in MODULE_SIG MODULE_SIG_FORCE MODULE_SIG_ALL SYSTEM_TRUSTED_KEYRING \
+    # Guarda: o Ministerio EXIGE assinatura, mas proibe chave privada no build.
+    # Aborta aqui se FORCE/certificado cair ou a assinatura automatica voltar.
+    for s in MODULE_SIG MODULE_SIG_FORCE MODULE_SIG_SHA512 SYSTEM_TRUSTED_KEYRING \
         USER_NS TUN WIREGUARD NETFILTER NF_TABLES NF_TABLES_INET NFT_CT \
         NFT_FIB_INET NF_CONNTRACK IPV6 IPV6_MULTIPLE_TABLES \
         WLAN CFG80211 MAC80211 RFKILL \
@@ -197,8 +243,11 @@ KCONFIG
         CRYPTO_DES CRYPTO_CBC CRYPTO_ECB \
         FRAMEBUFFER_CONSOLE SYSFB_SIMPLEFB DRM_SIMPLEDRM DRM_BOCHS \
         DRM_VMWGFX DRM_VBOXVIDEO \
-        SOUND SND SND_PCM SND_HDA_INTEL SND_HDA_GENERIC \
-        SND_HDA_CODEC_REALTEK SND_HDA_CODEC_HDMI \
+        SOUND SND SND_PCM SND_HDA SND_HDA_INTEL SND_HDA_GENERIC \
+        SND_HDA_CODEC_REALTEK SND_HDA_CODEC_HDMI SND_HDA_CODEC_CIRRUS \
+        SND_HDA_CODEC_CS8409 SND_HDA_CODEC_ANALOG SND_HDA_CODEC_SIGMATEL \
+        SND_HDA_CODEC_VIA SND_HDA_CODEC_CONEXANT SND_HDA_CODEC_SENARYTECH \
+        SND_HDA_CODEC_CA0110 SND_HDA_CODEC_CMEDIA SND_HDA_CODEC_CM9825 \
         SND_INTEL8X0 SND_ENS1371 SND_USB_AUDIO; do
         grep -q "^CONFIG_$s=y\$" .config || {
             echo "FATAL: falta CONFIG_$s=y no .config"
@@ -206,6 +255,19 @@ KCONFIG
             exit 1
         }
     done
+    grep -q '^# CONFIG_MODULE_SIG_ALL is not set$' .config || {
+        echo 'FATAL: CONFIG_MODULE_SIG_ALL precisa permanecer desligado'
+        exit 1
+    }
+    grep -q '^CONFIG_MODULE_SIG_HASH="sha512"$' .config || {
+        echo 'FATAL: hash de assinatura de modulo nao e sha512'
+        exit 1
+    }
+    grep -q '^CONFIG_MODULE_SIG_KEY="certs/distropica-module-signing.pem"$' \
+        .config || {
+        echo 'FATAL: kernel nao fixou o certificado publico de modulos'
+        exit 1
+    }
     # Os drivers sao =m e nao =y, entao a guarda acima nao os pega. Sem pelo
     # menos um deles nao ha radio nenhum, e o sintoma aparece so na maquina do
     # usuario: o iwgtk abre e nao lista rede.
@@ -216,19 +278,25 @@ KCONFIG
             exit 1
         }
     done
-    # bzImage + os módulos do defconfig. certs/signing_key.pem nasce AQUI
-    # ('openssl req' — chave ausente → certs/Makefile a cria); extract-cert e
-    # sign-file linkam a libcrypto (HOSTLDFLAGS -rpath-link p/ o libz transitivo).
+    # bzImage + modulos UNSIGNED. extract-cert embute somente o certificado
+    # publico; sign-file e construido para a reaplicacao posterior de CMS.
     make -j"$JOBS" HOSTLDFLAGS="-Wl,-rpath-link,/usr/lib" bzImage modules
+    [ ! -e certs/signing_key.pem ] || {
+        echo 'FATAL: Kbuild gerou/recebeu chave privada inesperada'
+        exit 1
+    }
     install -Dm644 arch/x86/boot/bzImage "$STAGE/boot/vmlinuz-$VERSION"
     install -Dm644 System.map "$STAGE/boot/System.map-$VERSION"
     install -Dm644 .config "$STAGE/boot/config-$VERSION"
-    # Instala os módulos JÁ ASSINADOS (MODULE_SIG_ALL assina no install, via
-    # sign-file+libcrypto). O depmod do busybox roda dentro do modules_install.
+    # Instala unsigned; MODULE_SIG_ALL=n impede o Kbuild de pedir segredo. O
+    # depmod do busybox roda dentro de modules_install antes de anexarmos CMS.
     # O alvo usa /usr unificado. Estagiar diretamente em usr/lib mantém o tar
     # original lexicalmente idêntico ao manifesto canônico; isso permite ao
     # `channel emit` reconstruir e conferir o artefato sem ambiguidade lib/.
     make -j"$JOBS" INSTALL_MOD_PATH="$STAGE/usr" modules_install
+    "$module_apply" "$STAGE/usr/lib/modules/$VERSION" "$module_bundle" \
+        "$module_cert_sha256" "$module_manifest_sha256" \
+        scripts/sign-file scripts/extract-module-sig.pl
     # build/source apontam p/ a árvore de build efêmera (/tmp/minitrue-build-*) →
     # removidos p/ não deixar symlink pendente no alvo.
     rm -f "$STAGE"/usr/lib/modules/*/build "$STAGE"/usr/lib/modules/*/source

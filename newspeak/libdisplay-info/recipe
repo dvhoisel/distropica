@@ -1,13 +1,13 @@
 NAME=libdisplay-info
-VERSION=0.2.0
+VERSION=0.3.0
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
 BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf hwdata-pnp python-glibc"
-ABOUT="Quem lê o EDID do monitor. Todo painel responde, pelo cabo, um bloco de 128 bytes que diz resolução nativa, taxa de atualização, tamanho físico e fabricante; alguém tem que decodificá-lo, e desde a versão 13 o weston delegou essa tarefa a esta biblioteca em vez de fazê-la à mão. É dependência OBRIGATÓRIA do backend DRM — não opcional, com not_found_message: 'Required by DRM-backend.' — de modo que sem ela o compositor não tem como saber em que modo pôr a tela. A faixa de versão é imposta pelo weston 14, que pede >= 0.1.1 e < 0.3.0; a 0.3.0 já existe e NÃO serve, então esta não é a versão mais recente por escolha. Conferência: o tarball de release é ASSINADO em PGP pelo Simon Ser, autor do projeto, com a chave 34FF9526CFEF0E97A340E2E40FDE7BE0E88F5E48 — a mesma que o Arch pina — e a assinatura foi verificada. Preferi isso a um segundo hash de distro porque o Void baixa o archive automático .tar.gz do GitLab, que é outro arquivo: corrobora a versão, não o mesmo byte."
+ABOUT="Quem lê o EDID do monitor. Todo painel responde, pelo cabo, um bloco de 128 bytes que diz resolução nativa, taxa de atualização, tamanho físico e fabricante; alguém tem que decodificá-lo, e desde a versão 13 o weston delegou essa tarefa a esta biblioteca em vez de fazê-la à mão. É dependência OBRIGATÓRIA do backend DRM — não opcional, com not_found_message: 'Required by DRM-backend.' — de modo que sem ela o compositor não tem como saber em que modo pôr a tela. A faixa de versão é imposta pelo Weston 16, que pede >= 0.2.0 e < 0.4.0; por isso a árvore pina 0.3.0 enquanto a 0.4.0 é incompatível, com a ressalva datada em versao-pinada. Conferência: o tarball de release é ASSINADO em PGP pelo Simon Ser, autor do projeto, com a chave 34FF9526CFEF0E97A340E2E40FDE7BE0E88F5E48 — a mesma que o Arch pina — e a assinatura foi verificada. Preferi isso a um segundo hash de distro porque o Void baixa o archive automático .tar.gz do GitLab, que é outro arquivo: corrobora a versão, não o mesmo byte."
 LICENSE=MIT
 SRC="https://gitlab.freedesktop.org/emersion/libdisplay-info/-/releases/$VERSION/downloads/libdisplay-info-$VERSION.tar.xz"
-SHA256=5a2f002a16f42dd3540c8846f80a90b8f4bdcd067a94b9d2087bc2feae974176
+SHA256="6ae77cd937f9cf7d1321d35c116062c4911e8447010a6a713ac4286f7a9d5987"
 
 build() {
     tar -xJf "$DL" --strip-components=1

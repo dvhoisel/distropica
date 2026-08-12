@@ -6,7 +6,7 @@ DEPS="glibc"
 BUILD_DEPS="make gcc-pass2 binutils-glibc"
 ABOUT="Tradutor do protocolo multitouch do kernel: converte os eventos do protocolo A, antigo e sem identidade de contato, no protocolo B com rastreamento de dedo. Exigência dura do libinput — ele recusa configurar sem ela, mesmo num sistema que só tem mouse. Pacote minúsculo e parado no tempo, o que é adequado a uma camada de compatibilidade com uma interface de kernel que não muda mais. É o .tar.gz e não o .tar.bz2 porque é o .gz que o Alpine pina, e assim a conferência é direta."
 LICENSE=MIT
-SRC="http://bitmath.org/code/mtdev/mtdev-$VERSION.tar.gz"
+SRC="https://bitmath.se/org/code/mtdev/mtdev-$VERSION.tar.gz"
 SHA256=a55bd02a9af4dd266c0042ec608744fff3a017577614c057da09f1f4566ea32c
 
 build() {

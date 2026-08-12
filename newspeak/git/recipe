@@ -57,9 +57,18 @@ build() {
     # para bindir), o que sobrevive ao DESTDIR e ao rootfs de instalacao.
     # SKIP_DASHED_BUILT_INS existe e apagaria os nomes em vez de liga-los; nao
     # foi usado porque script antigo ainda chama git-cat-file diretamente.
-    make -j"$JOBS" NO_GETTEXT=1 NO_TCLTK=1 NO_RUST=1 INSTALL_SYMLINKS=1
-    make install DESTDIR="$STAGE" NO_GETTEXT=1 NO_TCLTK=1 NO_RUST=1 \
+    # O Makefile 2.55 declara COCCI_GOALS como uma expressao recursiva e em
+    # seguida a testa com `ifdef`. Mesmo sem pedir coccicheck, o GNU make trata
+    # o texto cru da expressao como nao vazio e materializa a matriz completa
+    # regra x fonte. No make desta arvore (libc do Zig) isso ficou preso por
+    # mais de dez minutos em strchr enquanto avaliava centenas de milhares de
+    # termos de config_fn_ctx.pending. COCCI_GOALS vazio na linha de comando
+    # tem precedencia sobre a atribuicao do Makefile e desliga apenas essa
+    # matriz; nenhum alvo de build ou instalacao depende de coccicheck.
+    make -j"$JOBS" COCCI_GOALS= NO_GETTEXT=1 NO_TCLTK=1 NO_RUST=1 \
         INSTALL_SYMLINKS=1
+    make install DESTDIR="$STAGE" NO_GETTEXT=1 NO_TCLTK=1 NO_RUST=1 \
+        COCCI_GOALS= INSTALL_SYMLINKS=1
     [ -x "$STAGE/usr/bin/git" ] || {
         echo "git: o binario nao foi produzido" >&2; exit 1;
     }

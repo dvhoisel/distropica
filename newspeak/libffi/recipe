@@ -1,5 +1,5 @@
 NAME=libffi
-VERSION=3.7.1
+VERSION=3.8.0
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
@@ -7,7 +7,7 @@ BUILD_DEPS="make gcc-pass2 binutils-glibc"
 ABOUT="Interface de chamada estrangeira: permite montar uma chamada de função em tempo de execução, sem conhecer a assinatura na compilação. Entra por dois caminhos ao mesmo tempo — o ctypes do Python e a GObject Introspection da glib, ou seja, ela está embaixo tanto do interpretador quanto da pilha gráfica inteira. É o ativo de release do upstream, não o git archive: o release traz o configure gerado, e esta árvore não tem autoconf para regenerá-lo. O tarball de git archive da mesma tag foi conferido à parte e bate com o que o Arch pina, o que corrobora o conteúdo da tag."
 LICENSE=MIT
 SRC="https://github.com/libffi/libffi/releases/download/v$VERSION/libffi-$VERSION.tar.gz"
-SHA256=d5e9a6638ddbd2513ddb54518eb67e4bbe6fa707bcc01c10f6212f0a088d819d
+SHA256="7da3e2d9a171eb0a038f592ecad3ff2bb2550f3496d87b3b29ad0cf4430c0db4"
 
 build() {
     tar -xzf "$DL" --strip-components=1

@@ -3,7 +3,7 @@ VERSION=2026.05.30
 KIND=source
 TOOLCHAIN=none
 DEPS=""
-BUILD_DEPS=""
+BUILD_DEPS=busybox
 ABOUT="A base regulatória do Wi-Fi: que canais, que potência e que largura de banda são legais em cada país. Sem ela o cfg80211 fica no domínio mundial, que é a interseção restritiva de todas as jurisdições — o rádio funciona, mas some metade dos canais legais no país de quem usa, e nada avisa; o único sinal é uma linha de boot, 'Direct firmware load for regulatory.db failed with error -2'. A pendência estava escrita dentro da receita do linux-firmware-wifi, que é onde a falta aparecia e não é de onde a base vem: ela é do projeto wireless-regdb, publicado à parte no kernel.org. AQUI NÃO SE COMPILA A BASE, e a razão é de criptografia e não de preguiça: este kernel tem CONFIG_CFG80211_REQUIRE_SIGNED_REGDB=y e só carrega a regulatory.db se a regulatory.db.p7s a assinar com uma chave que ele embute. As chaves embutidas são sforshee e wens; a chave privada é dos mantenedores. Uma base recompilada de db.txt seria legítima e o kernel a RECUSARIA. Então o payload é o par binário do upstream, e a fonte correspondente — db.txt, com as 2203 linhas que descrevem cada domínio, mais as ferramentas db2fw.py e dbparse.py que o geram — viaja no mesmo tarball e no bundle de fontes. Difere do linux-firmware-wifi, que é blob sem fonte nenhuma: aqui a fonte existe e é auditável; o que não se pode reproduzir é a assinatura."
 LICENSE="ISC"
 SRC="https://mirrors.edge.kernel.org/pub/software/network/wireless-regdb/wireless-regdb-$VERSION.tar.xz"

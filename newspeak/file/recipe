@@ -1,5 +1,5 @@
 NAME=file
-VERSION=5.46
+VERSION=5.48
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc zlib"
@@ -7,7 +7,7 @@ BUILD_DEPS="gcc-pass2 binutils-glibc make"
 ABOUT="Identifica o tipo de um arquivo pelos bytes dele, e instala a libmagic junto. Entra por um argumento concreto e não por completude: o próprio ferramental desta distro depende dele. O bootstrap/sbom, que extrai a evidência de licenciamento de dentro dos artefatos, decide como abrir cada um chamando 'file -b' — e a Distrópica não conseguia rodar a própria ferramenta. Com zlib, para que ele enxergue dentro de arquivo comprimido em vez de parar em 'gzip compressed data'; sem bzip2, xz e zstd porque nenhuma das três está na árvore como biblioteca, e o BusyBox as descomprime pela linha de comando quando alguém precisa."
 LICENSE="BSD-2-Clause"
 SRC="https://astron.com/pub/file/file-$VERSION.tar.gz"
-SHA256=c9cc77c7c560c543135edc555af609d5619dbef011997e988ce40a3d75d86088
+SHA256="ed14656883b23a364b4057c05595d93252da9bc473d30106519519d0da141283"
 
 build() {
     tar -xzf "$DL" --strip-components=1

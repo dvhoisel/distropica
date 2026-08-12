@@ -1,13 +1,13 @@
 NAME=linux-firmware-wifi
-VERSION=20260622
+VERSION=20260810
 KIND=source
 TOOLCHAIN=native
 DEPS=""
-BUILD_DEPS=""
+BUILD_DEPS=busybox
 ABOUT="Firmware de Wi-Fi para Intel, Atheros e Realtek. ESTE PACOTE É A EXCEÇÃO DECLARADA da árvore, e a exceção precisa estar escrita onde ela mora, não só no LICENSING.md: é o único payload da Distrópica do qual NÃO temos a fonte correspondente. São blobs binários, redistribuíveis sob as licenças dos fabricantes descritas no arquivo WHENCE, mas sem código-fonte publicado por ninguém. Entra porque sem ele a placa não inicializa: o driver carrega, não encontra o firmware e o rádio simplesmente não existe para o sistema — a ferramenta gráfica abriria e não listaria rede nenhuma. É subconjunto e não o linux-firmware inteiro: só as três famílias comuns em laptop amd64, porque o pacote completo passa de 1 GB descompactado e inviabilizaria a ISO. O tarball baixado é o completo, de 609 MB, e a receita extrai apenas o necessário; o SRC não pode ser um subconjunto porque subconjunto não tem hash upstream. A conferência aqui é o sha256sums.asc que o kernel.org publica ASSINADO pelos mantenedores — para blob binário isso é a melhor fonte que existe. O Alpine pina a mesma data de release, mas do gitlab e em .tar.gz, então corrobora a VERSÃO e não o mesmo arquivo; registrado assim em vez de fingir duas fontes idênticas."
 LICENSE="linux-firmware (ver WHENCE; blobs proprietários redistribuíveis)"
 SRC="https://mirrors.edge.kernel.org/pub/linux/kernel/firmware/linux-firmware-$VERSION.tar.xz"
-SHA256=2b9d8a358e76eb766588609135e53fa548b902c551daae33ee32f26f25e60dbb
+SHA256="ac17c34fe73756926a961fbafadf8d8f07a3bd2dd2f4ea31a0fb5d50c714a49a"
 
 build() {
     tar -xJf "$DL" --strip-components=1

@@ -1,10 +1,23 @@
 NAME=linux-headers
-VERSION=6.12.96
+VERSION=7.1.8
 KIND=source
+BUILD_DEPS="make busybox"
 ABOUT="cabeçalhos da API do kernel (uapi) que a glibc consome; make headers não compila nada, só sanitiza e copia"
 LICENSE="GPL-2.0 WITH Linux-syscall-note"
-SRC="https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$VERSION.tar.xz"
-SHA256=7d2e1b5d5ab36b3a01856e71782dad2a54e634fb2b37c0a42998def3bbf957c1
+# O diretório `vN.x` acompanha o major do kernel EMBARCADO — ver newspeak/linux.
+# Ficou em v6.x/6.12.96 desde o primeiro commit enquanto o `linux` foi para a
+# série 7: os cabeçalhos que a glibc consumia eram de um kernel que a distro
+# não embarca mais. `vN.x` não é prefixo pontuado da versão, então o
+# `sobe-versao` não deriva sozinho: subir de major aqui é edição de receita.
+SRC="https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$VERSION.tar.xz"
+SHA256="ff01dcb449279d5b4cfccdb01fee639cf5ff1803f1749a77844dd33915422c49"
+# Certificado obtido do WKD oficial kernel.org:
+# https://kernel.org/.well-known/openpgpkey/hu/ew8uiogxwri7d3fuioqgt7u1d5sngorx?l=autosigner
+# signer observado e primária B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1.
+SIGSUMS="https://cdn.kernel.org/pub/linux/kernel/v7.x/sha256sums.asc"
+SIGSUMS_EPOCH=1786460504
+SIGKEY_1="files/upstream-release.asc"
+SIGKEY_FP_1=B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1
 
 build() {
     tar -xJf "$DL" --strip-components=1

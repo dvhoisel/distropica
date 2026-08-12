@@ -1,7 +1,8 @@
 NAME=binutils-cross
-VERSION=2.45
+VERSION=2.47
 KIND=source
 TOOLCHAIN=seed
+BUILD_DEPS="make busybox"
 # Scaffolding do E2: além das ferramentas PREFIXADAS (x86_64-distropica-…-*,
 # que ninguém reivindica, então permanecem), instala arquivos COMPARTILHADOS
 # não-prefixados (bfd-plugins, headers, info) que o binutils-glibc — o binutils
@@ -13,7 +14,13 @@ SUPERSEDES="binutils"
 ABOUT="binutils targetando x86_64-distropica-linux-gnu: as/ld/ar/ranlib/nm/objcopy com o prefixo do alvo, que o gcc da passada 1 invoca ao gerar libgcc e que o build cross da glibc usa (o executor põe AR=x86_64-distropica-linux-gnu-ar etc. no perfil cross, SPEC-0005). Mesmo tarball do binutils nativo; muda só --target=. Mesma arquitetura, então os objetos são idênticos aos do binutils nativo — o prefixo é o que o toolchain cross exige por nome."
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/binutils/binutils-$VERSION.tar.xz"
-SHA256=c50c0e7f9cb188980e2cc97e4537626b1672441815587f1eab69d2a1bfbef5d2
+SHA256="154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff"
+# Chave extraída do keyring oficial https://ftp.gnu.org/gnu/gnu-keyring.gpg;
+# signer observado e primária 3A24BC1E8FB409FA9F14371813FCEF89DD9E3C4F.
+SIG_1="https://ftp.gnu.org/gnu/binutils/binutils-2.47.tar.xz.sig"
+SIG_EPOCH_1=1786460504
+SIGKEY_1="files/upstream-release.asc"
+SIGKEY_FP_1=3A24BC1E8FB409FA9F14371813FCEF89DD9E3C4F
 
 build() {
     tar -xJf "$DL" --strip-components=1

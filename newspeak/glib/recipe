@@ -1,5 +1,5 @@
 NAME=glib
-VERSION=2.88.2
+VERSION=2.88.3
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc libffi pcre2 zlib busybox elfutils python-glibc"
@@ -7,7 +7,7 @@ BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc gette
 ABOUT="A base do GNOME e o degrau do qual a pilha gráfica inteira depende: GObject, GIO e as estruturas de dados que pango, gdk-pixbuf, GTK e o próprio Wireshark usam. É o primeiro pacote desta árvore construído com Meson, e por isso o primeiro teste real de que ninja, meson e o python-glibc funcionam juntos. Sem NLS, sem libmount (não há util-linux) e sem SELinux, que não tem política nesta distro. Sem introspection: ela geraria bindings para linguagens que aqui não existem e exigiria rodar o binário recém-construído sob emulação de si mesmo."
 LICENSE=LGPL-2.1-or-later
 SRC="https://download.gnome.org/sources/glib/2.88/glib-$VERSION.tar.xz"
-SHA256=cf3f215a640c8a4257f14317586b8f1fdd25a10a93cb4bdda147c0f9ad88e74f
+SHA256="ab24d24e698dfa1e408b7bcdb508f4aafc906185a8b8ce72fdf79bbbdc9b383b"
 
 build() {
     tar -xJf "$DL" --strip-components=1

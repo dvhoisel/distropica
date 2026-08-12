@@ -1,13 +1,13 @@
 NAME=hwdata-pnp
-VERSION=0.409
+VERSION=0.410
 KIND=source
 TOOLCHAIN=none
 DEPS=""
-BUILD_DEPS=""
+BUILD_DEPS=busybox
 ABOUT="A tabela de fabricantes de monitor, e SÓ ela. O nome do pacote diz o recorte de propósito, como em linux-firmware-wifi: o hwdata upstream traz pci.ids, usb.ids, oui.txt e iab.txt além do pnp.ids, e aqui entra apenas o último. Motivo: o pnp.ids é dependência de CONSTRUÇÃO da libdisplay-info, que compila a tabela para dentro do binário; os outros quatro só teriam serventia para lspci e lsusb, que esta árvore não tem — seriam 8 MB de texto que ninguém leria. Para que serve: o EDID de um monitor identifica o fabricante por três letras ('DEL', 'SAM'), e é esta tabela que as traduz para 'Dell Inc.' O que se perde sem ela é o nome legível no log do compositor; o que se perde sem o ARQUIVO é o build da libdisplay-info, que chama files('/usr/share/hwdata/pnp.ids') e falha na configuração se ele não existir — por isso é pacote e não um detalhe do build de lá. Instala o hwdata.pc porque é assim que a libdisplay-info localiza o diretório: com o .pc presente ela pergunta ao pkg-config e não recorre ao caminho absoluto embutido. Receita sem TOOLCHAIN: não compila nada, copia dois arquivos."
 LICENSE="GPL-2.0-or-later AND MIT"
 SRC="https://github.com/vcrhonek/hwdata/archive/refs/tags/v$VERSION.tar.gz"
-SHA256=23006accc0f931dd5187d0307a57d0744e2b8feb85e73c37bc0f5229fb31eadd
+SHA256="2864b061b179b8ad8cb6a7339ca07678240a183d9cedce8677a4950acaf798e0"
 
 build() {
     tar -xzf "$DL" --strip-components=1

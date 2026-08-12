@@ -1,10 +1,17 @@
 NAME=m4
 VERSION=1.4.21
 KIND=source
+BUILD_DEPS="make busybox"
 ABOUT="processador de macros GNU; o gmp não configura sem ele (gera o assembly das mpn)"
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/m4/m4-$VERSION.tar.xz"
 SHA256=f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66
+# Chave extraída do keyring oficial https://ftp.gnu.org/gnu/gnu-keyring.gpg;
+# signer observado e primária 71C2CC22B1C4602927D2F3AAA7A16B4A2527436A.
+SIG_1="https://ftp.gnu.org/gnu/m4/m4-1.4.21.tar.xz.sig"
+SIG_EPOCH_1=1786460504
+SIGKEY_1="files/upstream-release.asc"
+SIGKEY_FP_1=71C2CC22B1C4602927D2F3AAA7A16B4A2527436A
 # reprocorr: o hash reprodutível canônico — sha256 do pack(STAGE) (SPEC-0010 §4).
 # É a raiz de confiança da corroboração (SPEC-0009 §6): o build DEVE reproduzi-lo
 # (crimestop se divergir), e uma attestation de builder o assina. m4 é provado

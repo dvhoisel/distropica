@@ -5,11 +5,22 @@ TOOLCHAIN=cross
 RETRIES=20
 SUPERSEDES="gmp mpfr mpc"
 DEPS="glibc"
-BUILD_DEPS="gcc binutils-cross"
-ABOUT="gmp 6.3.0 + mpfr 4.2.2 + mpc 1.3.1 reconstruídos como GLIBC (não musl). Passo do E2 descoberto na passada 2 (SPEC-0005 §4): os mathlibs-semente são build musl do zig (NEEDED libc.so); um cc1 glibc (pass-2) não os carrega ('invalid ELF header' ao resolver o linker-script /usr/lib/libc.so). Reconstruídos pelo gcc da passada 1 (cross) com a glibc presente, passam a ter NEEDED libc.so.6. SUPERSEDE os mathlibs-semente nos mesmos caminhos /usr/lib — a colisão com gmp/mpfr/mpc (seed) é a dívida de 'fingerprint de build' (rebuild-in-place com mesma versão, toolchain diferente), ver §4. -std=gnu17: o código é pré-C23, e o gcc 15 rejeita () = zero args."
+BUILD_DEPS="gcc binutils-cross make busybox"
+ABOUT="gmp 6.3.0 + mpfr 4.2.2 + mpc 1.4.1 reconstruídos como GLIBC (não musl). Passo do E2 descoberto na passada 2 (SPEC-0005 §4): os mathlibs-semente são build musl do zig (NEEDED libc.so); um cc1 glibc (pass-2) não os carrega ('invalid ELF header' ao resolver o linker-script /usr/lib/libc.so). Reconstruídos pelo gcc da passada 1 (cross) com a glibc presente, passam a ter NEEDED libc.so.6. SUPERSEDE os mathlibs-semente nos mesmos caminhos /usr/lib — a colisão com gmp/mpfr/mpc (seed) é a dívida de 'fingerprint de build' (rebuild-in-place com mesma versão, toolchain diferente), ver §4. -std=gnu17: o código é pré-C23, e o gcc 15 rejeita () = zero args."
 LICENSE="LGPL-3.0-or-later"
-SRC="https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.2.tar.xz https://ftp.gnu.org/gnu/mpc/mpc-1.3.1.tar.gz"
-SHA256="a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898 b67ba0383ef7e8a8563734e2e889ef5ec3c3b898a01d00fa0a6869ad81c6ce01 ab642492f5cf882b74aa0cb730cd410a81edcdbec895183ce930e706c1c759b8"
+SRC="https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.2.tar.xz https://ftp.gnu.org/gnu/mpc/mpc-1.4.1.tar.xz"
+SHA256="a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898 b67ba0383ef7e8a8563734e2e889ef5ec3c3b898a01d00fa0a6869ad81c6ce01 91204cd32f164bd3b7c992d4a6a8ce6519511aadab30f78b6982d0bf8d73e931"
+# O plano é bijetivo por SRC. GMP usa o mesmo waiver v2 factual da receita
+# semente: RSA/SHA-512 válida na criação, cert expirado no review e primária
+# reendossada pela página oficial. MPFR passa a política normal com certificado
+# extraído do keyring oficial GNU. MPC usa o waiver v3 confinado: DSA-2048/SHA-256
+# é provado matematicamente, mas continua recusado pelo motor normal.
+SIG_UNSAFE_WAIVER_1="files/assinatura-insegura-1"
+SIG_2="https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.2.tar.xz.sig"
+SIG_EPOCH_2=1786460504
+SIGKEY_2="files/mpfr-release.asc"
+SIGKEY_FP_2=A534BE3F83E241D918280AEB5831D11A0D4DB02A
+SIG_UNSAFE_WAIVER_3="files/assinatura-insegura-3"
 
 build() {
     # Shim do cross gcc (pass-1) que injeta os paths /usr (o pass-1 é
@@ -47,7 +58,7 @@ SHIM
 
     # mpc (acha gmp+mpfr no stage)
     mkdir -p "$WORK/mpc"; cd "$WORK/mpc"
-    tar -xzf "$DL_3" --strip-components=1
+    tar -xJf "$DL_3" --strip-components=1
     ./configure --prefix=/usr --disable-nls --with-gmp="$STAGE/usr" --with-mpfr="$STAGE/usr" --disable-dependency-tracking
     retry make -j"$JOBS"
     make install DESTDIR="$STAGE"

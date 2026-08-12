@@ -2,10 +2,10 @@ NAME=python-glibc
 VERSION=3.14.6
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc zlib openssl ncurses libffi busybox e2fsprogs readline"
+DEPS="glibc zlib openssl ncurses libffi busybox e2fsprogs readline xz"
 BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf busybox"
 SUPERSEDES="python"
-ABOUT="O Python de verdade da distro, sucessor do interpretador-semente. O python semente é BUILD_DEPS do glibc: ele precisa existir ANTES da libc, então é compilado com o toolchain-semente musl do Zig, estático e sem nenhum módulo de extensão C — sem zlib, sem ssl, sem hashlib, sem ctypes. Isso basta para os scripts de build do glibc e para nada mais; o Meson, por exemplo, importa gzip e morre. Um Python nativo não pode ocupar o lugar do semente, porque seria circular. Daí a sucessão provisional, o mesmo padrão de gcc→gcc-pass2 e binutils→binutils-glibc: o semente cede os caminhos quando este chega. Continuam ausentes _bz2, _lzma, _sqlite3 e readline — não há bzip2, xz, sqlite nem readline nesta árvore, e cada um é uma decisão própria. SEM pip, deliberadamente: uma distro cuja premissa é não ter gerenciador de pacotes não ganha um segundo pela porta dos fundos."
+ABOUT="O Python de verdade da distro, sucessor do interpretador-semente. O python semente é BUILD_DEPS do glibc: ele precisa existir ANTES da libc, então é compilado com o toolchain-semente musl do Zig, estático e sem nenhum módulo de extensão C — sem zlib, sem ssl, sem hashlib, sem ctypes. Isso basta para os scripts de build do glibc e para nada mais; o Meson, por exemplo, importa gzip e morre. Um Python nativo não pode ocupar o lugar do semente, porque seria circular. Daí a sucessão provisional, o mesmo padrão de gcc→gcc-pass2 e binutils→binutils-glibc: o semente cede os caminhos quando este chega. O Python nativo traz zlib, TLS, ctypes, curses, readline e lzma com provedores declarados. _bz2 continua deliberadamente desligado: bzip2 pertence apenas à closure de build do GIMP, e autodetectá-lo faria a mesma receita gerar payload diferente numa raiz GIMP. _sqlite3 também continua ausente. SEM pip, deliberadamente: uma distro cuja premissa é não ter gerenciador de pacotes não ganha um segundo pela porta dos fundos."
 LICENSE=Python-2.0.1
 SRC="https://www.python.org/ftp/python/$VERSION/Python-$VERSION.tar.xz"
 SHA256=143b1dddefaec3bd2e21e3b839b34a2b7fb9842272883c576420d605e9f30c63
@@ -27,6 +27,17 @@ build() {
     # nmap): o OpenSSL 4.0 mudou API e o mundo ainda não alcançou. O conteúdo
     # entra no FINGERPRINT pelo snapshot de files/.
     patch -p1 < "$WORK/openssl4.patch"
+    patch -p1 < "$WORK/disable-bzip2.patch"
+    # Setup.local é a interface suportada pelo CPython para impedir um módulo
+    # independentemente do que o configure encontre. bzip2 não pertence à
+    # closure da base, mas estará instalado quando uma raiz limpa construir a
+    # closure do GIMP; sem este bloqueio, a MESMA receita/fingerprint ganharia
+    # _bz2 apenas nessa raiz. Isso é não determinismo por sujeira do rootfs.
+    printf '*disabled*\n_bz2\n' > Modules/Setup.local
+
+    # Setup.local impede o .so. O patch acima também zera a decisão final do
+    # configure e os dados de sysconfig; as respostas de cache impedem que o
+    # fallback Autoconf grave HAVE_BZLIB_H antes dessa decisão.
     # Ao contrário do semente, aqui os módulos de extensão são .so em
     # lib-dynload: é o que faz `import zlib` funcionar. Sem MODULE_BUILDTYPE.
     #
@@ -36,11 +47,12 @@ build() {
     # configure respondem "não" e os módulos somem em silêncio, que é
     # exatamente o modo de falha que trouxe esta receita à existência.
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ac_cv_header_bzlib_h=no \
+    ac_cv_lib_bz2_BZ2_bzCompress=no \
     ./configure \
         --prefix=/usr \
         --libdir=/usr/lib \
         --with-openssl=/usr \
-        --with-system-ffi \
         --without-ensurepip \
         --with-ensurepip=no \
         --disable-test-modules \
@@ -50,7 +62,7 @@ build() {
     # Guarda: esta receita existe para que os módulos de extensão existam.
     # Se o configure decidir em silêncio que zlib ou ssl não estão lá, o
     # build "passa" e entrega o mesmo Python inútil de antes.
-    for modulo in zlib _ssl _hashlib _ctypes _curses; do
+    for modulo in zlib _ssl _hashlib _ctypes _curses readline _lzma; do
         ls "$STAGE"/usr/lib/python*/lib-dynload/"$modulo"*.so >/dev/null 2>&1 || {
             echo "FATAL: módulo $modulo não foi construído"
             echo "lib-dynload contém:"
@@ -58,6 +70,15 @@ build() {
             exit 1
         }
     done
+    ! ls "$STAGE"/usr/lib/python*/lib-dynload/_bz2*.so >/dev/null 2>&1 || {
+        echo "FATAL: _bz2 foi construído apesar do bloqueio de hermeticidade"
+        exit 1
+    }
+    ! grep -q '^#define HAVE_BZLIB_H 1$' \
+        "$STAGE"/usr/include/python*/pyconfig.h || {
+        echo "FATAL: pyconfig.h ainda varia com bzlib presente no rootfs"
+        exit 1
+    }
     # __pycache__ prende caminho absoluto e mtime dentro do .pyc.
     find "$STAGE" -type d -name __pycache__ -exec rm -rf {} +
     find "$STAGE" -type d -empty -delete

@@ -1,7 +1,7 @@
 NAME=python
 VERSION=3.14.6
 KIND=source
-BUILD_DEPS=binutils
+BUILD_DEPS="binutils make busybox"
 PROVISIONAL=1
 # NOTA: esta correção só tem efeito em bootstrap NOVO. Numa árvore onde a
 # semente já cedeu caminhos ao sucessor, o minitrue recusa reconstruí-la

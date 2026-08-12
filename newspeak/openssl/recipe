@@ -3,11 +3,17 @@ VERSION=4.0.1
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc zlib"
-BUILD_DEPS="gcc-pass2 binutils-glibc perl"
+BUILD_DEPS="gcc-pass2 binutils-glibc perl make"
 ABOUT="Toolkit TLS/cripto: libcrypto + libssl. Mundo B (o openssl é distribuído como fonte). É a base de confiança da Distrópica: a libcrypto destrava os módulos de kernel ASSINADOS (o SYSTEM_TRUSTED_KEYRING que o E3 teve de desligar por falta de openssl — ver newspeak/linux) e a criptografia de attestation/federação (proveniência do minitrue). O Configure é perl, destravado no E3. Edge (P7): 4.0.1, o major mais recente do openssl.org; a linha LTS é a 3.5.x. Licença Apache-2.0 (relicenciada a partir do 3.0, fim do dual OpenSSL/SSLeay)."
 LICENSE="Apache-2.0"
 SRC="https://github.com/openssl/openssl/releases/download/openssl-$VERSION/openssl-$VERSION.tar.gz"
 SHA256=2db3f3a0d6ea4b59e1f094ace2c8cd536dffb87cdc39084c5afa1e6f7f37dd09
+# Chave extraída de https://www.openssl-library.org/source/pubkeys.asc;
+# signer observado e primária BA5473A2B0587B07FB27CF2D216094DFD0CB81EF.
+SIG_1="https://github.com/openssl/openssl/releases/download/openssl-4.0.1/openssl-4.0.1.tar.gz.asc"
+SIG_EPOCH_1=1786460504
+SIGKEY_1="files/upstream-release.asc"
+SIGKEY_FP_1=BA5473A2B0587B07FB27CF2D216094DFD0CB81EF
 
 build() {
     tar -xzf "$DL" --strip-components=1

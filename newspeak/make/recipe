@@ -1,10 +1,17 @@
 NAME=make
 VERSION=4.4.1
 KIND=source
-ABOUT="GNU não publica binário; o primeiro build do mundo-fonte. build.sh existe justamente para compilar make sem make. O upstream assina com OpenPGP (.sig); o pino será a assinatura quando a verificação PGP chegar (Marco 0.2) — por ora, o SHA256."
+BUILD_DEPS=busybox
+ABOUT="GNU não publica binário; o primeiro build do mundo-fonte. build.sh existe justamente para compilar make sem make. O tarball e a assinatura OpenPGP são pinados na receita."
 LICENSE="GPL-3.0-or-later AND GFDL-1.3-invariants-or-later"
 SRC="https://ftp.gnu.org/gnu/make/make-$VERSION.tar.gz"
 SHA256=dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3
+# Chave extraída do keyring oficial https://ftp.gnu.org/gnu/gnu-keyring.gpg;
+# signer observado B2508A90102F8AE3B12A0090DEACCAAEDB78137A, primária abaixo.
+SIG_1="https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz.sig"
+SIG_EPOCH_1=1786460504
+SIGKEY_1="files/upstream-release.asc"
+SIGKEY_FP_1=6D4EEB02AD834703510B117680CB727A20C79BB2
 
 build() {
     tar -xzf "$DL" --strip-components=1

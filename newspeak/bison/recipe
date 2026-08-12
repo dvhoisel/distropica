@@ -1,12 +1,15 @@
 NAME=bison
-VERSION=3.8
+VERSION=3.8.2
 KIND=source
 DEPS="m4 busybox"
-BUILD_DEPS=binutils
+BUILD_DEPS="binutils make"
 ABOUT="gerador de parsers LALR; a glibc precisa dele no build. Invoca m4 em runtime"
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/bison/bison-$VERSION.tar.xz"
-SHA256=1e0a14a8bf52d878e500c33d291026b9ebe969c27b3998d4b4285ab6dbce4527
+SHA256="9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2"
+# A única assinatura upstream é DSA-1024/SHA-1 sobre os dados e é recusada;
+# files/assinatura-insegura prende assinatura, FP, keyring oficial e extração.
+SIG_UNSAFE_WAIVER="files/assinatura-insegura"
 
 build() {
     tar -xJf "$DL" --strip-components=1

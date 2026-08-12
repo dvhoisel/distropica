@@ -1,0 +1,4 @@
+# Fonte Mozilla exata da qual o cacert.pem de 2026-07-16 foi convertido.
+# O próprio cabeçalho do PEM grava este SHA256 como a identidade de
+# certdata.txt; a conversão com mk-ca-bundle produz as mesmas 119 raízes.
+e57912808daef7b2b0fa4df2ccf17e47aeaf26c839a38f85c76003ebafd866bd https://raw.githubusercontent.com/mozilla-firefox/firefox/refs/heads/release/security/nss/lib/ckfw/builtins/certdata.txt

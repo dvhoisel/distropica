@@ -16,4 +16,5 @@
 # esta ressalva deixa de valer e o pino sobe.
 #
 # FORMATO: a primeira linha não-comentário é o motivo que o relatório mostra.
+# Verificado em 2026-08-11.
 5.4.1 regride e quebra a compilacao do gcc (SPEC-0005); revisar a cada 5.4.x

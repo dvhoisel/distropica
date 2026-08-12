@@ -1,5 +1,5 @@
 NAME=nmap
-VERSION=7.99
+VERSION=7.991
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc libpcap openssl zlib gcc-pass2"
@@ -7,30 +7,13 @@ BUILD_DEPS="make gcc-pass2 binutils-glibc busybox"
 ABOUT="Varredura de rede. Mundo B por censo: o nmap.org publica .rpm para Linux, que é pacote de distro e não tarball elegível (SPEC-0001 §2, SPEC-0007). Usa a libpcap e o openssl do sistema, um provedor canônico cada; Lua e PCRE ficam nos embutidos do próprio nmap, porque esta árvore ainda não tem receita para eles e um provedor por acidente é pior que um embutido declarado. Sem zenmap (Python+GTK), sem ndiff (Python) e sem nping. Sem cap_net_raw o nmap degrada para varredura connect(), que funciona sem privilégio."
 LICENSE=NPSL
 SRC="https://nmap.org/dist/nmap-$VERSION.tar.bz2"
-SHA256=df512492ffd108e53a27a06f26d8635bbe89e0e569455dc8ffef058c035d51b2
+SHA256="a5d507f29437bef3bedd4771ff9aaa8fc1c2a109ddba1f5b1cf12027456929be"
 
 build() {
     bunzip2 -c "$DL" | tar -x --strip-components=1
-    # ÚNICO patch de fonte desta árvore, e ele é temporário por construção.
-    #
-    # O nmap 7.99 não compila contra o OpenSSL 4.0: ASN1_STRING e ASN1_TIME
-    # viraram tipos opacos (o código lia ->data e ->length direto), X509_NAME
-    # e ASN1_OBJECT ganharam const nos retornos, e OPENSSL_atexit foi removido.
-    # São 19 erros, e o -fpermissive que o compilador sugere não resolve os de
-    # tipo incompleto. O 7.99 é a versão mais recente publicada.
-    #
-    # Procedência, que é o que autoriza carregá-lo: o patch é o do Linux From
-    # Scratch (nmap-7.99-openssl4_fixes-1.patch, Douglas R. Reno, 2026-05-14),
-    # e a origem declarada dele é o PR #3331 do PRÓPRIO nmap. Esse PR foi
-    # fechado porque os mantenedores implementaram o mesmo conserto em
-    # 2026-06-16 — ou seja, isto já está no master do upstream e falta apenas
-    # sair em release. Some daqui quando sair. Troca ->data/->length pelos
-    # acessores ASN1_STRING_get0_data/ASN1_STRING_length, acerta os const e
-    # substitui OPENSSL_atexit por atexit.
-    #
-    # O conteúdo do patch entra no FINGERPRINT da receita pelo snapshot de
-    # files/, então ele é tão pinado quanto o SHA256 do tarball.
-    patch -p1 < "$WORK/openssl4.patch"
+    # O 7.991 incorporou o conserto do PR upstream #3331 para OpenSSL 4 que a
+    # receita 7.99 carregava como patch local. Manter o patch depois da release
+    # faria a atualização falhar tentando aplicar de novo mudanças já presentes.
     # -rpath-link,/usr/lib: o mesmo padrão de elfutils, openssl e nftables. A
     # libcrypto.so.4 desta distro é ligada com zlib, logo tem NEEDED libz.so.1;
     # o teste de link do configure (BIO_int_ctrl em -lcrypto) falha porque o ld

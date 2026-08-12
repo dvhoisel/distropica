@@ -1,5 +1,5 @@
 NAME=pkgconf
-VERSION=3.0.4
+VERSION=3.0.5
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
@@ -7,7 +7,7 @@ BUILD_DEPS="make gcc-pass2 binutils-glibc"
 ABOUT="Implementação do pkg-config. Ferramenta de build, não superfície: entra porque o configure da libnftnl e do nftables usa PKG_CHECK_MODULES, que é exigência dura — sem ela os dois recusam a construir, e nenhum flag os convence do contrário. pkgconf e não o pkg-config da freedesktop: este último embute uma cópia da glib só para se construir, e arrastar a glib para dentro de uma ferramenta de build seria pagar caro por um resolvedor de arquivos .pc. Instala o binário pkgconf e o nome pkg-config como link, que é o que todo configure procura. --disable-shared porque uma libpkgconf.so acrescentaria um provedor à closure sem que nada além dela própria a use."
 LICENSE=ISC
 SRC="https://distfiles.ariadne.space/pkgconf/pkgconf-$VERSION.tar.xz"
-SHA256=91ce346b47f46b87d680c6928e6c43240b9cdc7a31afbea19f2298de4dbe266d
+SHA256="3acd3a8a3cce65a8d620321855d92fb602e026cbe8e13ee36bdec58483b59ace"
 
 build() {
     tar -xJf "$DL" --strip-components=1

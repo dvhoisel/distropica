@@ -1,0 +1,4 @@
+# 2026-08-10 — ressalva pragmática da P7.
+Weston 16.0.0 exige libdisplay-info >=0.2.0 e <0.4.0; 0.4.0 é incompatível
+# A 0.3.0 é a versão mais nova dentro da faixa. Remover este pino quando o
+# Weston aceitar a API 0.4.

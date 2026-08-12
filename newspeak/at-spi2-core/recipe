@@ -1,5 +1,5 @@
 NAME=at-spi2-core
-VERSION=2.60.5
+VERSION=2.60.6
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc glib dbus libxml2"
@@ -7,7 +7,7 @@ BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc gettext gl
 ABOUT="A acessibilidade inteira, num pacote só: o ATK (as interfaces que um widget usa para se descrever), a PONTE atk-bridge (que publica essas descrições no D-Bus) e a libatspi (o lado de quem lê). Desde a versão 2.46 o upstream fundiu os três, e por isso ESTE PACOTE SUBSTITUI o antigo 'atk' avulso — que ficou na 2.38.0 e não existe mais em distribuição nenhuma. Quem tinha o atk instalado precisa de memoryhole antes: os dois entregam libatk-1.0.so.0 e colidiriam no manifesto. Por que entrou: o backend X11 do GTK3 exige atk-bridge-2.0 como dependência DURA — está no meson.build dele, dentro do bloco x11_enabled — e o backend X11 do GTK3 passou a ser obrigatório quando se mediu que o libxul.so do Firefox referencia vinte e um símbolos gdk_x11_*, com -z now, o que faz o carregador recusar o binário se qualquer um faltar. A receita anterior do atk dizia que desligar o X11 poupava o dbus e o at-spi2 inteiros; era verdade, e deixou de ser no dia em que o Firefox entrou de verdade na árvore. Efeito colateral bom: com a ponte presente, as descrições de acessibilidade que os widgets já produziam passam a ter para onde ir — um leitor de tela agora teria o que ler, o que antes não tinha. Sem X11 aqui dentro (-Dx11=disabled): o at-spi2 usa o X só para atalhos globais de teclado, que não fazem sentido sem servidor. Sem systemd, sem introspection, sem gtk2_atk_adaptor. Uma armadilha de opção que custou um build: 'dbus_broker' NÃO é booleano, é uma string com o CAMINHO do executável, e passar -Ddbus_broker=false faz o meson entender que o broker está em um programa chamado 'false', exigir systemd por causa dele e abortar. O jeito de não ter broker é -Ddefault_bus=dbus-daemon, que deixa o caminho vazio e o systemd desnecessário. Vale a mesma lição do libdisplay-info: ler o meson_options.txt antes de supor o tipo."
 LICENSE=LGPL-2.1-or-later
 SRC="https://download.gnome.org/sources/at-spi2-core/2.60/at-spi2-core-$VERSION.tar.xz"
-SHA256=6059a77d507438ff6c8d6d06025f8f9f5774fa0f8eabe9c9b059b1cc41e1bbc0
+SHA256="a89b64a8b217a8042bdf0e35cbfab629ceee35640dba75df578afde9aa789d57"
 
 build() {
     tar -xJf "$DL" --strip-components=1

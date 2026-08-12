@@ -8,11 +8,17 @@ RETRIES=50
 # PROVISIONAL faz esta libstdc++ ceder à do gcc-pass2 sem doublethink. SPEC-0005 §4.
 PROVISIONAL=1
 DEPS="glibc"
-BUILD_DEPS="gcc binutils-cross"
+BUILD_DEPS="gcc binutils-cross make busybox"
 ABOUT="A libstdc++ (runtime C++), do subdir libstdc++-v3 do fonte do gcc, buildada pelo gcc da passada 1 AGORA que a glibc existe (headers presentes). É o elo que faltava entre a passada 1 (--without-headers: tem cc1plus mas nenhuma libstdc++) e a passada 2: sem uma libstdc++, o pass-1 g++ compila C++ mas não LINKA, então não conseguiria buildar o gcc, que é C++. Ordem LFS 5.7 (glibc → libstdc++ → gcc final)."
 LICENSE="GPL-3.0-or-later WITH GCC-exception-3.1"
 SRC="https://ftp.gnu.org/gnu/gcc/gcc-$VERSION/gcc-$VERSION.tar.xz"
 SHA256=fa59c1beef8995f27c4d71c1df227587189315d3e6faff1bb4306e61b0c530eb
+# Chave extraída do keyring oficial https://ftp.gnu.org/gnu/gnu-keyring.gpg;
+# signer observado 7F74F97C103468EE5D750B583AB00996FC26A641, primária abaixo.
+SIG_1="https://ftp.gnu.org/gnu/gcc/gcc-15.3.0/gcc-15.3.0.tar.xz.sig"
+SIG_EPOCH_1=1786460504
+SIGKEY_1="files/upstream-release.asc"
+SIGKEY_FP_1=13975A70E63C361C73AE69EF6EEB81F8981C74C7
 
 build() {
     tar -xJf "$DL" --strip-components=1

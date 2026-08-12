@@ -1,13 +1,20 @@
 NAME=elfutils
-VERSION=0.192
+VERSION=0.195
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc zlib busybox gcc-pass2"
-BUILD_DEPS="gcc-pass2 binutils-glibc m4 flex bison zlib"
-ABOUT="libelf + gelf.h — o objtool do kernel os exige ('fatal error: gelf.h: No such file or directory'). --program-prefix=eu- evita colidir com o binutils (readelf/nm/strip/ar); --disable-debuginfod evita a dependência de libcurl."
+DEPS="glibc zlib xz busybox gcc-pass2"
+BUILD_DEPS="gcc-pass2 binutils-glibc m4 flex bison zlib make"
+ABOUT="libelf + gelf.h — o objtool do kernel os exige ('fatal error: gelf.h: No such file or directory'). Mantém suporte a seções comprimidas por liblzma/xz. --program-prefix=eu- evita colidir com o binutils (readelf/nm/strip/ar); --disable-debuginfod evita a dependência de libcurl."
 LICENSE="GPL-3.0-or-later AND LGPL-3.0-or-later"
-SRC="https://sourceware.org/elfutils/ftp/0.192/elfutils-0.192.tar.bz2"
-SHA256=616099beae24aba11f9b63d86ca6cc8d566d968b802391334c91df54eab416b4
+SRC="https://sourceware.org/elfutils/ftp/0.195/elfutils-0.195.tar.bz2"
+SHA256=37629fdf7f1f3dc2818e138fca2b8094177d6c2d0f701d3bb650a561218dc026
+# Certificado extraído do GPG-KEY versionado no repositório oficial:
+# https://sourceware.org/cgit/elfutils/plain/GPG-KEY; signer observado e
+# primária 6C2B631563B8D330578D3CB474FD3FA2779E7073.
+SIG_1="https://sourceware.org/elfutils/ftp/0.195/elfutils-0.195.tar.bz2.sig"
+SIG_EPOCH_1=1786460504
+SIGKEY_1="files/upstream-release.asc"
+SIGKEY_FP_1=6C2B631563B8D330578D3CB474FD3FA2779E7073
 
 build() {
     # busybox tar pode não autodetectar bz2 — descomprime explícito.
@@ -16,11 +23,14 @@ build() {
     # (os tools do elfutils linkam libelf.so/libdw.so, que precisam de libz.so)
     # sem isto. Mesmo padrão do mathlibs-glibc (libmpc→libm). SPEC-0005.
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
-    # -Wno-error: o gcc 15 emite warnings que o -Werror do elfutils barra.
     # --disable-demangler: não precisamos do demangler C++ (só libelf/gelf.h
     # p/ o objtool), e o teste de __cxa_demangle na libstdc++ falha.
+    # Fixe também os codecs: sem isto, bzlib/zstd/libarchive encontrados por
+    # acaso num root já usado mudariam o payload sem mudar o fingerprint.
     ./configure --prefix=/usr --program-prefix=eu- \
-        --disable-debuginfod --disable-libdebuginfod --disable-nls --disable-werror \
+        --disable-debuginfod --disable-libdebuginfod --disable-nls \
+        --with-zlib --with-lzma --without-bzlib --without-zstd \
+        --without-libarchive \
         --disable-demangler --disable-dependency-tracking
     make -j"$JOBS"
     make install DESTDIR="$STAGE"

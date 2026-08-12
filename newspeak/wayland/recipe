@@ -1,5 +1,5 @@
 NAME=wayland
-VERSION=1.25.0
+VERSION=1.26.0
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc libffi expat"
@@ -7,7 +7,7 @@ BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf"
 ABOUT="O protocolo e as bibliotecas cliente e servidor. Primeira receita da camada Wayland do E4b, e a decisão de perfil que a governa: esta distro é Wayland-only, sem X11 — não há libX11, libxcb nem servidor Xorg, e não haverá. Traz o wayland-scanner, que gera código C a partir das descrições de protocolo em XML; daí o expat. A libffi entra porque o despacho de mensagem do protocolo monta chamadas em tempo de execução. Sem documentação, que exigiria docbook e graphviz para gerar diagramas que ninguém vai ler num sistema sem navegador — ainda."
 LICENSE=MIT
 SRC="https://gitlab.freedesktop.org/wayland/wayland/-/releases/$VERSION/downloads/wayland-$VERSION.tar.xz"
-SHA256=c065f040afdff3177680600f249727e41a1afc22fccf27222f15f5306faa1f03
+SHA256="64176eaa46e4969903e286f8e5ef8331affc17fdf03ac9b58381d2b23162b7a3"
 
 build() {
     tar -xJf "$DL" --strip-components=1

@@ -30,9 +30,9 @@
 # 6bdfe1f7f3229f63... com e sem um arquivo de sonda neste diretório.
 #
 # O sha256 abaixo foi conferido contra o SHA256SUMS que a Mozilla publica em
-# archive.mozilla.org/pub/firefox/releases/153.0.1/, antes de o arquivo entrar
+# archive.mozilla.org/pub/firefox/releases/140.13.0esr/, antes de o arquivo entrar
 # no cache. A assinatura destacada (.asc) veio junto e viaja no bundle.
 #
 # FORMATO: linhas de '<sha256>  <url>'. Comentários com '#'. Os arquivos
 # precisam estar no cache de fontes do rootfs para entrarem no bundle.
-ac586cfe4573cd02a0b96dd496ae28da0157a9fcc6530ede6b1decfd2a3fb512  https://archive.mozilla.org/pub/firefox/releases/153.0.1/source/firefox-153.0.1.source.tar.xz
+f53b9dc6942abda1185aa7d79048f59fc075020da36b4dd6b31f668b88714d01  https://archive.mozilla.org/pub/firefox/releases/140.13.0esr/source/firefox-140.13.0esr.source.tar.xz

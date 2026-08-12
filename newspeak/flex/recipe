@@ -3,11 +3,23 @@ VERSION=2.6.4
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc m4"
-BUILD_DEPS="gcc-pass2 binutils-glibc"
+BUILD_DEPS="gcc-pass2 binutils-glibc make"
 ABOUT="gerador de scanners léxicos (lex). O kconfig e o dtc do kernel o exigem — 'make defconfig' falha sem ele. 2.6.4 é a última estável (2017; o projeto não lança desde então, então edge = 2.6.4)."
 LICENSE="BSD-3-Clause"
 SRC="https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz"
 SHA256=e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995
+# Âncora de identidade reproduzível (observada em 2026-08-11): o objeto de
+# tag anotada oficial d69a58075169410324fe49666f6641ba6a9d1f91 é assinado
+# pela mesma primária abaixo e declara Will Estes <westes575@gmail.com>;
+# a API oficial da release lista `westes` como autor/uploader do tar e .sig.
+# API tag SHA256=65ac5b6f55ce751205fb9e1be0a65bc6376aebc699e5616a1242b4551d3970d4
+# API release SHA256=f36291f9ef96cfe86e447c2131d4008d0e9861bd9a3f9b06f5b29bbf8f9323c3
+# O certificado veio de transporte keyserver não confiável; tag+release do
+# projeto oficial e a verificação criptográfica são a âncora, não o transporte.
+SIG_1="https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz.sig"
+SIG_EPOCH_1=1786460504
+SIGKEY_1="files/upstream-release.asc"
+SIGKEY_FP_1=56C67868E93390AA1039AD1CE4B29C8D64885307
 
 build() {
     tar -xzf "$DL" --strip-components=1
