@@ -4,7 +4,13 @@ KIND=source
 # Semente musl: cede /usr/lib/libmpfr* ao rebuild glibc (mathlibs-glibc).
 PROVISIONAL=1
 DEPS=gmp
-BUILD_DEPS="binutils make busybox"
+# gawk pelo mesmo motivo do gmp: o `./configure` de autoconf chama awk para
+# gerar o config.status, e declarar só `busybox` não garante awk — o gawk
+# supersede o busybox e leva /usr/bin/awk. Enquanto o gawk não existisse, o
+# applet servia; depois que ele entra no mesmo plano, a view recebe um
+# busybox sem awk. A quebra é sensível à ORDEM, e declarar o provedor real é
+# o que a torna reprodutível.
+BUILD_DEPS="binutils make busybox gawk"
 ABOUT="ponto flutuante de precisão múltipla; dependência do gcc. --with-gmp aponta o gmp em /usr porque o zig cc não busca lá por conta própria"
 LICENSE=LGPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/mpfr/mpfr-$VERSION.tar.xz"

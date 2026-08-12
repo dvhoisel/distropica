@@ -4,7 +4,13 @@ KIND=source
 # Semente musl: cede /usr/lib/libmpc* ao rebuild glibc (mathlibs-glibc).
 PROVISIONAL=1
 DEPS="gmp mpfr"
-BUILD_DEPS="binutils make busybox"
+# gawk pelo mesmo motivo do gmp: o `./configure` de autoconf chama awk para
+# gerar o config.status, e declarar só `busybox` não garante awk — o gawk
+# supersede o busybox e leva /usr/bin/awk. Enquanto o gawk não existisse, o
+# applet servia; depois que ele entra no mesmo plano, a view recebe um
+# busybox sem awk. A quebra é sensível à ORDEM, e declarar o provedor real é
+# o que a torna reprodutível.
+BUILD_DEPS="binutils make busybox gawk"
 ABOUT="aritmética complexa de precisão arbitrária; a terceira biblioteca matemática que o gcc exige"
 LICENSE=LGPL-3.0-or-later
 # .tar.xz e não .tar.gz: o GNU trocou o formato a partir do 1.4.0, e o 1.3.1
