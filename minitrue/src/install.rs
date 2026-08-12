@@ -5647,11 +5647,14 @@ fn install_source(
             let _ = fs::remove_dir_all(&work);
             return fail(
                 8,
+                // Os hashes saem INTEIROS. Quem lê este crimestop precisa
+                // decidir entre "o build regrediu" e "o pino envelheceu com a
+                // toolchain", e no segundo caso precisa do valor novo para
+                // repinar. Truncar obrigava a reproduzir o erro com a receita
+                // adulterada só para ler o que a ferramenta já sabia.
                 format!(
-                    "crimestop (reprodução): {} produziu reprocorr {} mas a receita pina {}",
-                    r.name,
-                    &reprocorr[..16.min(reprocorr.len())],
-                    &pinned[..16.min(pinned.len())]
+                    "crimestop (reprodução): {} produziu reprocorr {reprocorr} mas a receita pina {pinned}",
+                    r.name
                 ),
             );
         }

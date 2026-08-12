@@ -25,11 +25,20 @@ SIGKEY_FP_1=71C2CC22B1C4602927D2F3AAA7A16B4A2527436A
 #
 # O crimestop funcionou: foi ele que parou a reconstrução da árvore em vez de
 # deixar passar um artefato que a receita não descrevia mais. O valor novo foi
-# MEDIDO — o pin saiu, o build rodou, o hash veio do registro — e não copiado da
-# mensagem de erro, que trunca em 16 dígitos. A reprodução foi confirmada numa
-# segunda construção, já com este pin no lugar: o próprio crimestop é quem a
-# valida.
-REPROCORR=3609991d1e8a84964e8ed758bda67134dfe5242ba03eeb4b58592418d454a502
+# MEDIDO — e o crimestop é quem valida: com o pin no lugar, uma segunda
+# construção que divergisse falharia. A mensagem de erro passou a imprimir os
+# hashes inteiros, então já não é preciso tirar o pin para ler o valor novo.
+#
+# REPINADO em 2026-08-12. O m4 continua 1.4.21; o que mudou foi a toolchain sob
+# ele — GCC, binutils e glibc subiram na mesma leva. REPROCORR prende "esta
+# árvore, com esta toolchain, produz estes bytes", então subir a toolchain
+# envelhece o pino por construção. O valor anterior era
+# 3609991d1e8a84964e8ed758bda67134dfe5242ba03eeb4b58592418d454a502.
+#
+# Duas construções independentes produziram este hash antes de ele ser pinado,
+# o que prova determinismo ENTRE RODADAS nesta máquina. Reprodução entre
+# ambientes limpos distintos continua sendo gate aberto da SPEC-0005.
+REPROCORR=bd9ee572820e5db01a1e626d16e26f16b5db8833323efab7073b74f3ceac52c0
 
 build() {
     tar -xJf "$DL" --strip-components=1
