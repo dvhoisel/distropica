@@ -10,7 +10,12 @@ DEPS="glibc"
 # /usr/bin/awk embora. A falta só aparece quando o gawk já foi construído no
 # mesmo plano, então a quebra é sensível à ordem. Conferido no próprio
 # configure da fonte pinada, não suposto.
-BUILD_DEPS="gcc binutils-cross make busybox gawk"
+# m4 porque esta receita reconstrói a família GMP contra a glibc, e o
+# `./configure` do gmp gera o assembly das mpn com m4 — sem ele para em
+# "No usable m4 in $PATH". O `gmp` já declarava; esta, que faz o mesmo build
+# noutra toolchain, não. mpc e mpfr não precisam: construíram sem m4 nesta
+# mesma cadeia, e é por isso que só esta recebe a declaração.
+BUILD_DEPS="m4 gcc binutils-cross make busybox gawk"
 ABOUT="gmp 6.3.0 + mpfr 4.2.2 + mpc 1.4.1 reconstruídos como GLIBC (não musl). Passo do E2 descoberto na passada 2 (SPEC-0005 §4): os mathlibs-semente são build musl do zig (NEEDED libc.so); um cc1 glibc (pass-2) não os carrega ('invalid ELF header' ao resolver o linker-script /usr/lib/libc.so). Reconstruídos pelo gcc da passada 1 (cross) com a glibc presente, passam a ter NEEDED libc.so.6. SUPERSEDE os mathlibs-semente nos mesmos caminhos /usr/lib — a colisão com gmp/mpfr/mpc (seed) é a dívida de 'fingerprint de build' (rebuild-in-place com mesma versão, toolchain diferente), ver §4. -std=gnu17: o código é pré-C23, e o gcc 15 rejeita () = zero args."
 LICENSE="LGPL-3.0-or-later"
 SRC="https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.2.tar.xz https://ftp.gnu.org/gnu/mpc/mpc-1.4.1.tar.xz"
