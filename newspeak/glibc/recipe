@@ -3,6 +3,21 @@ VERSION=2.44
 KIND=source
 TOOLCHAIN=cross
 RETRIES=50
+# linux-headers é DEPS, e não só BUILD_DEPS, porque os cabeçalhos que a glibc
+# INSTALA dependem dele em tempo de uso: /usr/include/bits/local_lim.h faz
+# `#include <linux/limits.h>`. Uma glibc instalada sem os uapi está incompleta —
+# quem compilar contra ela recebe "linux/limits.h: No such file or directory",
+# que foi exatamente onde o zlib parou. O ABOUT do próprio linux-headers já
+# dizia: são os cabeçalhos "que a glibc consome".
+#
+# A alternativa era declarar linux-headers no BUILD_DEPS das 106 receitas
+# cross/native da closure, uma a uma. Isso não descreveria a realidade melhor:
+# elas não consomem os uapi diretamente, e sim através dos cabeçalhos da glibc.
+# Declarar aqui é dizer a verdade uma vez, no lugar onde ela mora.
+#
+# Não muda o que é instalado: linux-headers já está na closure de identidade de
+# target.world. Muda o que entra na VIEW de build de quem depende da glibc.
+DEPS="linux-headers"
 BUILD_DEPS="gcc binutils-cross linux-headers binutils bison gawk python make"
 ABOUT="A ABI glibc — o divisor de águas do Estágio 2. COMPILA com o gcc da passada 1 (verificado 2026-07-19): libc.so.6 ($VERSION), ld-linux-x86-64.so.2, libm/libpthread/libdl saem como ELFs válidos. python é BUILD_DEP (a glibc exige Python no build). Ressalvas: o gcc-passada-1 (feito por zig cc/clang) é flaky — ICE segfault aleatório na math; um loop de make atravessa. O único não-compilável é links-dso-program.cc (helper de teste C++; pass-1 é só C). Falta fechar: make install no rootfs, symlinks do ld.so, e a passada 2 do gcc (que traz C++ e um gcc estável)."
 LICENSE="LGPL-2.1-or-later AND GPL-2.0-or-later"
