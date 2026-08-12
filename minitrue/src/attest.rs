@@ -495,7 +495,6 @@ mod tests {
     const HASH: &str = "de4710b70e7acc1267cf106b285f80e4a384ce6923fb4ed2b3bf4181bb29946e";
     const OTHER_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const FP_V1: &str = "1111111111111111111111111111111111111111111111111111111111111111";
-    const FP_V2: &str = "2222222222222222222222222222222222222222222222222222222222222222";
 
     fn temp_root(label: &str) -> PathBuf {
         let n = CNT.fetch_add(1, Ordering::Relaxed);
@@ -511,11 +510,101 @@ mod tests {
         }
     }
 
-    fn write_record(ctx: &Ctx, version: &str, fingerprint: &str, hash: &str) {
+    fn directory_integrity(mode: u32, tree_sha256: &str) -> String {
+        let mut hash = Sha256::new();
+        hash.update(b"minitrue-directory-integrity-v1\0");
+        hash.update((mode & 0o7777).to_be_bytes());
+        hash.update(tree_sha256.as_bytes());
+        hex::encode(hash.finalize())
+    }
+
+    fn write_runner_record(ctx: &Ctx, recipe: &crate::recipe::Recipe, fingerprint: &str) -> bool {
+        let rec = ctx.records_dir().join(crate::recipe::BUILD_RUNNER_PACKAGE);
+        if crate::install::read_meta_strict(&rec)
+            .unwrap()
+            .is_some_and(|meta| meta.get("RECORD_FORMAT").map(String::as_str) == Some("4"))
+        {
+            return false;
+        }
+        let payload = ctx
+            .opt(crate::recipe::BUILD_RUNNER_PACKAGE)
+            .join(&recipe.version);
+        fs::create_dir_all(&payload).unwrap();
+        fs::set_permissions(&payload, fs::Permissions::from_mode(0o755)).unwrap();
+        let tree_sha256 = crate::pack::pack_deterministic(&payload, 0, std::io::sink()).unwrap();
+        let manifest = format!(
+            "d:{}  /opt/{}/{}\n",
+            directory_integrity(0o755, &tree_sha256),
+            recipe.name,
+            recipe.version
+        );
+        let baseline_hash = hex::encode(Sha256::digest(manifest.as_bytes()));
+        fs::create_dir_all(&rec).unwrap();
+        fs::write(
+            rec.join("meta"),
+            format!(
+                "RECORD_FORMAT=3\nNAME={}\nVERSION={}\nKIND=binary\nWORLD=A\nORIGIN=vendor\nSHA256={}\nDEPS=\nSHARED_DIRS=\nFINGERPRINT={fingerprint}\nINSTALLED_AT=2026-08-11T00:00:00Z\nLICENSE={}\nSUPERSEDES=\nMANIFEST_BASELINE_SHA256={baseline_hash}\n",
+                recipe.name,
+                recipe.version,
+                recipe.sha256.join(" "),
+                recipe.license.as_deref().unwrap()
+            ),
+        )
+        .unwrap();
+        fs::write(rec.join("manifest"), &manifest).unwrap();
+        fs::write(rec.join(format!("manifest@{}", recipe.version)), &manifest).unwrap();
+        fs::write(rec.join("recipe"), &recipe.recipe_bytes).unwrap();
+        fs::write(
+            rec.join(format!("recipe@{}", recipe.version)),
+            &recipe.recipe_bytes,
+        )
+        .unwrap();
+        let current = ctx.opt(crate::recipe::BUILD_RUNNER_PACKAGE).join("current");
+        let _ = fs::remove_file(&current);
+        symlink(&recipe.version, current).unwrap();
+        true
+    }
+
+    fn write_record(ctx: &Ctx, version: &str, hash: &str) -> String {
         let rec = ctx.records_dir().join("m4");
+        let tree = ctx.root.join("var/lib/minitrue/newspeak");
+        let recipe_dir = tree.join("m4");
+        let runner_dir = tree.join(crate::recipe::BUILD_RUNNER_PACKAGE);
         let installed = ctx.root.join("usr/bin/m4");
         fs::create_dir_all(&rec).unwrap();
+        fs::create_dir_all(&recipe_dir).unwrap();
+        fs::create_dir_all(&runner_dir).unwrap();
         fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        let recipe_bytes = format!(
+            "NAME=m4\nVERSION={version}\nKIND=source\nLICENSE=MIT\nTOOLCHAIN=none\nbuild() {{ :; }}\n"
+        );
+        fs::write(recipe_dir.join("recipe"), &recipe_bytes).unwrap();
+        let runner_payload = b"runner de fixture\n";
+        let runner_sha = hex::encode(Sha256::digest(runner_payload));
+        fs::write(
+            runner_dir.join("recipe"),
+            format!(
+                "NAME={}\nVERSION=1\nKIND=binary\nLICENSE=MIT\nSRC=https://example.invalid/runner\nSHA256={runner_sha}\ninstall_pkg() {{ :; }}\n",
+                crate::recipe::BUILD_RUNNER_PACKAGE
+            ),
+        )
+        .unwrap();
+        fs::create_dir_all(ctx.cache_dir()).unwrap();
+        fs::set_permissions(ctx.cache_dir(), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(ctx.cache_dir().join(&runner_sha), runner_payload).unwrap();
+        let recipes = [
+            crate::recipe::load(ctx, "m4").unwrap(),
+            crate::recipe::load(ctx, crate::recipe::BUILD_RUNNER_PACKAGE).unwrap(),
+        ];
+        let fingerprints = crate::recipe::build_fingerprints(&recipes).unwrap();
+        let fingerprint = fingerprints.get("m4").unwrap().clone();
+        let runner_written = write_runner_record(
+            ctx,
+            &recipes[1],
+            fingerprints
+                .get(crate::recipe::BUILD_RUNNER_PACKAGE)
+                .unwrap(),
+        );
         fs::write(&installed, b"payload atestado\n").unwrap();
         fs::set_permissions(&installed, fs::Permissions::from_mode(0o644)).unwrap();
         let file_hash = hex::encode(Sha256::digest(b"payload atestado\n"));
@@ -525,14 +614,40 @@ mod tests {
         fs::write(
             rec.join("meta"),
             format!(
-                "RECORD_FORMAT=2\nNAME=m4\nVERSION={version}\nKIND=source\nWORLD=B\nFINGERPRINT={fingerprint}\nARTIFACT_HASH={hash}\nMANIFEST_BASELINE_SHA256={baseline_hash}\nTRANSACTION_ID=test\n"
+                "RECORD_FORMAT=3\nNAME=m4\nVERSION={version}\nKIND=source\nWORLD=B\nORIGIN=fonte\nSHA256=\nDEPS=\nSHARED_DIRS=\nFINGERPRINT={fingerprint}\nINSTALLED_AT=2026-08-11T00:00:00Z\nARTIFACT_HASH={hash}\nLICENSE=MIT\nSUPERSEDES=\nMANIFEST_BASELINE_SHA256={baseline_hash}\nTRANSACTION_ID=test\n"
             ),
         )
         .unwrap();
         fs::write(rec.join("manifest"), &manifest).unwrap();
         fs::write(rec.join(format!("manifest@{version}")), &manifest).unwrap();
-        fs::write(rec.join("recipe"), b"NAME=m4\n").unwrap();
-        fs::write(rec.join(format!("recipe@{version}")), b"NAME=m4\n").unwrap();
+        fs::write(rec.join("recipe"), &recipe_bytes).unwrap();
+        fs::write(rec.join(format!("recipe@{version}")), &recipe_bytes).unwrap();
+        let installed_recipe = crate::recipe::load(ctx, "m4").unwrap();
+        assert!(
+            !crate::install::source_needs_install_for_plan(
+                ctx,
+                &installed_recipe,
+                &fingerprint,
+                crate::install::BinaryPolicy::PreferBinary,
+                true,
+            )
+            .unwrap(),
+            "a fixture v3 precisa ser factual antes da promoção v4"
+        );
+        let mut written_records = std::collections::BTreeSet::from(["m4".to_string()]);
+        if runner_written {
+            written_records.insert(crate::recipe::BUILD_RUNNER_PACKAGE.to_string());
+        }
+        crate::plan::finalize_applied(
+            ctx,
+            &["m4".to_string()],
+            crate::plan::PlanPurpose::ChannelEmit,
+            crate::install::BinaryPolicy::PreferBinary,
+            crate::plan::AbiPolicy::Strict,
+            &written_records,
+        )
+        .unwrap();
+        fingerprint
     }
 
     /// Assina uma attestation com chave derivada de `seed` (determinística).
@@ -561,14 +676,14 @@ mod tests {
     fn assinatura_e_corroboracao() {
         let root = temp_root("corroboration");
         let ctx = context(&root);
-        write_record(&ctx, "1.4.21", FP_V1, HASH);
+        let fingerprint = write_record(&ctx, "1.4.21", HASH);
         let bdir = root.join("etc/minitrue/builders");
         let adir = root.join("var/lib/minitrue/attestations/m4");
         fs::create_dir_all(&bdir).unwrap();
         fs::create_dir_all(&adir).unwrap();
 
         // 1) parse_and_verify aceita uma att válida e RECUSA uma adulterada
-        let (alice, alice_pk) = sign(1, "alice", "1.4.21", FP_V1, HASH);
+        let (alice, alice_pk) = sign(1, "alice", "1.4.21", &fingerprint, HASH);
         assert!(parse_and_verify(&alice).is_ok());
         let tampered = alice.replace("de4710", "de4711");
         let signature_error = parse_and_verify(&tampered).unwrap_err();
@@ -581,7 +696,7 @@ mod tests {
         );
 
         // 2) sem builders pinados → nada corrobora (attestations existem, mas não confiáveis)
-        let (bob, bob_pk) = sign(2, "bob", "1.4.21", FP_V1, HASH);
+        let (bob, bob_pk) = sign(2, "bob", "1.4.21", &fingerprint, HASH);
         fs::write(adir.join("alice.att"), &alice).unwrap();
         fs::write(adir.join("bob.att"), &bob).unwrap();
         assert!(matches!(
@@ -598,7 +713,7 @@ mod tests {
         }
 
         // 4) mallory (pinada) atesta hash DIFERENTE → divergência (desvio)
-        let (mal, mal_pk) = sign(3, "mallory", "1.4.21", FP_V1, OTHER_HASH);
+        let (mal, mal_pk) = sign(3, "mallory", "1.4.21", &fingerprint, OTHER_HASH);
         fs::write(bdir.join("mallory"), &mal_pk).unwrap();
         fs::write(adir.join("mallory.att"), &mal).unwrap();
         assert!(matches!(corroboration(&ctx, "m4"), Verdict::Divergence(_)));
@@ -611,7 +726,7 @@ mod tests {
         // 5) builder NÃO pinado não conta (a forjada adulterada tb é ignorada)
         fs::remove_file(adir.join("mallory.att")).unwrap();
         fs::remove_file(bdir.join("mallory")).unwrap();
-        let (carol, _) = sign(4, "carol", "1.4.21", FP_V1, HASH); // carol NÃO pinada
+        let (carol, _) = sign(4, "carol", "1.4.21", &fingerprint, HASH); // carol NÃO pinada
         fs::write(adir.join("carol.att"), &carol).unwrap();
         fs::write(adir.join("alice.att"), &tampered).unwrap(); // alice agora adulterada
                                                                // sobra só bob válido+confiável → 1 (precisa ≥2)
@@ -633,24 +748,24 @@ mod tests {
         fs::create_dir_all(&adir).unwrap();
 
         // Attestations válidas para a identidade anterior ficam armazenadas.
-        write_record(&ctx, "1.4.21", FP_V1, OTHER_HASH);
-        let (old_version, alice_pk) = sign(11, "alice", "1.4.21", FP_V1, OTHER_HASH);
-        let (old_fingerprint, bob_pk) = sign(12, "bob", "2.0.0", FP_V1, OTHER_HASH);
+        let old_fp = write_record(&ctx, "1.4.21", OTHER_HASH);
+        let (old_version, alice_pk) = sign(11, "alice", "1.4.21", &old_fp, OTHER_HASH);
+        let (old_fingerprint, bob_pk) = sign(12, "bob", "2.0.0", &old_fp, OTHER_HASH);
         fs::write(bdir.join("alice"), &alice_pk).unwrap();
         fs::write(bdir.join("bob"), &bob_pk).unwrap();
         fs::write(adir.join("alice-old.att"), old_version).unwrap();
         fs::write(adir.join("bob-old-fingerprint.att"), old_fingerprint).unwrap();
 
         // Após o upgrade, ambas são stale. O hash antigo não pode virar desvio.
-        write_record(&ctx, "2.0.0", FP_V2, HASH);
+        let current_fp = write_record(&ctx, "2.0.0", HASH);
         assert!(matches!(
             corroboration(&ctx, "m4"),
             Verdict::Insufficient(0)
         ));
 
         // Só attestations da identidade exata atual passam a contar.
-        let (alice_current, _) = sign(11, "alice", "2.0.0", FP_V2, HASH);
-        let (bob_current, _) = sign(12, "bob", "2.0.0", FP_V2, HASH);
+        let (alice_current, _) = sign(11, "alice", "2.0.0", &current_fp, HASH);
+        let (bob_current, _) = sign(12, "bob", "2.0.0", &current_fp, HASH);
         fs::write(adir.join("alice-current.att"), alice_current).unwrap();
         fs::write(adir.join("bob-current.att"), bob_current).unwrap();
         assert!(matches!(
@@ -659,7 +774,7 @@ mod tests {
         ));
 
         // Hash diferente só é divergência quando versão e fingerprint casam.
-        let (mallory_current, mallory_pk) = sign(13, "mallory", "2.0.0", FP_V2, OTHER_HASH);
+        let (mallory_current, mallory_pk) = sign(13, "mallory", "2.0.0", &current_fp, OTHER_HASH);
         fs::write(bdir.join("mallory"), mallory_pk).unwrap();
         fs::write(adir.join("mallory-current.att"), mallory_current).unwrap();
         assert!(matches!(corroboration(&ctx, "m4"), Verdict::Divergence(_)));
@@ -671,7 +786,7 @@ mod tests {
     fn identidade_local_exige_payload_baseline_e_snapshots_integros() {
         let root = temp_root("local-integrity");
         let ctx = context(&root);
-        write_record(&ctx, "1.4.21", FP_V1, HASH);
+        write_record(&ctx, "1.4.21", HASH);
         assert!(local_identity(&ctx, "m4").is_ok());
 
         let installed = root.join("usr/bin/m4");
@@ -690,7 +805,7 @@ mod tests {
         .unwrap();
         assert!(local_identity(&ctx, "m4").is_err());
 
-        write_record(&ctx, "1.4.21", FP_V1, HASH);
+        write_record(&ctx, "1.4.21", HASH);
         let outside = root.with_extension("record-outside");
         fs::create_dir_all(&outside).unwrap();
         let rec = ctx.records_dir().join("m4");
@@ -717,14 +832,14 @@ mod tests {
         let root = temp_root("confined-trust");
         let outside = root.with_extension("outside");
         let ctx = context(&root);
-        write_record(&ctx, "1.4.21", FP_V1, HASH);
+        let fingerprint = write_record(&ctx, "1.4.21", HASH);
         let bdir = root.join("etc/minitrue/builders");
         let adir = root.join("var/lib/minitrue/attestations/m4");
         fs::create_dir_all(&bdir).unwrap();
         fs::create_dir_all(&adir).unwrap();
         fs::create_dir_all(&outside).unwrap();
 
-        let (alice, alice_pk) = sign(41, "alice", "1.4.21", FP_V1, HASH);
+        let (alice, alice_pk) = sign(41, "alice", "1.4.21", &fingerprint, HASH);
         fs::write(outside.join("alice.pin"), &alice_pk).unwrap();
         fs::write(outside.join("alice.att"), &alice).unwrap();
         symlink(outside.join("alice.pin"), bdir.join("alice")).unwrap();

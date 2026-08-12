@@ -1,0 +1,1 @@
+OpenPGP SHA1 policy fixture

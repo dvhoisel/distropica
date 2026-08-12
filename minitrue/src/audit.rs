@@ -136,8 +136,111 @@ struct Analysis {
     targets: Vec<(String, String)>,
     findings: Vec<Finding>,
     facts: BTreeSet<String>,
+    providers: BTreeSet<ProviderFact>,
     inspected: usize,
     missing: usize,
+}
+
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+struct ProviderFact {
+    package: String,
+    object: String,
+    namespace: String,
+    name: String,
+    versions: String,
+}
+
+/// Fatos tipados para o PLAN_LOCK. O plano nunca embute o relatório humano:
+/// ele recebe os sete campos normativos de AUDIT_FORMAT=1 e os reserializa em
+/// ABI_REQUIRE/ABI_PROVIDE, com ordenação e contagens próprias.
+#[derive(Debug, Clone)]
+pub(crate) struct PlanAbiFact {
+    pub package: String,
+    pub object: String,
+    pub kind: String,
+    pub requirement: String,
+    pub provider_package: String,
+    pub provider_object: String,
+    pub versions: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PlanAbiSnapshot {
+    pub facts: Vec<PlanAbiFact>,
+    pub providers: Vec<PlanAbiProvideFact>,
+    pub static_objects: Vec<PlanAbiStaticFact>,
+    pub complete: bool,
+    pub error_count: usize,
+    pub missing_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PlanAbiStaticFact {
+    pub package: String,
+    pub object: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PlanAbiProvideFact {
+    pub package: String,
+    pub object: String,
+    pub namespace: String,
+    pub name: String,
+    pub versions: String,
+}
+
+pub(crate) fn plan_snapshot(ctx: &Ctx, names: &[String]) -> Result<PlanAbiSnapshot> {
+    let analysis = analyze(ctx, names)?;
+    let mut facts = Vec::with_capacity(analysis.facts.len());
+    let mut static_objects = Vec::new();
+    for line in &analysis.facts {
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() != 7 {
+            return fail(1, "AUDIT_FORMAT=1 produziu fato com aridade inválida");
+        }
+        if fields[2] == "estatico" {
+            if fields[3..] != ["-", "-", "-", "-"] {
+                return fail(1, "AUDIT_FORMAT=1 produziu fato estático incoerente");
+            }
+            static_objects.push(PlanAbiStaticFact {
+                package: fields[0].to_string(),
+                object: fields[1].to_string(),
+            });
+            continue;
+        }
+        facts.push(PlanAbiFact {
+            package: fields[0].to_string(),
+            object: fields[1].to_string(),
+            kind: fields[2].to_string(),
+            requirement: fields[3].to_string(),
+            provider_package: fields[4].to_string(),
+            provider_object: fields[5].to_string(),
+            versions: fields[6].to_string(),
+        });
+    }
+    let error_count = analysis
+        .findings
+        .iter()
+        .filter(|finding| finding.severity == Severity::Erro)
+        .count();
+    Ok(PlanAbiSnapshot {
+        facts,
+        providers: analysis
+            .providers
+            .iter()
+            .map(|provider| PlanAbiProvideFact {
+                package: provider.package.clone(),
+                object: provider.object.clone(),
+                namespace: provider.namespace.clone(),
+                name: provider.name.clone(),
+                versions: provider.versions.clone(),
+            })
+            .collect(),
+        static_objects,
+        complete: error_count == 0 && analysis.missing == 0,
+        error_count,
+        missing_count: analysis.missing,
+    })
 }
 
 pub fn audit(ctx: &Ctx, names: &[String], output: Option<&std::path::Path>) -> Result<()> {
@@ -219,6 +322,7 @@ fn analyze(ctx: &Ctx, names: &[String]) -> Result<Analysis> {
 
     let mut findings = Vec::new();
     let mut facts = BTreeSet::new();
+    let mut provider_facts = BTreeSet::new();
     let mut inspected = 0usize;
     let mut missing = 0usize;
 
@@ -290,6 +394,29 @@ fn analyze(ctx: &Ctx, names: &[String]) -> Result<Analysis> {
             match elf::inspect(&real) {
                 Ok(Object::Elf(info)) => {
                     inspected += 1;
+                    provider_facts.insert(ProviderFact {
+                        package: pkg.name.clone(),
+                        object: virt.to_string(),
+                        namespace: "path".to_string(),
+                        name: virt.to_string(),
+                        versions: "-".to_string(),
+                    });
+                    if let Some(soname) = &info.soname {
+                        let mut versions = info.verdef.clone();
+                        versions.sort();
+                        versions.dedup();
+                        provider_facts.insert(ProviderFact {
+                            package: pkg.name.clone(),
+                            object: virt.to_string(),
+                            namespace: "soname".to_string(),
+                            name: soname.clone(),
+                            versions: if versions.is_empty() {
+                                "-".to_string()
+                            } else {
+                                versions.join(",")
+                            },
+                        });
+                    }
                     audit_elf(
                         ctx,
                         pkg,
@@ -304,6 +431,13 @@ fn analyze(ctx: &Ctx, names: &[String]) -> Result<Analysis> {
                 }
                 Ok(Object::Script(script)) => {
                     inspected += 1;
+                    provider_facts.insert(ProviderFact {
+                        package: pkg.name.clone(),
+                        object: virt.to_string(),
+                        namespace: "path".to_string(),
+                        name: virt.to_string(),
+                        versions: "-".to_string(),
+                    });
                     let mut wanted = vec![script.interpreter.clone()];
                     // `#!/usr/bin/env perl` depende de env **e** de perl; o
                     // provedor real do trabalho é o segundo.
@@ -366,6 +500,7 @@ fn analyze(ctx: &Ctx, names: &[String]) -> Result<Analysis> {
             .collect(),
         findings,
         facts,
+        providers: provider_facts,
         inspected,
         missing,
     })
@@ -841,6 +976,7 @@ fn report(analysis: &Analysis, output: Option<&std::path::Path>) -> Result<()> {
         targets,
         findings,
         facts,
+        providers: _,
         inspected,
         missing,
     } = analysis;

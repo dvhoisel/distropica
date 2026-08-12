@@ -5,7 +5,11 @@ mod channel;
 mod elf;
 mod fetch;
 mod install;
+mod linux;
+mod openpgp;
+mod openpgp_schema;
 mod pack;
+pub mod plan;
 mod recipe;
 mod sign;
 
@@ -19,6 +23,20 @@ pub struct Ctx {
 }
 
 impl Ctx {
+    /// TOFU só pode ser ativado num binário compilado para autoria. Manter a
+    /// decisão aqui, além da fronteira da CLI, impede que um chamador interno
+    /// transforme `tofu: true` em bypass num build distribuível.
+    pub fn tofu_enabled(&self) -> bool {
+        #[cfg(feature = "tofu-authoring")]
+        {
+            self.tofu
+        }
+        #[cfg(not(feature = "tofu-authoring"))]
+        {
+            false
+        }
+    }
+
     pub fn cache_dir(&self) -> PathBuf {
         self.root.join("var/cache/minitrue")
     }
@@ -80,18 +98,29 @@ pub fn fail<T>(code: i32, msg: impl Into<String>) -> anyhow::Result<T> {
     .into())
 }
 
-const USO: &str = "\
+const USO_CABECALHO: &str = "\
 minitrue — o Ministério da Verdade (v0.1: mundos A e B)
+";
 
-uso: minitrue [--root DIR] [--offline] [--tofu] [--no-binary|--only-binary] [--jobs N] <comando> [args]
+#[cfg(not(feature = "tofu-authoring"))]
+const USO_SINOPSE: &str = "uso: minitrue [--root DIR] [--offline] [--no-binary|--only-binary] [--jobs N] <comando> [args]";
 
+#[cfg(feature = "tofu-authoring")]
+const USO_SINOPSE: &str = "uso: minitrue [--root DIR] [--offline] [--tofu] [--no-binary|--only-binary] [--jobs N] <comando> [args]";
+
+const USO_CORPO: &str = "\
   rectify   <pacote>…   instala/atualiza; acrescenta ao world
+  rectify   newspeak    busca e troca atomicamente a árvore oficial assinada
+  plan      <pacote>…   resolve e imprime PLAN_LOCK_FORMAT=1 sem persistir
+  plan --sync            compara o world com records íntegros; apenas relata ORPHAN
   memoryhole <pacote>…  remove do sistema e do world
   archives              lista os registros
   verify                confere registros e varre /usr por links órfãos
   audit     [pacote]…   confronta DEPS com o que o payload realmente exige
                         (ELF/shebang, sem executar nada); sem argumento, tudo.
                         --output DIR|ARQ grava a serialização canônica
+  lint      [pacote]…   audita comandos literais de build contra
+                        DEPS/BUILD_DEPS/toolchain; sem argumento, toda a árvore
   newspeak  <pacote>    imprime a receita efetiva e sua origem
   fingerprint <pacote>… imprime '<pacote> <fingerprint>' da closure de
                         identidade; é o número que o crimestop exige do canal
@@ -101,16 +130,94 @@ uso: minitrue [--root DIR] [--offline] [--tofu] [--no-binary|--only-binary] [--j
   attest keygen <nome> <chave>  cria identidade ed25519 de builder
   attest <pacote> <builder> <chave>  emite attestation assinada
   corroborate <pacote>  coteja attestations confiáveis com o registro local
-  cache verify <pacote>…
-                        confere artefatos/assinaturas já presentes, sem rede ou instalação
-  channel emit --output DIR <pacote>...
-                        emite tar.zst + índice v2 a partir de registros B íntegros
+  cache verify --closure <pacote>…
+  cache verify --closure --world ARQUIVO
+                        resolve a mesma closure e confere objetos/índices/assinaturas,
+                        sem rede, instalação ou persistência
+  channel refresh [canal]…
+                        autentica o índice e mostra o diff antes de persistir
+  channel emit [--release] --output DIR <pacote>...
+                        emite tar.zst + índice v2 a partir de registros B íntegros;
+                        --release exige o tar selado retido do próprio build
   channel keygen <base>  cria par minisign (base.key 0600 + base.pub)
-  channel sign <chave> <arquivo>
-                        assina, escreve <arquivo>.minisig e confere o que escreveu
+  channel sign [--passphrase-fd N] <chave> <arquivo> <chave-pública-esperada>
+                        lê senha somente do descritor não-TTY já aberto,
+                        coteja a pública antes de assinar, escreve e confere
+                        <arquivo>.minisig
 
-chegam no Marco 0.2: rectify --sync, rollback, unperson, lint, SIGSUMS e
-OpenPGP.";
+chegam no Marco 0.2: rectify --sync, rollback e unperson.";
+
+fn imprime_uso() {
+    println!("{USO_CABECALHO}\n{USO_SINOPSE}\n\n{USO_CORPO}");
+    #[cfg(feature = "tofu-authoring")]
+    println!("\n  --tofu                autoria somente: obtém e imprime o SHA256 ainda ausente");
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DespachoRectify {
+    Arvore,
+    Pacotes(install::BinaryPolicy),
+}
+
+/// `newspeak` é nome reservado pela SPEC-0011, não uma receita ordinária.
+/// Separar a classificação do efeito deixa testável a fronteira que impede a
+/// árvore de cair no resolvedor de pacotes (e de acabar acrescentada ao world).
+fn classifica_rectify(
+    names: &[String],
+    no_binary: bool,
+    only_binary: bool,
+) -> anyhow::Result<DespachoRectify> {
+    if names.iter().any(|name| name == "newspeak") {
+        if names.len() != 1 {
+            return fail(1, "rectify newspeak precisa ser executado sozinho");
+        }
+        if no_binary || only_binary {
+            return fail(
+                1,
+                "--no-binary/--only-binary não se aplicam a rectify newspeak",
+            );
+        }
+        return Ok(DespachoRectify::Arvore);
+    }
+    let policy = if no_binary {
+        install::BinaryPolicy::SourceOnly
+    } else if only_binary {
+        install::BinaryPolicy::BinaryOnly
+    } else {
+        install::BinaryPolicy::PreferBinary
+    };
+    Ok(DespachoRectify::Pacotes(policy))
+}
+
+fn channel_sign_operands(names: &[String]) -> anyhow::Result<(&str, &str, &str)> {
+    match names {
+        [subcommand, secret, input, expected_public] if subcommand == "sign" => {
+            Ok((secret, input, expected_public))
+        }
+        _ => fail(
+            1,
+            "channel sign: diga [--passphrase-fd N] <chave-secreta> <arquivo> <chave-pública-esperada>",
+        ),
+    }
+}
+
+/// Estes comandos precedem o resolvedor tipado, mas leem o mesmo estado que
+/// os mutadores substituem. O lock fica no despacho para cobrir a operação
+/// inteira sem introduzir um lock aninhado nos handlers reutilizáveis.
+fn legacy_reader_lock(
+    ctx: &Ctx,
+    command: Option<&str>,
+    names: &[String],
+    closure: bool,
+) -> anyhow::Result<Option<install::RootLock>> {
+    let cache_verify =
+        command == Some("cache") && names.first().map(String::as_str) == Some("verify") && !closure;
+    if matches!(command, Some("archives" | "newspeak")) || cache_verify {
+        Ok(Some(install::acquire_read_lock(ctx)?))
+    } else {
+        Ok(None)
+    }
+}
 
 fn main() {
     match run() {
@@ -127,11 +234,18 @@ fn run() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let mut root = std::env::var("MINITRUE_ROOT").unwrap_or_else(|_| "/".into());
     let mut offline = false;
+    #[cfg(feature = "tofu-authoring")]
     let mut tofu = false;
+    #[cfg(not(feature = "tofu-authoring"))]
+    let tofu = false;
     let mut sync = false;
     let mut no_binary = false;
     let mut only_binary = false;
+    let mut release = false;
+    let mut closure = false;
+    let mut world: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
+    let mut passphrase_fd: Option<i32> = None;
     let mut jobs = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
@@ -147,11 +261,23 @@ fn run() -> anyhow::Result<()> {
                 })?
             }
             "--offline" => offline = true,
+            #[cfg(feature = "tofu-authoring")]
             "--tofu" => tofu = true,
             // Força a compilação local de KIND=source e proíbe qualquer
             // seleção nos canais binários configurados.
             "--no-binary" => no_binary = true,
             "--only-binary" => only_binary = true,
+            "--release" => release = true,
+            "--closure" => closure = true,
+            "--world" => {
+                if world.is_some() {
+                    return fail(1, "--world não pode ser repetido");
+                }
+                world = Some(PathBuf::from(args.next().ok_or_else(|| Fail {
+                    code: 1,
+                    msg: "--world exige arquivo".into(),
+                })?));
+            }
             "--sync" => sync = true,
             "--jobs" => {
                 jobs = args
@@ -168,9 +294,26 @@ fn run() -> anyhow::Result<()> {
                     msg: "--output exige diretório".into(),
                 })?));
             }
+            "--passphrase-fd" => {
+                if passphrase_fd.is_some() {
+                    return fail(1, "--passphrase-fd não pode ser repetido");
+                }
+                passphrase_fd = Some(
+                    args.next()
+                        .and_then(|value| value.parse::<i32>().ok())
+                        .filter(|fd| *fd >= 0)
+                        .ok_or_else(|| Fail {
+                            code: 1,
+                            msg: "--passphrase-fd exige descritor não negativo".into(),
+                        })?,
+                );
+            }
             "-h" | "--help" => {
-                println!("{USO}");
+                imprime_uso();
                 return Ok(());
+            }
+            _ if a.starts_with('-') => {
+                return fail(1, format!("opção desconhecida: {a}"));
             }
             _ if cmd.is_none() => cmd = Some(a),
             _ => names.push(a),
@@ -219,12 +362,45 @@ fn run() -> anyhow::Result<()> {
     if no_binary && only_binary {
         return fail(1, "--no-binary e --only-binary são mutuamente exclusivos");
     }
-    if (no_binary || only_binary) && cmd.as_deref() != Some("rectify") {
-        return fail(1, "--no-binary/--only-binary só se aplicam a rectify");
+    let cache_closure = cmd.as_deref() == Some("cache")
+        && names.first().map(String::as_str) == Some("verify")
+        && closure;
+    if (no_binary || only_binary)
+        && !matches!(cmd.as_deref(), Some("rectify" | "plan"))
+        && !cache_closure
+    {
+        return fail(
+            1,
+            "--no-binary/--only-binary só se aplicam a rectify, plan e cache verify --closure",
+        );
+    }
+    if closure && !cache_closure {
+        return fail(1, "--closure só se aplica a cache verify");
+    }
+    if world.is_some() && !cache_closure {
+        return fail(1, "--world só se aplica a cache verify --closure");
+    }
+    if sync && !matches!(cmd.as_deref(), Some("rectify" | "plan")) {
+        return fail(1, "--sync só se aplica a rectify ou plan");
     }
     if output.is_some() && !matches!(cmd.as_deref(), Some("channel") | Some("audit")) {
         return fail(1, "--output só se aplica a channel emit e a audit");
     }
+    if release
+        && !(cmd.as_deref() == Some("channel") && names.first().map(String::as_str) == Some("emit"))
+    {
+        return fail(1, "--release só se aplica a channel emit");
+    }
+    if passphrase_fd.is_some()
+        && !(cmd.as_deref() == Some("channel") && names.first().map(String::as_str) == Some("sign"))
+    {
+        return fail(1, "--passphrase-fd só se aplica a channel sign");
+    }
+
+    // Leitores legados precisam observar records/newspeak/cache como um
+    // snapshot em relação aos mutadores. `cache verify --closure` já toma
+    // seu próprio SH no ramo abaixo e, portanto, fica deliberadamente fora.
+    let _legacy_reader_lock = legacy_reader_lock(&ctx, cmd.as_deref(), &names, closure)?;
 
     match cmd.as_deref() {
         Some("rectify") => {
@@ -234,6 +410,22 @@ fn run() -> anyhow::Result<()> {
             if names.is_empty() {
                 return fail(1, "rectify: diga o que retificar");
             }
+            match classifica_rectify(&names, no_binary, only_binary)? {
+                DespachoRectify::Arvore => arvore::rectify(&ctx),
+                DespachoRectify::Pacotes(policy) => install::rectify(&ctx, &names, policy),
+            }
+        }
+        Some("plan") => {
+            let _lock = install::acquire_read_lock(&ctx)?;
+            if sync && !names.is_empty() {
+                return fail(1, "plan --sync lê exclusivamente o world canônico");
+            }
+            if !sync && names.is_empty() {
+                return fail(1, "plan: diga ao menos um pacote");
+            }
+            if names.iter().any(|name| name == "newspeak") {
+                return fail(1, "plan resolve pacotes; newspeak é a árvore reservada");
+            }
             let policy = if no_binary {
                 install::BinaryPolicy::SourceOnly
             } else if only_binary {
@@ -241,7 +433,27 @@ fn run() -> anyhow::Result<()> {
             } else {
                 install::BinaryPolicy::PreferBinary
             };
-            install::rectify(&ctx, &names, policy)
+            if sync {
+                let roots = plan::roots_from_system_world(&ctx)?;
+                plan::resolve_for(
+                    &ctx,
+                    &roots,
+                    plan::PlanPurpose::Sync,
+                    policy,
+                    plan::AbiPolicy::Development,
+                    channel::LoadMode::ReadOnly,
+                )?
+                .print()
+            } else {
+                plan::resolve(
+                    &ctx,
+                    &names,
+                    policy,
+                    plan::AbiPolicy::Development,
+                    channel::LoadMode::ReadOnly,
+                )?
+                .print()
+            }
         }
         Some("memoryhole") => {
             if names.is_empty() {
@@ -250,10 +462,20 @@ fn run() -> anyhow::Result<()> {
             install::memoryhole(&ctx, &names)
         }
         Some("archives") => install::archives(&ctx),
-        Some("verify") => install::verify(&ctx),
+        Some("verify") => {
+            let _lock = install::acquire_read_lock(&ctx)?;
+            install::verify(&ctx)
+        }
         // Fechamento de dependências (SPEC-0013 §4): a declaração da receita
         // confrontada com o payload instalado.
-        Some("audit") => audit::audit(&ctx, &names, output.as_deref()),
+        Some("audit") => {
+            let _lock = install::acquire_read_lock(&ctx)?;
+            audit::audit(&ctx, &names, output.as_deref())
+        }
+        // SPEC-0013 §5: orientação estática para autoria. O enforcement é a
+        // view fechada do próprio build; o lint não finge cobrir ramos gerados
+        // por configure/make que não aparecem literalmente na receita.
+        Some("lint") => install::lint_build(&ctx, &names),
         Some("newspeak") => match names.first() {
             Some(n) => install::newspeak_show(&ctx, n),
             None => fail(1, "newspeak: diga o pacote"),
@@ -262,19 +484,26 @@ fn run() -> anyhow::Result<()> {
         // programa possa confrontá-lo com o que um canal oferece sem
         // reimplementar a regra. Ver install::fingerprint.
         Some("fingerprint") => {
+            let _lock = install::acquire_read_lock(&ctx)?;
             if names.is_empty() {
                 return fail(1, "fingerprint: diga ao menos um pacote");
             }
             install::fingerprint(&ctx, &names)
         }
-        Some("explain") => match names.first() {
-            Some(t) => install::explain(&ctx, t),
-            None => fail(1, "explain: diga o caminho ou o comando"),
-        },
-        Some("why") => match names.first() {
-            Some(n) => install::why(&ctx, n),
-            None => fail(1, "why: diga o pacote"),
-        },
+        Some("explain") => {
+            let _lock = install::acquire_read_lock(&ctx)?;
+            match names.first() {
+                Some(t) => install::explain(&ctx, t),
+                None => fail(1, "explain: diga o caminho ou o comando"),
+            }
+        }
+        Some("why") => {
+            let _lock = install::acquire_read_lock(&ctx)?;
+            match names.first() {
+                Some(n) => install::why(&ctx, n),
+                None => fail(1, "why: diga o pacote"),
+            }
+        }
         // Attestation e corroboração (SPEC-0009 §6/§8) — o Miniluv com lei escrita.
         Some("attest") => match names.first().map(String::as_str) {
             Some("keygen") => match (names.get(1), names.get(2)) {
@@ -283,6 +512,7 @@ fn run() -> anyhow::Result<()> {
             },
             Some(pkg) => match (names.get(1), names.get(2)) {
                 (Some(builder), Some(key)) => {
+                    let _lock = install::acquire_read_lock(&ctx)?;
                     attest::attest(&ctx, pkg, builder, std::path::Path::new(key))
                 }
                 _ => fail(1, "attest <pacote> <builder> <arquivo-da-chave>"),
@@ -292,23 +522,71 @@ fn run() -> anyhow::Result<()> {
                 "attest: 'keygen <nome> <arq>' ou '<pacote> <builder> <arq>'",
             ),
         },
-        Some("corroborate") => match names.first() {
-            Some(p) => attest::corroborate(&ctx, p),
-            None => fail(1, "corroborate: diga o pacote"),
-        },
+        Some("corroborate") => {
+            let _lock = install::acquire_read_lock(&ctx)?;
+            match names.first() {
+                Some(p) => attest::corroborate(&ctx, p),
+                None => fail(1, "corroborate: diga o pacote"),
+            }
+        }
         Some("cache") => match names.first().map(String::as_str) {
+            Some("verify") if closure => {
+                let _lock = install::acquire_read_lock(&ctx)?;
+                let mut roots: Vec<plan::PlanRoot> = names[1..]
+                    .iter()
+                    .map(|name| plan::PlanRoot {
+                        name: name.clone(),
+                        role: plan::RootRole::Availability,
+                    })
+                    .collect();
+                if let Some(path) = world.as_deref() {
+                    roots.extend(plan::roots_from_world(path, plan::RootRole::Availability)?);
+                } else if roots.is_empty() {
+                    return fail(1, "cache verify --closure: diga pacotes ou --world ARQUIVO");
+                }
+                let policy = if no_binary {
+                    install::BinaryPolicy::SourceOnly
+                } else if only_binary {
+                    install::BinaryPolicy::BinaryOnly
+                } else {
+                    install::BinaryPolicy::PreferBinary
+                };
+                let offline = Ctx {
+                    root: ctx.root.clone(),
+                    offline: true,
+                    tofu: false,
+                    jobs: ctx.jobs,
+                };
+                let mut resolved = plan::resolve_for(
+                    &offline,
+                    &roots,
+                    plan::PlanPurpose::CacheClosure,
+                    policy,
+                    plan::AbiPolicy::Development,
+                    channel::LoadMode::ReadOnly,
+                )?;
+                resolved.authenticate_objects(&offline, true)?;
+                resolved.revalidate_tree(&offline)?;
+                println!(
+                    "cache closure íntegra: PLAN_LOCK_SHA256={}",
+                    resolved.lock_sha256()?
+                );
+                Ok(())
+            }
             Some("verify") if names.len() >= 2 => install::cache_verify(&ctx, &names[1..]),
             Some("verify") => fail(1, "cache verify: diga ao menos um pacote"),
             Some(other) => fail(1, format!("cache: subcomando desconhecido {other}")),
             None => fail(1, "cache: diga o subcomando (verify)"),
         },
         Some("channel") => match names.first().map(String::as_str) {
+            Some("refresh") if output.is_some() => fail(1, "channel refresh não aceita --output"),
+            Some("refresh") => channel::refresh(&ctx, &names[1..]),
             Some("emit") if names.len() >= 2 => {
                 let output = output.ok_or_else(|| Fail {
                     code: 1,
                     msg: "channel emit exige --output DIR".into(),
                 })?;
-                install::channel_emit(&ctx, &output, &names[1..])
+                install::channel_emit(&ctx, &output, &names[1..], release)
             }
             Some("emit") => fail(1, "channel emit: diga ao menos um pacote"),
             // Assinar é do produtor, e o produtor é esta árvore. Antes disto o
@@ -324,16 +602,24 @@ fn run() -> anyhow::Result<()> {
                 )
             }
             Some("keygen") => fail(1, "channel keygen: diga o caminho-base da chave"),
-            Some("sign") if names.len() == 3 => sign::sign_file(
-                Path::new(&names[1]),
-                Path::new(&names[2]),
-                &PathBuf::from(format!("{}.minisig", &names[2])),
-                None,
-                None,
-            ),
-            Some("sign") => fail(1, "channel sign: diga <chave-secreta> <arquivo>"),
+            Some("sign") => {
+                let (secret, input, expected_public) = channel_sign_operands(&names)?;
+                let passphrase = passphrase_fd.map(sign::read_passphrase_fd).transpose()?;
+                sign::sign_file(
+                    Path::new(secret),
+                    Path::new(input),
+                    &PathBuf::from(format!("{input}.minisig")),
+                    None,
+                    None,
+                    Some(expected_public),
+                    passphrase.as_ref().map(sign::Passphrase::as_bytes),
+                )
+            }
             Some(other) => fail(1, format!("channel: subcomando desconhecido {other}")),
-            None => fail(1, "channel: diga o subcomando (emit, keygen, sign)"),
+            None => fail(
+                1,
+                "channel: diga o subcomando (refresh, emit, keygen, sign)",
+            ),
         },
         Some("pack") => {
             let dir = match names.first() {
@@ -357,11 +643,11 @@ fn run() -> anyhow::Result<()> {
             println!("{sha}  {}", dir.display());
             Ok(())
         }
-        Some(c @ ("rollback" | "unperson" | "lint")) => {
+        Some(c @ ("rollback" | "unperson")) => {
             fail(1, format!("{c} chega no Marco 0.2 (SPEC-0003)"))
         }
         _ => {
-            println!("{USO}");
+            imprime_uso();
             fail(1, "comando ausente ou desconhecido")
         }
     }
@@ -386,4 +672,131 @@ pub fn iso_now() -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
     format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
+}
+
+#[cfg(test)]
+mod main_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static LOCK_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn rectify_newspeak_tem_despacho_proprio() {
+        assert_eq!(
+            classifica_rectify(&["newspeak".into()], false, false).unwrap(),
+            DespachoRectify::Arvore
+        );
+    }
+
+    #[test]
+    fn rectify_newspeak_nao_se_mistura_com_pacote_ou_politica_binaria() {
+        assert!(classifica_rectify(&["newspeak".into(), "base".into()], false, false).is_err());
+        assert!(classifica_rectify(&["newspeak".into()], true, false).is_err());
+        assert!(classifica_rectify(&["newspeak".into()], false, true).is_err());
+    }
+
+    #[test]
+    fn rectify_ordinario_preserva_politica_binaria() {
+        let nomes = ["base".into()];
+        assert_eq!(
+            classifica_rectify(&nomes, false, false).unwrap(),
+            DespachoRectify::Pacotes(install::BinaryPolicy::PreferBinary)
+        );
+        assert_eq!(
+            classifica_rectify(&nomes, true, false).unwrap(),
+            DespachoRectify::Pacotes(install::BinaryPolicy::SourceOnly)
+        );
+        assert_eq!(
+            classifica_rectify(&nomes, false, true).unwrap(),
+            DespachoRectify::Pacotes(install::BinaryPolicy::BinaryOnly)
+        );
+    }
+
+    #[test]
+    fn channel_sign_exige_chave_publica_esperada() {
+        assert!(channel_sign_operands(&["sign".into(), "secret".into(), "input".into()]).is_err());
+        assert!(channel_sign_operands(&[
+            "sign".into(),
+            "secret".into(),
+            "input".into(),
+            "expected.pub".into(),
+        ])
+        .is_ok());
+        assert!(channel_sign_operands(&[
+            "sign".into(),
+            "secret".into(),
+            "input".into(),
+            "expected.pub".into(),
+            "extra".into(),
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn leitores_legados_tomam_sh_sem_incluir_mutadores() {
+        let serial = LOCK_TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "mt-main-reader-lock-{}-{serial}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: true,
+            tofu: false,
+            jobs: 1,
+        };
+
+        let exclusive = install::acquire_lock(&ctx).expect("lock exclusivo de mutador");
+        for (command, names, closure) in [
+            ("archives", Vec::new(), false),
+            ("newspeak", vec!["pkg".to_string()], false),
+            (
+                "cache",
+                vec!["verify".to_string(), "pkg".to_string()],
+                false,
+            ),
+        ] {
+            assert!(
+                legacy_reader_lock(&ctx, Some(command), &names, closure).is_err(),
+                "{command} passou pelo lock exclusivo"
+            );
+        }
+
+        // Mutadores e o leitor tipado que já possui SH próprio não podem
+        // tentar adquirir este lock adicional enquanto seguram EX/SH.
+        assert!(
+            legacy_reader_lock(&ctx, Some("rectify"), &["newspeak".into()], false)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            legacy_reader_lock(&ctx, Some("cache"), &["verify".into(), "pkg".into()], true,)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            legacy_reader_lock(&ctx, Some("channel"), &["refresh".into()], false)
+                .unwrap()
+                .is_none()
+        );
+        drop(exclusive);
+
+        // SH é compatível com SH: os três guardas podem coexistir pelo
+        // tempo integral dos handlers.
+        let archives = legacy_reader_lock(&ctx, Some("archives"), &[], false)
+            .unwrap()
+            .expect("SH de archives");
+        let newspeak = legacy_reader_lock(&ctx, Some("newspeak"), &["pkg".into()], false)
+            .unwrap()
+            .expect("SH de newspeak");
+        let cache =
+            legacy_reader_lock(&ctx, Some("cache"), &["verify".into(), "pkg".into()], false)
+                .unwrap()
+                .expect("SH de cache verify");
+        drop((cache, newspeak, archives));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

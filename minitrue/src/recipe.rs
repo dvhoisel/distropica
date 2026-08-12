@@ -1,7 +1,10 @@
+use crate::openpgp_schema::{collect_literal_openpgp_fields, parse_signature_plan, SignaturePlan};
 use crate::{fail, Ctx};
 use anyhow::Result;
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Read, Write};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -48,9 +51,8 @@ pub struct Recipe {
     pub deps: Vec<String>,
     pub build_deps: Vec<String>,
     pub links: Vec<(String, String)>,
-    pub sig: Vec<String>,
-    pub sigsums: Option<String>,
-    pub sigkey: Option<String>,
+    /// Plano de autenticação upstream validado sem executar campos `SIG*`.
+    pub signature_plan: SignaturePlan,
     /// Hash reprodutível canônico do artefato (SPEC-0009 §6): o sha256 do
     /// `pack(STAGE)`. Pinado, é a AUTORIDADE ÚNICA da corroboração — o build
     /// DEVE reproduzi-lo (crimestop se divergir).
@@ -64,6 +66,11 @@ pub struct Recipe {
     /// (SPEC-0003 §7): a supersessão vira declarativa — colisão com um
     /// provisional NÃO listado aqui é *doublethink*, não cessão.
     pub supersedes: Vec<String>,
+    /// Raízes de diretório que este pacote fornece como pontos de depósito
+    /// compartilhados. As entradas de diretório do STAGE sob estas raízes
+    /// viram claims `D:` (tipo+modo, sem ownership da árvore); arquivos e
+    /// links continuam exclusivos.
+    pub shared_dirs: Vec<String>,
     /// Snapshot exato avaliado pelo parser e posteriormente executado/registrado.
     /// Evita que uma edição concorrente troque a receita entre fingerprint,
     /// build e escrita do registro.
@@ -105,6 +112,127 @@ pub struct Recipe {
 /// objeto compilado no mesmo comando já sai com zero.
 pub const BUILD_FLAGS: &[(&str, &str)] = &[("CFLAGS", "-O2 -g0"), ("CXXFLAGS", "-O2 -g0")];
 
+/// Formatos do contrato fechado de build (SPEC-0013 §5).
+///
+/// Estes números não são decoração: entram no fingerprint de toda receita
+/// fonte. Qualquer mudança que altere quais programas ou quais partes do
+/// sysroot um `build()` consegue observar precisa subir o formato
+/// correspondente, para que um payload produzido pelo runner antigo não tenha
+/// a mesma identidade de um produzido pelo novo.
+pub const BUILD_RUNNER_FORMAT: &str = "1";
+pub const BUILD_VIEW_FORMAT: &str = "1";
+pub const BUILD_SYSROOT_FORMAT: &str = "1";
+pub const BUILD_RUNNER_PACKAGE: &str = "busybox";
+
+/// Diretórios de executáveis que o bwrap substitui pela view filtrada. A lista
+/// é também serializada por [`build_runner_material`]; executor e identidade
+/// não podem divergir silenciosamente.
+pub const BUILD_EXEC_DIRS: &[&str] = &[
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+    "/usr/libexec",
+];
+
+/// Layout usr-merged do sysroot privado. Os aliases são criados pelo runner,
+/// não herdados do rootfs vivo; por isso também entram no contrato canônico.
+pub const BUILD_SYSROOT_ALIASES: &[(&str, &str)] = &[
+    ("/bin", "usr/bin"),
+    ("/sbin", "usr/bin"),
+    ("/lib", "usr/lib"),
+    ("/lib64", "usr/lib"),
+];
+
+/// A única ferramenta implícita do runner é o shell POSIX. `retry` é função
+/// injetada, não executável. Utilitários como tar/sed/make precisam vir de uma
+/// aresta DEPS, BUILD_DEPS ou toolchain.
+pub const BUILD_BASE_COMMANDS: &[&str] = &["sh"];
+
+/// Preâmbulo executado pelo mesmo shell materializado na view. Mantê-lo neste
+/// módulo faz seus bytes entrarem na identidade em vez de existir uma segunda
+/// literal no executor.
+pub const BUILD_PREAMBLE: &str = "umask 022\n\
+    retry(){ i=0; until \"$@\"; do i=$((i+1)); \
+    [ \"$i\" -gt \"${RETRIES:-0}\" ] && return 1; \
+    echo \"minitrue: retry $i (ICE?): $*\" >&2; done; }\n\
+    . \"$RECIPE\"\nbuild";
+
+impl Toolchain {
+    pub fn contract_name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Seed => "seed",
+            Self::Cross => "cross",
+            Self::Native => "native",
+        }
+    }
+}
+
+/// Serialização canônica do ambiente-base do runner.
+///
+/// Além das versões, prende a política de PATH absoluto, o rootfs somente
+/// leitura, os únicos mounts graváveis, a rede e o conjunto de variáveis
+/// injetadas. O material é deliberadamente texto legível: um fingerprint pode
+/// ser explicado sem depender da memória de quem alterou o executor.
+pub fn build_runner_material() -> String {
+    let mut out = String::new();
+    out.push_str("BUILD_RUNNER_FORMAT=");
+    out.push_str(BUILD_RUNNER_FORMAT);
+    out.push('\n');
+    out.push_str("BUILD_VIEW_FORMAT=");
+    out.push_str(BUILD_VIEW_FORMAT);
+    out.push('\n');
+    out.push_str("BUILD_SYSROOT_FORMAT=");
+    out.push_str(BUILD_SYSROOT_FORMAT);
+    out.push('\n');
+    out.push_str("BASE_COMMANDS=");
+    out.push_str(&BUILD_BASE_COMMANDS.join(" "));
+    out.push('\n');
+    out.push_str("RUNNER_PACKAGE=");
+    out.push_str(BUILD_RUNNER_PACKAGE);
+    out.push('\n');
+    out.push_str("RUNNER_SHELL=ELF64-x86_64-static\n");
+    out.push_str("EXEC_DIRS=");
+    out.push_str(&BUILD_EXEC_DIRS.join(":"));
+    out.push('\n');
+    out.push_str("SYSROOT_ALIASES=");
+    out.push_str(
+        &BUILD_SYSROOT_ALIASES
+            .iter()
+            .map(|(path, target)| format!("{path}->{target}"))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    out.push('\n');
+    out.push_str("PATH_POLICY=runtime+build+toolchain-closure\n");
+    out.push_str("ABSOLUTE_EXEC_POLICY=filtered-dirs+filtered-opt\n");
+    out.push_str("SYSROOT_POLICY=empty+declared-closure+runner-shell+source-inputs\n");
+    out.push_str("SYSROOT_ARCH=x86_64\nSYSROOT_PARENT_MODE=0755\nSYSROOT_TMP_MODE=1777\n");
+    out.push_str(
+        "SYSROOT_SNAPSHOT=reflink-or-stream-copy+nofollow+metadata-xattrs-pre-post+claim-verify\n",
+    );
+    out.push_str("VIEW_TIMESTAMPS=atime+mtime:SOURCE_DATE_EPOCH;ctime:kernel-maintained\n");
+    out.push_str("RESERVED_WORK=.minitrue-build-view .tc recipe\n");
+    out.push_str(
+        "TOOLCHAIN_SHIMS=seed:cc,gcc,c++,g++,ld,ar,ranlib;cross:seed+declared-cross;native:declared-native;none:-\n",
+    );
+    out.push_str("WRITABLE=WORK ZIG_GLOBAL_CACHE_DIR proc dev\n");
+    out.push_str("NETWORK=unshared\nENV=clear\nUMASK=022\n");
+    out.push_str(
+        "ENV_KEYS=AR CC CFLAGS CXX CXXFLAGS DL DL_N HOME JOBS LANG LANGUAGE LC_ALL LD NM PATH RANLIB RECIPE RETRIES ROOT SOURCE_DATE_EPOCH STAGE TMPDIR TZ WORK ZIG_GLOBAL_CACHE_DIR\n",
+    );
+    out.push_str("PREAMBLE_SHA256=");
+    let mut preamble = Sha256::new();
+    preamble.update(BUILD_PREAMBLE.as_bytes());
+    out.push_str(&hex::encode(preamble.finalize()));
+    out.push('\n');
+    out.push_str(&build_flags_material());
+    out
+}
+
 /// Serialização canônica de [`BUILD_FLAGS`] para o fingerprint e para o
 /// ambiente do runner. Uma função só, para que identidade e execução não possam
 /// discordar: se divergissem, o fingerprint prometeria flags que o build não
@@ -131,6 +259,18 @@ impl Recipe {
         }
     }
 
+    /// Aresta implícita do ambiente-base. O pacote inteiro participa da
+    /// identidade e é materializado antes do build, mas a view concede dele
+    /// somente `/bin/sh`; os demais applets continuam exigindo declaração
+    /// explícita em DEPS/BUILD_DEPS.
+    pub fn runner_build_deps(&self) -> &'static [&'static str] {
+        if self.kind == Kind::Source {
+            &[BUILD_RUNNER_PACKAGE]
+        } else {
+            &[]
+        }
+    }
+
     /// Fingerprint **próprio** (só desta receita): o arquivo `recipe` — que já
     /// carrega VERSION, SRC, SHA256, TOOLCHAIN, DEPS, BUILD_DEPS e o corpo de
     /// `build()` — mais o diretório `files/` (patches, chaves). Muda quando
@@ -140,7 +280,7 @@ impl Recipe {
     pub fn own_fingerprint(&self) -> Result<String> {
         use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
-        h.update(b"minitrue-fp-v2\0recipe\0");
+        h.update(b"minitrue-fp-v3\0recipe\0");
         h.update(&self.recipe_bytes);
         if let Some(fh) = &self.files_fingerprint {
             h.update(b"\0files\0");
@@ -161,6 +301,12 @@ impl Recipe {
         // a flag, e não que a versão do esquema andou.
         h.update(b"\0build-flags\0");
         h.update(build_flags_material().as_bytes());
+        if self.kind == Kind::Source {
+            h.update(b"\0build-runner\0");
+            h.update(build_runner_material().as_bytes());
+            h.update(b"\0toolchain-profile\0");
+            h.update(self.toolchain.contract_name().as_bytes());
+        }
         Ok(hex::encode(h.finalize()))
     }
 
@@ -173,6 +319,79 @@ impl Recipe {
             archive.unpack(work)?;
         }
         Ok(())
+    }
+
+    /// Lê um auxiliar do snapshot congelado de `files/`, nunca do pathname
+    /// vivo da árvore Newspeak. O schema só permite basenames `files/*.asc`;
+    /// ainda assim esta fronteira repete a validação e exige uma única entrada
+    /// regular e limitada no tar factual que participa do fingerprint.
+    pub(crate) fn frozen_file_bytes(&self, transport: &str, max_bytes: usize) -> Result<Vec<u8>> {
+        let Some(relative) = transport.strip_prefix("files/") else {
+            return fail(
+                2,
+                format!("{}: auxiliar fora de files/: {transport}", self.name),
+            );
+        };
+        if relative.is_empty()
+            || relative.contains('/')
+            || Path::new(relative)
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return fail(
+                2,
+                format!("{}: auxiliar não canônico: {transport}", self.name),
+            );
+        }
+        let archive = self.files_archive.as_deref().ok_or_else(|| crate::Fail {
+            code: 2,
+            msg: format!("{}: {transport} ausente do snapshot de files/", self.name),
+        })?;
+        let mut found = None;
+        for entry in tar::Archive::new(Cursor::new(archive)).entries()? {
+            let mut entry = entry?;
+            if entry.path()?.as_ref() != Path::new(relative) {
+                continue;
+            }
+            if found.is_some() {
+                return fail(
+                    2,
+                    format!("{}: {transport} repetido no snapshot", self.name),
+                );
+            }
+            if !entry.header().entry_type().is_file() {
+                return fail(
+                    2,
+                    format!("{}: {transport} não é arquivo regular", self.name),
+                );
+            }
+            let declared = entry.header().size()?;
+            if declared > max_bytes as u64 {
+                return fail(
+                    2,
+                    format!("{}: {transport} excede {max_bytes} bytes", self.name),
+                );
+            }
+            let mut bytes = Vec::with_capacity(declared as usize);
+            entry
+                .by_ref()
+                .take(max_bytes as u64 + 1)
+                .read_to_end(&mut bytes)?;
+            if bytes.len() > max_bytes {
+                return fail(
+                    2,
+                    format!("{}: {transport} excede {max_bytes} bytes", self.name),
+                );
+            }
+            found = Some(bytes);
+        }
+        found.ok_or_else(|| {
+            crate::Fail {
+                code: 2,
+                msg: format!("{}: {transport} ausente do snapshot de files/", self.name),
+            }
+            .into()
+        })
     }
 }
 
@@ -198,6 +417,7 @@ printf 'REPROCORR=%s\n' "${REPROCORR:-}"
 printf 'REQUIRES_GLIBC=%s\n' "${REQUIRES_GLIBC:-}"
 printf 'PROVISIONAL=%s\n' "${PROVISIONAL:-}"
 printf 'SUPERSEDES=%s\n' "${SUPERSEDES:-}"
+printf 'SHARED_DIRS=%s\n' "${SHARED_DIRS:-}"
 printf 'EPOCH=%s\n' "${EPOCH:-}"
 printf 'TOOLCHAIN=%s\n' "${TOOLCHAIN:-}"
 printf 'RETRIES=%s\n' "${RETRIES:-}"
@@ -227,6 +447,7 @@ const DUMP_FIELDS: &[&str] = &[
     "REQUIRES_GLIBC",
     "PROVISIONAL",
     "SUPERSEDES",
+    "SHARED_DIRS",
     "EPOCH",
     "TOOLCHAIN",
     "RETRIES",
@@ -255,6 +476,8 @@ const CAMPOS_METADADO: &[&str] = &[
     "REQUIRES_GLIBC",
     "PROVISIONAL",
     "SUPERSEDES",
+    "SHARED_DIRS",
+    "EPOCH",
     "TOOLCHAIN",
     "RETRIES",
 ];
@@ -443,7 +666,9 @@ fn snapshot_files(recipe_path: &Path) -> Result<(Option<Vec<u8>>, Option<String>
         // propósito e atravessa a mídia intacto.
         let modo = entry.header().mode().unwrap_or(0) & 0o7777;
         if modo & 0o022 != 0 {
-            let caminho = entry.path().map(|p| p.display().to_string())
+            let caminho = entry
+                .path()
+                .map(|p| p.display().to_string())
                 .unwrap_or_else(|_| "?".into());
             return fail(
                 2,
@@ -463,12 +688,68 @@ fn snapshot_files(recipe_path: &Path) -> Result<(Option<Vec<u8>>, Option<String>
     Ok((Some(archive), Some(fingerprint)))
 }
 
+/// Valida uma raiz explicitamente autorizada por NEWSPEAK_PATH. Raízes
+/// absolutas externas ao rootfs são permitidas (uso documentado por builders),
+/// mas nenhum componente pode ser `..` nem resolver por symlink para outro
+/// lugar: a autoridade é o pathname absoluto exato declarado.
+pub(crate) fn validate_newspeak_tree(tree: &Path) -> Result<bool> {
+    if !tree.is_absolute()
+        || tree.components().any(|component| {
+            !matches!(
+                component,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )
+        })
+    {
+        return fail(
+            2,
+            format!("NEWSPEAK_PATH não é absoluto/canônico: {}", tree.display()),
+        );
+    }
+    let metadata = match std::fs::symlink_metadata(tree) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_dir() {
+        return fail(
+            2,
+            format!("NEWSPEAK_PATH não é diretório real: {}", tree.display()),
+        );
+    }
+    let canonical = std::fs::canonicalize(tree)?;
+    if canonical != tree {
+        return fail(
+            2,
+            format!(
+                "NEWSPEAK_PATH atravessa symlink/alias não canônico: {}",
+                tree.display()
+            ),
+        );
+    }
+    Ok(true)
+}
+
 pub fn find(ctx: &Ctx, name: &str) -> Result<PathBuf> {
     validate_name(name)?;
     for tree in ctx.newspeak_paths() {
+        if !validate_newspeak_tree(&tree)? {
+            continue;
+        }
         let p = tree.join(name).join("recipe");
-        if p.is_file() {
-            return Ok(p);
+        match std::fs::symlink_metadata(&p) {
+            Ok(metadata) if metadata.file_type().is_file() && metadata.nlink() == 1 => {
+                return Ok(p)
+            }
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return fail(2, format!("recipe não pode ser symlink: {}", p.display()))
+            }
+            Ok(metadata) if metadata.file_type().is_file() => {
+                return fail(2, format!("recipe precisa ter nlink=1: {}", p.display()))
+            }
+            Ok(_) => return fail(2, format!("recipe não é regular: {}", p.display())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
     }
     fail(
@@ -516,6 +797,30 @@ pub(crate) fn validate_version(name: &str, version: &str) -> Result<()> {
     Ok(())
 }
 
+/// `SHARED_DIRS` entra no manifesto e em operações destrutivas. Aceita
+/// somente caminhos virtuais absolutos já canônicos; normalizar silenciosamente
+/// `..`, barras repetidas ou uma barra final faria a receita declarar uma
+/// autoridade diferente da que o autor escreveu.
+fn validate_shared_dir(name: &str, path: &str) -> Result<()> {
+    let relative = path.strip_prefix('/').unwrap_or("");
+    let canonical = !relative.is_empty()
+        && path.len() <= 4096
+        && !path.chars().any(char::is_control)
+        && !relative
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+        && Path::new(relative)
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)));
+    if !canonical {
+        return fail(
+            2,
+            format!("{name}: SHARED_DIRS contém caminho virtual não canônico: {path:?}"),
+        );
+    }
+    Ok(())
+}
+
 /// `LICENSE` é persistido como uma única linha em `meta`. O Minitrue não tenta
 /// implementar aqui um parser completo de expressões SPDX: `NOASSERTION` e
 /// expressões compostas continuam válidos, mas valores vazios, ambíguos ou
@@ -554,6 +859,15 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
     let path = find(ctx, name)?;
     let recipe_bytes = std::fs::read(&path)?;
     let (files_archive, files_fingerprint) = snapshot_files(&path)?;
+    // Esta análise PRECISA anteceder `evaluate_snapshot`: toda atribuição cujo
+    // nome começa por SIG é validada como dado literal antes que o shell possa
+    // interpretar `$()`, backticks ou expansões. O plano tipado abaixo usa
+    // somente este mapa, nunca a saída do DUMP para campos de assinatura.
+    let signature_fields =
+        collect_literal_openpgp_fields(&recipe_bytes).map_err(|error| crate::Fail {
+            code: 2,
+            msg: format!("{name}: schema de assinatura inválido: {error:#}"),
+        })?;
     // Avalia o mesmo snapshot que será usado no build e persistido no registro;
     // nunca volta a sourcear um caminho que possa ter mudado no intervalo.
     let out = evaluate_snapshot(&recipe_bytes)?;
@@ -661,7 +975,6 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
     };
     let srcs = list("SRC");
     let sha256: Vec<String> = list("SHA256").iter().map(|s| s.to_lowercase()).collect();
-    let sig = list("SIG");
     if kind == Kind::Binary && srcs.is_empty() {
         return fail(
             2,
@@ -672,10 +985,10 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         // Receita de MONTAGEM (sem SRC): o pacote é gerado pelo próprio build()
         // — config, esqueleto de /etc. Nada a baixar, logo nada a hashear ou
         // assinar. Um SHA256/SIG aqui é engano (não há artefato).
-        if !sha256.is_empty() || !sig.is_empty() {
+        if !sha256.is_empty() || !signature_fields.is_empty() {
             return fail(
                 2,
-                format!("{name}: SHA256/SIG sem SRC (receita de montagem não baixa nada)"),
+                format!("{name}: SHA256/assinatura sem SRC (receita de montagem não baixa nada)"),
             );
         }
     } else {
@@ -691,14 +1004,14 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
                 format!("{name}: SHA256 mal-formado (64 hex por artefato)"),
             );
         }
-        if sha256.is_empty() && !ctx.tofu {
+        if sha256.is_empty() && !ctx.tofu_enabled() {
+            #[cfg(feature = "tofu-authoring")]
             return fail(
                 2,
                 format!("{name}: receita sem SHA256 (só com --tofu, e com aviso)"),
             );
-        }
-        if !sig.is_empty() && sig.len() != srcs.len() {
-            return fail(2, format!("{name}: SIG e SRC com contagens diferentes"));
+            #[cfg(not(feature = "tofu-authoring"))]
+            return fail(2, format!("{name}: receita sem SHA256"));
         }
     }
     let mut links = Vec::new();
@@ -720,11 +1033,11 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
             }
         }
     }
-    let sigsums = Some(field("SIGSUMS")).filter(|s| !s.is_empty());
-    let sigkey = Some(field("SIGKEY")).filter(|s| !s.is_empty());
-    if !sig.is_empty() && sigkey.is_none() {
-        return fail(2, format!("{name}: SIG exige SIGKEY pinada"));
-    }
+    let signature_plan =
+        parse_signature_plan(srcs.len(), &signature_fields).map_err(|error| crate::Fail {
+            code: 2,
+            msg: format!("{name}: schema de assinatura inválido: {error:#}"),
+        })?;
     let reprocorr = Some(field("REPROCORR")).filter(|s| !s.is_empty());
     if let Some(rc) = &reprocorr {
         let canonical = rc
@@ -778,8 +1091,22 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
     let deps = list("DEPS");
     let build_deps = list("BUILD_DEPS");
     let supersedes = list("SUPERSEDES");
+    let shared_dirs = list("SHARED_DIRS");
     for dependency in deps.iter().chain(&build_deps).chain(&supersedes) {
         validate_name(dependency)?;
+    }
+    let mut seen_shared_dirs = HashSet::new();
+    for path in &shared_dirs {
+        validate_shared_dir(name, path)?;
+        if !seen_shared_dirs.insert(path.as_str()) {
+            return fail(2, format!("{name}: SHARED_DIRS repete {path}"));
+        }
+    }
+    if kind != Kind::Source && !shared_dirs.is_empty() {
+        return fail(
+            2,
+            format!("{name}: SHARED_DIRS só é válido para KIND=source"),
+        );
     }
 
     if kind == Kind::Binary && !get.contains_key("HAS_INSTALL") {
@@ -819,14 +1146,8 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         if !links.is_empty() {
             forbidden.push("LINKS");
         }
-        if !sig.is_empty() {
-            forbidden.push("SIG");
-        }
-        if sigsums.is_some() {
-            forbidden.push("SIGSUMS");
-        }
-        if sigkey.is_some() {
-            forbidden.push("SIGKEY");
+        if !matches!(signature_plan, SignaturePlan::None) {
+            forbidden.push("assinatura upstream");
         }
         if reprocorr.is_some() {
             forbidden.push("REPROCORR");
@@ -845,6 +1166,9 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         }
         if !supersedes.is_empty() {
             forbidden.push("SUPERSEDES");
+        }
+        if !shared_dirs.is_empty() {
+            forbidden.push("SHARED_DIRS");
         }
         if !matches!(toolchain_field.as_str(), "" | "none") {
             forbidden.push("TOOLCHAIN");
@@ -880,9 +1204,7 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         deps,
         build_deps,
         links,
-        sig,
-        sigsums,
-        sigkey,
+        signature_plan,
         reprocorr,
         requires_glibc,
         provisional,
@@ -890,6 +1212,7 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         toolchain,
         retries,
         supersedes,
+        shared_dirs,
         recipe_bytes,
         files_archive,
         files_fingerprint,
@@ -1045,26 +1368,35 @@ fn build_fp_from_snapshots(
         msg: format!("snapshot incompleto: dependência '{name}' não foi coletada"),
     })?;
     let mut h = Sha256::new();
-    h.update(b"minitrue-bfp-v1\0self\0");
+    h.update(b"minitrue-bfp-v2\0self\0");
     h.update(r.own_fingerprint()?.as_bytes());
     stack.push(name.to_string());
-    // Ordem canônica dos deps para o hash ser estável. A toolchain declarada
-    // também faz parte da identidade: trocar a receita do Zig invalida tudo
-    // que foi produzido pelos estágios seed/cross.
-    let mut deps: Vec<&str> = r
-        .deps
-        .iter()
-        .chain(r.build_deps.iter())
-        .map(String::as_str)
-        .chain(r.toolchain_build_deps().iter().copied())
-        .collect();
-    deps.sort();
-    deps.dedup();
-    for d in deps {
-        h.update(b"\0dep\0");
-        h.update(d.as_bytes());
-        h.update(b"=");
-        h.update(build_fp_from_snapshots(d, recipes, cache, stack)?.as_bytes());
+    // Arestas tipadas não podem ser achatadas. O mesmo provedor declarado em
+    // runtime e build concede duas autoridades distintas e ambas precisam
+    // sobreviver na identidade, ainda que a view final deduplique o arquivo.
+    for (kind, dependencies) in [
+        (
+            "runtime",
+            r.deps.iter().map(String::as_str).collect::<Vec<_>>(),
+        ),
+        (
+            "build",
+            r.build_deps.iter().map(String::as_str).collect::<Vec<_>>(),
+        ),
+        ("toolchain", r.toolchain_build_deps().to_vec()),
+        ("runner", r.runner_build_deps().to_vec()),
+    ] {
+        let mut dependencies = dependencies;
+        dependencies.sort_unstable();
+        dependencies.dedup();
+        for dependency in dependencies {
+            h.update(b"\0edge\0");
+            h.update(kind.as_bytes());
+            h.update(b"\0");
+            h.update(dependency.as_bytes());
+            h.update(b"=");
+            h.update(build_fp_from_snapshots(dependency, recipes, cache, stack)?.as_bytes());
+        }
     }
     stack.pop();
     let fp = hex::encode(h.finalize());
@@ -1103,6 +1435,100 @@ mod tests {
         r
     }
 
+    fn test_runner(ctx: &Ctx) -> Recipe {
+        let directory = ctx
+            .root
+            .join("var/lib/minitrue/newspeak")
+            .join(BUILD_RUNNER_PACKAGE);
+        if !directory.join("recipe").is_file() {
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join("recipe"),
+                format!(
+                    "NAME={BUILD_RUNNER_PACKAGE}\nVERSION=1\nKIND=binary\nLICENSE=NOASSERTION\nSRC=https://e/runner\nSHA256={}\ninstall_pkg(){{ :; }}\n",
+                    "b".repeat(64)
+                ),
+            )
+            .unwrap();
+        }
+        load(ctx, BUILD_RUNNER_PACKAGE).unwrap()
+    }
+
+    fn build_fingerprints_for_test(
+        ctx: &Ctx,
+        recipes: impl IntoIterator<Item = Recipe>,
+    ) -> Result<std::collections::HashMap<String, String>> {
+        let mut recipes: Vec<Recipe> = recipes.into_iter().collect();
+        if recipes.iter().any(|recipe| recipe.kind == Kind::Source)
+            && !recipes
+                .iter()
+                .any(|recipe| recipe.name == BUILD_RUNNER_PACKAGE)
+        {
+            recipes.push(test_runner(ctx));
+        }
+        build_fingerprints(&recipes)
+    }
+
+    #[test]
+    fn receita_sem_sha_respeita_a_fronteira_compilada_de_autoria() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("mt-tofu-boundary-{}-{n}", std::process::id()));
+        let dir = root.join("var/lib/minitrue/newspeak/foo");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("recipe"),
+            "NAME=foo\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nSRC=https://e/foo.tar.xz\nbuild(){ :; }\n",
+        )
+        .unwrap();
+        let mut ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        assert!(load(&ctx, "foo").is_err(), "TOFU nunca pode ser implícito");
+
+        ctx.tofu = true;
+        let authored = load(&ctx, "foo");
+        #[cfg(feature = "tofu-authoring")]
+        assert!(authored.is_ok(), "a feature explícita preserva autoria");
+        #[cfg(not(feature = "tofu-authoring"))]
+        {
+            let error = authored.expect_err("build distribuível precisa recusar SHA ausente");
+            assert!(error.to_string().contains("receita sem SHA256"));
+            assert!(!error.to_string().contains("--tofu"));
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn assinatura_e_coletada_antes_do_source_e_vira_plano_tipado() {
+        let marker = std::env::temp_dir().join(format!(
+            "mt-signature-must-not-run-{}-{}",
+            std::process::id(),
+            CNT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let malicious = format!("SIG_UNKNOWN=$(touch {})", marker.display());
+        assert!(load_body(&malicious).is_err());
+        assert!(
+            !marker.exists(),
+            "substituição de comando em SIG* chegou ao shell"
+        );
+
+        let legacy = load_body(
+            "SIG=https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz.minisig\nSIGKEY=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U",
+        )
+        .unwrap();
+        assert!(matches!(
+            legacy.signature_plan,
+            SignaturePlan::LegacyMinisign { .. }
+        ));
+
+        assert!(load_body("SIG=$SRC.minisig\nSIGKEY=literal").is_err());
+        assert!(load_body("SIGKEY_FP=AA1CF9EC4AE71CA1BF646C3AFCC8AE079B1EAEC6").is_err());
+    }
+
     /// Carrega uma receita (opcionalmente com arquivos em `files/`), computa o
     /// fingerprint ANTES de limpar (o fingerprint lê o arquivo do disco).
     fn fp_of(extra: &str, files: &[(&str, &str)]) -> String {
@@ -1121,8 +1547,11 @@ mod tests {
             for (name, content) in files {
                 std::fs::write(dir.join("files").join(name), content).unwrap();
                 // Ver a guarda de modo em snapshot_files: 664 seria recusado.
-                std::fs::set_permissions(dir.join("files").join(name),
-                                         std::fs::Permissions::from_mode(0o644)).unwrap();
+                std::fs::set_permissions(
+                    dir.join("files").join(name),
+                    std::fs::Permissions::from_mode(0o644),
+                )
+                .unwrap();
             }
         }
         let ctx = Ctx {
@@ -1227,6 +1656,7 @@ mod tests {
             "REQUIRES_GLIBC=1",
             "PROVISIONAL=1",
             "SUPERSEDES=old",
+            "SHARED_DIRS=/usr/share/icons",
             "LICENSE=",
             "LICENSE=NOASSERTION",
             "EPOCH=1",
@@ -1284,6 +1714,51 @@ mod tests {
             load_body("SIG=https://e/foo.sig").is_err(),
             "SIG sem SIGKEY não pode ser aceita"
         );
+    }
+
+    #[test]
+    fn shared_dirs_e_explicito_canonico_e_restrito_ao_mundo_b() {
+        let recipe = load_body("SHARED_DIRS='/usr/share/icons/hicolor /usr/share/applications'")
+            .expect("source pode declarar pontos de depósito");
+        assert_eq!(
+            recipe.shared_dirs,
+            ["/usr/share/icons/hicolor", "/usr/share/applications"]
+        );
+
+        for invalid in [
+            "SHARED_DIRS=usr/share/icons",
+            "SHARED_DIRS=/",
+            "SHARED_DIRS=/usr//share/icons",
+            "SHARED_DIRS=/usr/share/../icons",
+            "SHARED_DIRS=/usr/share/icons/",
+            "SHARED_DIRS='/usr/share/icons /usr/share/icons'",
+        ] {
+            assert!(
+                load_body(invalid).is_err(),
+                "SHARED_DIRS inválido foi aceito: {invalid}"
+            );
+        }
+
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-shared-a-{}-{n}", std::process::id()));
+        let dir = root.join("var/lib/minitrue/newspeak/foo");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("recipe"),
+            format!(
+                "NAME=foo\nVERSION=1\nKIND=binary\nLICENSE=NOASSERTION\nSRC=https://e/foo\nSHA256={}\nSHARED_DIRS=/usr/share/icons\ninstall_pkg(){{ :; }}\n",
+                "a".repeat(64)
+            ),
+        )
+        .unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        assert!(load(&ctx, "foo").is_err(), "mundo A não pode emitir D:");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1382,7 +1857,12 @@ mod tests {
         .unwrap();
         let aux = dir.join("files").join("aux.sh");
         std::fs::write(&aux, "#!/bin/sh\nexit 0\n").unwrap();
-        let ctx = Ctx { root: raiz.clone(), offline: false, tofu: false, jobs: 1 };
+        let ctx = Ctx {
+            root: raiz.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
 
         // 755: executável legítimo, tem de passar.
         std::fs::set_permissions(&aux, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1396,15 +1876,24 @@ mod tests {
         // Sem bit de execução, então o conserto sugerido é 644.
         std::fs::set_permissions(&aux, std::fs::Permissions::from_mode(0o664)).unwrap();
         let erro = load(&ctx, "foo").unwrap_err().to_string();
-        assert!(erro.contains("0664"), "a mensagem diz o modo achado: {erro}");
-        assert!(erro.contains("chmod 644"), "e sugere o conserto certo: {erro}");
+        assert!(
+            erro.contains("0664"),
+            "a mensagem diz o modo achado: {erro}"
+        );
+        assert!(
+            erro.contains("chmod 644"),
+            "e sugere o conserto certo: {erro}"
+        );
 
         // 775: executável E gravável por grupo. Aqui a sugestão tem de ser 755,
         // e não 644 — devolver 644 tiraria o bit de execução de um script que
         // precisa dele, trocando um defeito por outro.
         std::fs::set_permissions(&aux, std::fs::Permissions::from_mode(0o775)).unwrap();
         let erro = load(&ctx, "foo").unwrap_err().to_string();
-        assert!(erro.contains("chmod 755"), "executável mantém o bit: {erro}");
+        assert!(
+            erro.contains("chmod 755"),
+            "executável mantém o bit: {erro}"
+        );
 
         // 666: gravável por outros também.
         std::fs::set_permissions(&aux, std::fs::Permissions::from_mode(0o666)).unwrap();
@@ -1449,8 +1938,11 @@ mod tests {
         std::fs::write(files.join("fix.patch"), "patch original\n").unwrap();
         // 644 explícito: `fs::write` herda o umask do ambiente, e sob 002 sai
         // 664 — que a guarda de modo do snapshot_files recusa, com razão.
-        std::fs::set_permissions(files.join("fix.patch"),
-                                 std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(
+            files.join("fix.patch"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
         let ctx = Ctx {
             root: root.clone(),
             offline: false,
@@ -1460,19 +1952,22 @@ mod tests {
 
         let recipe = load(&ctx, "foo").unwrap();
         let fingerprint = recipe.own_fingerprint().unwrap();
-        let build_fingerprint = build_fingerprints(std::slice::from_ref(&recipe))
+        let build_fingerprint = build_fingerprints_for_test(&ctx, [recipe.clone()])
             .unwrap()
             .remove("foo")
             .unwrap();
         std::fs::write(dir.join("recipe"), original.replace("original", "alterada")).unwrap();
         std::fs::write(files.join("fix.patch"), "patch alterado\n").unwrap();
-        std::fs::set_permissions(files.join("fix.patch"),
-                                 std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(
+            files.join("fix.patch"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
 
         assert_eq!(recipe.about, "original");
         assert_eq!(recipe.own_fingerprint().unwrap(), fingerprint);
         assert_eq!(
-            build_fingerprints(std::slice::from_ref(&recipe))
+            build_fingerprints_for_test(&ctx, [recipe.clone()])
                 .unwrap()
                 .remove("foo")
                 .unwrap(),
@@ -1572,7 +2067,10 @@ mod tests {
         };
         let fingerprint_a = || {
             let closure = [load(&ctx, "b").unwrap(), load(&ctx, "a").unwrap()];
-            build_fingerprints(&closure).unwrap().remove("a").unwrap()
+            build_fingerprints_for_test(&ctx, closure)
+                .unwrap()
+                .remove("a")
+                .unwrap()
         };
 
         write("b", "");
@@ -1619,7 +2117,10 @@ mod tests {
         };
         let fingerprint = || {
             let closure = [load(&ctx, "zig").unwrap(), load(&ctx, "pkg").unwrap()];
-            build_fingerprints(&closure).unwrap().remove("pkg").unwrap()
+            build_fingerprints_for_test(&ctx, closure)
+                .unwrap()
+                .remove("pkg")
+                .unwrap()
         };
 
         write_zig("semente-a");
@@ -1627,10 +2128,77 @@ mod tests {
         write_zig("semente-b");
         assert_ne!(first, fingerprint());
         assert!(
-            build_fingerprints(&[load(&ctx, "pkg").unwrap()]).is_err(),
+            build_fingerprints_for_test(&ctx, [load(&ctx, "pkg").unwrap()]).is_err(),
             "snapshot seed sem a receita Zig precisa falhar fechado"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn runner_implicito_participa_do_fingerprint_de_fonte() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-bfp-runner-{}-{n}", std::process::id()));
+        let tree = root.join("var/lib/minitrue/newspeak");
+        let package = tree.join("pkg");
+        let runner = tree.join(BUILD_RUNNER_PACKAGE);
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::create_dir_all(&runner).unwrap();
+        std::fs::write(
+            package.join("recipe"),
+            "NAME=pkg\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nTOOLCHAIN=none\nbuild(){ :; }\n",
+        )
+        .unwrap();
+        let write_runner = |about: &str| {
+            std::fs::write(
+                runner.join("recipe"),
+                format!(
+                    "NAME={BUILD_RUNNER_PACKAGE}\nVERSION=1\nKIND=binary\nLICENSE=NOASSERTION\nABOUT={about}\nSRC=https://e/runner\nSHA256={}\ninstall_pkg(){{ :; }}\n",
+                    "a".repeat(64)
+                ),
+            )
+            .unwrap();
+        };
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: false,
+            tofu: false,
+            jobs: 1,
+        };
+        let fingerprint = || {
+            let closure = [
+                load(&ctx, BUILD_RUNNER_PACKAGE).unwrap(),
+                load(&ctx, "pkg").unwrap(),
+            ];
+            build_fingerprints(&closure).unwrap().remove("pkg").unwrap()
+        };
+
+        write_runner("runner-a");
+        let first = fingerprint();
+        write_runner("runner-b");
+        assert_ne!(first, fingerprint());
+        let package = load(&ctx, "pkg").unwrap();
+        assert_eq!(package.runner_build_deps(), &[BUILD_RUNNER_PACKAGE]);
+        assert!(build_fingerprints(&[package]).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn contrato_do_runner_serializa_toda_a_fronteira_versionada() {
+        let material = build_runner_material();
+        for field in [
+            "BUILD_RUNNER_FORMAT=1",
+            "BUILD_VIEW_FORMAT=1",
+            "BUILD_SYSROOT_FORMAT=1",
+            "RUNNER_PACKAGE=busybox",
+            "SYSROOT_POLICY=empty+declared-closure+runner-shell+source-inputs",
+            "VIEW_TIMESTAMPS=atime+mtime:SOURCE_DATE_EPOCH;ctime:kernel-maintained",
+            "PREAMBLE_SHA256=",
+        ] {
+            assert!(
+                material.lines().any(|line| line.starts_with(field)),
+                "{field}"
+            );
+        }
     }
 
     #[test]
@@ -1725,6 +2293,34 @@ mod tests {
 
     #[test]
     fn arvore_newspeak_do_projeto_carrega_por_snapshot() {
+        fn copy_real_tree(source: &Path, destination: &Path) {
+            std::fs::create_dir_all(destination).unwrap();
+            let directory_mode = std::fs::symlink_metadata(source)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7755;
+            std::fs::set_permissions(destination, std::fs::Permissions::from_mode(directory_mode))
+                .unwrap();
+            for entry in std::fs::read_dir(source).unwrap() {
+                let entry = entry.unwrap();
+                let metadata = std::fs::symlink_metadata(entry.path()).unwrap();
+                let target = destination.join(entry.file_name());
+                if metadata.file_type().is_dir() {
+                    copy_real_tree(&entry.path(), &target);
+                } else if metadata.file_type().is_file() {
+                    std::fs::copy(entry.path(), &target).unwrap();
+                    std::fs::set_permissions(
+                        &target,
+                        std::fs::Permissions::from_mode(metadata.permissions().mode() & 0o7755),
+                    )
+                    .unwrap();
+                } else {
+                    panic!("fixture Newspeak contém tipo não regular");
+                }
+            }
+        }
+
         let project = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("minitrue deve viver dentro do projeto");
@@ -1741,6 +2337,11 @@ mod tests {
             tofu: false,
             jobs: 1,
         };
+        let symlink_error = load(&ctx, "base")
+            .expect_err("a árvore absoluta por symlink não pode escapar do snapshot confiável");
+        assert!(symlink_error.to_string().contains("não é diretório real"));
+        std::fs::remove_file(parent.join("newspeak")).unwrap();
+        copy_real_tree(&tree, &parent.join("newspeak"));
         let mut names: Vec<String> = std::fs::read_dir(&tree)
             .unwrap()
             .flatten()
@@ -1768,7 +2369,10 @@ mod tests {
                 "busybox"
             ]
         );
-        assert_eq!(gcc.build_deps, ["gcc", "binutils-cross", "libstdcxx"]);
+        assert_eq!(
+            gcc.build_deps,
+            ["gcc", "binutils-cross", "libstdcxx", "make"]
+        );
 
         let binutils = load(&ctx, "binutils-glibc").unwrap();
         assert!(binutils.supersedes.iter().any(|name| name == "busybox"));
