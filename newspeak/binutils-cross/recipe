@@ -2,7 +2,14 @@ NAME=binutils-cross
 VERSION=2.47
 KIND=source
 TOOLCHAIN=seed
-BUILD_DEPS="make busybox"
+# gawk: o `./configure` desta fonte chama awk, e declarar só `busybox` NÃO
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora.
+# Esta receita já construiu sem declarar, mas só porque calhava de vir ANTES
+# do gawk na resolução; ordem não é contrato, e bastou outra receita declarar
+# gawk para ele subir na ordem e esta quebrar. Quem está na closure do próprio
+# gawk (binutils, make, busybox, zig) é garantido vir antes dele e por isso não
+# declara; todo o resto precisa.
+BUILD_DEPS="make busybox gawk"
 # Scaffolding do E2: além das ferramentas PREFIXADAS (x86_64-distropica-…-*,
 # que ninguém reivindica, então permanecem), instala arquivos COMPARTILHADOS
 # não-prefixados (bfd-plugins, headers, info) que o binutils-glibc — o binutils
