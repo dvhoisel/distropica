@@ -1,0 +1,46 @@
+NAME=gdk-pixbuf-introspection
+VERSION=2.42.12
+KIND=source
+TOOLCHAIN=native
+DEPS="gdk-pixbuf glib-introspection"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools gettext glib glib-introspection gobject-introspection libpng"
+ABOUT="Overlay de canal com GdkPixbuf-2.0 e GdkPixdata-2.0. Reproduz os loaders PNG/GIF internos da receita-base apenas para o scanner enxergar a mesma API; o payload contém exclusivamente dois GIR e dois typelibs, sem loaders, cache, biblioteca ou header."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/gdk-pixbuf/2.42/gdk-pixbuf-$VERSION.tar.xz"
+SHA256=b9505b3445b9a7e48ced34760c3bcb73e966df3ac94c95a148cb669ab748e3c7
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    export SETUPTOOLS_USE_DISTUTILS=local
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release \
+        -Dpng=enabled -Dgif=enabled -Djpeg=disabled -Dtiff=disabled \
+        -Dothers=disabled -Dbuiltin_loaders=png,gif \
+        -Dintrospection=enabled -Dgtk_doc=false -Ddocs=false -Dman=false \
+        -Dtests=false -Dinstalled_tests=false -Drelocatable=false \
+        -Dgio_sniffing=false
+    ninja -C build -j"$JOBS" \
+        gdk-pixbuf/GdkPixbuf-2.0.typelib \
+        gdk-pixbuf/GdkPixdata-2.0.typelib
+
+    install -dm755 "$STAGE/usr/share/gir-1.0" \
+                   "$STAGE/usr/lib/girepository-1.0"
+    for namespace in GdkPixbuf-2.0 GdkPixdata-2.0; do
+        install -m644 "build/gdk-pixbuf/$namespace.gir" "$STAGE/usr/share/gir-1.0/"
+        install -m644 "build/gdk-pixbuf/$namespace.typelib" "$STAGE/usr/lib/girepository-1.0/"
+    done
+
+    [ "$(find "$STAGE" -type f | wc -l)" -eq 4 ] || {
+        echo "gdk-pixbuf-introspection: stage não contém exatamente 4 arquivos" >&2
+        find "$STAGE" -mindepth 1 >&2
+        exit 1
+    }
+    [ -z "$(find "$STAGE" -type l -print -quit)" ] || {
+        echo "gdk-pixbuf-introspection: symlink fora da allowlist" >&2
+        exit 1
+    }
+    ! grep -R -a -F "$WORK" "$STAGE" >/dev/null || {
+        echo "gdk-pixbuf-introspection: caminho do build vazou no payload" >&2
+        exit 1
+    }
+}

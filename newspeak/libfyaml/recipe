@@ -1,0 +1,20 @@
+NAME=libfyaml
+VERSION=0.9.6
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf"
+ABOUT="Parser YAML em C exigido pela biblioteca AppStream. A implementação é autônoma; suporte de desenvolvimento, sanitizadores e rede de testes ficam desligados."
+LICENSE=MIT
+SRC="https://github.com/pantoniou/libfyaml/releases/download/v$VERSION/libfyaml-$VERSION.tar.gz"
+SHA256=a59cc3331e2eb903ec36933ad52a45888041cac31e44f553a00511131242c483
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    ./configure --prefix=/usr --libdir=/usr/lib --disable-static \
+        --disable-debug --disable-devmode --disable-asan --disable-network
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -e "$STAGE/usr/lib/libfyaml.so" ] || { echo "libfyaml: biblioteca compartilhada ausente" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

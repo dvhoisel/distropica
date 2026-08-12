@@ -1,0 +1,24 @@
+NAME=babl
+VERSION=0.1.128
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc lcms2"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc lcms2 gobject-introspection"
+ABOUT="Biblioteca de formatos e conversão de pixels que sustenta o GEGL. O suporte a Little CMS fica ligado para que conversões de cor usem o mesmo provedor ICC do GIMP. O GIR é obrigatório porque o typelib do GIMP inclui Babl-0.1; documentação e Vala ficam fora."
+LICENSE=LGPL-3.0-or-later
+SRC="https://download.gimp.org/babl/0.1/babl-$VERSION.tar.xz"
+SHA256=e676507b421d414d49db8627415dc1eadbd787536baa7d6fe94a1f1971cbe73e
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    export SETUPTOOLS_USE_DISTUTILS=local
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release \
+        -Dwith-lcms=enabled -Dwith-docs=false -Denable-gir=true \
+        -Denable-vapi=false -Dgi-docgen=disabled -Drelocatable-bundle=no
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/pkgconfig/babl-0.1.pc" ] || { echo "babl: babl-0.1.pc ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/girepository-1.0/Babl-0.1.typelib" ] || { echo "babl: Babl-0.1.typelib ausente" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

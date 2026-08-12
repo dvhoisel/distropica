@@ -1,0 +1,24 @@
+NAME=glib-networking
+VERSION=2.80.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib openssl ca-certificates"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf gettext glib openssl"
+ABOUT="Backend TLS do GIO. O configurador do GIMP executa g_tls_backend_get_default e aborta se nenhum módulo SSL existir. Usa o OpenSSL já canônico na árvore; GnuTLS, libproxy e proxy GNOME ficam fora, com proxy por variáveis de ambiente."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/glib-networking/2.80/glib-networking-$VERSION.tar.xz"
+SHA256=b80e2874157cd55071f1b6710fa0b911d5ac5de106a9ee2a4c9c7bee61782f8e
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release \
+        -Dgnutls=disabled -Dopenssl=enabled -Dlibproxy=disabled \
+        -Dgnome_proxy=disabled -Denvironment_proxy=enabled \
+        -Dinstalled_tests=false -Ddebug_logs=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/gio/modules/libgioopenssl.so" ] || { echo "glib-networking: backend OpenSSL ausente" >&2; exit 1; }
+    rm -f "$STAGE/usr/lib/gio/modules/giomodule.cache"
+    find "$STAGE" -type d -empty -delete
+}

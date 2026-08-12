@@ -1,0 +1,11 @@
+# O binário estático contém cargo-c e sua closure de crates. Este snapshot é a
+# fonte correspondente completa: preserva os dois insumos oficiais abaixo, a
+# configuração e todas as crates do Cargo.lock sem inflar a árvore Newspeak ou
+# o cache binário da mídia. Quando um artefato efetivamente distribui esse
+# binário, `bootstrap/source-bundle` busca o snapshot pelo SHA e o classifica
+# como `fonte-correspondente`; cargo-c não pertence à mídia oficial atual.
+a3b9ca3ec784555391415369f0b21d47342a5b22ff9f073faa1ad4b8b0900dac  https://distropica.com.br/sources/cargo-c/cargo-c-0.10.24-corresponding-source.tar.xz
+# Os dois objetos oficiais separados mantêm a procedência auditável do
+# conteúdo agregado e também são coletados pelo bundle de fontes.
+91c6e0be34aa0ad26b7ef21ce21a390c95635e4e6e00b7a6ff07323f9af8550b  https://github.com/lu-zero/cargo-c/archive/refs/tags/v0.10.24.tar.gz
+0cbf346afe2c77fec7b39f8954b9de0639ced04234764240c8290dbec8d45e82  https://github.com/lu-zero/cargo-c/releases/download/v0.10.24/Cargo.lock

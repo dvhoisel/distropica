@@ -1,0 +1,44 @@
+NAME=at-spi2-core-introspection
+VERSION=2.60.6
+KIND=source
+TOOLCHAIN=native
+DEPS="at-spi2-core glib-introspection gobject-introspection"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools gettext glib glib-introspection gobject-introspection dbus libxml2"
+ABOUT="Overlay de canal com Atk-1.0 e Atspi-2.0. O primeiro inclui GObject e o segundo inclui GLib/GObject/DBus, por isso os provedores aparecem como dependências factuais; o stage publica somente quatro arquivos GIR/typelib e não sobrepõe as três bibliotecas da receita-base."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/at-spi2-core/2.60/at-spi2-core-$VERSION.tar.xz"
+SHA256="a89b64a8b217a8042bdf0e35cbfab629ceee35640dba75df578afde9aa789d57"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    export SETUPTOOLS_USE_DISTUTILS=local
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release \
+        -Dx11=disabled -Duse_systemd=false -Dintrospection=enabled \
+        -Dgtk2_atk_adaptor=false -Ddocs=false \
+        -Ddefault_bus=dbus-daemon -Datk_only=false
+    ninja -C build -j"$JOBS" \
+        atk/Atk-1.0.typelib \
+        atspi/Atspi-2.0.typelib
+
+    install -dm755 "$STAGE/usr/share/gir-1.0" \
+                   "$STAGE/usr/lib/girepository-1.0"
+    install -m644 build/atk/Atk-1.0.gir "$STAGE/usr/share/gir-1.0/"
+    install -m644 build/atk/Atk-1.0.typelib "$STAGE/usr/lib/girepository-1.0/"
+    install -m644 build/atspi/Atspi-2.0.gir "$STAGE/usr/share/gir-1.0/"
+    install -m644 build/atspi/Atspi-2.0.typelib "$STAGE/usr/lib/girepository-1.0/"
+
+    [ "$(find "$STAGE" -type f | wc -l)" -eq 4 ] || {
+        echo "at-spi2-core-introspection: stage não contém exatamente 4 arquivos" >&2
+        find "$STAGE" -mindepth 1 >&2
+        exit 1
+    }
+    [ -z "$(find "$STAGE" -type l -print -quit)" ] || {
+        echo "at-spi2-core-introspection: symlink fora da allowlist" >&2
+        exit 1
+    }
+    ! grep -R -a -F "$WORK" "$STAGE" >/dev/null || {
+        echo "at-spi2-core-introspection: caminho do build vazou no payload" >&2
+        exit 1
+    }
+}

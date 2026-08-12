@@ -1,0 +1,22 @@
+NAME=poppler-data
+VERSION=0.4.12
+KIND=source
+TOOLCHAIN=native
+DEPS=""
+BUILD_DEPS="busybox make"
+ABOUT="Mapas CMap e tabelas Unicode oficiais usados pelo Poppler para PDFs CJK. São dados independentes de arquitetura; entram para que importar PDF no GIMP não perca texto chinês, japonês ou coreano."
+LICENSE="LicenseRef-Adobe-CMap AND (GPL-2.0-only OR GPL-3.0-only)"
+SRC="https://poppler.freedesktop.org/poppler-data-$VERSION.tar.gz"
+SHA256=c835b640a40ce357e1b83666aabd95edffa24ddddd49b8daff63adb851cdab74
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    make prefix=/usr -j"$JOBS"
+    make prefix=/usr DESTDIR="$STAGE" install
+    install -dm755 "$STAGE/usr/share/licenses/poppler-data"
+    for f in COPYING COPYING.adobe COPYING.gpl2; do
+        [ -f "$f" ] && install -m644 "$f" "$STAGE/usr/share/licenses/poppler-data/$f"
+    done
+    [ -e "$STAGE/usr/share/pkgconfig/poppler-data.pc" ] || { echo "poppler-data: .pc ausente" >&2; exit 1; }
+    [ -d "$STAGE/usr/share/poppler/cMap" ] || { echo "poppler-data: CMaps ausentes" >&2; exit 1; }
+}

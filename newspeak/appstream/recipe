@@ -1,0 +1,53 @@
+NAME=appstream
+VERSION=1.1.5
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib curl libxml2 libfyaml libxmlb"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf gettext gperf glib curl libxml2 libfyaml libxmlb"
+ABOUT="Biblioteca AppStream que o GIMP 3 usa para validar e ler metadados de componentes e extensões. A API C fica completa; composição, ferramentas, GIR, systemd, Qt, stemmer, zstd, SVG e documentação são recursos independentes e ficam desligados."
+LICENSE=LGPL-2.1-or-later
+SRC="https://www.freedesktop.org/software/appstream/releases/AppStream-$VERSION.tar.xz"
+SHA256=fc57337e250b0d27e75ac4216cc69a76d03c54011a5da5c7a2c57711a3d0cdf9
+
+build() {
+    # O tarball oficial traz o prefixo literal ./AppStream-<versão>/.
+    tar -xJf "$DL" --strip-components=2
+    # O patch do BusyBox não implementa --fuzz; -N e o contexto completo
+    # fazem a aplicação falhar em vez de reaplicar uma alteração divergente.
+    patch -Np1 -i "$WORK/no-cli-metainfo-without-tools.patch"
+    grep -Fq "if get_option('tools')" data/meson.build || {
+        echo "appstream: guarda tools do metainfo da CLI ausente" >&2
+        exit 1
+    }
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release \
+        -Dstemming=false -Dsystemd=false -Dvapi=false -Dqt=false \
+        -Dcompose=false -Dbash-completion=false -Dapt-support=false \
+        -Dgir=false -Dtools=false -Dsvg-support=false \
+        -Dzstd-support=false -Dblake3-support=false \
+        -Ddisplay-detection=none -Ddocs=false -Dapidocs=false \
+        -Dinstall-docs=false -Dman=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/pkgconfig/appstream.pc" ] || { echo "appstream: appstream.pc ausente" >&2; exit 1; }
+    [ ! -e "$STAGE/usr/bin/appstreamcli" ] && \
+        [ ! -L "$STAGE/usr/bin/appstreamcli" ] || {
+        echo "appstream: appstreamcli vazou com tools=false" >&2
+        exit 1
+    }
+    cli_metainfo="$STAGE/usr/share/metainfo/org.freedesktop.appstream.cli.metainfo.xml"
+    [ ! -e "$cli_metainfo" ] && [ ! -L "$cli_metainfo" ] || {
+        echo "appstream: metainfo da CLI vazou com tools=false" >&2
+        exit 1
+    }
+    [ -f "$STAGE/usr/share/gettext/its/metainfo.its" ] && \
+        [ -f "$STAGE/usr/share/gettext/its/metainfo.loc" ] || {
+        echo "appstream: definições ITS ausentes" >&2
+        exit 1
+    }
+    [ -f "$STAGE/usr/share/appstream/appstream.conf" ] || {
+        echo "appstream: appstream.conf ausente" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

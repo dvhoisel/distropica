@@ -1,0 +1,63 @@
+NAME=gimp
+VERSION=3.2.4
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2 busybox gtk3 gtk3-introspection at-spi2-core at-spi2-core-introspection babl cairo fontconfig freetype gdk-pixbuf gdk-pixbuf-introspection gegl exiv2 gexiv2 glib gobject-introspection glib-introspection harfbuzz harfbuzz-introspection json-glib lcms2 libmypaint mypaint-brushes pango pango-introspection librsvg glib-networking appstream libarchive libx11 libxmu libxext libxfixes libtiff libjpeg-turbo zlib bzip2 xz libpng poppler poppler-data libgudev libxcursor python-glibc pygobject pycairo shared-mime-info hicolor-icon-theme"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc perl gettext libxslt gobject-introspection glib-introspection harfbuzz-introspection pango-introspection gdk-pixbuf-introspection at-spi2-core-introspection gtk3-introspection"
+ABOUT="GIMP 3.2, editor de imagens entregue como Mundo B pelo canal e deliberadamente fora da mídia. A closure mantém gestão de cor e metadados, SVG com loader, HTTPS, pincéis MyPaint, PDF/CJK, impressão em arquivo, Python, Script-Fu, entrada Linux/tablet, Xcursor, JPEG, PNG, TIFF e OpenRaster; formatos que exigiriam pilhas próprias (HEIF/JXL/OpenEXR/JPEG2000/WebP/MNG/FITS) ficam explicitamente fora desta primeira receita auditável. Importação e exportação OpenEXR estão indisponíveis; a entrada PDB de exportação registrada pelo GIMP não tem a operação GEGL correspondente e não produz arquivo."
+LICENSE="GPL-3.0-or-later AND LGPL-3.0-or-later AND CC-BY-SA-3.0 AND CC-BY-SA-4.0 AND CC0-1.0 AND LicenseRef-GIMP-legacy-data"
+SRC="https://download.gimp.org/gimp/v3.2/gimp-$VERSION.tar.xz"
+SHA256=7312bc53e9c6d2d0056ca7b93f1c6b98707946dd934f714c21b8746ecb601588
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    # O binário temporário do g-ir-scanner liga libgimpui/libgimpwidgets, cujos
+    # DT_NEEDED internos usam os SONAMEs versionados. Os -L/-rpath emitidos
+    # pelo scanner não são busca de dependência transitiva para o GNU ld; sem
+    # estes rpath-link ele encontra as duas bibliotecas diretas, mas reporta
+    # libgimp/base/color/config/module como "not found" e falha fechado nos
+    # símbolos indefinidos. rpath-link só orienta o linker e não é gravado no
+    # ELF instalado.
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib \
+        -Wl,-rpath-link,$PWD/build/libgimp \
+        -Wl,-rpath-link,$PWD/build/libgimpbase \
+        -Wl,-rpath-link,$PWD/build/libgimpcolor \
+        -Wl,-rpath-link,$PWD/build/libgimpconfig \
+        -Wl,-rpath-link,$PWD/build/libgimpmath \
+        -Wl,-rpath-link,$PWD/build/libgimpmodule \
+        -Wl,-rpath-link,$PWD/build/libgimpwidgets"
+    export SETUPTOOLS_USE_DISTUTILS=local
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release \
+        -Dcheck-update=no -Denable-default-bin=enabled \
+        -Dbash-completion=disabled -Daa=disabled -Dalsa=disabled \
+        -Dappdata-test=disabled -Dcairo-pdf=enabled -Dfits=disabled \
+        -Dghostscript=disabled -Dgudev=enabled -Dheif=disabled \
+        -Dilbm=disabled -Djpeg2000=disabled -Djpeg-xl=disabled \
+        -Dmng=disabled -Dopenexr=disabled -Dopenmp=enabled \
+        -Dprint=true -Dwebp=disabled -Dwmf=disabled -Dxcursor=enabled \
+        -Dxpm=disabled -Dheadless-tests=disabled -Dgi-docgen=disabled \
+        -Dlinux-input=enabled -Dvector-icons=true -Dvala=disabled \
+        -Djavascript=disabled -Dlua=false -Dlibunwind=false \
+        -Dlibbacktrace=false -Drelocatable-bundle=no \
+        -Dwith-sendmail=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    install -dm755 "$STAGE/usr/share/licenses/gimp"
+    install -m644 COPYING LICENSE "$STAGE/usr/share/licenses/gimp/"
+    install -m644 libgimp/COPYING "$STAGE/usr/share/licenses/gimp/COPYING.LGPL"
+    install -m644 gimp-data/icons/Default/COPYING \
+        "$STAGE/usr/share/licenses/gimp/COPYING.icons-default"
+    install -m644 gimp-data/icons/Legacy/COPYING \
+        "$STAGE/usr/share/licenses/gimp/COPYING.icons-legacy"
+    install -m644 gimp-data/LICENSE "$STAGE/usr/share/licenses/gimp/LICENSE.data"
+    find "$STAGE" -type d -name __pycache__ -prune -exec rm -rf {} +
+    find "$STAGE" -type f -name '*.pyc' -delete
+
+    [ -x "$STAGE/usr/bin/gimp-3.2" ] || { echo "gimp: executável versionado ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/bin/gimp" ] || { echo "gimp: link sem versão ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/girepository-1.0/Gimp-3.0.typelib" ] || { echo "gimp: typelib ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/girepository-1.0/GimpUi-3.0.typelib" ] || { echo "gimp: typelib de interface ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/share/applications/gimp.desktop" ] || { echo "gimp: desktop entry ausente" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

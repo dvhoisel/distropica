@@ -1,0 +1,22 @@
+NAME=libmypaint
+VERSION=1.6.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc json-c"
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf json-c"
+ABOUT="Motor de pincéis MyPaint usado pelos pincéis paramétricos do GIMP. A biblioteca C usa apenas json-c; bindings GLib, introspecção, GEGL, OpenMP, documentação e traduções ficam fora para não duplicar APIs."
+LICENSE=ISC
+SRC="https://github.com/mypaint/libmypaint/releases/download/v$VERSION/libmypaint-$VERSION.tar.xz"
+SHA256=741754f293f6b7668f941506da07cd7725629a793108bb31633fb6c3eae5315f
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure --prefix=/usr --libdir=/usr/lib --disable-static \
+        --disable-openmp --disable-docs --disable-i18n --disable-nls \
+        --disable-introspection --disable-gegl --without-glib
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -e "$STAGE/usr/lib/pkgconfig/libmypaint.pc" ] || { echo "libmypaint: .pc ausente" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

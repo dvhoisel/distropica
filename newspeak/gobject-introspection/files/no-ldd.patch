@@ -1,0 +1,100 @@
+--- a/giscanner/shlibs.py
++++ b/giscanner/shlibs.py
+@@ -57,9 +57,9 @@
+     $""" % re.escape(library_name), re.VERBOSE)
+ 
+ 
+-# This is a what we do for non-la files. We assume that we are on an
+-# ELF-like system where ldd exists and the soname extracted with ldd is
+-# a filename that can be opened with dlopen().
++# This is what we do for non-la files. On ELF systems, inspect DT_NEEDED
++# with objdump instead of executing the dynamic loader through ldd. The soname
++# is a filename that can be opened with dlopen().
+ #
+ # On OS X this will need a straightforward alternate implementation
+ # in terms of otool.
+@@ -70,6 +70,17 @@
+ # We might need to hunt down the .lib in the compile-time path and
+ # use that to figure out the name of the DLL.
+ #
++def _objdump_needed(output):
++    needed = []
++    for line in output.splitlines():
++        fields = line.split()
++        # Ignore headers, SONAME, RPATH/RUNPATH and version tables: only
++        # DT_NEEDED is evidence that the inspected binary links the library.
++        if len(fields) == 2 and fields[0] == 'NEEDED':
++            needed.append(fields[1])
++    return "\n".join(needed)
++
++
+ def _resolve_non_libtool(options, binary, libraries):
+     if not libraries:
+         return []
+@@ -97,16 +108,20 @@
+             args.extend(libtool)
+             args.append('--mode=execute')
+         platform_system = platform.system()
++        use_objdump = False
+         if options.ldd_wrapper:
+             args.extend(options.ldd_wrapper)
+             args.append(binary.args[0])
+         elif platform_system == 'Darwin':
+             args.extend(['otool', '-L', binary.args[0]])
+         else:
+-            args.extend(['ldd', binary.args[0]])
++            args.extend(['objdump', '-p', '--', binary.args[0]])
++            use_objdump = True
+         output = subprocess.check_output(args)
+         if isinstance(output, bytes):
+             output = output.decode("utf-8", "replace")
++        if use_objdump:
++            output = _objdump_needed(output)
+ 
+         shlibs = resolve_from_ldd_output(libraries, output)
+         return list(map(sanitize_shlib_path, shlibs))
+--- a/tests/scanner/test_shlibs.py
++++ b/tests/scanner/test_shlibs.py
+@@ -2,7 +2,9 @@
+ import sys
+ import os
+ 
+-from giscanner.shlibs import resolve_from_ldd_output, sanitize_shlib_path
++from giscanner.shlibs import (_objdump_needed,
++                                resolve_from_ldd_output,
++                                sanitize_shlib_path)
+ 
+ 
+ class TestLddParser(unittest.TestCase):
+@@ -114,5 +116,31 @@
+             resolve_from_ldd_output(['foo'], output))
+ 
+ 
++class TestObjdumpParser(unittest.TestCase):
++
++    def test_resolves_needed_entries(self):
++        output = """\
++/tmp/tmp-introspect/Gio-2.0: file format elf64-x86-64
++  NEEDED               libgio-2.0.so.0
++  NEEDED               libglib-2.0.so.0
++  SONAME               libnot-a-dependency.so.0
++  RUNPATH              /tmp/libalso-not-a-dependency.so.0
++"""
++        self.assertEqual(
++            ['libgio-2.0.so.0', 'libglib-2.0.so.0'],
++            resolve_from_ldd_output(
++                ['gio-2.0', 'glib-2.0'], _objdump_needed(output)))
++
++    def test_ignores_non_needed_matches(self):
++        output = """\
++/tmp/libtrap.so: file format elf64-x86-64
++  NEEDED               libc.so.6
++  SONAME               libtrap.so.0
++  RUNPATH              /tmp/libtrap.so.0
++"""
++        with self.assertRaises(SystemExit):
++            resolve_from_ldd_output(['trap'], _objdump_needed(output))
++
++
+ if __name__ == '__main__':
+     unittest.main()

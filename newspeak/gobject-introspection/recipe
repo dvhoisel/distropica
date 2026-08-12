@@ -1,0 +1,86 @@
+NAME=gobject-introspection
+VERSION=1.86.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc busybox glib libffi python-glibc setuptools pkgconf gcc-pass2 binutils-glibc cairo fontconfig freetype libx11 dbus"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools glib libffi flex bison"
+ABOUT="Compilador e scanner de GObject Introspection, acompanhado apenas dos GIR/typelibs estáticos realmente usados nesta closure: cairo, fontconfig, freetype2, xlib e DBus. Cada biblioteca que esses dados descrevem é DEPS direta; os protocolos GL/Vulkan/Win32 e bindings antigos não entram como typelibs quebrados. Desde GI 1.86 os dados de GLib/GObject/Gio são apenas auxiliares não instalados deste build e pertencem ao próprio GLib; a receita separada glib-introspection os gera depois, quebrando o ciclo de bootstrap sem fingir que estes arquivos existem aqui. O scanner resolve DT_NEEDED com objdump, por inspeção, em vez de depender do ldd ausente ou executar o loader sobre binários temporários. Documentação fica fora."
+LICENSE="LGPL-2.0-or-later AND GPL-2.0-or-later AND MIT"
+SRC="https://download.gnome.org/sources/gobject-introspection/1.86/gobject-introspection-$VERSION.tar.xz"
+SHA256=920d1a3fcedeadc32acff95c2e203b319039dd4b4a08dd1a2dfd283d19c0b9ae
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    patch -Np1 -i "$WORK/no-ldd.patch"
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    export SETUPTOOLS_USE_DISTUTILS=local
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release \
+        -Dcairo=disabled -Ddoctool=disabled -Dgtk_doc=false \
+        -Dpython=python3 -Dbuild_introspection_data=true -Dtests=false
+    ninja -C build -j"$JOBS"
+    # O suite completo fica desligado, mas o parser que substitui ldd é parte
+    # da fronteira de segurança: exercite tanto NEEDED real quanto tokens
+    # conflitantes de cabeçalho/SONAME/RUNPATH antes de instalar o scanner.
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/build" \
+        python3 tests/scanner/test_shlibs.py
+    DESTDIR="$STAGE" ninja -C build install
+    # O upstream instala uma tabela genérica de protocolos mesmo quando os
+    # provedores não existem. Não publique typelibs que esta receita não
+    # consegue fechar; os cinco mantidos abaixo são os includes factuais de
+    # HarfBuzz/Pango/AT-SPI/GTK/GIMP.
+    for base in DBusGLib-1.0 GL-1.0 libxml2-2.0 Vulkan-1.0 xft-2.0 \
+                xfixes-4.0 xrandr-1.3 win32-1.0; do
+        rm -f "$STAGE/usr/share/gir-1.0/$base.gir" \
+              "$STAGE/usr/lib/girepository-1.0/$base.typelib"
+    done
+    [ -f "$STAGE/usr/bin/g-ir-scanner" ] && \
+        [ ! -L "$STAGE/usr/bin/g-ir-scanner" ] && \
+        [ -x "$STAGE/usr/bin/g-ir-scanner" ] || {
+        echo "gobject-introspection: g-ir-scanner ausente ou não regular" >&2
+        exit 1
+    }
+    scanner_shlibs="$STAGE/usr/lib/gobject-introspection/giscanner/shlibs.py"
+    [ -f "$scanner_shlibs" ] && [ ! -L "$scanner_shlibs" ] || {
+        echo "gobject-introspection: implementação instalada do scanner ausente ou não regular" >&2
+        exit 1
+    }
+    grep -Fq "args.extend(['objdump', '-p', '--', binary.args[0]])" "$scanner_shlibs" || {
+        echo "gobject-introspection: scanner instalado não usa objdump" >&2
+        exit 1
+    }
+    grep -Fq 'use_objdump = True' "$scanner_shlibs" && \
+        grep -Fq 'output = _objdump_needed(output)' "$scanner_shlibs" || {
+        echo "gobject-introspection: saída de objdump não usa parser DT_NEEDED" >&2
+        exit 1
+    }
+    if grep -Fq "args.extend(['ldd', binary.args[0]])" "$scanner_shlibs"; then
+        echo "gobject-introspection: dependência executável de ldd reapareceu" >&2
+        exit 1
+    fi
+    [ ! -e "$STAGE/usr/bin/ldd" ] && [ ! -L "$STAGE/usr/bin/ldd" ] || {
+        echo "gobject-introspection: wrapper ldd vazou para o payload" >&2
+        exit 1
+    }
+    # Estes dados estáticos são includes duros na cadeia que vai de
+    # HarfBuzz/Pango/GTK até os typelibs do GIMP.
+    for typelib in cairo-1.0 xlib-2.0 freetype2-2.0 fontconfig-2.0 \
+                   DBus-1.0 GIRepository-2.0; do
+        gir="$STAGE/usr/share/gir-1.0/$typelib.gir"
+        typelib_file="$STAGE/usr/lib/girepository-1.0/$typelib.typelib"
+        [ -f "$gir" ] && [ ! -L "$gir" ] && \
+            [ -f "$typelib_file" ] && [ ! -L "$typelib_file" ] || {
+            echo "gobject-introspection: par GIR/typelib regular ausente para $typelib" >&2
+            exit 1
+        }
+    done
+    for namespace in GLib-2.0 GObject-2.0 Gio-2.0; do
+        for path in "$STAGE/usr/share/gir-1.0/$namespace.gir" \
+                    "$STAGE/usr/lib/girepository-1.0/$namespace.typelib"; do
+            if [ -e "$path" ] || [ -L "$path" ]; then
+                echo "gobject-introspection: dado moderno de GLib vazou: $path" >&2
+                exit 1
+            fi
+        done
+    done
+    find "$STAGE" -type d -empty -delete
+}

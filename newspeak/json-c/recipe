@@ -1,0 +1,23 @@
+NAME=json-c
+VERSION=0.19
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="gcc-pass2 binutils-glibc cmake ninja"
+ABOUT="Implementação C de JSON, dependência única da libmypaint quando seus bindings GLib são desligados. A tag de release inclui a data, mas o ABI publicado é 0.19."
+LICENSE=MIT
+SRC="https://github.com/json-c/json-c/archive/refs/tags/json-c-$VERSION-20260627.tar.gz"
+SHA256=f17a6d7d265cf840dfd8f0f46a606d98c6b5b26dc7cfe27275d1546a213086c8
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    cmake -S . -B build -G Ninja \
+        -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib \
+        -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+        -DBUILD_STATIC_LIBS=OFF -DBUILD_APPS=OFF -DBUILD_TESTING=OFF \
+        -DDISABLE_WERROR=ON -DDISABLE_EXTRA_LIBS=ON
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/libjson-c.so" ] || { echo "json-c: biblioteca compartilhada ausente" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

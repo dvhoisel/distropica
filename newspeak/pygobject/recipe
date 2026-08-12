@@ -1,0 +1,25 @@
+NAME=pygobject
+VERSION=3.56.3
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc python-glibc glib glib-introspection libffi cairo pycairo"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc glib glib-introspection libffi cairo pycairo gobject-introspection"
+ABOUT="Binding Python de GLib, Gio e GObject Introspection. É a ponte usada pelos plug-ins Python do GIMP para carregar Gimp, Gegl e GExiv2; a integração com pycairo fica explicitamente ligada."
+LICENSE=LGPL-2.1-or-later
+SRC="https://files.pythonhosted.org/packages/source/p/pygobject/pygobject-$VERSION.tar.gz"
+SHA256=12760e4a0e3d04b6eb95e06f7a27e362c826d567ea613373a92c003b6c70d2d6
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release \
+        -Dpython=python3 -Dpycairo=enabled -Dtests=false -Dwheel=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    find "$STAGE" -type d -name __pycache__ -prune -exec rm -rf {} +
+    find "$STAGE" -type f -name '*.pyc' -delete
+    find "$STAGE" -type f -path '*/gi/_gi*.so' -print -quit | grep -q . || {
+        echo "pygobject: extensão gi._gi ausente" >&2
+        exit 1
+    }
+}

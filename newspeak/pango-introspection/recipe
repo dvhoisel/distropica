@@ -1,0 +1,49 @@
+NAME=pango-introspection
+VERSION=1.57.1
+KIND=source
+TOOLCHAIN=native
+DEPS="pango glib-introspection gobject-introspection harfbuzz-introspection"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools glib glib-introspection gobject-introspection harfbuzz harfbuzz-introspection fribidi cairo fontconfig freetype"
+ABOUT="Overlay de canal com os cinco namespaces GIR do Pango habilitados pela configuração-base: Pango, PangoCairo, PangoFc, PangoFT2 e PangoOT. Depende explicitamente dos typelibs GLib/HarfBuzz e dos dados estáticos cairo/fontconfig/freetype; o stage fechado não duplica bibliotecas nem headers de pango."
+LICENSE=LGPL-2.0-or-later
+SRC="https://download.gnome.org/sources/pango/1.57/pango-$VERSION.tar.xz"
+SHA256=e65d6d117080dc3aeeb7d8b4b3b518f7383aa2e6cfce23117c623cd624764c2f
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib -Wl,-rpath-link,$PWD/build/pango"
+    export SETUPTOOLS_USE_DISTUTILS=local
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release \
+        -Dfontconfig=enabled -Dfreetype=enabled -Dcairo=enabled \
+        -Dxft=disabled -Dlibthai=disabled -Dsysprof=disabled \
+        -Dintrospection=enabled -Ddocumentation=false -Dgtk_doc=false \
+        -Dman-pages=false -Dbuild-testsuite=false -Dbuild-examples=false
+    ninja -C build -j"$JOBS" \
+        pango/Pango-1.0.typelib \
+        pango/PangoCairo-1.0.typelib \
+        pango/PangoFc-1.0.typelib \
+        pango/PangoFT2-1.0.typelib \
+        pango/PangoOT-1.0.typelib
+
+    install -dm755 "$STAGE/usr/share/gir-1.0" \
+                   "$STAGE/usr/lib/girepository-1.0"
+    for namespace in Pango-1.0 PangoCairo-1.0 PangoFc-1.0 \
+                     PangoFT2-1.0 PangoOT-1.0; do
+        install -m644 "build/pango/$namespace.gir" "$STAGE/usr/share/gir-1.0/"
+        install -m644 "build/pango/$namespace.typelib" "$STAGE/usr/lib/girepository-1.0/"
+    done
+
+    [ "$(find "$STAGE" -type f | wc -l)" -eq 10 ] || {
+        echo "pango-introspection: stage não contém exatamente 10 arquivos" >&2
+        find "$STAGE" -mindepth 1 >&2
+        exit 1
+    }
+    [ -z "$(find "$STAGE" -type l -print -quit)" ] || {
+        echo "pango-introspection: symlink fora da allowlist" >&2
+        exit 1
+    }
+    ! grep -R -a -F "$WORK" "$STAGE" >/dev/null || {
+        echo "pango-introspection: caminho do build vazou no payload" >&2
+        exit 1
+    }
+}

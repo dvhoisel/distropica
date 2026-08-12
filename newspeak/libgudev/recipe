@@ -1,0 +1,21 @@
+NAME=libgudev
+VERSION=238
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib eudev"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf glib eudev"
+ABOUT="Binding GObject da libudev. O GIMP usa este caminho para o controlador de entrada Linux e tablets; testes, documentação, GIR e Vala não são necessários ao runtime."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/libgudev/$VERSION/libgudev-$VERSION.tar.xz"
+SHA256=61266ab1afc9d73dbc60a8b2af73e99d2fdff47d99544d085760e4fa667b5dd1
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release \
+        -Dtests=disabled -Dintrospection=disabled -Dvapi=disabled -Dgtk_doc=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/pkgconfig/gudev-1.0.pc" ] || { echo "libgudev: gudev-1.0.pc ausente" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

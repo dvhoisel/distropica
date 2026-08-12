@@ -1,0 +1,25 @@
+NAME=pycairo
+VERSION=1.29.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc python-glibc cairo"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc cairo"
+ABOUT="Binding Python oficial do cairo, necessário pelo PyGObject e pelos plug-ins Python do GIMP. É construído como extensão normal da instalação do sistema, sem wheel, testes ou superfícies X11 duplicadas."
+LICENSE="LGPL-2.1-only OR MPL-1.1"
+SRC="https://files.pythonhosted.org/packages/source/p/pycairo/pycairo-$VERSION.tar.gz"
+SHA256=4fbd26b4af24c9787d84cf5448e34eb8dca064b732479aaecd03109520eebd5f
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release \
+        -Dpython=python3 -Dtests=false -Dwheel=false -Dno-x11=true
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    find "$STAGE" -type d -name __pycache__ -prune -exec rm -rf {} +
+    find "$STAGE" -type f -name '*.pyc' -delete
+    find "$STAGE" -type f -name '_cairo*.so' -print -quit | grep -q . || {
+        echo "pycairo: extensão _cairo ausente" >&2
+        exit 1
+    }
+}

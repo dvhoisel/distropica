@@ -1,0 +1,32 @@
+NAME=poppler
+VERSION=26.08.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2 freetype fontconfig zlib libpng libjpeg-turbo lcms2 cairo glib poppler-data"
+BUILD_DEPS="gcc-pass2 binutils-glibc cmake ninja pkgconf freetype fontconfig zlib libpng libjpeg-turbo lcms2 cairo glib poppler-data"
+ABOUT="Renderizador PDF com o wrapper GLib/Cairo exigido pelo importador PDF do GIMP. Mantém JPEG, PNG, ICC e dados CJK; Qt, API C++, utilitários, TIFF, OpenJPEG, Boost, rede e assinaturas são componentes opcionais desligados."
+LICENSE=GPL-2.0-or-later
+SRC="https://poppler.freedesktop.org/poppler-$VERSION.tar.xz"
+SHA256=dc906e68cea698109706ac6aa3d2c9d4512fcfcac42d90b8afcda486d1b9abd0
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    cmake -S . -B build -G Ninja \
+        -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib \
+        -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+        -DENABLE_GLIB=ON -DENABLE_QT5=OFF -DENABLE_QT6=OFF \
+        -DENABLE_CPP=OFF -DENABLE_GOBJECT_INTROSPECTION=OFF \
+        -DENABLE_GTK_DOC=OFF -DENABLE_UTILS=OFF -DENABLE_BOOST=OFF \
+        -DENABLE_LIBOPENJPEG=OFF -DENABLE_LIBJPEG=ON -DENABLE_LCMS=ON \
+        -DENABLE_LIBCURL=OFF -DENABLE_LIBTIFF=OFF -DENABLE_NSS3=OFF \
+        -DENABLE_GPGME=OFF -DBUILD_GTK_TESTS=OFF \
+        -DBUILD_QT5_TESTS=OFF -DBUILD_QT6_TESTS=OFF \
+        -DBUILD_CPP_TESTS=OFF -DBUILD_MANUAL_TESTS=OFF \
+        -DINSTALL_GLIB_DEMO=OFF -DRUN_GPERF_IF_PRESENT=OFF
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/pkgconfig/poppler-glib.pc" ] || { echo "poppler: poppler-glib.pc ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/libpoppler-glib.so" ] || { echo "poppler: wrapper GLib ausente" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

@@ -1,0 +1,42 @@
+NAME=harfbuzz-introspection
+VERSION=14.3.0
+KIND=source
+TOOLCHAIN=native
+DEPS="harfbuzz glib-introspection gobject-introspection"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools glib glib-introspection gobject-introspection freetype zlib"
+ABOUT="Overlay de canal com o GIR e o typelib do HarfBuzz. Recompila a mesma fonte e configuração da receita-base, mas constrói somente HarfBuzz-0.0 e publica apenas seus dois arquivos de introspecção; bibliotecas, headers e pkg-config continuam pertencendo exclusivamente a harfbuzz."
+LICENSE=MIT
+SRC="https://github.com/harfbuzz/harfbuzz/releases/download/$VERSION/harfbuzz-$VERSION.tar.xz"
+SHA256="16070d77cfc4ba1f1e7327e83bf9b3f55898081cabdb94e56a33e04fc8874eae"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    export SETUPTOOLS_USE_DISTUTILS=local
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release \
+        -Dglib=enabled -Dgobject=enabled -Dfreetype=enabled \
+        -Dcairo=disabled -Dchafa=disabled -Dpng=disabled \
+        -Dicu=disabled -Dgraphite2=disabled -Dtests=disabled \
+        -Ddocs=disabled -Dutilities=disabled -Dbenchmark=disabled \
+        -Dintrospection=enabled
+    ninja -C build -j"$JOBS" src/HarfBuzz-0.0.typelib
+
+    install -dm755 "$STAGE/usr/share/gir-1.0" \
+                   "$STAGE/usr/lib/girepository-1.0"
+    install -m644 build/src/HarfBuzz-0.0.gir "$STAGE/usr/share/gir-1.0/"
+    install -m644 build/src/HarfBuzz-0.0.typelib "$STAGE/usr/lib/girepository-1.0/"
+
+    [ "$(find "$STAGE" -type f | wc -l)" -eq 2 ] || {
+        echo "harfbuzz-introspection: stage não contém exatamente 2 arquivos" >&2
+        find "$STAGE" -mindepth 1 >&2
+        exit 1
+    }
+    [ -z "$(find "$STAGE" -type l -print -quit)" ] || {
+        echo "harfbuzz-introspection: symlink fora da allowlist" >&2
+        exit 1
+    }
+    ! grep -R -a -F "$WORK" "$STAGE" >/dev/null || {
+        echo "harfbuzz-introspection: caminho do build vazou no payload" >&2
+        exit 1
+    }
+}

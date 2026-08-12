@@ -1,0 +1,20 @@
+NAME=lcms2
+VERSION=2.19.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc zlib"
+BUILD_DEPS="gcc-pass2 binutils-glibc make zlib"
+ABOUT="Little CMS, o motor ICC usado diretamente pelo GIMP e pelo babl. A biblioteca mantém compressão de perfis via zlib e suporte a threads; JPEG, TIFF e plugins GPL ficam desligados porque pertencem aos utilitários de conversão, não à transformação ICC consumida pelo editor."
+LICENSE=MIT
+SRC="https://github.com/mm2/Little-CMS/releases/download/lcms2.19.1/lcms2-$VERSION.tar.gz"
+SHA256=bfc54f7bab59fbc921012014a8032e4cba4abd46db47d46b76416a8c0b2815c8
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    ./configure --prefix=/usr --libdir=/usr/lib --disable-static \
+        --without-jpeg --without-tiff --with-zlib
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -e "$STAGE/usr/lib/liblcms2.so.2" ] || { echo "lcms2: liblcms2.so.2 ausente" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

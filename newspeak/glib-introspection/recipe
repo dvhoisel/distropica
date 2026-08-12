@@ -1,0 +1,80 @@
+NAME=glib-introspection
+VERSION=2.88.3
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib gobject-introspection"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc gettext glib gobject-introspection libffi pcre2 zlib elfutils busybox"
+ABOUT="GIR e typelibs da GLib 2.88: GLib, GLibUnix, GObject, GModule, Gio, GioUnix e GIRepository. O upstream transferiu estes dados do gobject-introspection para a própria GLib, mas gerá-los exige o scanner daquele pacote; uma receita separada quebra esse ciclo de bootstrap conforme a SPEC-0013. Ela recompila a mesma fonte pinada apenas para gerar introspecção e deixa no stage estritamente os quatorze arquivos GIR/typelib, sem bibliotecas, executáveis, cabeçalhos ou pkg-config que colidiriam com glib."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/glib/2.88/glib-$VERSION.tar.xz"
+SHA256="ab24d24e698dfa1e408b7bcdb508f4aafc906185a8b8ce72fdf79bbbdc9b383b"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    export SETUPTOOLS_USE_DISTUTILS=local
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dnls=disabled \
+        -Dlibmount=disabled \
+        -Dselinux=disabled \
+        -Dlibelf=enabled \
+        -Dsysprof=disabled \
+        -Ddtrace=disabled \
+        -Dsystemtap=disabled \
+        -Dintrospection=enabled \
+        -Dman-pages=disabled \
+        -Ddocumentation=false \
+        -Dtests=false \
+        -Dinstalled_tests=false
+    # Construa somente os sete typelibs (cada um puxa o GIR e as bibliotecas
+    # locais que o scanner precisa). Um `ninja` sem alvos recompilaria todas
+    # as ferramentas da GLib para depois descartá-las do stage.
+    ninja -C build -j"$JOBS" \
+        girepository/introspection/GLib-2.0.typelib \
+        girepository/introspection/GLibUnix-2.0.typelib \
+        girepository/introspection/GObject-2.0.typelib \
+        girepository/introspection/GModule-2.0.typelib \
+        girepository/introspection/Gio-2.0.typelib \
+        girepository/introspection/GioUnix-2.0.typelib \
+        girepository/introspection/GIRepository-3.0.typelib
+
+    install -dm755 "$STAGE/usr/share/gir-1.0" \
+                   "$STAGE/usr/lib/girepository-1.0"
+    for namespace in GLib-2.0 GLibUnix-2.0 GObject-2.0 GModule-2.0 \
+                     Gio-2.0 GioUnix-2.0 GIRepository-3.0; do
+        gir="build/girepository/introspection/$namespace.gir"
+        typelib="build/girepository/introspection/$namespace.typelib"
+        [ -f "$gir" ] || {
+            echo "glib-introspection: $namespace.gir não foi produzido" >&2
+            exit 1
+        }
+        [ -f "$typelib" ] || {
+            echo "glib-introspection: $namespace.typelib não foi produzido" >&2
+            exit 1
+        }
+        install -m644 "$gir" "$STAGE/usr/share/gir-1.0/"
+        install -m644 "$typelib" "$STAGE/usr/lib/girepository-1.0/"
+    done
+
+    # O filtro é deliberadamente fechado: este pacote não pode tomar posse
+    # de nenhuma biblioteca, ferramenta, header ou .pc da receita glib.
+    [ "$(find "$STAGE" -type f | wc -l)" -eq 14 ] || {
+        echo "glib-introspection: stage contém payload além dos 14 GIR/typelibs" >&2
+        find "$STAGE" -type f >&2
+        exit 1
+    }
+    if find "$STAGE" -type f \( -name '*.so*' -o -name '*.pc' -o \
+             -path '*/bin/*' -o -path '*/include/*' \) | grep -q .; then
+        echo "glib-introspection: payload sobreposto à receita glib" >&2
+        exit 1
+    fi
+    if grep -R -a -F "$WORK" "$STAGE/usr/share/gir-1.0" \
+                              "$STAGE/usr/lib/girepository-1.0" >/dev/null; then
+        echo "glib-introspection: caminho do build vazou para GIR/typelib" >&2
+        exit 1
+    fi
+    find "$STAGE" -type d -empty -delete
+}

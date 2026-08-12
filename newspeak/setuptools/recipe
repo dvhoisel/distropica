@@ -1,0 +1,36 @@
+NAME=setuptools
+VERSION=84.0.0
+KIND=source
+TOOLCHAIN=native
+DEPS="python-glibc"
+BUILD_DEPS="python-glibc"
+ABOUT="Implementação empacotada de distutils para Python moderno. O gobject-introspection ainda importa distutils ao gerar scanners; como Python 3.14 já não o traz na biblioteca padrão, esta receita instala o shim oficial do setuptools sem executáveis Windows nem sua suíte de testes."
+LICENSE="MIT AND Apache-2.0 AND LGPL-3.0-or-later"
+SRC="https://files.pythonhosted.org/packages/source/s/setuptools/setuptools-$VERSION.tar.gz"
+SHA256=f4695c21257f0d9b537ec2692c941d02ee143b7cc1276941349a546573b2ef73
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    sitedir=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+    install -dm755 "$STAGE$sitedir"
+    cp -a setuptools _distutils_hack "$STAGE$sitedir/"
+    rm -rf "$STAGE$sitedir/setuptools/tests"
+    find "$STAGE$sitedir" -type d -name __pycache__ -prune -exec rm -rf {} +
+    find "$STAGE$sitedir" -type f \( -name '*.pyc' -o -name '*.exe' \) -delete
+
+    install -dm755 "$STAGE$sitedir/setuptools-$VERSION.dist-info"
+    install -Dm644 LICENSE "$STAGE$sitedir/setuptools-$VERSION.dist-info/LICENSE"
+    printf '%s\n' \
+        'Metadata-Version: 2.1' \
+        'Name: setuptools' \
+        "Version: $VERSION" \
+        > "$STAGE$sitedir/setuptools-$VERSION.dist-info/METADATA"
+    printf '%s\n' \
+        "import os; var = 'SETUPTOOLS_USE_DISTUTILS'; enabled = os.environ.get(var, 'local') == 'local'; enabled and __import__('_distutils_hack').add_shim()" \
+        > "$STAGE$sitedir/distutils-precedence.pth"
+
+    [ -e "$STAGE$sitedir/setuptools/_distutils/__init__.py" ] || {
+        echo "setuptools: distutils empacotado ausente" >&2
+        exit 1
+    }
+}

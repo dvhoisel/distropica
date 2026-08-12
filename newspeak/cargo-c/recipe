@@ -1,0 +1,22 @@
+NAME=cargo-c
+VERSION=0.10.24
+KIND=binary
+DEPS=""
+ABOUT="Subcomandos cargo-c oficiais para gerar bibliotecas C a partir de crates. O artefato x86_64-musl é estático e publicado pelo próprio projeto; a fonte exata, Cargo.lock e todas as crates vendorizadas ficam preservadas pela declaração de fonte correspondente pinada ao lado da receita, fora da árvore Newspeak."
+LICENSE="MIT AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND Unicode-3.0 AND (Apache-2.0 WITH LLVM-exception) AND ISC AND MPL-2.0 AND MPL-2.0-or-later AND Zlib"
+SRC="https://github.com/lu-zero/cargo-c/releases/download/v$VERSION/cargo-c-x86_64-unknown-linux-musl.tar.gz"
+SHA256=503a6de066897b810051f2944e4157629c580d0e36219cddb39ad45116d0e8f5
+
+install_pkg() {
+    install -dm755 "$PREFIX/bin"
+    tar -xzf "$DL" -C "$PREFIX/bin"
+    for b in cargo-capi cargo-cbuild cargo-cinstall cargo-ctest; do
+        [ -x "$PREFIX/bin/$b" ] || {
+            echo "cargo-c: $b ausente no artefato oficial" >&2
+            exit 1
+        }
+    done
+    install -Dm644 "$WORK/LICENSE" "$PREFIX/share/licenses/cargo-c/LICENSE"
+    install -Dm644 "$WORK/SOURCE-INVENTORY" \
+        "$PREFIX/share/licenses/cargo-c/SOURCE-INVENTORY"
+}

@@ -1,0 +1,25 @@
+NAME=gexiv2
+VERSION=0.14.7
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2 exiv2 glib glib-introspection python-glibc pygobject"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc exiv2 glib glib-introspection pygobject gobject-introspection"
+ABOUT="API GObject sobre Exiv2 e seu override Python. A série 0.14 é mantida deliberadamente porque o GIMP 3.2.4 declara >=0.14 e <0.15; a série 0.16 atual é incompatível com esse contrato."
+LICENSE=GPL-2.0-or-later
+SRC="https://download.gnome.org/sources/gexiv2/0.14/gexiv2-$VERSION.tar.xz"
+SHA256=373b67b24f1a7b5c0606aaf0ea00b352f9511751e21deba0bac650bd5159c93d
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    export SETUPTOOLS_USE_DISTUTILS=local
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release \
+        -Dtests=false -Dgtk_doc=false -Dintrospection=true \
+        -Dvapi=false -Dtools=false -Dpython3=true
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/girepository-1.0/GExiv2-0.10.typelib" ] || { echo "gexiv2: typelib ausente" >&2; exit 1; }
+    find "$STAGE" -type f -path '*/gi/overrides/GExiv2.py' -print -quit | grep -q . || { echo "gexiv2: override Python ausente" >&2; exit 1; }
+    find "$STAGE" -type d -name __pycache__ -prune -exec rm -rf {} +
+    find "$STAGE" -type f -name '*.pyc' -delete
+}

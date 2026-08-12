@@ -1,0 +1,38 @@
+NAME=libxslt
+VERSION=1.1.43
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libxml2 busybox"
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf libxml2"
+ABOUT="Processador XSLT e o xsltproc usado pelos geradores do GIMP. A 1.1.43 é a última versão compatível com a série libxml2 2.13 fixada pela base; 1.1.44 e 1.1.45 exigem libxml2 2.15.1. Python, extensões criptográficas, plugins, depurador e profiler ficam desligados; as bibliotecas compartilhadas e a ferramenta de transformação permanecem."
+LICENSE=MIT
+SRC="https://download.gnome.org/sources/libxslt/1.1/libxslt-$VERSION.tar.xz"
+SHA256=5a3d6b383ca5afc235b171118e90f5ff6aa27e9fea3303065231a6d403f0183a
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure --prefix=/usr --libdir=/usr/lib --disable-static \
+        --without-python --without-crypto --without-plugins \
+        --without-debug --without-debugger --without-profiler
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -x "$STAGE/usr/bin/xsltproc" ] || { echo "libxslt: xsltproc ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/libxslt.so.1.1.43" ] || { echo "libxslt: libxslt.so.1.1.43 ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/libexslt.so.0.8.24" ] || { echo "libxslt: libexslt.so.0.8.24 ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/pkgconfig/libxslt.pc" ] || { echo "libxslt: libxslt.pc ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/pkgconfig/libexslt.pc" ] || { echo "libxslt: libexslt.pc ausente" >&2; exit 1; }
+    readelf -d "$STAGE/usr/bin/xsltproc" | grep -Fq 'Shared library: [libxslt.so.1]' || {
+        echo "libxslt: xsltproc não referencia libxslt.so.1" >&2
+        exit 1
+    }
+    ! find "$STAGE" -type f -name '*.a' -print -quit | grep -q . || {
+        echo "libxslt: biblioteca estática inesperada" >&2
+        exit 1
+    }
+    ! find "$STAGE" -type f -path '*/python*' -print -quit | grep -q . || {
+        echo "libxslt: payload Python inesperado" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

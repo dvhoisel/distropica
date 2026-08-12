@@ -1,0 +1,11 @@
+# 2026-08-11 — ressalva pragmática da P7 por compatibilidade de ABI da base.
+#
+# libxslt 1.1.44 e 1.1.45 declaram LIBXML_REQUIRED_VERSION=2.15.1 no
+# configure.ac upstream. A base fixa deliberadamente libxml2 2.13.9 porque as
+# séries seguintes quebram ABI; elevar essa dependência aqui mudaria a base
+# inteira para satisfazer uma ferramenta que o GIMP usa apenas no build.
+#
+# A 1.1.43 declara mínimo 2.6.27, compila contra a 2.13.9 e contém as correções
+# de segurança publicadas até março de 2025. Rever quando a base puder migrar
+# para uma série libxml2 >= 2.15 sem quebrar ABI.
+libxslt 1.1.44+ exige libxml2 2.15.1; 1.1.43 é a última compatível com a libxml2 2.13.9 da base

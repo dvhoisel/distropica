@@ -1,0 +1,4 @@
+GIMP 3.2.4 exige gexiv2 >= 0.14 e < 0.15 no meson.build. A série estável
+upstream atual é 0.16.2, mas ela é recusada pelo próprio consumidor. Mantemos
+0.14.7 até que uma versão estável do GIMP aceite a ABI nova. Verificado em
+2026-08-10.

@@ -1,0 +1,23 @@
+NAME=json-glib
+VERSION=1.10.8
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc glib"
+ABOUT="JSON integrado a GObject, dependência obrigatória do GEGL e do GIMP. O consumidor é C; introspecção, documentação, traduções e suítes instaladas são desligadas."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/json-glib/1.10/json-glib-$VERSION.tar.xz"
+SHA256=55c5c141a564245b8f8fbe7698663c87a45a7333c2a2c56f06f811ab73b212dd
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release \
+        -Dintrospection=disabled -Ddocumentation=disabled -Dman=false \
+        -Dtests=false -Dconformance=false -Dnls=disabled \
+        -Dinstalled_tests=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/pkgconfig/json-glib-1.0.pc" ] || { echo "json-glib: .pc ausente" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

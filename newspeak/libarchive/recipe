@@ -1,0 +1,25 @@
+NAME=libarchive
+VERSION=3.8.9
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc zlib bzip2 xz"
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf zlib bzip2 xz"
+ABOUT="Leitura e escrita de arquivos compactados usada pelos pacotes de recursos e extensões do GIMP 3. Mantém gzip, bzip2 e xz; ferramentas bsd*, formatos criptográficos e integrações XML ficam fora."
+LICENSE="BSD-2-Clause AND BSD-3-Clause AND CC0-1.0"
+SRC="https://github.com/libarchive/libarchive/releases/download/v$VERSION/libarchive-$VERSION.tar.xz"
+SHA256=888c934f9d95648ecb9163dc8e23ab80a476ecb81a8f1154704a227b5b676dde
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure --prefix=/usr --libdir=/usr/lib --disable-static \
+        --disable-bsdtar --disable-bsdcat --disable-bsdcpio --disable-bsdunzip \
+        --disable-acl --disable-xattr --without-openssl --without-xml2 \
+        --without-expat --without-lz4 --without-zstd --without-lzo2 \
+        --without-libb2
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    install -Dm644 COPYING "$STAGE/usr/share/licenses/libarchive/COPYING"
+    [ -e "$STAGE/usr/lib/pkgconfig/libarchive.pc" ] || { echo "libarchive: .pc ausente" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}
