@@ -861,6 +861,40 @@ fn future_selfsig_cannot_retroactively_validate_an_earlier_epoch() {
         .is_err());
 }
 
+/// Certificado real do OpenSSL (`BA5473A2…`), com TRÊS selfsigs da própria
+/// primária, cada uma estendendo a validade: 2024-04-08, 2026-03-16 e
+/// 2026-06-10. É o formato que expôs a mistura de instantes.
+const EXTENDED_SELFSIG_CERT: &[u8] = include_bytes!("fixtures/openpgp/cert-selfsig-estendida.asc");
+const EXTENDED_SELFSIG_PRIMARY: &str = "BA5473A2B0587B07FB27CF2D216094DFD0CB81EF";
+
+#[test]
+fn selfsig_mais_recente_manda_no_instante_pinado() {
+    let cert = PinnedCert::from_bytes(
+        EXTENDED_SELFSIG_CERT,
+        EXTENDED_SELFSIG_PRIMARY,
+        &[EXTENDED_SELFSIG_PRIMARY.to_string()],
+    )
+    .unwrap();
+
+    // Em 2026-06-09 — véspera da extensão, e instante em que o OpenSSL 4.0.1
+    // foi de fato assinado — a selfsig vigente é a de março.
+    assert_eq!(
+        cert.primary_expiration_epoch_at(SignatureClock::from_unix_seconds(1_781_005_219).unwrap())
+            .unwrap(),
+        Some(1_781_432_244)
+    );
+
+    // Em 2026-08-11, epoch de revisão das receitas, a selfsig vigente é a de
+    // junho, que estendeu a chave. Julgar a expiração no instante pinado sem
+    // resolver o certificado NESSE instante devolvia o valor de março — já
+    // passado — e reprovava uma assinatura boa.
+    assert_eq!(
+        cert.primary_expiration_epoch_at(SignatureClock::from_unix_seconds(1_786_460_504).unwrap())
+            .unwrap(),
+        Some(1_788_873_729)
+    );
+}
+
 #[test]
 fn flex_normal_signature_is_anchored_by_the_official_signed_tag_and_release() {
     assert_eq!(

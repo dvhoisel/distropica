@@ -467,7 +467,34 @@ impl StrictHelper {
         if creation_epoch > self.verification_epoch {
             bail!("assinatura OpenPGP foi criada após o instante de verificação pinado");
         }
-        if let Some(expiration) = good.ka.key_expiration_time() {
+        // A validade da chave é julgada NO INSTANTE PINADO — é o que a guarda
+        // do waiver v2 exige do motor normal, e é o que faz `assinatura-insegura`
+        // significar "a chave expirou entre assinar e revisar".
+        //
+        // Por isso o certificado precisa ser resolvido NESSE MESMO instante. O
+        // Sequoia resolve o binding pelo creation time da assinatura, então
+        // `good.ka` carrega a selfsig que valia lá atrás; comparar a expiração
+        // dela contra o epoch de revisão misturava dois instantes e reprovava
+        // assinatura boa. O OpenSSL 4.0.1 é o caso: assinou em 2026-06-09 e
+        // estendeu a própria chave em 2026-06-10, então o binding da assinatura
+        // declarava uma expiração que o projeto já havia substituído.
+        let pinned_clock = SignatureClock::from_unix_seconds(self.verification_epoch)?;
+        let pinned_policy = verification_policy(pinned_clock);
+        let pinned_cert = self
+            .cert
+            .with_policy(&pinned_policy, pinned_clock.system_time())
+            .context("certificado não é válido no instante pinado")?;
+        let signing_fingerprint = good.ka.key().fingerprint();
+        let pinned_signer = pinned_cert
+            .keys()
+            .find(|ka| ka.key().fingerprint() == signing_fingerprint)
+            .ok_or_else(|| {
+                anyhow!(
+                    "chave assinante {signing_fingerprint} não está válida no instante pinado {}",
+                    self.verification_epoch
+                )
+            })?;
+        if let Some(expiration) = pinned_signer.key_expiration_time() {
             let expiration_epoch = expiration
                 .duration_since(UNIX_EPOCH)
                 .map_err(|_| anyhow!("expiração da chave antecede Unix epoch"))?
