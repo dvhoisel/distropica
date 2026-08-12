@@ -52,14 +52,14 @@ perfil/
 ├── target.world
 ├── cache.world           # opcional; disponibilidade exigida no cache offline
 ├── overlay/              # opcional
-└── channel-bootstrap/    # opcional; somente bootstrap online
+└── channel-bootstrap/    # opcional; autoridade pós-instalação do canal e da árvore
 ```
 
 O arquivo `profile` declara `PROFILE_FORMAT=1`, `NAME`, `ARCH`,
 `SOURCE_DATE_EPOCH`, `STATUS=development|release` e, opcionalmente,
 `MEDIA_SIZE_MIB` e `INSTALL_READY=yes|no` (default `yes`). O marco atual aceita
 somente `x86_64`; um perfil de release exige `INSTALL_READY=yes`. O perfil
-`official` de desenvolvimento fixa atualmente `MEDIA_SIZE_MIB=512` para
+`official` de desenvolvimento fixa atualmente `MEDIA_SIZE_MIB=1024` para
 dimensionar a saída IMG e registrar esse parâmetro no lock. O campo não
 dimensiona o disco de instalação e não fixa o tamanho da ISO, que acompanha o
 payload.
@@ -81,8 +81,10 @@ mídia ainda precisam de distribuição externa assinada.
   disponíveis e verificáveis numa instalação offline, sem pedir sua instalação;
 - `overlay/` aplica a personalização final do filesystem;
 - a árvore Newspeak vem de `--newspeak DIR` ou `DISTROPICA_NEWSPEAK`;
-- `--cache DIR` acrescenta o cache completo para operação offline ou, no
-  modo online, o bootstrap estrito de configuração+índice assinado do canal.
+- `--cache DIR` acrescenta o cache completo para operação offline;
+- `channel-bootstrap/` é um snapshot separado e versionado, restrito à
+  configuração+índice assinado do canal e a `newspeak-origem` (URL-base +
+  chave pinada da árvore). Um override de cache não o substitui.
 
 Os três worlds são normalizados de forma canônica; `cache.world` ausente
 equivale à forma vazia. Árvores são recusadas quando
@@ -93,10 +95,10 @@ ficam em `0600`; regulares executáveis ficam em `0755`, os demais em `0644` e
 symlinks são representados como `0777`. No snapshot de cache, todos os regulares
 ficam em `0644`. O `SOURCE_DATE_EPOCH` fixa timestamps dos arquivos empacotados.
 
-O lock textual usa `PROFILE_LOCK_FORMAT=2`; sua identidade interna usa
-`PROFILE_CONTENT_FORMAT=2`. Ele inclui hashes SHA-256 dos três worlds, overlay,
-Newspeak e cache, além de nome, `PROFILE_CLASS`, arquitetura, epoch,
-`INSTALL_READY`, o `PROFILE_CONTENT_SHA256` calculado e os três pinos oficiais.
+O lock textual usa `PROFILE_LOCK_FORMAT=3`; sua identidade interna usa
+`PROFILE_CONTENT_FORMAT=3`. Ele inclui hashes SHA-256 dos três worlds, overlay,
+Newspeak, cache e bootstrap de canal, além de nome, `PROFILE_CLASS`, arquitetura,
+epoch, `INSTALL_READY`, o `PROFILE_CONTENT_SHA256` calculado e os três pinos oficiais.
 `CACHE_WORLD_SHA256` prende a forma normalizada de `cache.world`, inclusive o
 hash da forma vazia quando o arquivo opcional não existe. O lock pode ser
 inspecionado sem construir ou instalar nada:
@@ -110,7 +112,7 @@ minipax lock --profile profiles/official --newspeak newspeak \
 Saídas nunca são sobrescritas. Um lock identifica os bytes resolvidos; ele
 não é, sozinho, uma assinatura nem uma declaração de que esses bytes vieram
 do projeto. O envelope continua em `MEDIA_FORMAT=1`, mas o consumidor atual
-aceita dentro dele somente `PROFILE_LOCK_FORMAT=2`; mídias com lock v1
+aceita dentro dele somente `PROFILE_LOCK_FORMAT=3`; mídias com locks anteriores
 permanecem evidência histórica, não entrada compatível com o fluxo atual.
 
 ### 2.1 Classes de perfil
@@ -118,11 +120,12 @@ permanecem evidência histórica, não entrada compatível com o fluxo atual.
 - `development`: `NAME=official`, `STATUS=development` e nenhum override que
   force personalização;
 - `official-inputs`: perfil chamado `official`, marcado `release`, sem
-  override de `target.world`, `live.world`, overlay ou cache e cujo conteúdo
-  resolvido coincide com `OFFICIAL_CONTENT_SHA256`;
+  override de `target.world`, `live.world` ou overlay e cujo conteúdo resolvido
+  — inclusive `CACHE_SHA256`, quando `--cache` é usado — coincide com
+  `OFFICIAL_CONTENT_SHA256`;
 - `custom`: qualquer outro nome ou o uso de `--world`, `--live-world` ou
-  `--overlay` ou `--cache`; divergência do pino de conteúdo também rebaixa um
-  perfil de release para esta classe.
+  `--overlay`; qualquer divergência do pino de conteúdo, inclusive um único
+  byte do cache fornecido, também rebaixa um perfil de release para esta classe.
 
 A classe é gravada no lock e nos manifestos para impedir que uma variante se
 apresente acidentalmente como entrada canônica. Alterações na árvore Newspeak
@@ -160,7 +163,8 @@ Ele:
    snapshot contra crescimento, redução e escrita e calcula seu SHA-256;
 4. grava um marcador inicial na raiz, cria o esqueleto FHS/usr-merge (incluindo
    `/proc`, `/sys` e `/dev`) e promove o marcador a `profile.lock.pending`;
-5. instala snapshots congelados da árvore Newspeak e do cache opcional;
+5. instala snapshots congelados da árvore Newspeak e do cache opcional; em
+   instalação online semeia também o bootstrap de canal antes da retificação;
 6. no modo offline, antes de qualquer retificação, executa do mesmo `memfd`
    `minitrue --root DIR --offline cache verify <cache.world>` quando a lista
    não é vazia;
@@ -168,7 +172,9 @@ Ele:
    `minitrue --root DIR rectify <target.world>`;
 8. executa do snapshot `minitrue verify`, aplica o overlay e verifica
    novamente;
-9. persiste exatamente os snapshots medidos de `minitrue` e `minipax` em
+9. em instalação offline, depois de consumir o cache fechado, instala por cima
+   dele o bootstrap versionado que deve sobreviver ao reboot;
+10. persiste exatamente os snapshots medidos de `minitrue` e `minipax` em
    `/usr/bin`, grava `install.manifest` e promove o lock pendente para
    `/var/lib/minipax/profile.lock`.
 
@@ -249,6 +255,13 @@ minipax media build \
   --output ARQ
 ```
 
+O diretório pai de `ARQ` DEVE ser diretório real, pertencer ao UID efetivo do
+compositor e não permitir escrita por grupo/outros. Uma invocação típica cria
+antes `media-output` com `install -d -m 0700 media-output`. O lock, o staging e
+as promoções ficam ancorados no descritor desse diretório; aceitar um parent
+compartilhado permitiria a um escritor não cooperativo trocar nomes entre a
+validação e o rollback.
+
 O payload contém:
 
 - `EFI/BOOT/BOOTX64.EFI`, fornecido explicitamente;
@@ -256,8 +269,10 @@ O payload contém:
   `target.world` e `cache.world` (vazio quando não declarado no perfil);
 - snapshots determinísticos de Newspeak e overlay;
 - `media.meta`, que vincula modo, perfil, lock, arquitetura e hash do EFI;
-- `cache.tar`: cache completo na variante offline; na online, exclusivamente
-  configuração pinada e snapshot assinado do canal, sem artefatos de pacote.
+- `cache.tar`: cache completo, presente somente na variante offline;
+- `channel-bootstrap.tar`: configuração pinada e snapshot assinado do canal,
+  mais a origem pinada da árvore Newspeak; presente nas duas variantes quando
+  declarado pelo perfil.
 
 O compositor verifica que `--boot-efi` é um arquivo PE/COFF que declara o
 subsistema EFI Application. Ele **não demonstra que esse executável contém um
@@ -301,8 +316,8 @@ mesmo payload lógico.
 
 | Modo | Cache na mídia | Contrato |
 |------|----------------|----------|
-| `online` | bootstrap obrigatório | incorpora somente `channel-config/<nome>` + `channels/<nome>/{index,index.minisig}`; o ambiente vivo baixa os artefatos da URL HTTPS pinada |
-| `offline` | obrigatório | incorpora o snapshot indicado por `--cache`; a instalação roda com rede proibida |
+| `online` | sem cache de pacotes; bootstrap obrigatório e separado | incorpora somente `channel-bootstrap.tar`; o ambiente vivo baixa índice fresco e artefatos da URL HTTPS pinada |
+| `offline` | cache e bootstrap separados | incorpora o snapshot indicado por `--cache`, roda com rede proibida e instala o bootstrap versionado no alvo depois de consumir o cache |
 
 O builder vincula o cache completo em `CACHE_SHA256` e a lista normalizada de
 disponibilidade em `CACHE_WORLD_SHA256`. Ele não prova por si só que o cache
@@ -355,27 +370,30 @@ precisam ser medidos antes de atribuir essa redução à mídia atual.
 Historicamente, o cache de desenvolvimento network-v1 fechou o perfil mínimo e
 carregou o objeto pinado de `ripgrep` sem acrescentá-lo ao antigo
 `target.world`; esse resultado não prova o perfil atual. A capacidade online
-existe no consumidor,
-porém o projeto ainda não publicou endpoint, chave e índice de um canal
-oficial. O perfil oficial não inventa esses valores: sem um diretório
-`channel-bootstrap/` real ou um `--cache DIR` com esse layout estrito, a
-composição online é recusada
-antes de publicar a mídia. No target, o bootstrap vai para
-`/var/cache/minitrue`; a existência de `/etc/minitrue/channels` continua
+existe no consumidor e o perfil oficial pina o endpoint, a chave pública
+minisign e um índice assinado do canal publicado. Sem um diretório
+`channel-bootstrap/` real, a composição online é recusada antes de publicar a
+mídia; `--cache` deixou de servir como substituto dessa autoridade. No target,
+o bootstrap vai para `/var/cache/minitrue`, inclusive `newspeak-origem` para
+`rectify newspeak`; a existência de `/etc/minitrue/channels` continua
 vencendo por inteiro, inclusive quando o diretório está vazio para desativar
-explicitamente a seed. O Minipax valida aqui o layout e o vínculo pelo hash do
-perfil; a assinatura minisign é validada pelo Minitrue contra a chave da
-configuração antes de selecionar qualquer pacote.
+explicitamente a seed. O Minipax valida aqui o layout e o vínculo por
+`CHANNEL_BOOTSTRAP_SHA256`; a assinatura minisign é validada pelo Minitrue
+contra a chave da configuração antes de selecionar qualquer pacote. Com rede,
+o Minitrue consulta o índice corrente em cada operação e o aceita somente após
+essa validação; a operação explícita pode persistir o snapshot que prendeu em
+seu lock, sem qualquer atualização em background. Sem rede, usa exatamente a
+seed assinada. A inspeção/atualização administrativa sem instalação é
+`channel refresh`, que exibe o diff antes de persistir.
 
 ### 4.3 Limites de escala deste marco
 
-Cada árvore é coletada na memória. Newspeak e overlay são limitadas,
-separadamente, a **128 MiB de conteúdo em arquivos regulares**; o cache, a
-**384 MiB**. Cada árvore admite **50 mil entradas**. O arquivo de entrada
-`cache.tar` possui ainda o teto de aceitação de **416 MiB**; arquivos de
-perfil/world têm o limite de 1 MiB. Esses são limites explícitos de
-desenvolvimento, não o tamanho pretendido de uma mídia offline final nem uma
-prova de que o perfil atual caiba neles.
+Newspeak e overlay são coletados em memória e limitados, separadamente, a
+**128 MiB de conteúdo em arquivos regulares**. O cache é coletado por
+referência, empacotado diretamente num `Write` e ingerido em duas passadas de
+streaming; seu teto é **4 GiB−1**, porque `cache.tar` é hoje um único arquivo
+na FAT32. Cada árvore admite **50 mil entradas** e arquivos de perfil/world têm
+o limite de 1 MiB.
 
 Ao consumir um artefato de canal, o transporte `.tar.zst` é selado antes do
 uso e permanece vivo enquanto o tar descompactado é escrito noutro `memfd`
@@ -383,9 +401,9 @@ selado; o pico de RAM pode, portanto, aproximar a soma de **zst + tar**. No
 instalador vivo, a raiz materializada em `/run` permanece até a cópia e a
 verificação no disco, acrescentando ao pico o tamanho da closure preparada.
 
-Antes de suportar caches maiores, o pipeline precisa empacotar e aplicar
-árvores por streaming. Para `.img`, uma partição de dados separada da ESP
-também permanece gate de release; o compositor atual põe o payload na FAT32.
+O streaming já suporta o cache gráfico atual sem mantê-lo integralmente na
+RAM. Para ultrapassar 4 GiB−1 na `.img`, uma partição de dados separada e
+autenticada permanece necessária; o compositor atual põe o payload na FAT32.
 
 ### 4.4 Sidecars e não sobrescrita
 
@@ -405,11 +423,31 @@ compositor empregado. Nenhum desses arquivos é hoje assinado automaticamente.
 Cada imagem ou sidecar é publicado sem substituir um nome existente, inclusive
 quando outro processo cria esse nome depois do preflight.
 
-Essa garantia vale **por arquivo**, não pelo conjunto. Sidecars são publicados
-antes da imagem e não há transação multi-arquivo contra escritores
-concorrentes. Numa corrida, a operação pode falhar depois de publicar parte dos
-sidecars; o operador deve conferir a presença e a consistência dos quatro
-arquivos antes de distribuí-los.
+Não existe uma primitiva atômica multi-arquivo, portanto a imagem é o
+**marcador externo de commit**: os três sidecars são promovidos e sincronizados
+primeiro, e o nome da imagem aparece por último. A operação mantém, no mesmo
+filesystem e sob `flock`, um staging privado 0700 com OWNER, REQUEST, READY e
+COMMITTED canônicos. Os controles prendem parent, nome, perfil/lock, payload,
+modo, formato, BOOT EFI, executor e ferramenta, além de inode, tamanho, modo,
+UID, links, mtime e hash de cada membro.
+
+Todas as leituras e mutações do protocolo são ancoradas em descritores e não
+seguem symlinks. Controles são escritos por temporário durável + promoção sem
+substituição; `renameat2(RENAME_NOREPLACE)` é preferido e o fallback por
+hardlink tem estado recuperável explícito. Uma queda em qualquer prefixo
+retoma a mesma geração, conclui a promoção ou desfaz somente os inodes que o
+journal prova. Antes da limpeza de membros, READY/COMMITTED são invalidados e
+sincronizados; a retirada final do staging usa um tombstone recuperável. O
+workspace da ISO mora dentro do staging e a própria ISO recebe `sync_all`
+antes de ser selada.
+
+Saída parcial sem staging recuperável, conjunto divergente, outro UID, modo
+gravável, link extra ou invocação diferente falham fechados e nunca são
+sobrescritos. A exceção deliberada à regra de “saída preexistente falha” é um
+conjunto completo, canônico e pertencente à **mesma requisição** no mesmo
+namespace confiável: ele é reconhecido como sucesso idempotente. O consumidor
+ainda DEVE tratar a presença da imagem como condição mínima e validar os três
+sidecars antes de distribuir o conjunto.
 
 Com os mesmos bytes de entrada, epoch e versão do compositor, `.img` deve ser
 byte a byte reproduzível. A ISO também fixa datas, ownership e identificadores,
@@ -437,7 +475,7 @@ minipax media build \
   --overlay meu-overlay \
   --mode offline --cache cache-fechado \
   --format iso --boot-efi BOOTX64.EFI \
-  --output minha-distropica.iso
+  --output media-output/minha-distropica.iso
 ```
 
 A imagem oficial publicada será apenas uma conveniência assinada produzida
@@ -480,7 +518,7 @@ fornece esse comportamento de boot. O projeto poderá adotar ou implementar um
 stub mínimo sem depender do systemd, mas não deve chamar de UKI um `bzImage`
 que recebeu seções sem um consumidor compatível.
 
-`bootstrap/live/build-efi` implementa esse primeiro marco: pina Linux 7.1.4 e
+`bootstrap/live/build-efi` implementa esse primeiro marco: pina Linux 7.1.8 e
 o BusyBox estático, exige `minipax`/`minitrue` estáticos e incorpora os quatro
 componentes e o PID 1 via `CONFIG_INITRAMFS_SOURCE`. No boot, o initramfs
 localiza o payload, inicia `install-media` e, em boots posteriores, localiza a
@@ -489,13 +527,13 @@ e mede seus bytes; o construtor do EFI ainda não consome nem coteja
 automaticamente `live.world`/`profile.lock`, dívida que precisa ser fechada
 antes de release.
 
-O kernel vivo conserva `CONFIG_MODULES=y`, porém seu initramfs não distribui
-módulo algum: todos os drivers necessários para encontrar mídia, rede e disco
-precisam estar built-in. `LOCALVERSION=-distropica-live` faz seu release ser
-`7.1.4-distropica-live`, distinto do kernel `7.1.4` materializado no target.
-Assim, depois do `switch_root`, a busca automática não reutiliza por acidente
-`/lib/modules/7.1.4`; isso não amplia a cobertura estreita de drivers deste
-marco.
+O kernel vivo fixa `CONFIG_MODULES=n` e seu initramfs não distribui módulo
+algum: todos os drivers necessários para encontrar mídia, rede e disco
+precisam estar built-in, e a guarda pós-`olddefconfig` exige `=y` para cada
+classe suportada. `LOCALVERSION=-distropica-live` faz seu release ser
+`7.1.8-distropica-live`, distinto do kernel `7.1.8` materializado no target.
+Não há carregador de `.ko` nem busca automática depois do `switch_root`; isso
+não amplia a cobertura estreita de drivers deste marco.
 
 A mídia destinada a pessoas DEVE ser construída sem `--install-device` e não
 DEVE conter `distropica.test=1`. Sua cmdline atual é
@@ -542,16 +580,16 @@ O PID 1 da mídia viva implementa um fluxo deliberadamente estreito:
 
 Essa ordem troca memória por segurança: closure e EFI ficam integralmente em
 `/run` durante a decisão e a escrita, mas mídia inválida ou incompleta falha
-antes de qualquer autorização destrutiva. Não se promete ainda operar caches
-grandes nesse desenho; streaming com uma área de dados autenticada continua
-gate de release.
+antes de qualquer autorização destrutiva. `cache.tar` já é validado e extraído
+por streaming; uma área de dados autenticada só se torna necessária ao exceder
+o teto de arquivo da FAT32 ou a capacidade prática de `/run`.
 
 Os runners QEMU e VirtualBox reservam atualmente discos vazios de 4096 MiB por
 padrão, para comportar a closure de produção. Esse valor é independente de
-`MEDIA_SIZE_MIB=512`, que dimensiona somente a saída IMG; a ISO segue o tamanho
+`MEDIA_SIZE_MIB=1024`, que dimensiona somente a saída IMG; a ISO segue o tamanho
 do payload. A instalação continua obrigada a medir os snapshots e recusar um
 destino pequeno antes do wipe. O MBR com ESP FAT32 de 64 MiB descrito acima
-também não muda: 512 MiB não é o tamanho da ESP do target.
+também não muda: 1024 MiB não é o tamanho da ESP do target.
 
 `bootstrap/live/build-efi --install-device /dev/...` embute também
 `distropica.test=1`, suprime a interação e deixa root bloqueado. Essa opção é
@@ -676,7 +714,7 @@ ignorar os artefatos binários. Depois de
 tree. Só então liga a NAT para as provas separadas de DHCP, DNS e gateway. Até
 essa execução sobre a nova mídia recomposta existir, os hashes e resultados
 network-v1 acima continuam históricos e não sustentam o novo fluxo;
-`MEDIA_SIZE_MIB=512` dimensionará a IMG, não a ISO usada no aceite.
+`MEDIA_SIZE_MIB=1024` dimensionará a IMG, não a ISO usada no aceite.
 
 O aceite VirtualBox histórico não substitui o final-v10 de QEMU: o primeiro prova a
 experiência humana, o console gráfico com SATA `/dev/sda`, a configuração
@@ -695,7 +733,15 @@ filesystems alternativos e interface gráfica ficam fora deste marco.
 
 O perfil `profiles/official` está deliberadamente com `STATUS=development` e
 `INSTALL_READY=yes`. Não há, neste marco, ISO oficial publicada nem alegação
-de reprodução oficial. Antes de mudar para `release`, são obrigatórios:
+de reprodução oficial.
+
+A transição tem duas fronteiras. Antes de gravar `STATUS=release`, todos os
+gates que não dependem dos bytes finais DEVEM estar verdes e os três pinos
+oficiais DEVEM ter sido medidos numa prévia ainda `development`. Essa mudança
+cria apenas um **candidato congelado e ainda não publicado**; não autoriza
+distribuição nem transforma provas antigas em provas dos novos bytes. Antes de
+publicar, todos os itens abaixo são obrigatórios contra o commit e os artefatos
+finais exatos:
 
 - repetir o aceite sobre o futuro artefato canônico pinado e publicado;
 - ampliar e testar os drivers do kernel vivo em hardware UEFI real;
@@ -704,12 +750,12 @@ de reprodução oficial. Antes de mudar para `release`, são obrigatórios:
 - runit, configuração final de contas e a política de rede além do DHCP IPv4
   simples validado em VirtIO/NAT;
 - publicar canal binário oficial, chave pinada e bundle estático assinado;
-- implementar `channel refresh` explícito, autenticado e com diff auditável;
 - converter as mutações do Journal ainda baseadas em caminhos para operações
   fd-relative confinadas, fechando TOCTOU contra mutador concorrente;
 - perfil canônico com os três pinos de release e manifesto externo assinado
   contendo o SHA-256 final esperado;
-- streaming das árvores e, para imagens maiores, partição de dados separada;
+- preservar o streaming do cache e, se o arquivo exceder a FAT32, definir uma
+  partição de dados autenticada;
 - limite de entradas para objetos de canal e tratamento uniforme por `rescue`
   de todos os comandos auxiliares executados depois do wipe;
 - limpeza fd-relative da saída de `--export-boot-efi`; até lá, chamadores

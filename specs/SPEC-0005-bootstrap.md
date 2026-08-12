@@ -68,13 +68,16 @@ três entradas públicas:
 |---------|----------|-------|
 | **Mídia oficial mínima** | iniciar a futura ISO/IMG publicada e executar o `minipax` contido nela | sistema instalado; os demais programas continuam sendo instalados pelo `minitrue` |
 | **Instalação direta num host Linux** | `./bootstrap/distropica-bootstrap install --profile profiles/official --target /mnt --offline --cache CACHE --only-binary` | interface implementada; materializa a raiz já montada quando recebe um cache assinado que feche o world |
-| **Construção de mídia** | `./bootstrap/distropica-bootstrap media build --profile profiles/official --mode offline --cache CACHE --format iso --boot-efi BOOTX64.EFI --output distropica.iso` | ISO ou imagem de disco gerada localmente a partir do mesmo perfil |
+| **Construção de mídia** | `install -d -m 0700 media-output && ./bootstrap/distropica-bootstrap media build --profile profiles/official --mode offline --cache CACHE --format iso --boot-efi BOOTX64.EFI --output media-output/distropica.iso` | ISO ou imagem de disco gerada localmente a partir do mesmo perfil, em namespace de publicação privado |
 
 `install --target` **não particiona** e nunca interpreta `/mnt` como nome
 mágico: o operador precisa preparar e montar o destino. A escrita destrutiva
 num disco inteiro pertence ao fluxo interativo do instalador (SPEC-0008), com
 alvo resolvido e confirmação explícita. A construção de mídia, por sua vez,
-só escreve um arquivo de saída novo.
+só publica um conjunto novo imagem+sidecars. O diretório pai precisa pertencer
+ao UID efetivo e não pode ser gravável por grupo/outros; isto prende o
+namespace usado pelo journal de publicação contra escritores não
+cooperativos.
 
 O perfil `official`, sem overrides, com o lock de release e a mesma época,
 define a tentativa de reproduzir a mídia oficial byte a byte. Trocar `world`,
@@ -83,7 +86,7 @@ como **custom**, muda seu lock e seus hashes e não lhe concede a assinatura nem
 o nome de artefato oficial do projeto.
 
 No estado atual, `profiles/official` declara `INSTALL_READY=yes`,
-`STATUS=development` e `MEDIA_SIZE_MIB=512`. O último campo dimensiona somente
+`STATUS=development` e `MEDIA_SIZE_MIB=1024`. O último campo dimensiona somente
 a saída IMG e participa do lock; a ISO cresce conforme o payload e não recebe
 dele um tamanho fixo. O target inclui Vim como editor canônico e
 `miniplenty-buildbase`, o conjunto declarativo que torna o sistema instalado
@@ -164,8 +167,8 @@ e ncurses também não pertenciam àquela evidência histórica. Seu console usa
 simpledrm/fbcon e a cmdline
 `console=ttyS0,115200 console=tty0 panic=-1 rdinit=/init`, com `tty0` por
 último para ser o console interativo primário. Ainda faltam o bundle estático
-assinado de release, endpoint/chave/pool de canal oficial, `channel refresh`
-auditável, pinos e manifesto externo de release, uma ISO/IMG oficial
+assinado de release, a reemissão do canal oficial publicado contra a árvore
+corrente, pinos e manifesto externo de release, uma ISO/IMG oficial
 publicada, reprodução oficial por builders independentes e testes em hardware
 real. Portanto, os comandos acima são o contrato público em construção e uma
 implementação funcional de desenvolvimento, não a promessa de uma release já
@@ -310,9 +313,11 @@ SPEC-0004 §3.2). É necessário para o perfil `native` (o gcc da passada 2 é
 **dinâmico** e usa o loader/libs glibc do rootfs em `/lib64`,`/usr/lib`
 absolutos, que só são os do rootfs sob chroot); o `cross` (estático, e o gcc é
 relocável) rodaria fora também, mas o runner o roda no mesmo ambiente limpo. O
-rootfs ainda é montado **gravável**, portanto isto não é hermeticidade completa:
-uma receita confiável continua obrigada a escrever só em WORK/STAGE. Smoke
-verificado: sob `bwrap`, o `x86_64-distropica-linux-gnu-gcc` compila
+rootfs é montado **somente-leitura**; apenas `WORK` (incluindo `STAGE` e
+`TMPDIR`) e o cache do Zig são sobrepostos como binds graváveis. Assim um
+install hook que ignore `DESTDIR` falha em vez de retargetar bibliotecas vivas
+de outro pacote. A avaliação top-level e o mundo A continuam fora dessa
+fronteira. Smoke verificado: sob `bwrap`, o `x86_64-distropica-linux-gnu-gcc` compila
 in-chroot achando o `cc1`, e a rede fica isolada. No próprio sistema
 (`--root /`) o build roda direto (o alvo já é `/`; sandbox de rede lá é dívida
 de SPEC-0003 §8).
@@ -633,7 +638,8 @@ com SHA256 real pinado.
   apto a compilar; as sementes `gcc`, `binutils`, `binutils-cross`, `libstdcxx`,
   `gmp`, `mpfr` e `mpc` não devem sobreviver no target binário final. O
   `minitrue verify` confere agora a presença factual das `DEPS` de execução de
-  cada registro v2, em vez de validar apenas os arquivos do próprio pacote.
+  cada registro tipado v2/v3, em vez de validar apenas os arquivos do próprio
+  pacote.
 
   **O gap que a transcrição expôs — supersessão / fingerprint de build.** Os
   rebuilds-glibc instalam nos **mesmos caminhos** dos seus equivalentes
@@ -703,7 +709,7 @@ com SHA256 real pinado.
   de depuração serão retirados. É preciso reconstruir os payloads, medir o
   resultado, executar os probes funcionais e repetir o build para testar sua
   identidade byte a byte. Pacotes `-dbg` separados poderão preservar símbolos
-  no futuro. `MEDIA_SIZE_MIB=512` orça apenas a IMG; a ISO acompanha o payload,
+  no futuro. `MEDIA_SIZE_MIB=1024` orça apenas a IMG; a ISO acompanha o payload,
   e nenhuma das duas mídias novas foi recomposta ou aceita. Os discos de aceite
   continuam com 4096 MiB.
 
@@ -768,9 +774,11 @@ locais dessa ISO humana foram byte a byte idênticas, com SHA-256
 `3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d`; o EFI
 medido foi
 `71b8977c55a3d0e25785c0299af32515e3dc71759e89f1f08d57d525f800fc88`.
-O cache continua sendo um override `custom`, e o ensaio não comprova Internet,
-hardware real, reprodução entre builders independentes nem uma ISO oficial
-publicada.
+Na implementação que produziu essa evidência histórica, o cache era um override
+`custom`. O contrato atual o prende por `CACHE_SHA256` e deixa a coincidência
+com o pino de conteúdo decidir a classe; isso não transforma o ensaio antigo em
+prova de Internet, hardware real, reprodução entre builders independentes nem
+ISO oficial publicada.
 
 O runner atual foi adaptado ao novo contrato e usa um VDI de 4096 MiB por
 padrão. No segundo boot, ainda sem cabo, deve encontrar ripgrep 15.2.0, Vim
@@ -793,7 +801,7 @@ recompilação local de toda a closure.
 Depois de `minitrue verify` limpo, um novo boot deve comprovar a persistência de
 Vim, jq e tree; só então a NAT é ligada para a prova separada de DHCP, DNS e
 gateway. A nova mídia que satisfaz esse contrato ainda precisa ser recomposta e
-o runner precisa ser executado; `MEDIA_SIZE_MIB=512` dimensiona sua variante
+o runner precisa ser executado; `MEDIA_SIZE_MIB=1024` dimensiona sua variante
 IMG, não fixa o tamanho da ISO. Os resultados network-v1 continuam apenas como
 evidência histórica e não comprovam esses requisitos.
 

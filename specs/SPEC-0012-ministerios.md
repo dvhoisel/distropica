@@ -80,7 +80,7 @@ memorização e à coesão; onde ele brigar com a clareza, a clareza vence.
   por depender do meta; Zig fica somente no cache; jq e tree começam ausentes.
   O primeiro deve ser instalado offline do binário upstream e o segundo,
   compilado offline da fonte oficial com a toolchain nativa.
-  `MEDIA_SIZE_MIB=512` dimensiona a variante IMG, enquanto a ISO cresce conforme
+  `MEDIA_SIZE_MIB=1024` dimensiona a variante IMG, enquanto a ISO cresce conforme
   o payload. O `gcc-pass2` mantém como dependências de execução
   `linux-headers`, glibc, mathlibs-glibc, zlib e binutils-glibc; gcc passada 1,
   binutils-cross e libstdcxx intermediário são apenas scaffolding de build e
@@ -149,16 +149,16 @@ publicar o manifesto externo que prende o hash final da mídia oficial é uma
 operação de release posterior aos sidecars locais emitidos pelo Minipax, não
 uma razão para transferir lógica de pacotes ao instalador.
 
-**Limite do estado atual:** não há endpoint, chave, índice e pool de canal
-oficial publicados; tampouco bundle estático assinado, ISO/IMG oficial,
+**Limite do estado atual:** endpoint, chave, índice e pool do canal oficial já
+estão publicados e pinados no perfil, mas seus payloads ainda precisam ser
+reemitidos contra a árvore corrente. Tampouco há bundle estático assinado, ISO/IMG oficial,
 manifesto externo de release, aceite em hardware real ou reprodução oficial
 por builders independentes. Os aceites QEMU/OVMF e VirtualBox e a igualdade
 entre duas composições locais da ISO humana (SHA-256
 `3616506afa26b790e932edf2489558582743865e137d29b98225cddffa176c2d`, EFI
 `71b8977c55a3d0e25785c0299af32515e3dc71759e89f1f08d57d525f800fc88`)
 são evidências locais de desenvolvimento, não autoridade de release. Também
-são gates a operação administrativa `channel refresh`, a
-conversão integral do Journal path-based para operações fd-relative contra
+são gates a conversão integral do Journal path-based para operações fd-relative contra
 TOCTOU e streaming: durante o consumo de canal coexistem em RAM o `.tar.zst`
 selado e o tar descompactado, e a mídia viva retém ainda a closure em `/run`.
 
@@ -173,14 +173,17 @@ de morar num comando:
   ("*crimestop (assinatura): X não é de quem diz ser*"). SPEC-0009.
 - **`room101`** — o log de interrogatório do build que falha ("*o
   interrogatório completo está em…*"): a Sala 101 do mundo B.
-- **`verify`** — integridade tipada (conteúdo, alvo de link e árvore no
-  manifesto v2); pega adulteração. SPEC-0003.
+- **`verify`** — integridade tipada (conteúdo, alvo de link, árvore e diretório
+  compartilhado estrutural no manifesto v3); pega adulteração. SPEC-0003.
 - **doublethink** — a colisão de donos (dois pacotes reivindicando o mesmo
   caminho) é heresia e é barrada. SPEC-0003 §7.
 - **`MODULE_SIG_FORCE`** no kernel — o mesmo gesto, um andar abaixo: o kernel
   recusa o `.ko` não-assinado ("*Loading of unsigned module is rejected*") e o
-  adulterado (`EKEYREJECTED`), confiando só na chave do Ministério da Verdade
-  embutida no chaveiro builtin (ver newspeak/linux, newspeak/openssl).
+  adulterado (`EKEYREJECTED`), confiando só no certificado público do
+  Ministério da Verdade embutido no chaveiro builtin. A chave privada não
+  participa do build: CMS detached, gerados offline sobre corpos unsigned
+  pinados, são verificados e reaplicados com `sign-file -s` (ver
+  newspeak/linux, newspeak/openssl e SPEC-0010).
 
 Onde Miniluv **cristaliza** em doutrina própria é na política de
 **attestations** (SPEC-0009 §8.1), cujo mecanismo local já existe. Miniplenty

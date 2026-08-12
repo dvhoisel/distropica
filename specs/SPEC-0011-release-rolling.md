@@ -60,6 +60,32 @@ ela mesma atualizável:
 - Não exige git instalado (é um tarball, não um clone) — coerente com a base
   mínima e com P1 (sem protocolo de repositório próprio).
 
+O protocolo concreto usa a seed pinada
+`/var/cache/minitrue/newspeak-origem`, com `URL=` para um diretório HTTPS e
+`KEY=` para a chave pública minisign. Sob essa URL vivem `newspeak.tar` e
+`newspeak.tar.minisig`. O perfil oficial semeia
+`URL=https://distropica.com.br/newspeak/` e a mesma chave pública oficial já
+pinada para o canal; a URL não é descoberta nem substituída pela rede. A cadeia
+do produtor reutiliza as ferramentas próprias que já empacotam e assinam sem
+depender do host:
+
+```sh
+minitrue pack newspeak newspeak.tar
+gestor-de-segredos ... | \
+  minitrue channel sign --passphrase-fd 0 <chave-secreta> newspeak.tar \
+    <chave-pública-esperada>
+```
+
+O segundo comando cria `newspeak.tar.minisig` e verifica imediatamente a
+assinatura com o mesmo consumidor usado no alvo. A passphrase não atravessa
+argumento, ambiente ou arquivo da árvore publicável: chega pelo pipe já aberto,
+é limitada e seu buffer no signer é apagado ao sair. Chaves sem senha continuam
+aceitas sem `--passphrase-fd`. Ao materializar, o cliente
+normaliza os modos pela mesma política do Minipax (diretórios e executáveis
+`0755`, demais regulares `0644`), para o fingerprint da árvore atualizada ser
+o mesmo da árvore congelada na mídia mesmo quando o checkout do produtor veio
+de um `umask` diferente.
+
 ### 3.2 `rectify --sync` — a convergência
 
 Chegada a árvore nova, `--sync` converge o sistema à árvore (= ao `world`
@@ -171,20 +197,25 @@ projeto é o stable novo.
 | Design rolling (tree-at-commit, sem release) | pronto — é o que P1 pressupõe |
 | Política edge (P7) | especificada (SPEC-0001 P7 + este spec) |
 | Boot A/B do kernel (rollback do mais arriscado) | especificado (SPEC-0008 §4) |
-| `rectify newspeak` (árvore-como-pacote) | **não implementado** (§3.1) |
+| `rectify newspeak` (árvore-como-pacote) | **implementado e coberto por testes unitários** (§3.1); falta E2E contra a publicação oficial |
 | `rectify --sync` | speced, *stubbed* (SPEC-0003) |
 | Fingerprint de build | **implementado, transitivo** (§4) |
 | Rollback de mundo B | **lacuna** (§5.1) |
 | Canal binário: consumo, lock v2 e emissão | **implementação inicial pronta** (SPEC-0009) |
-| `channel refresh` autenticado + diff auditável | **não implementado; gate de release** |
+| `channel refresh` autenticado + diff auditável | **implementado e coberto por teste unitário** |
 | Republicação automática a cada roll | especificada, não implementada |
 
-Com o fingerprint transitivo e o protocolo binário inicial feitos, restam três
-peças: **árvore-como-pacote** (o motor), **rollback de mundo B** (a rede) —
-exclusivamente rolling — e a automação que recompõe, assina e publica o canal
-a cada roll. Também falta o `channel refresh` que valida o índice, apresenta a
-mudança e só então avança explicitamente o snapshot local. A publicação de um
-canal oficial continua ausente.
+Com o fingerprint transitivo, o protocolo binário inicial e a
+**árvore-como-pacote** feitos, restam **rollback de mundo B** (a rede) —
+exclusivamente rolling — e a automação que recompõe, assina e publica árvore e
+canal a cada roll. O consumidor online já busca e valida o índice corrente pela
+chave pinada, de modo que pacotes posteriores à mídia ficam alcançáveis;
+`channel refresh` permite apresentar o diff e avançar sem instalar; o consumo
+durante `rectify` continua sendo uma mutação explícita distinta: autentica e
+pode persistir o snapshot operacional preso na própria seleção/lock. Não há
+avanço em background.
+Endpoint, chave, índice e pool oficiais já estão publicados,
+mas ainda precisam ser reemitidos em cada roll pela automação descrita acima.
 
 ## 7.1 Exigência de publicação: conferir a versão de TODO software empacotado
 
@@ -217,7 +248,8 @@ aparecer:
 
 - **atual** — pinado é igual ao estável mais novo;
 - **atrasado** — há estável mais novo; exige subir, ou registrar a ressalva
-  pragmática da P7 (regressão comprovada) NA RECEITA, com o motivo;
+  pragmática da P7 (regressão comprovada) no arquivo irmão
+  `newspeak/<pacote>/versao-pinada`, com motivo e data;
 - **não conferido** — o upstream não publica um índice legível. Esta é a
   categoria perigosa: ela precisa ser **listada por nome**, e não somada num
   total. Um relatório que diz "112 de 120 conferidos" e cala sobre os oito faz
@@ -227,8 +259,10 @@ aparecer:
 
 A P7 permite pinar versão anterior quando o estável-mais-novo regride —
 precedente do gawk 5.3.2. O que a exigência acrescenta é que essa decisão passa
-a ser **explícita e datada na receita**, e não a consequência de ninguém ter
-olhado. "Atrasado sem motivo registrado" e "pinado por regressão" deixam de ser
+a ser **explícita e datada ao lado da receita**, em `versao-pinada`, e não a
+consequência de ninguém ter olhado. O arquivo separado evita mudar o fingerprint
+e recompilar payloads só por atualizar uma justificativa de governança.
+"Atrasado sem motivo registrado" e "pinado por regressão" deixam de ser
 indistinguíveis.
 
 ## 8. Conjunto publicável e fontes correspondentes
@@ -258,6 +292,82 @@ inventário, não substitui o inventário por artefato, os textos e avisos
 upstream nem a análise das combinações efetivamente distribuídas.
 `NOASSERTION` conserva explicitamente essa pendência e não libera o artefato
 para publicação oficial.
+
+O gate executável de publicação é `bootstrap/source-bundle --artifact ARQ
+--output DIR --cache CACHE --minitrue-root ROOT --minitrue-bin
+MINITRUE_PRODUTOR --strict`, seguido de
+`bootstrap/sbom --bundle DIR --strict`. O primeiro recalcula o SHA-256 antes e
+depois de promover cada objeto content-addressed e recusa fonte ausente,
+divergente ou `LICENSE=NOASSERTION`; o segundo recusa qualquer pacote que
+permaneça `SEM EVIDÊNCIA`. Para ISO/IMG, `--media ARQ --live-kernel-config CONFIG
+--live-util-linux-tar TAR` é a forma legada compatível; o modo estrito recusa a
+falta da configuração do kernel vivo ou da fonte exata do util-linux que o
+`build-efi` compila em `cfdisk`/`sfdisk`. O bundle do EFI usa a forma genérica
+`--artifact BOOTX64.EFI` com esses mesmos dois argumentos. O script lê
+`UTIL_LINUX_VERSION`, `UTIL_LINUX_URL` e `UTIL_LINUX_SHA256` diretamente dos
+pinos do `bootstrap/live/build-efi`, confere o tar e o registra como
+`insumo-live`; não existe receita Newspeak artificial para encobrir esse insumo.
+Para um canal, `ARQ` é `index` diretamente na saída de `channel emit
+--release`: o `emit.meta` v4 irmão com `RELEASE_ROOT=yes` prende a raiz local,
+o `PLAN_LOCK` produtor e os bytes por `PRODUCER_PLAN_LOCK_SHA256` e
+`INDEX_SHA256`. O inventário deriva
+das linhas desse próprio índice, nunca do cache reduzido da mídia; seu hash
+vincula o bundle ao conjunto exato, e cada linha vincula por SHA-256 o
+respectivo objeto de `pool/`. A assinatura do índice continua
+obrigatória antes da publicação. O modo sem `--strict` pode produzir
+diagnóstico incompleto durante o desenvolvimento, mas NÃO satisfaz o gate desta
+seção. `MINITRUE_PRODUTOR` é o executável exato que calculou os fingerprints e
+produziu os registros; o bundle registra seu SHA-256 e, quando o perfil está em
+`STATUS=release`, o modo estrito exige que ele coincida com
+`OFFICIAL_MINITRUE_SHA256`.
+
+`bootstrap/sbom --strict` transforma a evidência desse bundle em um payload
+determinístico preparatório: cria `licenses.tar` e `licenses.tar.sha256` ao lado do
+diretório `licencas/`. Dentro do tar, `PACOTES` é a projeção canônica e sem
+duplicatas das quatro primeiras colunas do `INVENTARIO` daquele bundle;
+`INDICE` precisa cobrir exatamente esses pacotes e exatamente cada arquivo de
+evidência por hash; `MANIFEST.sha256` cobre todo regular restante. Essa
+projeção impede ampliação para um catálogo global ou `BUILD_DEPS`, mas ainda é
+uma afirmação do próprio bundle: sozinha não prova que suas identidades
+correspondem ao plano realmente distribuído.
+
+O tar é emitido em ordem de bytes, com formato GNU, uid/gid/mtime zero, modos
+`0755` para diretórios e `0644` para regulares. O consumidor recusa caminho
+não UTF-8 ou não canônico, link/hardlink/tipo especial, entrada ausente ou
+extra, manifesto divergente, arquivo acima de 32 MiB, tar/conteúdo acima de
+128 MiB ou mais de 20.000 entradas. O parser interno abre o arquivo e cada
+componente de seu caminho por descritor com `NOFOLLOW`, revalida
+inode/metadados depois da leitura e possui um instalador fd-relative
+experimental. GPL, NOTICE e este documento do próprio projeto já viajam no
+pacote `base` e no ambiente vivo sob `/usr/share/licenses/distropica/`.
+
+`PLAN_LOCK_FORMAT=1` já expõe, para cada identidade material, nome, versão,
+kind/mundo, fingerprint transitivo, hash do payload, `LICENSE`, `MATERIAL_ID` e
+`PROVENANCE_SHA256`, distinguindo runtime/cache-only/identity-only. O núcleo
+também possui parser/import tipado de `LIVE_COMPONENTS`,
+`LIVE_RUNNER_PROOF` e `LIVE_LOCK` para `PURPOSE=media` strict, ancorado por
+hashes esperados externos. A integração produtiva no profile/Minipax e a API
+de consumo de um plan lock externo verificado ainda não existem; tampouco está
+fechada a aplicação de um plano de mídia sobre target vazio sem nova resolução
+online. Assim, a comparação de `PACOTES`, `LICENSES_SHA256` e o bump do
+`profile.lock` permanecem bloqueados: autoconsistência continua sendo evidência
+preparatória, não gate de release.
+
+O comando de gate do EFI é, concretamente:
+
+```sh
+bootstrap/source-bundle --artifact "$EFI" --output "$EFI_SOURCES" \
+  --cache "$CACHE" --minitrue-root "$ROOT" --minitrue-bin "$MINITRUE_BIN" \
+  --live-kernel-config "$EFI_WORK/linux-source/.config" \
+  --live-util-linux-tar "$UTIL_LINUX_TAR" --strict
+bootstrap/sbom --bundle "$EFI_SOURCES" --strict
+```
+
+Para o canal, a origem binária do gate é `minitrue --root ROOT channel emit
+--release --output DIR <pacotes...>`. Esse modo exige os tars selados retidos
+atomicamente durante os próprios builds locais e grava `RELEASE_ROOT=yes` em
+`emit.meta`, junto de `INDEX_SHA256`; a emissão comum com reconstrução grava
+`RELEASE_ROOT=no` e não é publicável como release.
 
 ## 9. Questões em aberto
 

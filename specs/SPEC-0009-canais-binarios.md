@@ -4,18 +4,19 @@
 **Depende de:** SPEC-0001 (premissas, P2/P6), SPEC-0003 (minitrue),
 SPEC-0004 (newspeak), SPEC-0008 (minipax).
 **Complementado por:** SPEC-0013 (fechamento ABI, mapa de provedores e plan
-lock; ainda futuros).
+lock).
 
 **Estado de implementação:** consumo de canais, `--only-binary`, cache offline,
-bootstrap online, lock de seleção e `channel emit` já existem. O índice v2
-canônico é assinado com minisign e autentica o fingerprint da receita; a chave
-é pinada localmente e cada artefato tem hash de transporte e `reprocorr`. Lock
-e emissão usam formato 2, e `verify` coteja semanticamente a proveniência
-registrada com o lock content-addressed. A CLI administrativa
-`channel add/remove/list/refresh`, a publicação de um canal oficial e a
-distribuição/rotação de sua chave ainda não existem. Em particular,
-`channel refresh` autenticado, com diff auditável antes de avançar o snapshot,
-é gate de release. O cache exercitado no E2E é de desenvolvimento,
+bootstrap online, lock de seleção e `channel emit` já existem. O índice v4
+canônico é assinado com minisign e autentica fingerprint, `reprocorr`, plano
+produtor e raiz de release; a chave é pinada localmente. Lock e emissão usam
+formato 4, e `verify` coteja semanticamente a proveniência
+registrada com o lock content-addressed. O perfil oficial já distribui endpoint,
+chave pinada e seed assinada; operações online buscam e autenticam o índice
+corrente, enquanto operações offline usam a seed. `channel refresh` busca e
+autentica sem instalar, emite o diff canônico antes de avançar atomicamente o
+snapshot e está coberto por teste. `channel add/remove/list` e a rotação de
+chave ainda não existem. O cache exercitado no E2E é de desenvolvimento,
 `TRUST=builder`.
 
 ## 1. Princípio: a premissa aplicada a si mesma
@@ -57,8 +58,8 @@ Um canal é uma tripla:
 
 Dois tipos:
 
-- **Canal oficial** — será publicado pela Distrópica com chave do projeto e
-  pré-configurado no release, com prioridade máxima por padrão. É a saída do
+- **Canal oficial** — publicado pela Distrópica com chave do projeto e
+  pré-configurado no perfil oficial, com prioridade máxima por padrão. É a saída do
   Ministério da Verdade: os binários "oficialmente retificados".
 - **Canal samizdat** — não oficial, porém confiável: um terceiro que
   publica binários da Distrópica. O usuário o adiciona **explicitamente**,
@@ -69,24 +70,31 @@ Dois tipos:
 Nada de repositório "central comunitário" implícito (SPEC-0001 P1): não há
 canal ativo que o usuário não tenha configurado, exceto o oficial.
 
-No estado de desenvolvimento atual, nem mesmo o oficial vem configurado: não
-há endpoint, chave de release ou artefatos públicos. Um cache fechado pode
-semear configuração, índice e objetos para a instalação offline.
+No estado de desenvolvimento atual, o perfil oficial traz URL HTTPS, chave
+pinada e uma seed assinada. Online, a seed não congela o canal: o cliente busca
+e autentica o índice corrente. Um cache fechado continua levando índice e
+objetos para a instalação offline; ao fim, o Minipax repõe no alvo o bootstrap
+versionado do perfil, separado daquele cache.
 
 ## 3. O índice do canal (assinado)
 
-Cada canal expõe um **índice v2** — texto puro, um artefato por linha,
-assinado com a chave do canal (minisign). O formato obrigatório de cada linha
-é:
+Cada canal expõe um **índice v4** — texto puro assinado com a chave do canal
+(minisign). Ele começa por dois headers, nesta ordem:
 
 ```
-NAME VERSION ARCH RECIPE_FINGERPRINT PATH SHA256 [REPROCORR]
+CHANNEL_INDEX_FORMAT=4
+RELEASE_ROOT=yes|no
 ```
 
-Ex.: `glibc 2.42 x86_64 <fingerprint> pool/glibc-2.42-x86_64.tar.zst <sha256>`.
-São exatamente seis campos, ou sete quando `REPROCORR` está presente. O
-formato anterior sem `RECIPE_FINGERPRINT` é recusado; não há fallback
-posicional.
+Depois há um artefato por linha, com exatamente oito campos:
+
+```
+NAME VERSION ARCH RECIPE_FINGERPRINT PATH SHA256 REPROCORR PRODUCER_PLAN_LOCK_SHA256
+```
+
+Ex.: `glibc 2.42 x86_64 <fingerprint> pool/glibc-2.42-x86_64.tar.zst <sha256>
+<reprocorr> <plan-sha256>`. Os formatos anteriores não ganham campos por
+fallback posicional.
 
 - O índice inteiro é coberto por uma assinatura destacada
   (`index.minisig`); `minitrue` recusa índice cujo `minisig` não bate com
@@ -115,18 +123,35 @@ depois de sua assinatura ser validada, e persiste um **lock de canal**. A mídia
 congela configuração, índice/assinatura e, no modo offline, objetos pelo
 `profile.lock`; o lock de canal nasce quando o Minitrue resolve a instalação.
 
-O formato implementado é texto canônico (`CHANNEL_LOCK_FORMAT=2`) e fecha:
+O formato implementado é texto canônico (`CHANNEL_LOCK_FORMAT=4`) e fecha:
 
 - arquitetura;
 - para cada canal usado: nome, URL, SHA-256 da chave pinada, SHA-256 do índice
-  validado e política de confiança;
+  validado, `CHANNEL_INDEX_FORMAT=4`, `RELEASE_ROOT=yes|no` e política de
+  confiança;
 - para cada pacote selecionado: nome, versão, fingerprint autenticado pelo
   índice e já cotejado com a receita efetiva, canal, caminho, SHA-256 dos bytes
-  servidos, `reprocorr` e política de confiança.
+  servidos, `reprocorr`, hash do `PLAN_LOCK` produtor e política de confiança.
 
-O lock v1 continha um campo de fingerprint preenchido apenas pela receita
-local, não pelo índice assinado. Ele é recusado: não pode ser promovido
-implicitamente à semântica autenticada do formato 2.
+O lock v4 exige `CHANNEL_COUNT>0` e `PACKAGE_COUNT>0`; contagens são decimais
+canônicas e correspondem exatamente aos records C-sort/únicos. O índice
+assinado começa, nesta ordem, por
+`CHANNEL_INDEX_FORMAT=4` e `RELEASE_ROOT=yes|no`; cada linha seguinte possui
+exatamente oito campos:
+
+```
+NAME VERSION ARCH RECIPE_FINGERPRINT PATH SHA256 REPROCORR PRODUCER_PLAN_LOCK_SHA256
+```
+
+O plano produtor é publicado como `plans/<hash>.lock`, deve ser canônico,
+`PURPOSE=channel-emit`, e seu conjunto source/runtime factual precisa ser
+bijetivo às linhas do índice. `RELEASE_ROOT=yes` exige ABI strict e
+`REPROCORR` factual.
+
+Os índices/locks v2 e v3 são legados de builder e só podem ser lidos quando a
+configuração é explicitamente `TRUST=builder` e o fluxo está em development.
+Eles são recusados antes de mutação em canal oficial, corroboração, release,
+mídia ou outro fechamento strict; não existe downgrade implícito para v4.
 
 O arquivo fica em
 `/var/lib/minitrue/channel-locks/<sha256-do-corpo>.lock`; o hash do nome também
@@ -140,8 +165,11 @@ Regras:
    curso; todos os downloads precisam corresponder ao snapshot;
 2. artefato ausente no snapshot falha fechado — não se substitui
    silenciosamente por uma versão mais nova;
-3. uma futura atualização administrativa do lock será explícita e deverá
-   produzir diff auditável;
+3. não há atualização em background. `rectify <pacote>` já é uma mutação
+   explícita: pode autenticar e persistir o snapshot operacional que usará na
+   própria seleção/lock. A atualização administrativa sem instalar é também
+   explícita (`channel refresh`), produz diff auditável antes da persistência
+   e não altera locks de operações passadas;
 4. uma release deverá publicar seu lock junto da mídia e incluí-lo na
    proveniência. A reprodução do perfil oficial deverá reutilizar essa
    seleção, não resolver novamente o "mais recente";
@@ -169,36 +197,43 @@ canal de pacote `KIND=source` não vira mundo A. Muda só a origem —
 pré-buildado em vez de compilado localmente.
 
 - Nome: `<nome>-<versão>-<arch>.tar.zst`.
-- **Produção (builder/publicador):** depois de um build fonte registrado em
-  formato v2, `minitrue --root ROOT channel emit --output DIR <pacote>...`
-  comprime para `.tar.zst` e escreve `pool/`, o índice v2 e `emit.meta` com
-  `CHANNEL_EMIT_FORMAT=2`. Para um registro instalado de canal, reutiliza o tar
-  original autenticado no cache content-addressed, revalidando o hash de
-  transporte, o `ARTIFACT_HASH` interno e a topologia instalável. Sem esse
-  objeto — ou para um build local — o fallback reconstrói a árvore a partir das
-  claims e do epoch registrados; só emite se conseguir provar topologia e
-  metadados e reproduzir exatamente `ARTIFACT_HASH`. Qualquer ambiguidade falha
-  fechado. A saída declara `INDEX_SIGNED=no`: o publicador precisa conferir a
-  attestation, assinar externamente `index` como `index.minisig` e só então
-  publicar. O pipeline de release DEVE emitir no mesmo build que produz o
-  artefato e conservar o objeto autenticado; reconstrução posterior é fallback
-  local/de recuperação, não raiz de publicação de release.
+- **Produção (builder/publicador):** o build fonte retém atomicamente seu tar
+  canônico selado em
+  `/var/cache/minitrue/channel-stages/<ARTIFACT_HASH>.tar`. O comando de release
+  `minitrue --root ROOT channel emit --release --output DIR <pacote>...`
+  reabre cada objeto sem seguir symlink, revalida hash, limite e topologia e
+  recusa qualquer pacote sem o tar do próprio build. Ele comprime para
+  `.tar.zst` e escreve `pool/`, índice v4, o plano produtor em `plans/` e
+  `emit.meta` com `CHANNEL_EMIT_FORMAT=4`, `INDEX_SHA256`,
+  `PRODUCER_PLAN_LOCK_SHA256` e `RELEASE_ROOT=yes`. O hash prende
+  o metadado aos bytes exatos do índice e impede misturar duas emissões. O modo
+  comum prefere o retido,
+  mas permite reutilizar um tar autenticado de outro canal ou reconstruir a
+  árvore das claims/epoch quando reproduz exatamente `ARTIFACT_HASH`; essa
+  saída declara `RELEASE_ROOT=no` e serve só a desenvolvimento/recuperação.
+  Qualquer ambiguidade ou objeto retido corrompido falha fechado. A saída também
+  declara `INDEX_SIGNED=no`: o publicador precisa conferir a
+  attestation, assinar `index` num passo separado com `channel sign` como
+  `index.minisig` e só então publicar.
   `bootstrap/channel-from-rootfs` é um migrador separado e explícito para
   registros históricos v1; ele produz apenas canal de desenvolvimento
   `TRUST=builder`.
 - O artefato NÃO carrega scripts de pós-instalação (SPEC-0001 §2): é
   árvore passiva, como qualquer tarball.
-- Antes de integrar um canal oficial, o payload deve passar pela auditoria de
-  closure da SPEC-0013 §4. O mapa de provedores, requisitos ABI e hash de
-  closure deverão ser autenticados por um formato futuro de índice/sidecar. O
-  índice v2 e o `CHANNEL_LOCK_FORMAT=2` atuais **não** carregam essa prova e
-  não devem ser apresentados como plan lock global.
+- Antes de integrar um canal oficial, o payload passa pela auditoria de closure
+  da SPEC-0013 §4. O `PLAN_LOCK` produtor prende provedores, requisitos,
+  `ABI_STATIC`/`ABI_NONE` e closure; o índice v4 autentica seu hash. Isso não
+  transforma o lock de canal em plan lock global: os dois objetos permanecem
+  distintos e são cotejados semanticamente.
 - No consumo atual, o `.tar.zst` conferido é copiado para um snapshot selado e
   permanece vivo enquanto o tar interno é descompactado para outro `memfd`
   selado. Isso fecha hash→uso, mas faz o pico de RAM aproximar a soma de
-  **zst + tar**. Transporte e tar são limitados a 16 GiB cada, mas a quantidade
-  de entradas ainda não tem teto próprio. Streaming autenticado e um limite de
-  entradas são gates de release para artefatos grandes ou patológicos.
+  **zst + tar**. Transporte e tar são limitados a 16 GiB cada. Uma pré-passada
+  crua limita ainda 50.000 entradas lógicas, membros físicos, 4.096 bytes por
+  path/alvo, 16 MiB de PAX e 16 GiB de conteúdo regular agregado antes de o
+  parser semântico alocar extensões. Streaming autenticado continua um caminho
+  de redução do pico para artefatos grandes; o limite de entradas patológicas
+  já está implementado.
 
 ## 5. Resolução: binário de canal vs. fonte
 
@@ -230,7 +265,7 @@ canal e, portanto, não deve fingir uma seleção binária nem reutilizar como s
 identidade o lock v2 produzido pelo caminho normal:
 
 - **normal:** instala os artefatos binários fechados por um
-  `CHANNEL_LOCK_FORMAT=2`. O instalador
+  `CHANNEL_LOCK_FORMAT=4`. O instalador
   de release usa semântica `--only-binary` para a base: a falta de um binário
   é erro claro, não o início acidental de horas de compilação;
 - **reprodutor (`SourceOnly`, exposto por `--from-source`/`--no-binary`):**
@@ -306,23 +341,72 @@ a seed. Somente quando ele estiver ausente um cache offline poderá semear os
 mesmos arquivos em `/var/cache/minitrue/channel-config/`. Índice e assinatura
 verificados ficam em `/var/cache/minitrue/channels/<nome>/`.
 
-O comando de produção implementado é:
+Os comandos administrativos/de produção implementados são:
 
 ```
+minitrue --root ROOT channel refresh [canal]...
 minitrue --root ROOT channel emit --output DIR <pacote>...
+minitrue channel keygen <base>
+minitrue channel sign [--passphrase-fd N] <chave> <arquivo> <pública-esperada>
 ```
 
-Sua saída declara `CHANNEL_EMIT_FORMAT=2` e contém linhas no formato v2 de
-§3. Em release, esse comando integra o job de build; o fallback que reconstrói
-um STAGE já instalado serve a desenvolvimento e recuperação.
+`channel refresh` recusa `--offline`, lê a mesma precedência estrita de
+configuração usada pelo consumidor, baixa índice e assinatura via HTTPS e
+valida minisign + forma canônica de **todos** os canais selecionados antes de
+publicar qualquer plano. A saída `CHANNEL_REFRESH_FORMAT=1` registra nome,
+estado/hash anterior, hash novo e linhas canônicas removidas (`-`) e
+acrescentadas (`+`). Ela é descarregada antes da primeira mutação; a invocação
+explícita do comando é a autorização para avançar. Cada par
+`index`/`index.minisig` é promovido como um diretório com
+`RENAME_EXCHANGE`, de modo que uma queda não misture gerações. O comando não
+resolve receitas, não cria lock de seleção e não instala nada.
 
-A gestão `channel add/remove/list/refresh` descrita no desenho ainda não foi
+Sua saída declara `CHANNEL_EMIT_FORMAT=4`, `INDEX_SHA256`,
+`PRODUCER_PLAN_LOCK_SHA256` e contém índice no formato v4 de §3, além de
+`plans/<hash>.lock`. `channel emit --release` exige os tars retidos pelo build
+e declara `RELEASE_ROOT=yes`; sem a flag, o fallback de
+desenvolvimento/recuperação declara `RELEASE_ROOT=no`.
+
+`channel sign` aceita tanto a chave plain produzida por `channel keygen` como
+a chave minisign `Sc` protegida por scrypt. Para a segunda, a passphrase só
+pode entrar por um descritor que o chamador já abriu: não existe opção com o
+segredo em argumento, variável de ambiente ou pathname. O descritor é
+duplicado com `CLOEXEC` (sem fechar o original), precisa ser legível e não-TTY,
+e é lido até EOF; são aceitos no máximo 1023 bytes, descontado um LF/CRLF
+terminal. NUL, quebra interna, descritor inválido e conteúdo excessivo falham
+antes de carregar a chave. Os buffers sob controle do signer — passphrase,
+stream scrypt, texto decodificado e material de chave — são zerados ao sair. Os
+`opslimit`/`memlimit` gravados na chave também ficam restritos à faixa que o
+minisign/libsodium produz, antes da alocação.
+
+Sem `--passphrase-fd`, a chave plain continua funcionando e a chave cifrada
+falha fechado. Depois de decriptar, o checksum BLAKE2b e a pública derivada da
+semente precisam conferir. `pública-esperada` é obrigatória e seu cotejo ocorre
+antes de criar `<arquivo>.minisig`; por fim, a assinatura escrita é verificada
+com o mesmo `minisign-verify` do consumidor.
+
+O compositor offline expõe a mesma fronteira como
+`bootstrap/cache-from-channel --passphrase-fd N`. A opção é explícita e
+opcional; por portabilidade do `/bin/sh`, o wrapper aceita stdin (`0`) ou um fd
+auxiliar de `3` a `9`. Ele confirma que o descritor está aberto e não é TTY,
+conserva-o somente no shell pai enquanto toda a preparação roda num subshell
+que fecha sua cópia antes de chamar qualquer executável, duplica-o
+exclusivamente sobre o stdin de `enter.sh`/bwrap, fecha o número original no
+filho e executa `channel sign --passphrase-fd 0`. Depois dessa chamada o pai
+fecha sua cópia antes de qualquer cleanup ou relatório. Não há passagem
+alternativa por argumento, ambiente ou pathname. Sem a opção, o fluxo plain
+permanece inalterado. Qualquer falha de leitura, decriptação, cotejo ou
+assinatura remove o staging e a saída parcial, sem promover `index.minisig`.
+
+A gestão `channel add/remove/list` descrita no desenho ainda não foi
 implementada; adicionar ou rotacionar um canal hoje é editar explicitamente o
-arquivo e distribuir sua chave por um meio confiável. Também não há um
-`00-oficial` publicado neste marco. Antes de release, `channel refresh` precisa
-validar a assinatura com a chave já pinada, mostrar um diff auditável da
-seleção e só então publicar atomicamente o novo snapshot; rede não pode avançar
-o estado silenciosamente.
+arquivo e distribuir sua chave por um meio confiável. O perfil oficial já
+semeia `oficial`: em operação online, cada carregamento do catálogo busca o
+índice corrente, valida assinatura e forma canônica e só então substitui o
+snapshot persistente necessário à seleção/lock daquela invocação explícita de
+`rectify`; em operação offline, a rede não é consultada. Não existe daemon ou
+avanço em background. Para inspecionar e avançar sem instalar, o administrador
+usa `channel refresh`.
 
 ## 8. Registro e proveniência
 
@@ -333,13 +417,15 @@ O registro de um pacote (SPEC-0003 §6) ganha, no `meta`:
 - `CHANNEL_PATH=` — o caminho autenticado do artefato no índice;
 - `CHANNEL_SHA256=` — o hash servido pelo índice (para auditoria);
 - `CHANNEL_INDEX_SHA256=` — o índice validado que decidiu a seleção;
+- `CHANNEL_INDEX_FORMAT=4`, `CHANNEL_RELEASE_ROOT=` e
+  `CHANNEL_PRODUCER_PLAN_LOCK_SHA256=` — formato, papel e inventário produtor;
 - `CHANNEL_LOCK_SHA256=` — o lock imutável que contém a seleção;
 - `TRUST=` — a política sob a qual foi aceito.
 
 `archives` mostra a origem; `verify` abre o lock content-addressed, exige
-`CHANNEL_LOCK_FORMAT=2`, confere o hash do próprio lock e coteja semanticamente
+`CHANNEL_LOCK_FORMAT=4`, confere o hash do próprio lock e coteja semanticamente
 nome, versão, fingerprint, canal, caminho, trust, hash do artefato, hash do
-índice e `reprocorr` com o `meta` e a receita. Ele não confia apenas em campos
+índice, `reprocorr`, release-root e plano produtor com o `meta` e a receita. Ele não confia apenas em campos
 homônimos nem consulta um índice de rede que possa ter avançado. Assim o
 sistema é auditável: "quais binários vieram de samizdat, e sob que confiança?".
 
@@ -437,5 +523,6 @@ Ordem de preferência de um artefato, do mais ao menos preferido:
 - Federação/descoberta de samizdats confiáveis (uma "lista de listas"
   assinada pelo projeto): tentador, mas reintroduz confiança central —
   decidir se vale.
-- CLI administrativa de canais, vínculo do lock de canal ao lock de perfil,
-  anti-replay/monotonicidade do índice e publicação do canal oficial.
+- CLI administrativa `add/remove/list`, vínculo do lock de canal ao lock de
+  perfil, anti-replay/monotonicidade do índice e republicação dos payloads oficiais
+  contra a árvore corrente.

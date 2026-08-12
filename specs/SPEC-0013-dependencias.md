@@ -17,10 +17,11 @@ entrou em 2026-07-24 como `minitrue audit`, com `AUDIT_FORMAT=1`: parser ELF
 próprio, mapa de provedores vindo dos registros, confronto declaração ×
 observação e `CLOSURE_SHA256` canônico. Desde 2026-07-28 ele **impede**:
 `channel emit` recusa publicar pacote cujo payload exija provedor não
-declarado. O gate da composição de mídia, o lock tipado de closure, o PATH de
-build fechado, `cache verify --closure`, o plano somente-leitura,
-`rectify --sync` e a coleta explícita de órfãos especificados abaixo
-**continuam não implementados**.
+declarado. O PATH/view de build, `PLAN_LOCK_FORMAT=1`, `plan`, o preview
+`plan --sync`, `cache verify --closure`, `RECORD_FORMAT=4` e o receipt global
+estão implementados. Continuam não implementados o gate produtivo da
+composição de mídia/profile, a aplicação `rectify --sync`, rollback e a coleta
+explícita de órfãos.
 
 ## 1. Princípio: a árvore é o lock global
 
@@ -67,6 +68,12 @@ O ambiente mínimo do runner ainda é uma dependência implícita incompleta: a
 implementação futura DEVE representá-lo por identidade versionada — por
 exemplo, um metapacote de ferramentas de build — em vez de pressupor todos os
 comandos que por acaso existam em `/bin` e `/usr/bin`.
+
+Uma aresta runtime direta também é a autorização explícita para depositar
+payload sob uma claim de diretório compartilhado `D:` do provedor
+(`SHARED_DIRS`, SPEC-0003 §§6–7). A transitividade serve para presença/ordem,
+mas NÃO amplia essa autoridade de namespace: quem grava sob `D:` precisa
+nomear o dono diretamente em `DEPS`.
 
 O resolvedor precisa manter cinco conjuntos relacionados, mas distintos:
 
@@ -278,8 +285,8 @@ de dependência.
 
 ## 6. Lock tipado do plano e registros
 
-A resolução bem-sucedida DEVE produzir um lock content-addressed do plano. O
-futuro `PLAN_LOCK_FORMAT=1` conterá, no mínimo:
+A resolução bem-sucedida produz um lock content-addressed do plano.
+`PLAN_LOCK_FORMAT=1` contém:
 
 - hash da árvore Newspeak, arquitetura, política binária e roots pedidos;
 - para cada nó: nome, versão, kind, ação (`keep`, `meta`, `vendor`, `channel`
@@ -287,28 +294,57 @@ futuro `PLAN_LOCK_FORMAT=1` conterá, no mínimo:
 - arestas de runtime com nome e fingerprint esperado do provedor;
 - arestas de build, toolchain e runner, mesmo quando não materializadas no
   alvo;
-- identidade do artefato e referência ao `CHANNEL_LOCK_FORMAT=2` escolhido,
+- `PURPOSE` (`rectify`, `sync`, `cache-closure`, `media` ou `channel-emit`),
+  `BINARY_POLICY`, `ABI_POLICY`, `TREE_SHA256` e
+  `BUILD_CONTRACT_SHA256`;
+- papel explícito de root (`install`/`availability`) e material
+  (`runtime`/`cache-only`/`identity-only`);
+- `LICENSE`, `MATERIAL_ID` e `PROVENANCE_SHA256` em cada nó, derivados dos
+  bytes tipados e de todos os `ARTIFACT` C-sort;
+- identidade do artefato e referência ao `CHANNEL_LOCK_FORMAT=4` escolhido,
   quando houver;
-- requisitos e provedores ABI observados;
+- requisitos e provedores ABI observados, além de `ABI_STATIC`, `ABI_NONE` e
+  `ABI_PENDING` disjuntos; o digest ABI é recomputável desses records;
 - hash canônico da closure resolvida.
 
 O lock deve viver por hash sob `/var/lib/minitrue/plan-locks/`. Arestas de
 build/toolchain que influenciam a identidade mas não serão materializadas
-devem aparecer como `identity-only`. Cada registro instalado deve apontar para
-o lock e conservar sua fatia relevante. O índice/artefato de canal deve
-prender o mesmo hash de closure ou dados equivalentes autenticados.
+aparecem como `identity-only`. Arestas de `DEPS` cujo consumidor é meta são
+`aggregation`, sem serem achatadas em runtime.
+
+`RECORD_FORMAT=3` é exclusivamente intermediário da operação que escreveu o
+payload. O fechamento factual promove somente esses records para
+`RECORD_FORMAT=4`, com `INSTALL_PLAN_LOCK_SHA256` e
+`INSTALL_PLAN_SLICE_SHA256` imutáveis, payload e ABI factuais. Um v3 histórico
+é legível para migração/sync, mas precisa ser reaplicado; não vira v4 por mera
+reobservação. O commit global é
+`APPLIED_PLAN_RECEIPT_FORMAT=1`: receipt content-addressed do world completo,
+hash factual de exatamente cada diretório de record e ponteiro atômico
+`applied-plans/current`. Ausência, record extra ou fact hash divergente falha
+fechado.
+
+Antes do primeiro payload/record, o mutador varre por descritores os namespaces
+de locks, slices, records, receipts/current e seus alvos. Há limite de 64 MiB
+por objeto, 100.000 entradas e 255 bytes por nome; nomes e records são
+canônicos/C-sort, objetos preexistentes precisam corresponder ao hash do nome,
+e symlink, tipo especial ou colisão estrangeira são recusados. Cada publicação
+reabre o alvo e confere inode/metadata. Temporários reconhecíveis anteriores ao
+commit são rollback seguro; o retry recalcula o receipt e só o rename de
+`current`, seguido do fsync do pai, torna o novo estado autoridade global.
 
 Esse formato NÃO substitui os locks existentes:
 
-- `CHANNEL_LOCK_FORMAT=2` congela seleção, índice e confiança de canais;
-- `PROFILE_LOCK_FORMAT=2` congela os insumos de um perfil do Minipax;
+- `CHANNEL_LOCK_FORMAT=4` congela seleção, índice v4, `RELEASE_ROOT`, plano
+  produtor e confiança de canais;
+- `PROFILE_LOCK_FORMAT=3` congela os insumos de um perfil do Minipax, inclusive
+  o bootstrap de canal separado do cache offline;
 - `PLAN_LOCK_FORMAT=1` congela a resolução tipada desses insumos.
 
 Uma futura composição oficial deve fazer o `profile.lock` referenciar o hash
 do plan lock resolvido, em vez de fingir que o próprio lock de perfil já é a
 resolução.
 
-`verify` então deixa de conferir apenas que “algum registro chamado glibc
+`verify` deixou de conferir apenas que “algum registro chamado glibc
 existe”: ele confere que o provedor presente tem a identidade esperada e ainda
 satisfaz a ABI registrada. `BUILD_DEPS` não se tornam requisitos de runtime,
 mas permanecem explicáveis e reproduzíveis.
@@ -320,7 +356,7 @@ algoritmo simplificado para exibir e outro para instalar.
 
 ### 7.1 Plano somente-leitura
 
-O futuro `minitrue plan <pacote>…` e `minitrue plan --sync` devem mostrar,
+`minitrue plan <pacote>…` e `minitrue plan --sync` mostram,
 antes de mutar:
 
 - origem escolhida de cada nó;
@@ -356,7 +392,7 @@ provedor de runtime alcançável. O futuro `memoryhole --orfaos` DEVE:
 ### 7.4 Cache
 
 `cache verify --closure <pacote>…` e `cache verify --closure --world ARQUIVO`
-devem resolver o mesmo plano sob `--offline` e provar, sem instalar, que todos
+resolvem o mesmo plano sob `--offline` e provam, sem instalar, que todos
 os objetos, índices, assinaturas e fontes necessários à política escolhida
 estão presentes. Sob `--only-binary`, isso inclui todos os artefatos de canal
 da closure runtime; sob build local, inclui fontes e closures de
@@ -418,7 +454,8 @@ não são solução implícita de dependências da Distrópica.
 3. Fechar o PATH/view de build e adicionar lint de ferramentas não declaradas.
 4. Implementar lock tipado, `verify` exato e `cache verify --closure`.
 5. Implementar `plan`, `rectify --sync` e coleta explícita de órfãos.
-6. Publicar o canal oficial assinado com closure e fontes correspondentes.
+6. Reemitir o canal oficial assinado com closure e fontes correspondentes à
+   árvore corrente.
 7. Só então promover uma pilha gráfica como metapacote suportado.
 
 O scanner e o fechamento do ambiente de build vêm antes de um solver mais
@@ -427,7 +464,7 @@ provar que o único conjunto escolhido declara e contém tudo de que depende.
 
 ## 11. Estado resumido
 
-| Peça | Estado em 2026-07-23 |
+| Peça | Estado em 2026-08-11 |
 |---|---|
 | `DEPS`/`BUILD_DEPS`/toolchain/meta | implementado |
 | DFS, deduplicação e detecção de ciclo | implementado |
@@ -437,11 +474,12 @@ provar que o único conjunto escolhido declara e contém tudo de que depende.
 | scanner ELF/ABI e mapa de provedores | implementado (`audit`, `AUDIT_FORMAT=1`) |
 | gate de closure em `channel emit` | implementado — recusa publicação, com teste de regressão |
 | gate de closure na composição de mídia | não implementado |
-| ambiente/PATH fechado por closure | não implementado |
-| plan lock tipado e `verify` de identidade exata da dependência | não implementado |
-| `cache verify --closure` | não implementado |
-| `plan`, `rectify --sync`, `memoryhole --orfaos` | não implementado |
-| canal oficial público | não publicado |
+| ambiente/PATH fechado por closure | implementado |
+| plan lock tipado e `verify` de identidade exata da dependência | implementado (`PLAN_LOCK_FORMAT=1`, record v4 + receipt) |
+| `cache verify --closure` | implementado, read-only/offline |
+| `plan` e preview `plan --sync` | implementados, read-only sob lock compartilhado |
+| aplicação `rectify --sync`, rollback e coleta de órfãos | não implementados |
+| canal oficial público | publicado; payloads da árvore corrente ainda precisam ser reemitidos |
 | metapacote gráfico suportado | futuro |
 
 ## 12. Não-objetivos e questões em aberto
@@ -455,8 +493,9 @@ provar que o único conjunto escolhido declara e contém tudo de que depende.
   ambiguidade silenciosa.
 - Inferência perfeita de `dlopen`, plugins, subprocessos e protocolos é
   impossível estaticamente; definir combinação de declaração, lint e testes.
-- Definir a serialização canônica de `PLAN_LOCK_FORMAT=1` sem duplicar
-  `CHANNEL_LOCK_FORMAT=2` nem o lock de perfil.
+- Integrar o import tipado `LIVE_LOCK`/`LIVE_COMPONENTS` do purpose `media` ao
+  profile e à composição produtiva. A API/parser existe, mas não é ainda gate
+  do Minipax nem autoriza publicação.
 - Definir política de ABI para bibliotecas sem símbolos versionados.
 - Decidir se o plano somente-leitura será comando `plan` ou flag de `rectify`;
   a exigência é compartilhar exatamente o resolvedor, não a grafia final.

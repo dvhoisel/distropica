@@ -1,6 +1,6 @@
 # SPEC-0004 — newspeak, o formato das receitas
 
-**Status:** rascunho v0.8 · 2026-07-23
+**Status:** rascunho v0.13 · 2026-08-11
 **Depende de:** SPEC-0001 (elegibilidade), SPEC-0003 (contrato de execução).
 **Complementado por:** SPEC-0013 (semântica tipada e validação da closure).
 
@@ -50,9 +50,10 @@ Condicionais:
 Uma receita `source` sem `SRC` é uma receita de **montagem**: seu `build()`
 gera o payload apenas de conteúdo versionado com a própria receita. Ela não
 pode declarar `SHA256` nem `SIG` sem um artefato a que esses campos se refiram.
-O modo explícito `--tofu` continua sendo apenas o fluxo excepcional para obter
-e revisar um hash ainda não pinado; não torna `SHA256` opcional na árvore
-publicada.
+O modo explícito `--tofu`, compilado somente na variante de autoria
+(`bootstrap/build-minitrue.sh --authoring`), continua sendo apenas o fluxo
+excepcional para obter e revisar um hash ainda não pinado; não torna `SHA256`
+opcional na árvore publicada.
 
 Opcionais:
 
@@ -63,10 +64,12 @@ Opcionais:
 | `LINKS` | mundo A: comandos a expor, `nome=caminho/relativo/no/prefix`, sem `/`, `.` ou `..` nos componentes; default: todo executável em `bin/` do prefix |
 | `REQUIRES_GLIBC` | `1` ⇒ só instala após o Estágio 2 (SPEC-0005) |
 | `ABOUT` | uma linha: o que é / justificativa de classificação |
-| `SIG` | URL(s) de assinatura destacada, uma por artefato, na ordem de `SRC` (§5) |
-| `SIGSUMS` | norma do Marco 0.2: URL única de lista de checksums assinada; parser atual reconhece, executor ainda recusa (§5) |
-| `SIGKEY` | hoje: chave minisign/signify pinada em uma linha base64; caminho `files/*.asc` pertence ao OpenPGP futuro |
-| `SIGKEY_FP` | norma futura OpenPGP: fingerprint da chave — o `.asc` será só transporte |
+| `SIG` + `SIGKEY` | minisign/signify legado: URL HTTPS literal da assinatura e chave pública base64 em uma linha (§5) |
+| `SIG_n` + `SIG_EPOCH_n` + `SIGKEY_n` + `SIGKEY_FP_n` | OpenPGP destacado do artefato `SRC_n`: URL HTTPS literal, instante criptográfico explícito, transporte `files/*.asc` e fingerprint da chave primária (§5) |
+| `SIGSUMS` + `SIGSUMS_EPOCH` | URL HTTPS literal de uma lista de SHA-256 clearsigned OpenPGP e instante criptográfico explícito; usa `SIGKEY_1` + `SIGKEY_FP_1` (§5) |
+| `SIGSUMS_SIG` | URL HTTPS literal opcional da assinatura destacada de `SIGSUMS` (padrão CMake); omitida no Cleartext Signature Framework (§5) |
+| `SIG_UNSAFE_WAIVER` | transporte literal `files/assinatura-insegura` da renúncia auditável quando a única assinatura upstream é recusada pela política; nunca relaxa o motor (§5) |
+| `SIG_UNSAFE_WAIVER_n` | forma indexada `files/assinatura-insegura-n` para o `SRC_n` de uma receita multi-SRC; pode coexistir apenas com quádruplas OpenPGP normais de outros índices (§5) |
 | `EPOCH` | `SOURCE_DATE_EPOCH` da receita (unix ts); sobrepõe o default do projeto p/ builds reprodutíveis (§3, SPEC-0010) |
 | `REPROCORR` | mundo B: sha256 do **tar normalizado** reprodutível (saída de `minitrue pack`); raiz de confiança única da corroboração de canal (SPEC-0009 §6, SPEC-0010 §4) |
 | `PROVISIONAL` | `1` ⇒ pacote-semente/scaffolding que **cede** seus caminhos ao sucessor que os reivindique, sem *doublethink* (SPEC-0003 §3). Dois usos: (a) busybox → coreutils/binutils; (b) o toolchain-semente musl do E2 (gmp/mpfr/mpc/binutils/gcc) → os rebuilds-glibc, SPEC-0005 §4 |
@@ -85,7 +88,7 @@ Funções:
 
 O parser implementa `KIND=meta` com validação fechada. `DEPS` precisa conter
 ao menos uma receita; `TOOLCHAIN` deve ser omitido ou `none`; `SRC`, `SHA256`,
-`LICENSE`, `BUILD_DEPS`, `LINKS`, `SIG`, `SIGSUMS`, `SIGKEY`, `REPROCORR`,
+`LICENSE`, `BUILD_DEPS`, `LINKS`, qualquer campo `SIG*`/`SIGKEY*`, `REPROCORR`,
 `REQUIRES_GLIBC`, `PROVISIONAL`, `SUPERSEDES`, `EPOCH`, `RETRIES`, `files/`,
 `build()` e `install_pkg()` são proibidos. `NAME`, `VERSION`, `KIND`, `DEPS` e
 `ABOUT` continuam sujeitos às validações gerais. Como o meta não possui
@@ -128,8 +131,9 @@ não-determinismo próprio (gravar a data corrente etc.). Campo opcional
 A tabela descreve o ambiente da função. A avaliação top-level que coleta os
 campos é uma execução separada, também com `env_clear` e locale/`TZ` fixos; o
 mundo A recebe `WORK`/`PREFIX`, enquanto o mundo B recebe `WORK`/`STAGE` e a
-toolchain. Em rootfs alternativo, só o `build()` mundo B ganha bwrap e rede
-isolada; o rootfs ainda é gravável (SPEC-0003 §8).
+toolchain. Em rootfs alternativo, só o `build()` mundo B ganha bwrap, rede
+isolada e raiz somente-leitura; `WORK`/`STAGE` e o cache do Zig são os únicos
+binds graváveis (SPEC-0003 §8).
 
 Proibições (contrato; sandbox é dívida registrada em SPEC-0003 §8):
 
@@ -190,7 +194,7 @@ ABOUT="toolchain Zig; fornece zig cc, o compilador C do mundo-fonte pré-E2"
 LICENSE=NOASSERTION
 SRC="https://ziglang.org/download/$VERSION/zig-x86_64-linux-$VERSION.tar.xz"
 SHA256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
-SIG="$SRC.minisig"
+SIG="https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz.minisig"
 SIGKEY="RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
 LINKS="zig=zig"
 
@@ -226,9 +230,10 @@ ABOUT="GNU não publica binário; primeiro build do mundo-fonte. build.sh existe
 LICENSE="GPL-3.0-or-later AND GFDL-1.3-invariants-or-later"
 SRC="https://ftp.gnu.org/gnu/make/make-$VERSION.tar.gz"
 SHA256=@PINAR@
-SIG="$SRC.sig"
-SIGKEY="files/gnu-make.asc"
-SIGKEY_FP=@PINAR@
+SIG_1="https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz.sig"
+SIG_EPOCH_1=@PINAR_INSTANTE_DE_REVISAO@
+SIGKEY_1="files/gnu-make.asc"
+SIGKEY_FP_1=@PINAR_FINGERPRINT_PRIMARIO@
 
 build() {
     tar -xzf "$DL" --strip-components=1
@@ -281,7 +286,8 @@ install_pkg() {
 ```
 
 `@PINAR@` marca hash a pinar no momento de criar a receita de verdade (o
-minitrue recusa receita sem hash, salvo `--tofu`; SPEC-0003 §2).
+Minitrue distribuído recusa receita sem hash; a variante explícita de autoria
+pode usar `--tofu`; SPEC-0003 §2).
 
 ## 5. Assinaturas upstream
 
@@ -289,50 +295,161 @@ Quando o mantenedor assina o que publica, a receita pina a assinatura junto
 com o hash. Papéis distintos: o **SHA-256 congela o artefato exato** que o
 autor da receita viu; a **assinatura prova a autoria upstream** — inclusive
 do artefato *novo* no momento de atualizar a versão. É a repinagem que a
-assinatura protege: com `--tofu` o hash é recalculado, mas a chave pinada
-continua exigindo que o artefato venha de quem sempre veio.
+assinatura protege: na variante de autoria, com `--tofu`, o hash é recalculado,
+mas a chave pinada continua exigindo que o artefato venha de quem sempre veio.
 
 1. `SHA256` é obrigatório para **cada `SRC`**; assinatura complementa, não
    substitui (o cache é verificável offline e sem esquema criptográfico
    variável). Receitas de montagem e metas omitem ambos porque não possuem
    artefato upstream.
 2. Upstream assina ⇒ a receita DEVERIA pinar. Pacotes da base (estágios
-   0–3, SPEC-0005) DEVEM pinar quando a assinatura existir.
-3. A chave pública vive **na árvore newspeak**, versionada e revisável em
-   diff. Buscar chave em keyserver ou URL em tempo de instalação é
-   proibido (SPEC-0001 P6).
-4. Implementação v0.1: **minisign/signify** por artefato (Ed25519; chave em uma
-   linha base64 de `SIGKEY`). OpenPGP destacado (`.sig`/`.asc`, chave em
-   `files/*.asc`, `SIGKEY_FP`) é norma do Marco 0.2 e hoje falha explicitamente.
-5. `SIG` cobre assinatura por artefato e está implementado; `SIGSUMS` cobrirá o padrão
-   "lista de checksums assinada" (ex.: `SHASUMS256.txt.asc` do Node.js) —
-   nesse modo o artefato DEVE constar na lista **e** bater com o `SHA256`
-   pinado. Uma receita usa um esquema ou o outro, não ambos.
-6. Falha de assinatura ⇒ erro 7 (SPEC-0003 §9), sem contorno.
-7. Rotação de chave do upstream é evento auditável: o commit que troca
-   `SIGKEY`/`SIGKEY_FP` DEVE justificar no corpo (link do anúncio).
+   0–3, SPEC-0005) DEVEM pinar quando existir assinatura que passe a política.
+   Se o upstream publicar **somente** assinatura criptograficamente recusada,
+   a receita não pode relaxar o motor: usa exclusivamente
+   `SIG_UNSAFE_WAIVER="files/assinatura-insegura"`, mantém o SHA-256 e registra
+   uma renúncia explícita à prova de autoria. O arquivo é UTF-8/LF canônico,
+   preso no fingerprint, e contém exatamente data/epoch da revisão (a data
+   precisa ser o dia UTC do epoch), pacote/versão, URL+SHA-256 do artefato,
+   URL+SHA-256+epoch da assinatura, fingerprint primária, algoritmo/hash e
+   motivo. A forma não indexada exige exatamente um `SRC` e não pode se
+   misturar com outro campo de assinatura. Uma receita multi-SRC usa
+   `SIG_UNSAFE_WAIVER_n="files/assinatura-insegura-n"`: cada índice contém
+   **ou** esse waiver **ou** a quádrupla OpenPGP normal, nunca ambos, e todo
+   `SRC` precisa ser coberto exatamente uma vez. Os formatos aceitos são
+   fechados e factualmente distintos:
 
-Disponibilidade upstream: **todo o ftp.gnu.org publica `.sig`**, Zig publica
-`.minisig` (chave acima, copiada da página oficial em 2026-07-18) e Node assina
-`SHASUMS256.txt`. Hoje o minitrue valida o caso Zig/minisign; a cobertura GNU e
-Node depende de OpenPGP/`SIGSUMS` no Marco 0.2.
+   - `minitrue-insecure-upstream-signature-v1` é renúncia sem prova de autoria
+     e cobre somente `DSA-1024` + `SHA1_DATA_REJECTED`. Prende URL+SHA-256 dos
+     bytes-fonte da chave, regra de extração e SHA-256 do certificado extraído;
+     assim uma página HTML ou keyring multi-cert nunca finge que seu hash é o
+     do certificado. Assinatura, fonte e certificado extraído são arquivos
+     distintos no snapshot `files/`: o runtime coteja seus hashes, reproduz a
+     extração, exige packet binário DSA p=1024/q=160 + SHA-1, issuer/creation
+     time exatos e prova que o motor normal recusa a assinatura sobre o mesmo
+     fd do artefato. Isso documenta factualmente a renúncia, sem transformar a
+     assinatura fraca em prova de autoria.
+   - `minitrue-expired-signer-endorsement-v2` cobre somente uma assinatura de
+     dados moderna (`RSA-2560`/`SHA512`) que era válida em seu creation time,
+     mas cujo certificado expirou antes do `REVIEW_EPOCH`. `VALIDATION_EPOCH`
+     DEVE ser exatamente o creation time autenticado da assinatura; a
+     selfsig/binding selecionada DEVE já existir e estar vigente nesse instante,
+     e sua expiração DEVE anteceder a revisão. Bytes de uma página HTTPS
+     oficial, observados e pinados no `REVIEW_EPOCH` posterior à expiração,
+     DEVEM continuar reendossando o fingerprint exato. Quando o próprio
+     conteúdo declara uma data, ela é registrada como `PAGE_DATE`, nunca
+     apresentada como header HTTP autenticado. Assinatura,
+     resposta-fonte do certificado, certificado mínimo e página oficial vivem
+     no snapshot `files/`; seus hashes são cotejados, o certificado mínimo é
+     provado packet-a-packet como subconjunto da fonte, o fingerprint é extraído
+     pela regra fechada da página e a assinatura é verificada sobre o mesmo fd
+     do artefato. O motor normal também precisa provar que a assinatura falha no
+     `REVIEW_EPOCH`; portanto o v2 não retrodata `SIG_EPOCH`.
+   - `minitrue-legacy-dsa-data-math-v3` cobre exclusivamente
+     `DSA-2048-Q256`/`SHA256`. O motor normal continua recusando DSA sobre
+     dados. Uma API separada, acessível somente pelo parser v3, verifica
+     matematicamente a assinatura sobre o mesmo fd e exige que emissor e chave
+     sejam exatamente a primária pinada com p=2048/q=256. Duas páginas oficiais
+     congeladas precisam prender, respectivamente, a release+sidecar+chave e o
+     fingerprint+email exatos; o certificado transportado apenas fornece os
+     MPIs da primária e não cria confiança temporal.
+
+   Novo motivo, algoritmo, regra de extração ou semântica exige novo formato
+   normativo; nunca se amplia silenciosamente v1/v2/v3.
+3. A chave pública vive **na árvore newspeak**, versionada e revisável em
+   diff. Buscar chave em keyserver, trustdb, WKD ou URL em tempo de instalação
+   é proibido (SPEC-0001 P6). `files/*.asc` é apenas transporte congelado no
+   fingerprint; `SIGKEY_FP_n` é a âncora primária e precisa ser hexadecimal
+   maiúscula canônica (40 ou 64 dígitos). O transporte contém exatamente um
+   certificado público, sem material secreto. A chave/subchave emissora precisa
+   pertencer a essa primária e ser válida sob a política no instante pinado.
+   Quando bytes do certificado só existem por transporte não confiável, esse
+   transporte não cria identidade. O caso Flex prende no mesmo snapshot os
+   bytes das APIs oficiais de tag/release, verifica a assinatura da tag pela
+   mesma primária e coteja tagger, email, uploader, nomes/URLs/tamanhos do tar e
+   sidecar; certificado e assinatura normal continuam inputs autenticados do
+   `PLAN_LOCK`.
+   Um objeto de transporte oficial pode conter certificações WoT adicionais
+   dentro do mesmo certificado (caso WKD da glibc). Isso não é um keyring nem
+   `export-minimal`: o parser ainda exige exatamente **um** `Cert`, a primária
+   exata e a signing key pertencente a ela sob a policy/epoch pinados;
+   certificações externas não criam outra âncora nem ampliam signers aceitos.
+4. Minisign/signify continua usando os nomes não indexados `SIG` + `SIGKEY`.
+   OpenPGP destacado usa, para **cada** `SRC_n`, a quádrupla completa e contígua
+   `SIG_n` + `SIG_EPOCH_n` + `SIGKEY_n` + `SIGKEY_FP_n`, salvo quando aquele
+   índice usa `SIG_UNSAFE_WAIVER_n`. Índice zero, buraco, campo sobrando,
+   sobreposição waiver/quádrupla ou mistura com minisign/`SIGSUMS` falha
+   fechado. Os inputs autenticados de waiver indexado carregam o mesmo índice
+   em seus identificadores; isso impede colisão entre evidências de dois SRC.
+5. `SIGSUMS` cobre a lista de checksums assinada. Sem `SIGSUMS_SIG`, a lista
+   precisa usar o OpenPGP Cleartext Signature Framework; com `SIGSUMS_SIG`, a
+   assinatura é destacada. Em ambos os casos exige `SIGSUMS_EPOCH`, `SIGKEY_1`
+   e `SIGKEY_FP_1`; cada artefato deve aparecer uma única vez como basename
+   canônico e seu SHA-256 deve coincidir exatamente com `SHA256`. Linha
+   malformada, path, duplicata ou separador ambíguo invalida toda a lista. Uma
+   receita usa OpenPGP destacado por artefato ou `SIGSUMS`, nunca ambos.
+6. `SIG_EPOCH_n`/`SIGSUMS_EPOCH` é Unix decimal canônico obrigatório, limitado
+   ao horizonte `u32` do OpenPGP. Representa o instante pinado de
+   verificação/revisão: deve ser igual ou posterior à criação da assinatura e
+   cair dentro da validade aplicável do certificado/chave. Não é o relógio da
+   máquina, não tem default e **nunca** é `EPOCH`/`SOURCE_DATE_EPOCH`, que rege
+   somente a reprodutibilidade do build. O epoch criptográfico entra no
+   fingerprint da receita e no namespace do cache.
+7. Antes de executar `source` da receita, o Minitrue coleta **todo nome que
+   começa por `SIG`** como atribuição literal no cabeçalho. `$VAR`, `$()`,
+   backticks, escapes, operadores shell, duplicatas e campos após as funções
+   são recusados; portanto URLs como `SIG="$SRC.minisig"` não são válidas.
+   O plano tipado usa só esse mapa literal, nunca valores de assinatura
+   impressos pelo shell.
+8. A verificação é hermética: Sequoia OpenPGP com backend Rust e política
+   versionada no formato do motor (`OPENPGP_ENGINE_FORMAT=3`), tempo explícito
+   tanto no parser quanto na própria política e certificado local pinado;
+   nenhuma consulta de rede, GnuPG externo ou trustdb. Para certificados
+   legados, SHA-1 é aceito somente quando Sequoia exige resistência à segunda
+   pré-imagem (selfsig/binding), e DSA-1024 somente para validar a certificação
+   ou binding de uma subchave. O helper exige que a assinatura efetiva dos
+   dados e sua chave emissora não sejam DSA e recusa SHA-1 explicitamente;
+   SHA-1 também continua recusado pela política nos contextos que exigem
+   resistência a colisão. Assim, uma primária DSA histórica pode ligar uma
+   subchave RSA/SHA-256, mas nunca assinar artefato ou manifesto.
+   Assinatura destacada de `SRC` ou manifesto DEVE ser do tipo OpenPGP Binary,
+   pois Text canonicaliza EOL e não prova os bytes exatos. Somente o ramo
+   declarado do Cleartext Signature Framework aceita Text, antes de interpretar
+   sua lista autenticada de checksums.
+   Assinatura e `SIGSUMS` são objetos pequenos e limitados.
+   O artefato (até 16 GiB) é transmitido pelo mesmo descritor regular
+   `O_NOFOLLOW`, `nlink=1` usado para seu SHA-256; metadados são comparados
+   antes/depois. Objetos auxiliares conservam o mesmo fd/snapshot da leitura à
+   publicação, são reverificados inclusive em `--offline` e publicados num
+   diretório pertencente ao uid efetivo e sem escrita por grupo/outros, com
+   `RENAME_NOREPLACE` + `fsync`, sem aceitar symlink/hardlink. Um swap aborta;
+   limpeza pós-falha só remove o inode exato que acabou de ser publicado.
+9. Falha criptográfica, auxiliar ausente/inválido em `--offline` ou assinatura
+   cacheada que não revalida ⇒ erro 7 (SPEC-0003 §9), sem contorno.
+10. Rotação de chave do upstream é evento auditável: o commit que troca
+    `SIGKEY_n`/`SIGKEY_FP_n` DEVE justificar no corpo (link do anúncio).
+
+O motor autentica somente os bytes exatos de `SRC` ou o SHA-256 desses bytes
+num `SIGSUMS`. Assinaturas sobre uma transformação implícita (por exemplo, o
+WireGuard assina o TAR depois de `xz -dc`, não o `.tar.xz`) permanecem
+bloqueadas até existir um transformador autenticado explícito no schema.
 
 ## 6. Convenções da árvore
 
 - Um pacote por diretório; `NAME` = nome do diretório; erro caso divirjam.
-- Em receita com `SRC`, atualização = mudar `VERSION` e `SHA256` no mesmo
-  commit; título de commit: `<nome>: <versão>`.
+- Em receita com `SRC`, atualização = mudar `VERSION`, `SHA256` e, quando
+  aplicável, URL/epoch da assinatura no mesmo commit; título de commit:
+  `<nome>: <versão>`.
 - A árvore newspeak num dado commit é o conjunto consistente do sistema —
   não existem ranges de versão (SPEC-0001 P1).
 - Comentários na receita são bem-vindos quando registram uma decisão de
   classificação (por que este binário é elegível, por que este build é
   estranho).
-- A árvore DEVERÁ passar `minitrue lint` antes de publicar quando o comando do
-  Marco 0.2 existir (local e no CI do repositório). O lint conferirá: `NAME` = nome do diretório; campos
+- A árvore DEVERÁ passar `minitrue lint` antes de publicar (local e no CI do
+  repositório). O lint confere: `NAME` = nome do diretório; campos
   obrigatórios presentes e bem-formados; `SRC` só https; um `SHA256` de
   64 hex por artefato de `SRC`; ausência conjunta de `SRC`/`SHA256` apenas em
-  montagem `source` ou meta; `SIGKEY_FP` presente quando `SIGKEY` é
-  bloco OpenPGP; `VERSION`, dependências e `LINKS` canônicos; ausência do nome
+  montagem `source` ou meta; quádruplas OpenPGP/SIGSUMS completas, literais e
+  indexadas; `VERSION`, dependências e `LINKS` canônicos; ausência do nome
   reservado `files/recipe`; `LICENSE` presente, não vazio e em uma única linha
   sem controles em `binary`/`source`, e ausente em `meta`; a função exigida pelo
   `KIND` definida (`install_pkg`/`build`) ou, para `meta`, `DEPS` não vazio e

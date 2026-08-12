@@ -233,12 +233,13 @@ independente do caminho — não só do caminho canônico do chroot.
 
 O `minipax` não usa o nome de um perfil como prova de identidade. Ele resolve
 o perfil, normaliza `target.world`, `live.world` e o `cache.world` opcional,
-empacota deterministicamente overlay, árvore Newspeak e cache, e grava um
-`profile.lock` textual com `PROFILE_LOCK_FORMAT=2`. A identidade calculada usa
-`PROFILE_CONTENT_FORMAT=2`.
+empacota deterministicamente overlay, árvore Newspeak, cache e bootstrap de
+canal, e grava um `profile.lock` textual com `PROFILE_LOCK_FORMAT=3`. A
+identidade calculada usa `PROFILE_CONTENT_FORMAT=3`.
 O lock também registra `INSTALL_READY`; `STATUS=release` exige valor `yes`.
-O lock contém os hashes desses insumos — inclusive `CACHE_WORLD_SHA256` —, o
-hash de conteúdo calculado, os três pinos oficiais, além de nome, classe, arquitetura,
+O lock contém os hashes desses insumos — inclusive `CACHE_WORLD_SHA256` e
+`CHANNEL_BOOTSTRAP_SHA256` —, o hash de conteúdo calculado, os três pinos
+oficiais, além de nome, classe, arquitetura,
 `SOURCE_DATE_EPOCH` e `MEDIA_SIZE_MIB`; o sha256 do próprio lock é a identidade
 curta dos insumos do perfil. Ele não representa a resolução tipada das
 dependências. O futuro `PLAN_LOCK_FORMAT=1` da SPEC-0013 cumprirá esse papel e
@@ -248,7 +249,10 @@ precisa pinar os três campos
 `OFFICIAL_MINITRUE_SHA256`. Só a coincidência exata do conteúdo calculado com
 o primeiro pode produzir `PROFILE_CLASS=official-inputs`; qualquer world,
 Newspeak, overlay ou cache divergente é classificado como `custom`, assim
-como o uso explícito de `--world`, `--live-world`, `--overlay` ou `--cache`.
+como o uso explícito de `--world`, `--live-world` ou `--overlay`. `--cache`
+não é por si só personalização: seus bytes entram em `CACHE_SHA256` e no hash
+de conteúdo, de modo que só o cache byte-idêntico ao pino do perfil de release
+pode conservar `official-inputs`; qualquer diferença continua rebaixando.
 Essa classe
 atesta os insumos declarados, não uma reprodução oficial. O perfil versionado
 atual segue em `development`, declara `INSTALL_READY=yes` e pode materializar
@@ -280,7 +284,7 @@ faz a identidade declarada do sistema apto a compilar incluir headers e
 binutils nativos, mas excluir as sementes `gcc`, `binutils`, `binutils-cross`,
 `libstdcxx`, `gmp`, `mpfr`, `mpc` e Zig no caminho atendido pelo canal. O
 `minitrue verify` confere a presença factual das `DEPS` de execução de cada
-registro v2, além da integridade de seus próprios arquivos.
+registro tipado v2/v3, além da integridade de seus próprios arquivos.
 
 Uma instalação direta usa exatamente esse snapshot. O Minipax copia a árvore
 Newspeak e o cache fechados e congela também os executores: abre o Minitrue
@@ -307,12 +311,14 @@ o executor reproduz `OFFICIAL_MINITRUE_SHA256`; caso contrário, é rebaixada
 para `custom` (ou permanece `development` para o perfil de desenvolvimento sem
 override explícito).
 
-O coletor atual limita Newspeak e overlay a 128 MiB de arquivos regulares cada
-e o cache a 384 MiB; cada árvore admite 50.000 entradas. Na ingestão, o arquivo
-`cache.tar` é aceito até 416 MiB. Ele mantém conteúdo e tar normalizado em
-memória; esses são limites explícitos do protótipo, não capacidade de release
-nem prova de que o perfil atual caiba neles. Streaming é necessário antes de
-aceitar árvores reais maiores.
+O coletor limita Newspeak e overlay a 128 MiB de arquivos regulares cada e
+mantém essas duas árvores pequenas em memória. O cache usa referências aos
+arquivos: seu tar normalizado é escrito diretamente no destino e lido pelo
+instalador em duas passadas de streaming (validação de cabeçalhos e extração),
+sem carregar conteúdo ou tar integral na RAM. Cada árvore admite 50.000
+entradas. O teto do cache e de `cache.tar` é 4 GiB−1, não como orçamento de
+memória, mas porque o arquivo vive hoje numa FAT32, cujo tamanho máximo de
+arquivo é menor que 4 GiB.
 
 Os modos dessas árvores também fazem parte da representação canônica: dirs
 `0755`, `root/` do overlay `0700`, `shadow`/`gshadow` e backups `0600`,
@@ -333,16 +339,17 @@ normalizados ou explicitamente separados como estado de máquina.
 `minipax media build` recebe o perfil resolvido, o modo `online|offline`, o
 formato `img|iso` e um `BOOTX64.EFI` externo. O hash do EFI, a representação
 canônica do perfil, o lock, os três worlds (incluindo `cache.world`, ainda que
-vazio), o snapshot Newspeak, o overlay e, no
-modo offline, o cache completo entram no payload. No modo online, o cache é
-restrito ao bootstrap de configuração + índice/assinatura do canal; seus bytes
-também participam do lock, mas artefatos de pacote são recusados.
+vazio), o snapshot Newspeak, o overlay e o bootstrap de configuração +
+índice/assinatura do canal entram no payload. No modo offline entra ainda o
+cache completo; no modo online, `cache.tar` é recusado. Os dois snapshots têm
+hashes separados no lock, para que o override usado na instalação offline não
+substitua a autoridade que deve restar no alvo.
 O builder valida cabeçalhos DOS/PE, máquina AMD64, optional header PE32+,
 subsystem de aplicação EFI, número de seções e limites das tabelas. Isso prova
 apenas a forma e a arquitetura declarada do executável: **não** prova que ele
 inicia nem que contém o ambiente vivo.
 
-O perfil atual fixa `MEDIA_SIZE_MIB=512`. Esse valor dimensiona somente a saída
+O perfil atual fixa `MEDIA_SIZE_MIB=1024`. Esse valor dimensiona somente a saída
 IMG e participa do lock; a ISO cresce conforme o payload e não é limitada nem
 preenchida até esse tamanho. O campo também não dimensiona o disco em que o
 sistema será instalado. Os runners atuais criam destinos de 4096 MiB por padrão
@@ -351,7 +358,7 @@ nas evidências históricas abaixo continuam exatamente os fatos daqueles
 ensaios.
 
 O repositório agora fornece `bootstrap/live/build-efi`, que constrói um
-EFI-stub com Linux 7.1.4, initramfs, BusyBox e executores estáticos. Isso cria
+EFI-stub com Linux 7.1.8, initramfs, BusyBox e executores estáticos. Isso cria
 um insumo vivo conhecido, mas a validade de qualquer arquivo arbitrário ainda
 não decorre do parser PE. No consumo, `minipax install-media` reconstrói o
 perfil e exige reproduzir `profile.lock` byte a byte antes de tocar no target.
@@ -361,10 +368,32 @@ closure em `/run` antes de escolher um disco; só depois copia e verifica o root
 instala o snapshot EFI e publica por último o marcador completo.
 O construtor do EFI ainda não recebe o lock nem prova automaticamente que seu
 conteúdo corresponde a `live.world`. O build fixa
-`LOCALVERSION=-distropica-live`; embora mantenha `CONFIG_MODULES=y`, não
-empacota módulos e depende exclusivamente dos drivers built-in. Além de
-separar a identidade do kernel vivo, o release resultante impede que a busca
-automática consuma `/lib/modules/7.1.4` do target.
+`LOCALVERSION=-distropica-live` e `CONFIG_MODULES=n`: como não empacota nenhum
+`.ko`, todos os drivers de mídia, disco, rede, vídeo, entrada e áudio são
+built-in e guardados como `=y` depois do `olddefconfig`. Além de eliminar uma
+superfície de carga que o artefato não usa, o release distinto continua
+separando a identidade do kernel vivo da árvore `/lib/modules/7.1.8` do target.
+
+Nos dois kernels, `KBUILD_BUILD_TIMESTAMP` precisa ser não só estável, mas
+parseável pelo `date` do próprio builder. `usr/gen_initramfs.sh` reconverte esse
+texto para alimentar `gen_init_cpio`; se a conversão falha, o script upstream
+silencia a falha e o gerador usa `time(NULL)` nos diretórios e nós do CPIO. O
+builder Distrópica usa BusyBox, que não aceita a forma longa do GNU date. Por
+isso target e live usam `YYYY-MM-DD HH:MM:SS` sob `TZ=UTC` e exigem que a
+reconversão resulte exatamente em `SOURCE_DATE_EPOCH` antes de compilar.
+
+O kernel instalado segue outro contrato: `CONFIG_MODULE_SIG_FORCE=y`, SHA-512
+e chaveiro confiável embutido, porém `CONFIG_MODULE_SIG_ALL=n`. A compilação
+produz os módulos **sem** assinatura automática e não recebe segredo. A receita
+pina um certificado X.509 público e um manifesto que associa, para cada `.ko`,
+o sha256 do corpo unsigned ao sha256 de um CMS detached público. Antes de
+anexar qualquer assinatura com `scripts/sign-file -s`, o build exige cobertura
+exata (nenhum módulo/assinatura ausente ou extra), confere os dois hashes e
+valida o CMS contra os bytes e o certificado pinado com `-nointern`. Depois,
+extrai novamente corpo, CMS e descritor do `.ko` final e os coteja. A chave RSA
+de autoria do bundle nasce em diretório `0700` fora de worktree/rootfs, não é
+impressa e é removida antes de o bundle público ser materializado; regenerar o
+bundle é operação offline explícita, não passo do build reproduzível.
 
 O construtor produz duas classes operacionais que NÃO DEVEM ser confundidas.
 Sem `--install-device`, a variante humana omite `distropica.test=1`, usa a
@@ -428,43 +457,46 @@ como neutro.
 
 ### 8.3 Publicação e sidecars
 
-A mídia nasce em arquivo temporário irmão e é concluída pelo compositor. Os
-três sidecars também são preparados integralmente em temporários; em seguida,
-são publicados um a um e, somente depois deles, a imagem recebe o nome final.
-Cada publicação é uma criação atômica **sem substituição**. Uma saída
-preexistente — inclusive criada numa corrida após o preflight — faz a operação
-falhar; arquivo ou symlink jamais é substituído. Para `<saída>`, o `minipax`
-cria:
+A mídia e os três sidecars nascem integralmente num staging privado, no mesmo
+filesystem do destino. O diretório pai da saída precisa ser real, pertencer ao
+UID efetivo e não permitir escrita por grupo/outros; o Minipax ancora nele o
+lock, o staging, as validações e as promoções por descritor. Cada nome é criado
+atomicamente **sem substituição**. Os sidecars duráveis aparecem primeiro e a
+imagem por último, como marcador externo de commit. Para `<saída>`, o
+`minipax` cria:
 
 - `<saída>.sha256` — hash dos bytes finais;
 - `<saída>.media.lock` — cópia exata do `profile.lock`;
 - `<saída>.manifest` — formato, modo, arquitetura, classe, hashes da mídia,
   do payload completo, do lock e do BOOT EFI, e compositor usado.
 
-O lock e metadados essenciais também vão dentro da mídia. A ordem impede que o
-Minipax publique a imagem antes de seus sidecars, mas os quatro nomes externos
-**não** formam uma transação única. Falha ou corrida durante a sequência pode
-deixar um prefixo dos sidecars — ou todos eles — sem a imagem; não há rollback
-multi-arquivo automático. A assinatura e publicação do manifesto oficial
-externo, contra o qual se compara o hash final para reconhecer uma reprodução,
-continuam pertencendo ao pipeline futuro de release.
+O lock e metadados essenciais também vão dentro da mídia. Como não existe uma
+primitiva atômica multi-arquivo, um journal durável no staging prende a
+requisição, os insumos, os hashes, os inodes e a fase da promoção. Depois de
+queda ou erro, uma repetição com a mesma requisição recupera ou desfaz o prefixo
+sem misturar gerações; um conjunto final completo, canônico e da mesma
+requisição é sucesso idempotente. Symlinks, troca de paths, bytes incoerentes,
+hardlinks estranhos e requisição diferente são recusados. A assinatura e
+publicação do manifesto oficial externo, contra o qual se compara o hash final
+para reconhecer uma reprodução, continuam pertencendo ao pipeline futuro de
+release.
 
 ### 8.4 Escala do modo offline
 
-O cache offline entra hoje no mesmo payload e está sujeito, como árvore, aos
-limites de desenvolvimento de 384 MiB e 50.000 entradas (§7); seu arquivo de
-entrada `cache.tar` é aceito até 416 MiB. A nova closure ainda precisa ser
-composta e medida para demonstrar cabimento. Um cache de release real tende a
-superar tanto essa estratégia em memória quanto o desenho de uma única ESP/FAT
-contendo tudo. O caminho esperado exige coleta e escrita em streaming e
-provavelmente uma partição de dados offline separada; formato, integridade e
-montagem dessa partição ainda precisam ser especificados.
+O cache offline entra no mesmo payload, admite 50.000 entradas e usa streaming
+de ponta a ponta (§7). A closure gráfica medida já ultrapassou o antigo teto em
+memória e continuou compondo sem cópia integral do cache na RAM. O limite que
+resta é 4 GiB−1 para o único `cache.tar` armazenado na FAT32. Se uma closure
+futura o ultrapassar, será necessária uma partição de dados autenticada ou
+outro layout; formato, integridade e montagem desse caminho ainda precisam ser
+especificados.
 
 Há ainda dois multiplicadores explícitos de pico: no consumo do canal, o
 `.tar.zst` selado e o tar descompactado coexistem em `memfd` (**zst + tar**); no
 instalador vivo, a closure materializada em `/run` permanece até terminar a
 cópia e a verificação do disco. Essa escolha é deliberada para garantir
-fail-before-wipe, mas não escala ao cache de release sem streaming autenticado.
+fail-before-wipe. Essa ocupação de `/run` é separada do streaming de
+`cache.tar` já implementado e ainda precisa ser dimensionada para cada mídia.
 
 ## 9. Evidência atual e gates de mídia
 
@@ -572,7 +604,7 @@ invoque GCC. Depois deve instalar jq do binário upstream com
 e tree; a NAT só é ligada depois para DHCP, DNS e gateway. Como a nova mídia
 ainda não foi recomposta nem executada com os discos padrão de 4096 MiB, a
 evidência network-v1 não pode ser reutilizada como prova de R4 para o perfil
-atual. `MEDIA_SIZE_MIB=512` dimensiona a variante IMG, não a ISO desse aceite.
+atual. `MEDIA_SIZE_MIB=1024` dimensiona a variante IMG, não a ISO desse aceite.
 
 Essas provas exercitam localmente R2 e o compositor de R3, não fecham um
 release. Permanecem gates:
@@ -581,15 +613,15 @@ release. Permanecem gates:
   publicado;
 - ligar a construção do EFI ao `live.world`/lock e fixar os três pinos de
   release (`CONTENT`, `BOOT_EFI` e `MINITRUE`);
-- publicar o canal oficial, a chave pinada e o metapacote normativo
-  `miniplenty-buildbase`; `base` permanece receita de montagem com payload;
-- implementar `channel refresh` autenticado, explícito e com diff auditável;
+- reemitir o canal oficial já publicado contra a árvore corrente e seu
+  metapacote normativo `miniplenty-buildbase`; `base` permanece receita de
+  montagem com payload;
 - converter o Journal path-based restante para operações fd-relative
   confinadas contra TOCTOU de mutador concorrente;
 - definir como a atualização de `/boot/vmlinuz-*` atualiza e retém o EFI com
   kernel/initramfs embutidos;
-- substituir os snapshots de árvores em memória por streaming e definir a
-  partição de dados do modo offline;
+- manter o cache em streaming e definir uma partição de dados autenticada caso
+  o modo offline ultrapasse o teto de arquivo da FAT32;
 - definir uid/gid e os metadados hoje ausentes antes de afirmar R2b;
 - pinar a versão do `xorriso` no ambiente oficial de reprodução;
 - repetir IMG e ISO em builders independentes, publicar um manifesto oficial

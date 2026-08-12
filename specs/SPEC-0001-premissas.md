@@ -152,9 +152,10 @@ pino — não um bypass que o dispensa. Depois disso, todo uso (o do autor e o
 de qualquer outro) confere contra o hash pinado, como manda P6; a árvore
 versionada continua sendo a fonte de verdade. As três amarras que o mantêm
 dentro de P6: (a) se a receita pina `SIGKEY`, a assinatura é exigida **mesmo
-em TOFU** — nem o primeiro fetch é cego; (b) `--tofu` NÃO DEVE existir em
-builds de release destinados a usuários finais; (c) nada é instalado num
-sistema alheio a partir de hash não-pinado — o pino nasce na máquina do
+em TOFU** — nem o primeiro fetch é cego; (b) `--tofu` existe somente no build
+explícito de autoria (`bootstrap/build-minitrue.sh --authoring`, feature Cargo
+`tofu-authoring` sem default) e não é compilado na interface distribuída; (c)
+nada é instalado num sistema alheio a partir de hash não-pinado — o pino nasce na máquina do
 autor e chega aos outros já congelado no commit. TOFU é como um pino passa a
 existir, não uma licença para viver sem ele.
 

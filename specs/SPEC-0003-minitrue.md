@@ -41,8 +41,9 @@ minitrue newspeak  <pacote>       imprime a receita efetiva e sua origem
 minitrue explain   <caminho>      de quem é o arquivo e toda a sua proveniência (§6)
 minitrue why       <pacote>       por que este pacote está no sistema (§6)
 minitrue lint      [<árvore>]     valida a árvore newspeak (SPEC-0004 §6)
-minitrue channel   <sub>          add|remove|list|refresh de canais (norma futura;
-                                  a configuração atual é por arquivos, SPEC-0009 §7)
+minitrue channel refresh [canal]… autentica, mostra diff e avança snapshots
+minitrue channel   <sub>          add|remove|list continuam norma futura;
+                                  a configuração atual é por arquivos, SPEC-0009 §7
 minitrue pack      <dir> [saída]  tar normalizado determinístico + sha256 (SPEC-0010 §4)
 minitrue attest keygen <nome> <chave> gera chave ed25519 de builder (SPEC-0009 §8.1)
 minitrue attest <pkg> <builder> <chave> emite attestation assinada
@@ -52,8 +53,9 @@ minitrue corroborate <pkg>        confere attestations contra a identidade insta
 Esta é a interface normativa. No protótipo atual estão implementados
 `rectify <pkg>`, `memoryhole`, `archives`, `verify`, `newspeak`, `explain`,
 `why`, `pack`, `attest`, `corroborate`, `cache verify`, o consumo de canais
-assinados e `channel emit`; `--sync`, rollback, `unperson`, `lint`, a CLI de gestão
-`channel add|remove|list|refresh` e as variantes de remoção/varredura acima
+assinados, `channel emit` e `channel refresh`; `--sync`, rollback, `unperson`,
+`lint`, a CLI de gestão `channel add|remove|list` e as variantes de
+remoção/varredura acima
 continuam no Marco 0.2 (ver `STATUS.md`).
 
 Opções globais:
@@ -65,7 +67,7 @@ Opções globais:
 | `--offline` | proíbe rede; só aceita artefato já presente no cache |
 | `--no-binary` / `--only-binary` | força build de fonte / exige artefato aceitável de canal e proíbe fallback de fonte (SPEC-0009 §5); ambas implementadas e mutuamente exclusivas |
 | `NEWSPEAK_PATH` (env ou `conf`) | árvores de receitas separadas por `:`, em ordem de precedência — a primeira ocorrência do pacote vence (herança `KISS_PATH`); default `/var/lib/minitrue/newspeak` |
-| `--tofu` | permite receita sem `SHA256`: baixa, calcula, imprime a linha `SHA256=…` pronta para colar, instala com aviso gritante. Se a receita pina `SIGKEY`, a assinatura continua obrigatória mesmo em TOFU — é o que torna a repinagem de versão segura. NÃO DEVE existir em builds de release da ferramenta destinados a usuários finais. É a única exceção a P6, e reconciliada lá: o TOFU **cria** o pino (aid de autoria), não o dispensa — SPEC-0001 P6 |
+| `--tofu` | permite receita sem `SHA256`: baixa, calcula, imprime a linha `SHA256=…` pronta para colar, instala com aviso gritante. Se a receita pina `SIGKEY`, a assinatura continua obrigatória mesmo em TOFU — é o que torna a repinagem de versão segura. Existe somente na feature Cargo sem default `tofu-authoring`, construída explicitamente por `bootstrap/build-minitrue.sh --authoring`; o caminho canônico sem essa opção compila com `--no-default-features`, não anuncia a flag e a recusa como desconhecida. É a única exceção a P6, e reconciliada lá: o TOFU **cria** o pino (aid de autoria), não o dispensa — SPEC-0001 P6 |
 
 ### Canais binários — contrato implementado
 
@@ -79,19 +81,29 @@ minisign, prioridade e confiança.
 O índice canônico **v2** assinado autentica, por linha,
 `NAME VERSION ARCH RECIPE_FINGERPRINT PATH SHA256 [REPROCORR]`. A seleção só
 aceita versão, arquitetura e fingerprint iguais à receita efetiva, verifica a
-assinatura também em cache-hit/offline, baixa o `.tar.zst` pelo hash de
+assinatura também offline e, online, busca o índice corrente antes da seleção;
+a invocação explícita de `rectify` pode persistir esse snapshot operacional,
+mas não há atualização em background. `channel refresh` é a via administrativa
+sem instalação e exibe o diff antes de persistir;
+baixa o `.tar.zst` pelo hash de
 transporte e valida limites, topologia e hash do tar interno antes de qualquer
 aplicação. A escolha fica congelada num `CHANNEL_LOCK_FORMAT=2`, endereçado por
 hash sob `/var/lib/minitrue/channel-locks/`; o registro conserva caminho,
 hashes e confiança, e `verify` coteja esses campos semanticamente com o lock.
 
-`channel emit` produz artefatos, índice v2 e `emit.meta` com
-`CHANNEL_EMIT_FORMAT=2`, mas **não assina nem publica**. Para registros vindos
-de canal, reutiliza o tar autenticado do cache; para registros locais, só
-reconstrói quando consegue provar topologia, metadados e `ARTIFACT_HASH`, e
-falha fechado na ambiguidade. Um release DEVE emitir junto do build, assinar o
-índice externamente e conservar o artefato autenticado. O projeto ainda não
-publicou URL, chave, índice nem pool de um canal oficial. Metapacotes não têm
+Todo build fonte local retém atomicamente o tar canônico selado sob
+`/var/cache/minitrue/channel-stages/<ARTIFACT_HASH>.tar`. `channel emit`
+produz artefatos, índice v2 e `emit.meta` com `CHANNEL_EMIT_FORMAT=3` e
+`INDEX_SHA256` prendendo os bytes exatos desse índice, mas
+**não assina nem publica**. O modo comum prefere esse tar retido; na ausência,
+pode reutilizar o tar autenticado de outro canal ou reconstruir quando prova
+topologia, metadados e `ARTIFACT_HASH`, marcando `RELEASE_ROOT=no`. O gate
+`channel emit --release` exige exclusivamente o tar retido do próprio build,
+revalida integralmente seus bytes e formato e marca `RELEASE_ROOT=yes`;
+ausência ou corrupção falha sem reconstrução. Um release DEVE usar esse modo e
+assinar o índice externamente. O endpoint, a chave, o
+índice e o pool oficiais estão publicados e o bootstrap está pinado no perfil;
+a republicação precisa acompanhar cada roll. Metapacotes não têm
 payload nem `ARTIFACT_HASH` e, portanto, são recusados por `channel emit`: o
 canal publica os pacotes fonte pré-buildados que eles agregam, nunca o nó
 declarativo.
@@ -230,9 +242,9 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
    de mundo B sai somente por `rmdir`; pais não reivindicados não são podados.
 2. Preservados por padrão: `/etc/opt/<nome>`, `/var/opt/<nome>` e qualquer
    caminho cuja prova de conteúdo/tipo/alvo diferir do manifesto (§6) —
-   modificado pelo usuário ⇒ fica, com aviso. É a prova tipada do registro v2
-   que torna essa promessa **enforçável** (sem ela, não há como saber o que o
-   usuário mexeu). `--tudo` remove também esses.
+   modificado pelo usuário ⇒ fica, com aviso. É a prova tipada do registro
+   v2/v3 que torna essa promessa **enforçável** (sem ela, não há como saber o
+   que o usuário mexeu). `--tudo` remove também esses.
 3. Registro apagado por último. No mundo M, isso e a retirada do `world` são
    toda a remoção: suas `DEPS` ficam instaladas e podem passar a órfãs, mas não
    são apagadas sem ordem. Saída: `"<nome> nunca existiu."`
@@ -275,14 +287,15 @@ Três papéis, persistidos em cinco folhas (`meta`, `manifest`,
 `manifest@<versão>`, `recipe`, `recipe@<versão>`):
 
 - `meta` — `RECORD_FORMAT=`, `NAME=`, `VERSION=`, `KIND=`, `WORLD=A|B|M`,
-  `ORIGIN=`, `SHA256=` (por artefato), `DEPS=`, `SUPERSEDES=`, `FINGERPRINT=`,
+  `ORIGIN=`, `SHA256=` (por artefato), `DEPS=`, `SHARED_DIRS=`,
+  `SUPERSEDES=`, `FINGERPRINT=`,
   `ABOUT=`, `LICENSE=` (somente mundos A/B), `REPROCORR=`,
   `ARTIFACT_HASH=` (mundo B),
   `MANIFEST_BASELINE_SHA256=`, `INSTALLED_AT=` (ISO-8601) e
   `TRANSACTION_ID=` (mundo B). `ABOUT`, `LICENSE` e o pino `REPROCORR` são
   congelados no momento da instalação: inspeção posterior não precisa executar
   a receita histórica. O **`RECORD_FORMAT`** versiona o
-  esquema do registro (hoje `2`), para migração e leitura consciente. O
+  esquema do registro (hoje `3`), para migração e leitura consciente. O
   **`ORIGIN`** é de onde veio o artefato ou a declaração — `vendor` (mundo
   A), `fonte` (mundo B compilado localmente), `canal:<nome>` quando os canais
   (SPEC-0009 §8) o instalam, caso em que `TRUST=`, `CHANNEL_PATH=`,
@@ -298,14 +311,16 @@ Três papéis, persistidos em cinco folhas (`meta`, `manifest`,
   receita Zig propaga para os dependentes afetados (transitivo). A identidade
   inclui essa aresta mesmo quando um canal atende a instalação; o plano de
   instalação, porém, só materializa Zig quando haverá compilação local.
-  O fast path exige ainda registro v2 íntegro: `recipe` e `recipe@<versão>`
+  O fast path exige ainda registro tipado íntegro: `recipe` e
+  `recipe@<versão>`
   precisam coincidir byte a byte com o snapshot corrente e todas as provas do
   manifesto precisam conferir no filesystem. Em pacote comum,
   `manifest@<versão>` coincide com `manifest`; em provisional, a cópia
   versionada é o baseline imutável e o ativo pode conter apenas um subconjunto
   de linhas byte-idênticas após cessões.
 
-  `LICENSE` é uma extensão aditiva de `RECORD_FORMAT=2`: registros A/B novos
+  `LICENSE` entrou como extensão aditiva de `RECORD_FORMAT=2` e permanece no
+  formato 3: registros A/B novos
   sempre o gravam e registros M sempre o omitem. Num v2 anterior sem o campo,
   a leitura aceita apenas uma atribuição única, literal, não vazia e inequívoca
   no snapshot `recipe`, aberto sem seguir symlink e sem executar shell.
@@ -313,16 +328,21 @@ Três papéis, persistidos em cinco folhas (`meta`, `manifest`,
   fallback. A ausência não cria um novo formato; sem o fallback seguro, a
   licença fica indisponível e o fast path do registro A/B não é íntegro.
 - `manifest` — uma entrada por linha, ordenada, no formato
-  **`<prova>␠␠<caminho absoluto>`** (registro **v2**). A prova é
+  **`<prova>␠␠<caminho absoluto>`** (registro **v3**). A prova é
   `f:<sha256>` para **modo + conteúdo** de um regular, `l:<sha256>` para os bytes crus
   do alvo de um symlink e `d:<sha256>` para **modo do diretório-raiz + tar
-  canônico da árvore**. O prefixo prende o tipo; portanto retargetar um link,
+  canônico da árvore**. O formato 3 acrescenta `D:<sha256>` para um
+  **diretório estrutural compartilhado**: prende tipo + modo, sem reivindicar
+  os filhos depositados por outros pacotes. Uma claim `D:` só pode ser emitida
+  sob uma raiz canônica declarada em `SHARED_DIRS` pela receita fonte. O
+  prefixo prende o tipo; portanto retargetar um link,
   trocar o tipo, mudar o modo de um diretório reclamado ou adulterar qualquer
   arquivo sob `/opt/<nome>/<versão>` invalida a claim. Isto sustenta o veredito
   intacto × modificado do `memoryhole`, o `verify` e o fast path.
   Xattrs/ACLs/caps, uid/gid e timestamps ainda não entram.
 
-  Leitura permanece compatível com v1 (`<sha256>`/`-`) e v0 (somente caminho).
+  Leitura permanece compatível com v2 (`f:`/`l:`/`d:`), v1
+  (`<sha256>`/`-`) e v0 (somente caminho).
   Quando versão, fingerprint e snapshot já coincidem, o `rectify` pode migrar
   v0/v1 **in-place**, decorando claims legadas com o estado presente; uma claim
   v0 sem hash é promovida confiando nesse estado, pois o formato antigo não
@@ -331,7 +351,11 @@ Três papéis, persistidos em cinco folhas (`meta`, `manifest`,
   somente quando cada linha ativa é idêntica ao baseline e cada linha removida
   possui hoje sucessor não-provisional, ou sucessor provisional cujo registro
   declara `SUPERSEDES=<cedente>`. Formato maior/desconhecido falha fechado,
-  nunca é regravado como v2.
+  nunca é regravado como v3. Um registro v2 íntegro cuja receita não declara
+  `SHARED_DIRS` é reconhecido pelo planejador sem buscar canal nem expandir
+  build-deps e migra transacionalmente para v3 antes do fast path. Ativar
+  `SHARED_DIRS` exige reaplicar o STAGE: um registro v2 nunca teve autoridade
+  para fabricar claims `D:` retrospectivamente.
 - `recipe` — snapshot fiel da receita avaliada e usada. O diretório `files/`
   também é congelado para o fingerprint e o mesmo snapshot é materializado no
   `WORK` do build, evitando mudança de insumo entre parse e execução.
@@ -346,10 +370,10 @@ fingerprint canônico, snapshots de receita coerentes e ambos os manifestos
 iguais a essa forma vazia; qualquer marcador parcial ou claim de payload é
 *wrongthink*.
 
-Para **todo** registro v2, `verify` também percorre `DEPS`: cada nome precisa
-ser canônico e apontar para um diretório de registro factual cujo `meta`
-confirme o mesmo `NAME`. Isso prova o fechamento de runtime, inclusive o
-conjunto sustentado por um meta. `BUILD_DEPS` e a aresta de toolchain não são
+Para **todo** registro v2 ou v3, `verify` também percorre `DEPS`: cada nome
+precisa ser canônico e apontar para um diretório de registro factual cujo
+`meta` confirme o mesmo `NAME`. Isso prova o fechamento de runtime, inclusive
+o conjunto sustentado por um meta. `BUILD_DEPS` e a aresta de toolchain não são
 exigidos no sistema instalado, pois um artefato de canal deliberadamente não
 os materializa.
 
@@ -457,7 +481,7 @@ respondem, sem estado extra:
 É a característica distintiva: não "tenho um gerenciador pequeno", e sim
 "todo arquivo do sistema explica a si mesmo". Habilitada pelo registro —
 especialmente pelo `FINGERPRINT` (SPEC-0011 §4) e pelas provas tipadas do
-manifesto v2.
+manifesto v3.
 
 ### 6.2 Attestations e identidade de reprodução
 
@@ -471,10 +495,11 @@ corroboram; um builder pinado divergindo nessa mesma identidade dispara
 *crimestop*.
 
 A implementação usa `ed25519-dalek` dentro do minitrue e **não depende de
-OpenSSL**. O OpenSSL da base é necessário hoje para a assinatura dos módulos do
-kernel, não para este protocolo.
+OpenSSL**. O OpenSSL da base valida e reaplica os CMS públicos dos módulos do
+kernel; a chave privada que os originou não entra nesse build nem neste
+protocolo.
 
-Antes de emitir, a implementação exige registro mundo B v2 commitado, baseline
+Antes de emitir, a implementação exige registro mundo B v3 commitado, baseline
 hashado, `recipe`/`recipe@` idênticos e claims tipadas conferindo no rootfs; um
 `REPROCORR` pinado também precisa coincidir com `ARTIFACT_HASH`. Limite de
 confiança: sem pino externo, `ARTIFACT_HASH` e `FINGERPRINT` continuam vindo do
@@ -516,6 +541,15 @@ No upgrade do próprio dono, um diretório retirado só é removido se sua prova
 `d:` ainda confere; se ganhou conteúdo/metadados, permanece no filesystem e
 apenas deixa de ser reclamado.
 
+Claims `D:` são a exceção estrutural explícita, não coownership genérico. A
+claim exata continua única, e arquivo/link não pode substituí-la. Somente uma
+receita que declare o dono como `DEPS` **direta** pode instalar descendentes;
+dependência meramente transitiva não concede essa autoridade. O dono continua
+responsável por tipo e modo, enquanto cada produtor continua dono exclusivo
+dos arquivos/links que depositou. `verify` prova `D:` sem enumerar seus filhos;
+reconstrução de canal recria o diretório vazio; upgrade e `memoryhole` usam
+somente `rmdir`, preservando qualquer filho existente.
+
 ## 8. Execução de receitas e confinamento
 
 - O arquivo `recipe` e `files/` são congelados antes da operação. A avaliação
@@ -533,11 +567,12 @@ apenas deixa de ser reclamado.
 - Regra normativa: receita NÃO DEVE acessar rede (todo insumo entra por
   `SRC`) nem escrever fora de `WORK`/`PREFIX`/`STAGE`. Para builds de um
   rootfs (`--root` != `/`), o `build()` de mundo B roda dentro dele via
-  `bwrap` com `--clearenv` e `--unshare-net` — SPEC-0005. O rootfs, porém, é
-  montado **gravável**, então ainda é possível escrever fora de `STAGE`. O
-  build no próprio sistema (`--root /`) roda direto, sem netns nem usuário
-  dedicado. Alvo: rootfs read-only com binds graváveis só para WORK/STAGE e
-  confinamento também da avaliação e do mundo A.
+  `bwrap` com `--clearenv`, `--unshare-net` e o rootfs em **somente-leitura** —
+  SPEC-0005. Somente `WORK` (que contém `STAGE` e `TMPDIR`) e o cache global do
+  Zig voltam como binds graváveis. Isso impede que um install hook que ignore
+  `DESTDIR` altere o sistema vivo ou uma claim já cedida. O build no próprio
+  sistema (`--root /`) ainda roda direto, sem netns nem usuário dedicado.
+  Permanecem como alvo o confinamento deste caso, da avaliação e do mundo A.
 - O `pack` representa nomes não-UTF-8 e hardlinks, mas o aplicador de mundo B
   ainda opera com caminhos UTF-8 e não possui `linkat` transacional. Por isso
   `rectify` **recusa** ambos no `STAGE`, em vez de instalar uma topologia
