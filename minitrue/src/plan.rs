@@ -5255,7 +5255,10 @@ fn verify_receipt_record_identity(
         "source" if meta.get("ARTIFACT_HASH") != Some(&node.payload) => {
             bail!("{package}: payload source diverge do receipt")
         }
-        "binary" if sha256(&read_record_payload(&record, "manifest")?) != node.payload => {
+        "binary"
+            if record_payload_sha256(&record, package, record_is_provisional(&meta))?
+                != node.payload =>
+        {
             bail!("{package}: payload vendor diverge do receipt")
         }
         "meta" if node.payload != "-" => bail!("{package}: meta do receipt possui payload"),
@@ -7678,6 +7681,61 @@ fn read_content_addressed(directory: &Path, name: &str, label: &str) -> Result<V
         .ok_or_else(|| anyhow::anyhow!("{label} referenciado não existe"))
 }
 
+/// Payload factual de um registro Mundo A, do jeito que o PLAN_LOCK o prende.
+///
+/// Um registro PROVISIONAL existe para se dissolver: seus applets cedem lugar
+/// às ferramentas reais conforme o sistema materializa, e
+/// `adopt_provisional_path` transfere cada caminho para quem o instala e o
+/// declara em SUPERSEDES. Prender o manifesto inteiro era prender um valor que
+/// o próprio design promete mudar — e mudava DENTRO do plano que causava a
+/// mudança: instalar binutils tirava `/usr/bin/ar` e `/usr/bin/strings` do
+/// busybox, e o vínculo do PLAN_LOCK do busybox quebrava no meio da execução.
+///
+/// Saber de antemão QUAIS caminhos serão cedidos exigiria construir antes de
+/// resolver, porque quem supersede costuma ser Mundo B. Mas a cessão não
+/// alcança o payload: um pacote Mundo A vive em `/opt/<nome>/`, e ninguém
+/// supersede um caminho de lá. É essa árvore que identifica o pacote, e é ela
+/// que fica presa; a integridade do manifesto inteiro continua conferida pelo
+/// `verify`, por outro caminho.
+///
+/// Registro não-provisional não cede nada, e continua preso por inteiro. A
+/// leitura é ancorada em descritor como a de qualquer outro payload de record.
+/// Um registro provisional é o que declara, no próprio meta, que veio para
+/// ceder lugar.
+pub(crate) fn record_is_provisional(meta: &HashMap<String, String>) -> bool {
+    meta.get("PROVISIONAL").map(String::as_str) == Some("1")
+}
+
+pub(crate) fn record_payload_sha256(
+    record: &Path,
+    name: &str,
+    provisional: bool,
+) -> Result<String> {
+    let manifest = read_record_payload(record, "manifest")?;
+    if !provisional {
+        return Ok(sha256(&manifest));
+    }
+    let prefix = format!("/opt/{name}/").into_bytes();
+    let mut retained: Vec<u8> = Vec::new();
+    for line in manifest.split(|byte| *byte == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let separator = line
+            .windows(2)
+            .position(|window| window == b"  ")
+            .ok_or_else(|| anyhow::anyhow!("{name}: manifesto tem linha sem caminho"))?;
+        if line[separator + 2..].starts_with(&prefix) {
+            retained.extend_from_slice(line);
+            retained.push(b'\n');
+        }
+    }
+    if retained.is_empty() {
+        bail!("{name}: registro provisional não reivindica payload em /opt/{name}/");
+    }
+    Ok(sha256(&retained))
+}
+
 fn read_record_payload(record: &Path, name: &str) -> Result<Vec<u8>> {
     let directory = fs::OpenOptions::new()
         .read(true)
@@ -7833,8 +7891,8 @@ pub(crate) fn verify_record_binding(
             }
         }
         payload if node.kind == "binary" => {
-            if sha256(&read_record_payload(record, "manifest")?) != payload {
-                bail!("record A diverge do manifesto preso no PLAN_LOCK");
+            if record_payload_sha256(record, package, record_is_provisional(meta))? != payload {
+                bail!("record A diverge do payload preso no PLAN_LOCK");
             }
         }
         _ => bail!("payload do NODE é incompatível com KIND/ACTION"),
@@ -8857,6 +8915,56 @@ mod tests {
         "recipe:SIG_MINISIGN[2]=https://e.invalid/b.sig",
     );
     const MINIKEY: (&str, &str) = ("signature-key", "recipe:SIGKEY=minisign:aaaa");
+
+    #[test]
+    fn cessao_de_applet_nao_move_o_payload_do_provisional() {
+        let (root, _ctx) = fixture("provisional");
+        let record = root.join("var/lib/minitrue/records/busybox");
+        fs::create_dir_all(&record).unwrap();
+        let escreve = |linhas: &str| fs::write(record.join("manifest"), linhas).unwrap();
+
+        // O retrato do busybox recém-instalado: a árvore em /opt é o payload,
+        // e os applets em /usr/bin são a superfície que cede.
+        let antes = "d:aa  /opt/busybox/1.35.0\n\
+                     l:bb  /opt/busybox/current\n\
+                     l:cc  /usr/bin/ar\n\
+                     l:dd  /usr/bin/strings\n";
+        escreve(antes);
+        let payload = record_payload_sha256(&record, "busybox", true).unwrap();
+
+        // Instalar binutils tira /usr/bin/ar e /usr/bin/strings. Era isso que
+        // invalidava o PLAN_LOCK no meio do plano que causava a cessão.
+        escreve("d:aa  /opt/busybox/1.35.0\nl:bb  /opt/busybox/current\n");
+        assert_eq!(
+            record_payload_sha256(&record, "busybox", true).unwrap(),
+            payload,
+            "ceder applet não pode mover o payload de um provisional"
+        );
+
+        // Mexer no payload em si continua movendo o valor preso.
+        escreve("d:ff  /opt/busybox/1.35.0\nl:bb  /opt/busybox/current\n");
+        assert_ne!(
+            record_payload_sha256(&record, "busybox", true).unwrap(),
+            payload
+        );
+
+        // Registro não-provisional não cede nada, e continua preso por inteiro:
+        // ali o mesmo par de linhas a menos MUDA o valor.
+        escreve(antes);
+        let inteiro = record_payload_sha256(&record, "busybox", false).unwrap();
+        escreve("d:aa  /opt/busybox/1.35.0\nl:bb  /opt/busybox/current\n");
+        assert_ne!(
+            record_payload_sha256(&record, "busybox", false).unwrap(),
+            inteiro
+        );
+
+        // Um provisional sem payload em /opt não tem o que prender, e dizer
+        // isso é melhor que prender o hash do vazio.
+        escreve("l:cc  /usr/bin/ar\n");
+        assert!(record_payload_sha256(&record, "busybox", true).is_err());
+
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[test]
     fn minisign_tem_n_assinaturas_para_uma_chave_e_nenhum_epoch() {

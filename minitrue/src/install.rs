@@ -8016,7 +8016,11 @@ pub(crate) fn installed_plan_material(
             .get("ARTIFACT_HASH")
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("{}: registro B sem ARTIFACT_HASH", recipe.name))?,
-        Kind::Binary => sha256_bytes(&read_regular_nofollow(&record.join("manifest"))?),
+        Kind::Binary => crate::plan::record_payload_sha256(
+            &record,
+            &recipe.name,
+            crate::plan::record_is_provisional(&meta),
+        )?,
         Kind::Meta => "-".to_string(),
     };
     Ok(Some((origin, payload)))
