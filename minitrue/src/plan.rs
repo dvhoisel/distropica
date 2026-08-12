@@ -6150,6 +6150,20 @@ fn validate_signature_identifier(kind: &str, identifier: &str, transport: &str) 
                 validate_epoch(epoch)?;
                 return Ok(());
             }
+            // Minisign tem forma própria porque tem semântica própria: chave
+            // única para todas as fontes, assinatura Ed25519 crua sem validade
+            // nem expiração. Não há instante de referência a declarar, e não há
+            // SIGKEY[n] com que parear.
+            if let Some(value) = identifier.strip_prefix("recipe:SIG_MINISIGN[") {
+                let (index, url) = value
+                    .split_once("]=")
+                    .ok_or_else(|| anyhow::anyhow!("assinatura minisign indexada malformada"))?;
+                if canonical_index(index, "índice SIG_MINISIGN")? == 0 {
+                    bail!("assinatura minisign com índice zero");
+                }
+                validate_canonical_https(url, "URL de assinatura minisign")?;
+                return Ok(());
+            }
             let value = identifier
                 .strip_prefix("recipe:")
                 .ok_or_else(|| anyhow::anyhow!("assinatura sem prefixo recipe"))?;
@@ -6440,6 +6454,39 @@ fn validate_package_artifact_correlation(
         if normal_signatures.contains(index) || normal_keys.contains(index) {
             bail!("{package}: slot SRC[{index}] mistura waiver e assinatura normal");
         }
+    }
+    // Minisign não entra na bijeção acima: são N assinaturas para UMA chave.
+    // Mas isso não pode virar ausência de correlação — sem esta conferência,
+    // uma assinatura minisign existiria sem chave que a julgue, ou apontaria
+    // para um SRC que a receita não declara.
+    let minisign_signatures: BTreeSet<usize> = facts
+        .iter()
+        .filter(|(kind, _)| kind == "signature")
+        .filter_map(|(_, identifier)| {
+            bracketed_index(identifier, "recipe:SIG_MINISIGN[", "índice SIG_MINISIGN").transpose()
+        })
+        .collect::<Result<_>>()?;
+    let minisign_keys = facts
+        .iter()
+        .filter(|(kind, identifier)| {
+            kind == "signature-key" && identifier.starts_with("recipe:SIGKEY=minisign:")
+        })
+        .count();
+    if !minisign_signatures.is_empty() {
+        if minisign_keys != 1 {
+            bail!("{package}: assinatura minisign exige exatamente uma SIGKEY minisign");
+        }
+        if minisign_signatures
+            .iter()
+            .any(|index| !source_counts.contains_key(index))
+        {
+            bail!("{package}: assinatura minisign aponta para SRC inexistente");
+        }
+        if !normal_signatures.is_empty() || !normal_keys.is_empty() {
+            bail!("{package}: mistura assinatura minisign com assinatura indexada OpenPGP");
+        }
+    } else if minisign_keys > 0 {
+        bail!("{package}: SIGKEY minisign sem assinatura que ela julgue");
     }
     if normal_signatures != normal_keys {
         bail!("{package}: SIG[n] e SIGKEY[n] não são bijetivos");
@@ -8773,6 +8820,96 @@ mod tests {
         assert!(verified
             .abi_projection(&BTreeSet::from(["pkg".to_string()]))
             .is_err());
+    }
+
+    /// Um nó qualquer, material e de mundo A, só para dar contexto às
+    /// conferências de assinatura.
+    fn no_de_vendor() -> VerifiedNode {
+        VerifiedNode {
+            version: "1".into(),
+            kind: "binary".into(),
+            world: "A".into(),
+            action: "vendor".into(),
+            origin: "vendor".into(),
+            fingerprint: "a".repeat(64),
+            role: "runtime".into(),
+            payload: "b".repeat(64),
+            license: "MIT".into(),
+            provenance_sha256: "c".repeat(64),
+        }
+    }
+
+    fn fatos(pares: &[(&str, &str)]) -> Vec<(String, String)> {
+        pares
+            .iter()
+            .map(|(kind, identifier)| (kind.to_string(), identifier.to_string()))
+            .collect()
+    }
+
+    const SRC_1: (&str, &str) = ("vendor-input", "recipe:SRC[1]=https://e.invalid/a.tar");
+    const SRC_2: (&str, &str) = ("vendor-input", "recipe:SRC[2]=https://e.invalid/b.tar");
+    const MINISIG_1: (&str, &str) = (
+        "signature",
+        "recipe:SIG_MINISIGN[1]=https://e.invalid/a.sig",
+    );
+    const MINISIG_2: (&str, &str) = (
+        "signature",
+        "recipe:SIG_MINISIGN[2]=https://e.invalid/b.sig",
+    );
+    const MINIKEY: (&str, &str) = ("signature-key", "recipe:SIGKEY=minisign:aaaa");
+
+    #[test]
+    fn minisign_tem_n_assinaturas_para_uma_chave_e_nenhum_epoch() {
+        let no = no_de_vendor();
+        // A regressão que travou o rebuild: minisign emitia `SIG[n]`, e o
+        // validador cobrava dele o EPOCH e a bijeção com `SIGKEY[n]` — regras
+        // que só existem no OpenPGP. Uma assinatura Ed25519 crua não tem
+        // validade nem expiração, então não há instante de referência a citar.
+        validate_package_artifact_correlation("zig", &no, &fatos(&[SRC_1, MINISIG_1, MINIKEY]))
+            .unwrap();
+        // Uma chave para duas fontes é o caso normal do minisign, e seria
+        // recusado por qualquer regra de bijeção.
+        validate_package_artifact_correlation(
+            "zig",
+            &no,
+            &fatos(&[SRC_1, SRC_2, MINISIG_1, MINISIG_2, MINIKEY]),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn minisign_sem_correlacao_e_recusado() {
+        let no = no_de_vendor();
+        let recusa = |pares: &[(&str, &str)], porque: &str| {
+            assert!(
+                validate_package_artifact_correlation("zig", &no, &fatos(pares)).is_err(),
+                "{porque}"
+            );
+        };
+        recusa(
+            &[SRC_1, MINISIG_1],
+            "assinatura sem chave não tem quem a julgue",
+        );
+        recusa(&[SRC_1, MINIKEY], "chave sem assinatura que ela julgue");
+        recusa(
+            &[SRC_1, MINISIG_2, MINIKEY],
+            "assinatura apontando para SRC[2] inexistente",
+        );
+        // Misturar os dois esquemas deixaria ambíguo qual chave julga qual
+        // assinatura.
+        recusa(
+            &[
+                SRC_1,
+                MINISIG_1,
+                MINIKEY,
+                (
+                    "signature",
+                    "recipe:SIG[1]=https://e.invalid/a.asc;EPOCH=10",
+                ),
+                ("signature-key", "recipe:SIGKEY[1]=files/k.asc;FP=AA"),
+            ],
+            "minisign misturado com OpenPGP indexado",
+        );
     }
 
     #[test]

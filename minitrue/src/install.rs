@@ -2459,7 +2459,12 @@ fn copy_regular_or_link_into_view(source: &Path, destination: &Path) -> Result<(
         // FICLONE cria outro inode e congela os blocos por COW; é seguro como
         // snapshot e evita recopiá-los fisicamente para cada consumidor. Em
         // filesystems sem reflink, a cópia streaming mantém a mesma semântica.
-        const FICLONE_IOCTL: libc::c_ulong = 0x4004_9409;
+        // O tipo do segundo argumento de `ioctl` NÃO é o mesmo nas duas libc
+        // desta distro: `c_ulong` na glibc e `c_int` no musl. Escrever o
+        // literal com um tipo fixo compila numa e quebra na outra — e a que
+        // quebrava era justamente a musl do binário distribuível, que só falha
+        // no stage0. `libc::Ioctl` é o apelido que cada plataforma define.
+        const FICLONE_IOCTL: libc::Ioctl = 0x4004_9409 as libc::Ioctl;
         let cloned =
             unsafe { libc::ioctl(output.as_raw_fd(), FICLONE_IOCTL, input.as_raw_fd()) } == 0;
         if !cloned {
@@ -2493,9 +2498,19 @@ fn copy_regular_or_link_into_view(source: &Path, destination: &Path) -> Result<(
 }
 
 fn set_build_timestamp(path: &Path, epoch: u64) -> Result<()> {
-    let seconds: libc::time_t = epoch
+    // O tipo vem do CAMPO que vai ser preenchido, não de `time_t`: o musl está
+    // migrando `time_t` para 64 bits e a libc marcou o apelido como obsoleto.
+    // Derivar de `tv_sec` mantém a conversão correta nas duas libc sem
+    // depender de qual largura cada uma escolheu, e o `try_into` continua
+    // recusando um epoch que não caiba.
+    // O tipo sai por inferência do CAMPO que vai receber o valor, e não de
+    // `libc::time_t`: o musl está migrando `time_t` para 64 bits e a libc já
+    // marcou o apelido como obsoleto. Assim a conversão continua correta nas
+    // duas libc sem depender da largura que cada uma escolheu, e o `try_into`
+    // segue recusando um epoch que não caiba.
+    let seconds = epoch
         .try_into()
-        .map_err(|_| anyhow::anyhow!("SOURCE_DATE_EPOCH excede time_t: {epoch}"))?;
+        .map_err(|_| anyhow::anyhow!("SOURCE_DATE_EPOCH excede o tv_sec desta libc: {epoch}"))?;
     let times = [
         libc::timespec {
             tv_sec: seconds,

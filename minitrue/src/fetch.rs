@@ -377,7 +377,14 @@ pub(crate) fn signature_input_facts(r: &Recipe) -> Result<Vec<AuthenticatedInput
             for (index, url) in signature_urls.iter().enumerate() {
                 facts.push(input_fact(
                     "signature",
-                    format!("recipe:SIG[{}]={url}", index + 1),
+                    // Minisign NÃO usa a forma indexada do OpenPGP. Ele tem uma
+                    // chave só para todas as fontes — daí `SIGKEY=minisign:` sem
+                    // índice —, e sua assinatura Ed25519 crua não tem validade
+                    // nem expiração, então não há instante de referência a
+                    // declarar. Emitir `SIG[n]` aqui fazia o validador cobrar
+                    // EPOCH e exigir bijeção com `SIGKEY[n]`, duas regras que só
+                    // fazem sentido no OpenPGP.
+                    format!("recipe:SIG_MINISIGN[{}]={url}", index + 1),
                     "pending".to_string(),
                 ));
             }
@@ -1670,7 +1677,7 @@ fn verify_minisign_plan(
         }
         facts.push(input_fact(
             "signature",
-            format!("recipe:SIG[{}]={signature_url}", index + 1),
+            format!("recipe:SIG_MINISIGN[{}]={signature_url}", index + 1),
             hex::encode(Sha256::digest(&object.bytes)),
         ));
         eprintln!("  assinatura minisign confere — veio de quem sempre veio");
