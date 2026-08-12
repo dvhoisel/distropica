@@ -8,17 +8,25 @@ Nenhuma delas é oficial.
 `live.world` descreve o ambiente incorporado no `BOOTX64.EFI` da mídia;
 `target.world` descreve o sistema instalado; e o `cache.world` opcional declara
 quais receitas precisam ter, no cache offline, todos os artefatos e as
-assinaturas que estiverem pinadas. A árvore Newspeak, o overlay, os três worlds
-e o cache entram no `profile.lock` por hash. O lock e sua identidade de conteúdo
-usam os formatos `PROFILE_LOCK_FORMAT=2` e `PROFILE_CONTENT_FORMAT=2`; o campo
-`CACHE_WORLD_SHA256` autentica a forma normalizada de `cache.world`.
+assinaturas que estiverem pinadas. A árvore Newspeak, o overlay, os três worlds,
+o cache e o bootstrap do canal entram no `profile.lock` por hashes separados.
+O lock e sua identidade de conteúdo usam os formatos `PROFILE_LOCK_FORMAT=3`
+e `PROFILE_CONTENT_FORMAT=3`; `CACHE_WORLD_SHA256` autentica a forma
+normalizada de `cache.world` e `CHANNEL_BOOTSTRAP_SHA256` prende endpoint,
+chave pública e seed assinada.
 
-Quando o canal oficial existir, seu bootstrap versionado poderá viver em
-`channel-bootstrap/`, com `channel-config/<nome>` e
-`channels/<nome>/{index,index.minisig}`. Esse diretório é autodetectado,
-entra em `CACHE_SHA256` e é semeado antes do primeiro `rectify`. Ele não existe
-hoje porque endpoint e chave ainda não foram publicados; valores fictícios
-tornariam uma mídia online aparentemente pronta, mas inoperante.
+O canal oficial publicado em `https://distropica.com.br/canal/oficial/` tem
+seu bootstrap versionado em `channel-bootstrap/`, com
+`channel-config/oficial` e
+`channels/oficial/{index,index.minisig}`. O arquivo `newspeak-origem` prende
+separadamente `https://distropica.com.br/newspeak/` com a mesma chave do
+projeto, para `rectify newspeak`. O endpoint e a chave minisign estão
+pinados na mídia; o índice embarcado é uma seed assinada, não autoridade vinda
+da rede. Em operações online o Minitrue busca o índice corrente, valida-o pela
+mesma chave e só então, dentro da invocação explícita de `rectify`, substitui o
+snapshot operacional preso no lock. Não há atualização em background;
+`channel refresh` é a via auditável sem instalação. Em operação offline usa
+exatamente a seed assinada disponível.
 
 `INSTALL_READY=yes` declara que o world mínimo (`base` + `linux` + `e2fsprogs`
 + `ripgrep` + `vim` + `miniplenty-buildbase`) pode ser materializado num alvo
@@ -35,13 +43,18 @@ desejo top-level. O caminho de instalação pretendido usa um canal assinado com
 fonte de sua closure, Vim e ncurses vêm como artefatos do canal, sem compilar
 esses componentes no computador do usuário. O canal/cache local de
 desenvolvimento com essa closure foi construído, assinado e aceito na mídia
-`miniplenty-v1`; continua não sendo um canal oficial publicado.
+`miniplenty-v1`; essa evidência histórica continua sendo de desenvolvimento,
+embora endpoint, chave e índice oficiais já estejam publicados agora.
 
-O cache e sua chave de assinatura ainda não são artefatos oficiais publicados
-pelo projeto. Passá-lo por `--cache` é um override explícito e classifica esse
-build como `custom`; um futuro `channel-bootstrap/` versionado preservará
-`development` até o perfil ser promovido com os pinos de release. O perfil
-fixa `MEDIA_SIZE_MIB=512` para dimensionar a saída IMG e registrar o valor no
+O cache fechado usado para compor a mídia offline é um insumo de build e entra
+integralmente em `CACHE_SHA256` e `PROFILE_CONTENT_SHA256`. Em
+`STATUS=release`, apenas os bytes exatos pinados por
+`OFFICIAL_CONTENT_SHA256` conservam `official-inputs`; qualquer alteração no
+`--cache` rebaixa a composição para `custom`. O cache não substitui o
+`channel-bootstrap/`: ele é consumido para instalar sem rede e, antes do
+primeiro reboot, endpoint, chave e seed oficiais do perfil são instalados no
+alvo. O perfil
+fixa `MEDIA_SIZE_MIB=1024` para dimensionar a saída IMG e registrar o valor no
 lock. Esse campo não fixa o tamanho da ISO, que acompanha o payload.
 
 O cache offline completo pode ser um superconjunto estrito da closure de
@@ -87,8 +100,9 @@ artefato de canal evita a compilação e não instala Zig; receitas `none` ou
 perfil, o único desejo explícito é `miniplenty-buildbase`: Make e `gcc-pass2`
 ficam registrados e instalados como dependências, mas não viram desejos
 top-level. `base`, também alcançado pelo meta, já é listado diretamente ao lado
-de `linux`, `ripgrep` e `vim`. O override `--cache` continua classificando a
-composição como `custom`.
+de `linux`, `ripgrep` e `vim`. O `--cache` participa da identidade pelos próprios
+bytes: em desenvolvimento conserva a classe `development`; em release, só o
+conteúdo exatamente pinado pode chegar a `official-inputs`.
 
 O overlay fornece o estado mínimo de contas e boot: conta root inicialmente
 bloqueada, `fstab`, `securetty`, `passwd` e `group`. A mídia viva pede uma senha
@@ -122,7 +136,7 @@ A variante interativa pode ser aceita com:
 
 ```sh
 bootstrap/live/accept-virtualbox \
-  --iso target/distropica.iso \
+  --iso target/media-output/distropica.iso \
   --run-dir target/acceptance-virtualbox
 ```
 
@@ -214,17 +228,16 @@ Isso continua sendo desenvolvimento: os manifestos registraram
 `PROFILE_CLASS=custom` e `MEDIA_CLASS=custom`; essa evidência não é
 pino oficial e igualdade local não provará reprodução entre builders. O kernel
 vivo cobre sobretudo o hardware virtual testado e o EFI contém
-kernel+initramfs embutidos. `CONFIG_MODULES=y` permanece habilitado, mas a
-mídia não contém `.ko`: os drivers do instalador são built-in. O sufixo
-`-distropica-live` separa seu release do `7.1.4` instalado e evita que a busca
-automática use `/lib/modules/7.1.4` do target. O EFI ainda não acompanha
-automaticamente atualizações de `/boot/vmlinuz-*`.
+kernel+initramfs embutidos. `CONFIG_MODULES=n` fecha o carregador e a mídia não
+contém `.ko`: os drivers do instalador são built-in. O sufixo
+`-distropica-live` separa seu release do `7.1.8` instalado. O EFI ainda não
+acompanha automaticamente atualizações de `/boot/vmlinuz-*`.
 
-Para virar release faltam, entre outros, endpoint e chave do canal oficial,
-bundle estático assinado, pinos oficiais do perfil/EFI/Minitrue, manifesto
+Para virar release faltam, entre outros, fechar e reconstruir os payloads do
+canal, o bundle estático assinado, pinos oficiais do perfil/EFI/Minitrue, manifesto
 externo assinado, runit, política final de contas e uid/gid, atualização
-atômica do EFI e testes em hardware real. Também faltam `channel refresh`
-auditável, Journal integralmente fd-relative contra TOCTOU e streaming: durante
+atômica do EFI e testes em hardware real. Também faltam Journal integralmente
+fd-relative contra TOCTOU e streaming: durante
 o consumo binário, o `.tar.zst` selado e o tar descompactado coexistem em RAM, e
 o instalador vivo ainda mantém a raiz pré-validada em `/run` até concluir a
 cópia segura para o disco.

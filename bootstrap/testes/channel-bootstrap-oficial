@@ -1,0 +1,49 @@
+#!/bin/sh
+# Regressão local da autoridade que a mídia instala no alvo.
+#
+# Não consulta a rede: a URL só fornece bytes, enquanto estes arquivos
+# versionados decidem a chave e a seed autenticada.
+set -eu
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+BOOTSTRAP=$REPO/profiles/official/channel-bootstrap
+CONFIG=$BOOTSTRAP/channel-config/oficial
+INDEX=$BOOTSTRAP/channels/oficial/index
+SIGNATURE=$BOOTSTRAP/channels/oficial/index.minisig
+NEWSPEAK_ORIGIN=$BOOTSTRAP/newspeak-origem
+
+command -v minisign >/dev/null 2>&1 || {
+    echo "erro: minisign ausente; não pude validar o bootstrap oficial" >&2
+    exit 1
+}
+
+url=$(sed -n 's/^URL=//p' "$CONFIG")
+key=$(sed -n 's/^KEY=//p' "$CONFIG")
+priority=$(sed -n 's/^PRIORITY=//p' "$CONFIG")
+trust=$(sed -n 's/^TRUST=//p' "$CONFIG")
+
+[ "$url" = 'https://distropica.com.br/canal/oficial/' ] || {
+    echo "erro: URL oficial inesperada: $url" >&2
+    exit 1
+}
+[ "$key" = 'RWQXESsMzaikZ69ZZDbdf02LU8K+U56UvYHlpkgMrXGcE/X3QvtKPyLI' ] || {
+    echo "erro: chave pública oficial inesperada" >&2
+    exit 1
+}
+[ "$priority" = 100 ] || { echo "erro: prioridade oficial inesperada" >&2; exit 1; }
+[ "$trust" = oficial ] || { echo "erro: trust oficial inesperado" >&2; exit 1; }
+[ -s "$INDEX" ] || { echo "erro: seed oficial vazia" >&2; exit 1; }
+[ -s "$SIGNATURE" ] || { echo "erro: assinatura oficial vazia" >&2; exit 1; }
+
+minisign -Vm "$INDEX" -x "$SIGNATURE" -P "$key" >/dev/null
+newspeak_url=$(sed -n 's/^URL=//p' "$NEWSPEAK_ORIGIN")
+newspeak_key=$(sed -n 's/^KEY=//p' "$NEWSPEAK_ORIGIN")
+[ "$newspeak_url" = 'https://distropica.com.br/newspeak/' ] || {
+    echo "erro: origem oficial da árvore inesperada: $newspeak_url" >&2
+    exit 1
+}
+[ "$newspeak_key" = "$key" ] || {
+    echo "erro: a árvore e o canal não usam a mesma chave oficial" >&2
+    exit 1
+}
+echo "bootstrap oficial: canal, origem da árvore, chave e seed assinada conferem"
