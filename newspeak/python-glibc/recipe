@@ -86,5 +86,21 @@ build() {
     }
     # __pycache__ prende caminho absoluto e mtime dentro do .pyc.
     find "$STAGE" -type d -name __pycache__ -exec rm -rf {} +
+
+    # Mesmo resquício da stdlib tratado no `python`: encodings/rot_13.py vem com
+    # modo 755 e '#!/usr/bin/env python', um comando que esta árvore não instala.
+    # É codec, não programa — importado, nunca executado por shebang. Some-se o
+    # bit de execução, não o arquivo nem a linha, para não divergir dos bytes do
+    # upstream. Sem isto a auditoria recusa o payload, e com razão: um
+    # executável declara o interpretador que exige.
+    find "$STAGE/usr/lib" -type f -name '*.py' -perm -u+x \
+        -exec head -1 {} \; -print 2>/dev/null |
+        awk '/^#!.*\/env python$/ { getline caminho; print caminho }' |
+        while IFS= read -r resquicio; do
+            [ -n "$resquicio" ] || continue
+            chmod a-x "$resquicio"
+            echo "  bit de execução removido de ${resquicio#"$STAGE"}"
+        done
+
     find "$STAGE" -type d -empty -delete
 }

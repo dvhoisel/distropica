@@ -61,5 +61,29 @@ SETUP
     # apontando para quem veio depois. Mesmo princípio do glibc largando ldd e
     # tzselect — não entregar o que não é seu nem funciona.
     rm -rf "$STAGE/usr/lib/python3.14/config-3.14"
+
+    # Mesmo princípio, um degrau abaixo: encodings/rot_13.py vem do upstream com
+    # modo 755 e '#!/usr/bin/env python' — um comando `python` que esta árvore
+    # não tem e não pretende ter (instala python3.14, e PEP 394 deixa o nome nu
+    # a cargo da distro). O arquivo NÃO é um programa: é o codec usado por
+    # "x".encode("rot13") e por `python -m encodings.rot_13`, sempre importado,
+    # nunca executado por shebang.
+    #
+    # Some-se o BIT DE EXECUÇÃO, não o arquivo nem o shebang: o módulo é
+    # necessário, e reescrever a linha divergiria dos bytes do upstream sem
+    # necessidade. Sem o bit, ele deixa de ser executável e para de declarar um
+    # interpretador inexistente — que é exatamente o que a auditoria acusa.
+    #
+    # A busca é por padrão, e não pelo nome do arquivo, para que uma stdlib
+    # futura com outro resquício igual seja tratada em vez de reabrir isto.
+    find "$STAGE/usr/lib/python3.14" -type f -name '*.py' -perm -u+x \
+        -exec head -1 {} \; -print 2>/dev/null |
+        awk '/^#!.*\/env python$/ { getline caminho; print caminho }' |
+        while IFS= read -r resquicio; do
+            [ -n "$resquicio" ] || continue
+            chmod a-x "$resquicio"
+            echo "  rot13 e afins: bit de execução removido de ${resquicio#"$STAGE"}"
+        done
+
     find "$STAGE" -type d -empty -delete
 }
