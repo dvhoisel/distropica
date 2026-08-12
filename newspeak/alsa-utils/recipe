@@ -2,7 +2,7 @@ NAME=alsa-utils
 VERSION=1.2.16
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc alsa-lib ncurses bash"
+DEPS="glibc alsa-lib ncurses bash busybox"
 BUILD_DEPS="gcc-pass2 binutils-glibc make gettext"
 ABOUT="As ferramentas de linha de comando da ALSA, e elas existem aqui por uma razão específica: SEM MIXER NÃO HÁ SOM. A alsa-lib sozinha abre o dispositivo e escreve amostras nele, mas a maioria das placas — e o VirtualBox entre elas — sobe com o canal Master MUTADO, e não há nada no sistema que o desmute. O sintoma é o pior desta árvore: nada falha, o navegador diz que está tocando, o /proc/asound lista a placa, e não sai áudio. Quem desmuta é o amixer; quem persiste o estado entre boots é o alsactl. Por isso este pacote é dependência do 'desktop' e não um extra. O alsactl também é o que torna o volume uma coisa que se ajusta uma vez: ele salva em /var/lib/alsa/asound.state no desligamento e restaura no boot, e esse arquivo é ESTADO DE MÁQUINA — gerado no primeiro uso, nunca no payload, mesmo motivo do machine-id e do hwdb.bin. Sem alsamixer curses (--disable-alsamixer seria uma opção), porque o ncurses já está na árvore por causa do Vim e o custo é um binário; um mixer visual é a diferença entre 'ajuste o volume' e 'leia a documentação do amixer'. Sem alsaconf: é um script interativo para escolher módulo ISA de placa de som dos anos noventa, e esta árvore compila tudo builtin. Sem bat/nhlt e sem as ferramentas de topologia, que servem a firmware de DSP que não embarcamos."
 LICENSE="GPL-2.0-or-later"
@@ -52,6 +52,160 @@ build() {
             exit 1
         }
     done
+
+    # Politica de audio, finalmente ligada ao boot. A ALSA chama de `default`
+    # a placa zero quando nao ha configuracao; em maquinas com GPU dedicada a
+    # placa zero costuma ser o HDMI, enquanto o codec analogico fica em C1.
+    # Nao se fixa um numero da maquina do mantenedor: a cada boot escolhe-se a
+    # melhor via de playback: uma que se declare analogica, depois uma neutra,
+    # e somente por ultimo HDMI/DisplayPort/S/PDIF. /proc/asound/cards entra
+    # como pista auxiliar quando o nome do PCM e generico, nunca como fonte do
+    # numero do dispositivo.
+    install -d "$STAGE/etc/rc.d/rcS.d" "$STAGE/etc/rc.d/rcK.d"
+    cat > "$STAGE/etc/rc.d/rcS.d/07-alsa.sh" <<'ALSASTART'
+# Drop-in de inicializacao: escolhe a saida default e restaura o mixer ALSA.
+# Sourced pelo rcS depois que /proc e /dev ja existem. As variaveis DISTROPICA
+# abaixo sao ganchos de teste; no boot normal todas caem nos caminhos reais.
+alsa_proc_dir=${DISTROPICA_ALSA_PROC_DIR:-/proc/asound}
+alsa_etc_dir=${DISTROPICA_ALSA_ETC_DIR:-/etc}
+alsa_state_dir=${DISTROPICA_ALSA_STATE_DIR:-/var/lib/alsa}
+alsa_busybox=${DISTROPICA_ALSA_BUSYBOX:-/bin/busybox}
+alsa_amixer=${DISTROPICA_ALSA_AMIXER:-/usr/bin/amixer}
+alsa_alsactl=${DISTROPICA_ALSA_ALSACTL:-/usr/sbin/alsactl}
+
+if [ -r "$alsa_proc_dir/pcm" ] && [ -x "$alsa_amixer" ] && \
+   [ -x "$alsa_alsactl" ]; then
+    alsa_arquivo_cards=$alsa_proc_dir/cards
+    [ -r "$alsa_arquivo_cards" ] || alsa_arquivo_cards=/dev/null
+    alsa_escolha=$("$alsa_busybox" awk -F: '
+        # DISTROPICA-ALSA-SELECT-BEGIN
+        function eh_digital(texto) {
+            texto = tolower(texto)
+            return texto ~ /hdmi|displayport|display audio|s\/pdif|spdif|iec958|digital/ || \
+                texto ~ /(^|[^[:alnum:]_])dp([^[:alnum:]_]|$)/
+        }
+
+        tipo == "cards" {
+            linha_cards = $0
+            sub(/^[[:space:]]*/, "", linha_cards)
+            if (linha_cards ~ /^[0-9]+[[:space:]]+\[/) {
+                split(linha_cards, campos_cards, /[[:space:]]+/)
+                card_atual = campos_cards[1] + 0
+                tem_card_atual = 1
+                descricao_card[card_atual] = tolower($0)
+            } else if (tem_card_atual) {
+                descricao_card[card_atual] = descricao_card[card_atual] " " tolower($0)
+            }
+            next
+        }
+
+        tipo == "pcm" && /playback [1-9]/ {
+            split($1, numero, "-")
+            placa = numero[1] + 0
+            dispositivo = numero[2] + 0
+            candidato = placa " " dispositivo
+            linha = tolower($0)
+
+            # O nome do PCM e a evidencia principal: "Analog" explicito
+            # vence ate uma descricao de card ruim. A descricao do card so
+            # desempata nomes genericos, como os das controladoras HDA AMD.
+            if (linha ~ /analog/) {
+                if (analogica == "") analogica = candidato
+            } else if (!eh_digital(linha) && !eh_digital(descricao_card[placa])) {
+                if (neutra == "") neutra = candidato
+            } else if (digital == "") {
+                digital = candidato
+            }
+        }
+        END {
+            if (analogica != "") print analogica, "analogica"
+            else if (neutra != "") print neutra, "neutra"
+            else if (digital != "") print digital, "digital"
+        }
+        # DISTROPICA-ALSA-SELECT-END
+    ' tipo=cards "$alsa_arquivo_cards" tipo=pcm "$alsa_proc_dir/pcm")
+
+    if [ -n "$alsa_escolha" ]; then
+        alsa_placa=${alsa_escolha%% *}
+        alsa_resto=${alsa_escolha#* }
+        alsa_dispositivo=${alsa_resto%% *}
+        alsa_tipo=${alsa_resto#* }
+
+        # Arquivo gerado, nao payload: os numeros pertencem a esta maquina. Um
+        # administrador assume o controle removendo o marcador da primeira
+        # linha; nesse caso o boot nunca sobrescreve sua configuracao.
+        if [ ! -e "$alsa_etc_dir/asound.conf" ] || \
+           "$alsa_busybox" grep -q '^# DISTROPICA-AUTO-ALSA$' \
+               "$alsa_etc_dir/asound.conf"; then
+            umask 022
+            cat > "$alsa_etc_dir/asound.conf.new" <<EOF
+# DISTROPICA-AUTO-ALSA
+# Gerado de /proc/asound/pcm; remova o marcador acima para administrar a mao.
+defaults.pcm.card $alsa_placa
+defaults.pcm.device $alsa_dispositivo
+defaults.ctl.card $alsa_placa
+EOF
+            "$alsa_busybox" mv "$alsa_etc_dir/asound.conf.new" \
+                "$alsa_etc_dir/asound.conf"
+        fi
+
+        "$alsa_busybox" mkdir -p "$alsa_state_dir"
+        alsa_restaurada=nao
+        # O restore precisa provar que restaurou ESTA placa. O modo force do
+        # alsactl pode sair zero quando so outra placa aparece no state; -P
+        # torna a ausencia/incompatibilidade da escolhida um erro observavel.
+        if [ -s "$alsa_state_dir/asound.state" ] && \
+           "$alsa_alsactl" -P restore "$alsa_placa" >/dev/null 2>&1; then
+            alsa_restaurada=sim
+        fi
+
+        # Primeira partida (ou estado incompativel): desmuta os nomes comuns.
+        # Controles ausentes nao sao erro — codecs diferentes expoem conjuntos
+        # diferentes. Depois disso o estado salvo preserva os ajustes do
+        # usuario e este bloco deixa de impor volume nos boots seguintes.
+        if [ "$alsa_restaurada" = nao ]; then
+            "$alsa_amixer" -q -c "$alsa_placa" sset Master 70% unmute 2>/dev/null || true
+            "$alsa_amixer" -q -c "$alsa_placa" sset Speaker 70% unmute 2>/dev/null || true
+            "$alsa_amixer" -q -c "$alsa_placa" sset Headphone 70% unmute 2>/dev/null || true
+            "$alsa_amixer" -q -c "$alsa_placa" sset PCM 90% unmute 2>/dev/null || true
+            "$alsa_amixer" -q -c "$alsa_placa" sset Front 70% unmute 2>/dev/null || true
+            # HDMI/S/PDIF normalmente expoe apenas uma chave IEC958, sem
+            # volume. `unmute` sozinho e um parametro valido do sset; tentar
+            # ambos os nomes cobre o nome ALSA e a rotulagem S/PDIF exibida
+            # por mixers, sem inventar uma porcentagem que o controle nao tem.
+            if [ "$alsa_tipo" = digital ]; then
+                "$alsa_amixer" -q -c "$alsa_placa" sset IEC958 unmute 2>/dev/null || true
+                "$alsa_amixer" -q -c "$alsa_placa" sset S/PDIF unmute 2>/dev/null || true
+            fi
+            "$alsa_alsactl" store >/dev/null 2>&1 || true
+        fi
+        echo "distropica: audio default na placa $alsa_placa, dispositivo $alsa_dispositivo"
+        unset alsa_placa alsa_resto alsa_dispositivo alsa_tipo alsa_restaurada
+    else
+        echo "distropica: nenhuma via de reproducao ALSA encontrada" >&2
+    fi
+    unset alsa_escolha
+fi
+unset alsa_proc_dir alsa_etc_dir alsa_state_dir alsa_busybox alsa_amixer \
+    alsa_alsactl alsa_arquivo_cards
+ALSASTART
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/07-alsa.sh"
+
+    cat > "$STAGE/etc/rc.d/rcK.d/90-alsa.sh" <<'ALSASTOP'
+# Drop-in de desligamento: o volume e estado desta maquina, nao do pacote.
+if [ -x /usr/sbin/alsactl ] && [ -d /proc/asound ]; then
+    /bin/busybox mkdir -p /var/lib/alsa
+    /usr/sbin/alsactl store >/dev/null 2>&1 || \
+        echo "distropica: nao foi possivel salvar o estado ALSA" >&2
+fi
+ALSASTOP
+    chmod 0644 "$STAGE/etc/rc.d/rcK.d/90-alsa.sh"
+
+    # Guardas do comportamento, nao so da presenca dos binarios. Foi possivel
+    # embarcar alsactl e amixer por uma release inteira sem jamais chama-los.
+    grep -q 'alsactl.*-P restore' "$STAGE/etc/rc.d/rcS.d/07-alsa.sh"
+    grep -q 'alsactl store' "$STAGE/etc/rc.d/rcK.d/90-alsa.sh"
+    grep -q 'defaults.pcm.card' "$STAGE/etc/rc.d/rcS.d/07-alsa.sh"
     # ESTADO DE MÁQUINA NÃO ENTRA NO MANIFESTO. O asound.state guarda o volume
     # desta máquina; se viesse no payload, toda instalação nasceria com o
     # volume de outra pessoa e o arquivo divergiria do registro no primeiro

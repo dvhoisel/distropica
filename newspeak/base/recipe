@@ -17,6 +17,8 @@ build() {
         "$STAGE/usr/share/licenses/distropica/GPL-3.0-or-later.txt"
     install -m 0644 "$WORK/NOTICE" \
         "$STAGE/usr/share/licenses/distropica/NOTICE"
+    install -m 0644 "$WORK/LICENSING.md" \
+        "$STAGE/usr/share/licenses/distropica/LICENSING.md"
 
     # /var/run -> /run. O LINK DE COMPATIBILIDADE QUE FALTAVA, e a ausencia dele
     # custou uma rodada inteira de diagnostico.
@@ -458,7 +460,7 @@ if command -v getent >/dev/null 2>&1 && ! getent passwd distropica >/dev/null 2>
         echo sim || echo NAO) | nsswitch: $(sed -n 's/^passwd: *//p' \
         /etc/nsswitch.conf 2>/dev/null) ---" >&2
 fi
-# GRUPOS DE ACESSO A HARDWARE. Sao dois e cada um destrava uma coisa:
+# GRUPOS DE ACESSO A HARDWARE. Sao tres e cada um destrava uma coisa:
 #
 #   seat   quem pode falar com o seatd, que e quem entrega ao compositor os
 #          descritores de /dev/dri e /dev/input. Sem estar neste grupo, a
@@ -568,6 +570,23 @@ $BB mkdir -p /dev/pts 2>/dev/null
 $BB mount -t devpts -o gid=5,mode=620 devpts /dev/pts 2>/dev/null
 $BB mount -t tmpfs    tmp  /tmp  2>/dev/null
 $BB mount -t tmpfs    run  /run  2>/dev/null
+# O grupo audio PRECISA existir antes do mdev. O 04-usuario.sh tambem o cria,
+# mas os drop-ins rodam no fim deste arquivo e o mdev resolve `root:audio`
+# agora. No primeiro boot ainda havia apenas o grupo root: o mdev encontrava
+# um nome desconhecido e interrompia a populacao de /dev exatamente antes dos
+# pcmC*/controlC* que o Firefox e o amixer precisam. A conta pode vir depois;
+# uma entrada de grupo pode nomear um membro que ainda nao existe. Se o admin
+# ja escolheu outro GID para audio, preserva-se a entrada dele e o mdev resolve
+# esse GID pelo nome, em vez de congelar 102 no mdev.conf.
+if ! $BB grep -q '^audio:' /etc/group 2>/dev/null; then
+    if printf '%s\n' 'audio:x:102:distropica' >> /etc/group; then
+        $BB sync
+        echo "distropica: grupo audio criado antes do mdev"
+    else
+        echo "distropica: nao foi possivel criar o grupo audio;" >&2
+        echo "            os dispositivos de som podem ficar indisponiveis" >&2
+    fi
+fi
 $BB mdev -s 2>/dev/null
 [ -f /etc/hostname ] && $BB hostname -F /etc/hostname 2>/dev/null
 $BB ip link set lo up 2>/dev/null
@@ -646,6 +665,16 @@ RCS
     cat > "$STAGE/etc/rc.d/rcK" <<'RCK'
 #!/bin/sh
 # rcK — desligamento ordenado (SPEC-0006 §3).
+#
+# Assim como o rcS, o rcK nao pode conhecer cada pacote que precise persistir
+# estado antes de os filesystems fecharem. Os ganchos pertencem aos pacotes
+# interessados e sao SOURCED aqui; o primeiro consumidor e o alsa-utils, que
+# salva o volume da maquina. Sem o laco, cada novo consumidor teria de tomar
+# este arquivo do base ou ficar sem shutdown ordenado.
+for dropin in /etc/rc.d/rcK.d/*.sh; do
+    [ -e "$dropin" ] || continue
+    . "$dropin"
+done
 /bin/busybox sync
 /bin/busybox umount -a -r 2>/dev/null
 RCK
