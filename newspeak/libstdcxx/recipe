@@ -8,7 +8,12 @@ RETRIES=50
 # PROVISIONAL faz esta libstdc++ ceder à do gcc-pass2 sem doublethink. SPEC-0005 §4.
 PROVISIONAL=1
 DEPS="glibc"
-BUILD_DEPS="gcc binutils-cross make busybox"
+# gawk: o `./configure` desta fonte chama awk para gerar o config.status, e
+# declarar só `busybox` NÃO garante awk — o gawk supersede o busybox e leva
+# /usr/bin/awk embora. A falta só aparece quando o gawk já foi construído no
+# mesmo plano, então a quebra é sensível à ordem. Conferido no próprio
+# configure da fonte pinada, não suposto.
+BUILD_DEPS="gcc binutils-cross make busybox gawk"
 ABOUT="A libstdc++ (runtime C++), do subdir libstdc++-v3 do fonte do gcc, buildada pelo gcc da passada 1 AGORA que a glibc existe (headers presentes). É o elo que faltava entre a passada 1 (--without-headers: tem cc1plus mas nenhuma libstdc++) e a passada 2: sem uma libstdc++, o pass-1 g++ compila C++ mas não LINKA, então não conseguiria buildar o gcc, que é C++. Ordem LFS 5.7 (glibc → libstdc++ → gcc final)."
 LICENSE="GPL-3.0-or-later WITH GCC-exception-3.1"
 SRC="https://ftp.gnu.org/gnu/gcc/gcc-$VERSION/gcc-$VERSION.tar.xz"

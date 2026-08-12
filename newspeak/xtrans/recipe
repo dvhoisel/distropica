@@ -3,7 +3,12 @@ VERSION=1.6.0
 KIND=source
 TOOLCHAIN=native
 DEPS=""
-BUILD_DEPS="make pkgconf util-macros busybox"
+# gawk: o `./configure` desta fonte chama awk para gerar o config.status, e
+# declarar só `busybox` NÃO garante awk — o gawk supersede o busybox e leva
+# /usr/bin/awk embora. A falta só aparece quando o gawk já foi construído no
+# mesmo plano, então a quebra é sensível à ordem. Conferido no próprio
+# configure da fonte pinada, não suposto.
+BUILD_DEPS="make pkgconf util-macros busybox gawk"
 ABOUT="A camada de transporte do X11, distribuída como CÓDIGO-FONTE em cabeçalhos e não como biblioteca. O libX11 a compila para dentro de si; por isso não há .so nenhum aqui e por isso ela é BUILD_DEPS de lá e DEPS de ninguém. É o que decide se a conexão vai por socket UNIX, TCP ou memória compartilhada — irrelevante nesta distro, onde nunca haverá servidor X para conectar, mas o libX11 não compila sem ela."
 LICENSE=MIT
 SRC="https://www.x.org/releases/individual/lib/xtrans-$VERSION.tar.xz"

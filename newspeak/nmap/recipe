@@ -3,7 +3,12 @@ VERSION=7.991
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc libpcap openssl zlib gcc-pass2"
-BUILD_DEPS="make gcc-pass2 binutils-glibc busybox"
+# gawk: o `./configure` desta fonte chama awk para gerar o config.status, e
+# declarar só `busybox` NÃO garante awk — o gawk supersede o busybox e leva
+# /usr/bin/awk embora. A falta só aparece quando o gawk já foi construído no
+# mesmo plano, então a quebra é sensível à ordem. Conferido no próprio
+# configure da fonte pinada, não suposto.
+BUILD_DEPS="make gcc-pass2 binutils-glibc busybox gawk"
 ABOUT="Varredura de rede. Mundo B por censo: o nmap.org publica .rpm para Linux, que é pacote de distro e não tarball elegível (SPEC-0001 §2, SPEC-0007). Usa a libpcap e o openssl do sistema, um provedor canônico cada; Lua e PCRE ficam nos embutidos do próprio nmap, porque esta árvore ainda não tem receita para eles e um provedor por acidente é pior que um embutido declarado. Sem zenmap (Python+GTK), sem ndiff (Python) e sem nping. Sem cap_net_raw o nmap degrada para varredura connect(), que funciona sem privilégio."
 LICENSE=NPSL
 SRC="https://nmap.org/dist/nmap-$VERSION.tar.bz2"

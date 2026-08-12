@@ -3,7 +3,12 @@ VERSION=40.1.1
 KIND=source
 TOOLCHAIN=native
 DEPS="hicolor-icon-theme"
-BUILD_DEPS="make busybox"
+# gawk: o `./configure` desta fonte chama awk para gerar o config.status, e
+# declarar só `busybox` NÃO garante awk — o gawk supersede o busybox e leva
+# /usr/bin/awk embora. A falta só aparece quando o gawk já foi construído no
+# mesmo plano, então a quebra é sensível à ordem. Conferido no próprio
+# configure da fonte pinada, não suposto.
+BUILD_DEPS="make busybox gawk"
 ABOUT="Os ícones de verdade: o tema padrão do GTK, o que o gtk-icon-theme-name aponta quando ninguém mexe. Sem ele o GTK abre, mas cada ícone da interface vira o retângulo de imagem quebrada. A versão é 40.1.1 e a escolha não é por conservadorismo — é por evidência. O Adwaita moderno (49.x) é quase inteiramente SVG simbólico, e renderizar SVG no GTK depende do carregador do librsvg, que é escrito em Rust e traria o toolchain inteiro para dentro de uma árvore que decidiu não ter Rust nem para a Mesa. Um Adwaita só de SVG aqui seria um tema de ícones invisíveis. Contei os arquivos antes de decidir: a 40.1.1 traz 2042 PNGs pré-renderizados além de 745 SVGs, então os ícones aparecem sem librsvg nenhum. O preço é ficar numa versão de 2021 e não ter os símbolos novos; a alternativa era Rust, e não paga. Corroborado pelo Alpine 3.15-stable, que é o branch daquela época — as distribuições atuais já não pinam esta versão."
 LICENSE="CC-BY-SA-3.0 OR LGPL-3.0-or-later"
 SRC="https://download.gnome.org/sources/adwaita-icon-theme/40/adwaita-icon-theme-$VERSION.tar.xz"

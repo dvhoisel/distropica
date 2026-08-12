@@ -1,7 +1,12 @@
 NAME=python
 VERSION=3.14.6
 KIND=source
-BUILD_DEPS="binutils make busybox"
+# gawk: o `./configure` desta fonte chama awk para gerar o config.status, e
+# declarar só `busybox` NÃO garante awk — o gawk supersede o busybox e leva
+# /usr/bin/awk embora. A falta só aparece quando o gawk já foi construído no
+# mesmo plano, então a quebra é sensível à ordem. Conferido no próprio
+# configure da fonte pinada, não suposto.
+BUILD_DEPS="binutils make busybox gawk"
 PROVISIONAL=1
 # NOTA: esta correção só tem efeito em bootstrap NOVO. Numa árvore onde a
 # semente já cedeu caminhos ao sucessor, o minitrue recusa reconstruí-la

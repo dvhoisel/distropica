@@ -3,7 +3,12 @@ VERSION=3.14.6
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc zlib openssl ncurses libffi busybox e2fsprogs readline xz"
-BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf busybox"
+# gawk: o `./configure` desta fonte chama awk para gerar o config.status, e
+# declarar só `busybox` NÃO garante awk — o gawk supersede o busybox e leva
+# /usr/bin/awk embora. A falta só aparece quando o gawk já foi construído no
+# mesmo plano, então a quebra é sensível à ordem. Conferido no próprio
+# configure da fonte pinada, não suposto.
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf busybox gawk"
 SUPERSEDES="python"
 ABOUT="O Python de verdade da distro, sucessor do interpretador-semente. O python semente é BUILD_DEPS do glibc: ele precisa existir ANTES da libc, então é compilado com o toolchain-semente musl do Zig, estático e sem nenhum módulo de extensão C — sem zlib, sem ssl, sem hashlib, sem ctypes. Isso basta para os scripts de build do glibc e para nada mais; o Meson, por exemplo, importa gzip e morre. Um Python nativo não pode ocupar o lugar do semente, porque seria circular. Daí a sucessão provisional, o mesmo padrão de gcc→gcc-pass2 e binutils→binutils-glibc: o semente cede os caminhos quando este chega. O Python nativo traz zlib, TLS, ctypes, curses, readline e lzma com provedores declarados. _bz2 continua deliberadamente desligado: bzip2 pertence apenas à closure de build do GIMP, e autodetectá-lo faria a mesma receita gerar payload diferente numa raiz GIMP. _sqlite3 também continua ausente. SEM pip, deliberadamente: uma distro cuja premissa é não ter gerenciador de pacotes não ganha um segundo pela porta dos fundos."
 LICENSE=Python-2.0.1
