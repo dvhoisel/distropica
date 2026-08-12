@@ -71,7 +71,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 
 /// Cria um snapshot novo sem seguir um symlink no nome final. Usado para a
 /// receita executável dentro de WORK, cujo nome é reservado em `files/`.
-fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file = fs::OpenOptions::new()
         .create_new(true)
         .write(true)

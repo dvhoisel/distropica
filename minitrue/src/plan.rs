@@ -1574,10 +1574,19 @@ fn activate(
             || (strict_media && requested_materiality == Materiality::Runtime))
         && !from_channel
     {
+        // A recusa tem duas causas distintas, e nomear a errada manda quem
+        // depura procurar uma flag que não passou. `--only-binary` é escolha do
+        // chamador; a mídia estrita é estrutural — ela COMPÕE e não compila,
+        // então todo runtime KIND=source precisa vir do canal.
+        let causa = if strict_media && requested_materiality == Materiality::Runtime {
+            "mídia estrita não compila em runtime"
+        } else {
+            "--only-binary"
+        };
         return fail(
             5,
             format!(
-                "{name} {}: --only-binary e nenhum canal aceitável oferece esta identidade",
+                "{name} {}: {causa} e nenhum canal aceitável oferece esta identidade",
                 recipe.version
             ),
         );

@@ -113,6 +113,12 @@ const USO_CORPO: &str = "\
   rectify   newspeak    busca e troca atomicamente a árvore oficial assinada
   plan      <pacote>…   resolve e imprime PLAN_LOCK_FORMAT=1 sem persistir
   plan --sync            compara o world com records íntegros; apenas relata ORPHAN
+  plan --media --world ARQ [--cache-world ARQ] [--output ARQ]
+                        resolve a composição de uma mídia: PURPOSE=media com
+                        ABI estrita, worlds como raízes (target=install,
+                        cache=availability). --output grava os bytes canônicos
+                        do PLAN_LOCK, que é o que o perfil prende em vez de
+                        re-resolver
   memoryhole <pacote>…  remove do sistema e do world
   archives              lista os registros
   verify                confere registros e varre /usr por links órfãos
@@ -151,6 +157,60 @@ fn imprime_uso() {
     println!("{USO_CABECALHO}\n{USO_SINOPSE}\n\n{USO_CORPO}");
     #[cfg(feature = "tofu-authoring")]
     println!("\n  --tofu                autoria somente: obtém e imprime o SHA256 ainda ausente");
+}
+
+/// A correspondência entre world e papel é FIXADA aqui, e não deixada a cada
+/// chamador: `target.world` é o que a mídia instala, `cache.world` é o que ela
+/// precisa ter disponível sem instalar. Dois chamadores com convenções
+/// diferentes produziriam dois PLAN_LOCK distintos para a mesma mídia, e o
+/// perfil não teria como saber qual dos dois prendeu.
+fn raizes_de_midia(
+    target_world: &std::path::Path,
+    cache_world: Option<&std::path::Path>,
+) -> anyhow::Result<Vec<plan::PlanRoot>> {
+    let mut roots = plan::roots_from_world(target_world, plan::RootRole::Install)?;
+    if let Some(path) = cache_world {
+        roots.extend(plan::roots_from_world(path, plan::RootRole::Availability)?);
+    }
+    Ok(roots)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DespachoPlan {
+    Media,
+    Sync,
+    Pacotes,
+}
+
+/// As três resoluções que `plan` sabe fazer são mutuamente exclusivas e leem
+/// fontes de raiz diferentes: `--media` lê os worlds do perfil, `--sync` lê o
+/// world do sistema e a forma ordinária lê os nomes da linha de comando.
+/// Aceitar duas ao mesmo tempo produziria um plano cujas raízes ninguém sabe
+/// dizer de onde vieram, então a classificação é separada do efeito para ser
+/// testável.
+fn classifica_plan(media: bool, sync: bool, names: &[String]) -> anyhow::Result<DespachoPlan> {
+    if names.iter().any(|name| name == "newspeak") {
+        return fail(1, "plan resolve pacotes; newspeak é a árvore reservada");
+    }
+    if media && sync {
+        return fail(1, "plan --media e plan --sync são resoluções distintas");
+    }
+    if media {
+        if !names.is_empty() {
+            return fail(1, "plan --media lê exclusivamente os worlds do perfil");
+        }
+        return Ok(DespachoPlan::Media);
+    }
+    if sync {
+        if !names.is_empty() {
+            return fail(1, "plan --sync lê exclusivamente o world canônico");
+        }
+        return Ok(DespachoPlan::Sync);
+    }
+    if names.is_empty() {
+        return fail(1, "plan: diga ao menos um pacote");
+    }
+    Ok(DespachoPlan::Pacotes)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -244,6 +304,8 @@ fn run() -> anyhow::Result<()> {
     let mut release = false;
     let mut closure = false;
     let mut world: Option<PathBuf> = None;
+    let mut cache_world: Option<PathBuf> = None;
+    let mut media = false;
     let mut output: Option<PathBuf> = None;
     let mut passphrase_fd: Option<i32> = None;
     let mut jobs = std::thread::available_parallelism()
@@ -278,6 +340,16 @@ fn run() -> anyhow::Result<()> {
                     msg: "--world exige arquivo".into(),
                 })?));
             }
+            "--cache-world" => {
+                if cache_world.is_some() {
+                    return fail(1, "--cache-world não pode ser repetido");
+                }
+                cache_world = Some(PathBuf::from(args.next().ok_or_else(|| Fail {
+                    code: 1,
+                    msg: "--cache-world exige arquivo".into(),
+                })?));
+            }
+            "--media" => media = true,
             "--sync" => sync = true,
             "--jobs" => {
                 jobs = args
@@ -377,14 +449,28 @@ fn run() -> anyhow::Result<()> {
     if closure && !cache_closure {
         return fail(1, "--closure só se aplica a cache verify");
     }
-    if world.is_some() && !cache_closure {
-        return fail(1, "--world só se aplica a cache verify --closure");
+    let plan_media = matches!(cmd.as_deref(), Some("plan")) && media;
+    if world.is_some() && !cache_closure && !plan_media {
+        return fail(
+            1,
+            "--world só se aplica a cache verify --closure e a plan --media",
+        );
+    }
+    if cache_world.is_some() && !plan_media {
+        return fail(1, "--cache-world só se aplica a plan --media");
+    }
+    if media && !matches!(cmd.as_deref(), Some("plan")) {
+        return fail(1, "--media só se aplica a plan");
     }
     if sync && !matches!(cmd.as_deref(), Some("rectify" | "plan")) {
         return fail(1, "--sync só se aplica a rectify ou plan");
     }
-    if output.is_some() && !matches!(cmd.as_deref(), Some("channel") | Some("audit")) {
-        return fail(1, "--output só se aplica a channel emit e a audit");
+    if output.is_some() && !matches!(cmd.as_deref(), Some("channel") | Some("audit")) && !plan_media
+    {
+        return fail(
+            1,
+            "--output só se aplica a channel emit, a audit e a plan --media",
+        );
     }
     if release
         && !(cmd.as_deref() == Some("channel") && names.first().map(String::as_str) == Some("emit"))
@@ -417,15 +503,7 @@ fn run() -> anyhow::Result<()> {
         }
         Some("plan") => {
             let _lock = install::acquire_read_lock(&ctx)?;
-            if sync && !names.is_empty() {
-                return fail(1, "plan --sync lê exclusivamente o world canônico");
-            }
-            if !sync && names.is_empty() {
-                return fail(1, "plan: diga ao menos um pacote");
-            }
-            if names.iter().any(|name| name == "newspeak") {
-                return fail(1, "plan resolve pacotes; newspeak é a árvore reservada");
-            }
+            let despacho = classifica_plan(media, sync, &names)?;
             let policy = if no_binary {
                 install::BinaryPolicy::SourceOnly
             } else if only_binary {
@@ -433,7 +511,39 @@ fn run() -> anyhow::Result<()> {
             } else {
                 install::BinaryPolicy::PreferBinary
             };
-            if sync {
+            if despacho == DespachoPlan::Media {
+                let target = world.as_deref().ok_or_else(|| Fail {
+                    code: 1,
+                    msg: "plan --media exige --world com o target.world do perfil".into(),
+                })?;
+                let roots = raizes_de_midia(target, cache_world.as_deref())?;
+                // ABI estrita não é opção do chamador: uma mídia resolvida em
+                // Development aceitaria ABI pendente e produziria um lock que
+                // não descreve o que o alvo vai encontrar.
+                let mut resolved = plan::resolve_for(
+                    &ctx,
+                    &roots,
+                    plan::PlanPurpose::Media,
+                    policy,
+                    plan::AbiPolicy::Strict,
+                    channel::LoadMode::ReadOnly,
+                )?;
+                resolved.authenticate_objects(&ctx, true)?;
+                resolved.revalidate_tree(&ctx)?;
+                match output.as_deref() {
+                    // create_new: um lock de mídia é insumo de composição, e
+                    // sobrescrever o anterior em silêncio esconderia que a
+                    // resolução mudou entre duas execuções.
+                    Some(path) => {
+                        let bytes = resolved.canonical_bytes()?;
+                        let lock_sha256 = resolved.lock_sha256()?;
+                        install::write_new(path, &bytes)?;
+                        println!("PLAN_LOCK_SHA256={lock_sha256}");
+                        Ok(())
+                    }
+                    None => resolved.print(),
+                }
+            } else if despacho == DespachoPlan::Sync {
                 let roots = plan::roots_from_system_world(&ctx)?;
                 plan::resolve_for(
                     &ctx,
@@ -680,6 +790,76 @@ mod main_tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static LOCK_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn midia_instala_o_target_world_e_apenas_disponibiliza_o_cache_world() {
+        let serial = LOCK_TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "mt-main-raizes-midia-{}-{serial}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("target.world");
+        let cache = dir.join("cache.world");
+        std::fs::write(&target, "base\nfirefox\n").unwrap();
+        std::fs::write(&cache, "zig\n").unwrap();
+
+        let roots = raizes_de_midia(&target, Some(&cache)).unwrap();
+        let papeis: Vec<(&str, plan::RootRole)> = roots
+            .iter()
+            .map(|root| (root.name.as_str(), root.role))
+            .collect();
+        assert_eq!(
+            papeis,
+            vec![
+                ("base", plan::RootRole::Install),
+                ("firefox", plan::RootRole::Install),
+                ("zig", plan::RootRole::Availability),
+            ]
+        );
+
+        // Sem cache.world a mídia continua resolvendo — o cache offline é
+        // override de composição, não parte obrigatória da identidade.
+        let so_target = raizes_de_midia(&target, None).unwrap();
+        assert_eq!(so_target.len(), 2);
+        assert!(so_target
+            .iter()
+            .all(|root| root.role == plan::RootRole::Install));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plan_tem_tres_resolucoes_e_elas_nao_se_misturam() {
+        assert_eq!(
+            classifica_plan(true, false, &[]).unwrap(),
+            DespachoPlan::Media
+        );
+        assert_eq!(
+            classifica_plan(false, true, &[]).unwrap(),
+            DespachoPlan::Sync
+        );
+        assert_eq!(
+            classifica_plan(false, false, &["base".into()]).unwrap(),
+            DespachoPlan::Pacotes
+        );
+        // Cada uma lê uma fonte de raiz diferente; pedir duas ao mesmo tempo
+        // não tem resposta certa, só uma escolha silenciosa.
+        assert!(classifica_plan(true, true, &[]).is_err());
+    }
+
+    #[test]
+    fn plan_recusa_raiz_que_a_resolucao_escolhida_nao_leria() {
+        // Nomes na linha de comando seriam ignorados por --media e por --sync:
+        // aceitá-los faria o chamador crer que pediu uma mídia daqueles
+        // pacotes.
+        assert!(classifica_plan(true, false, &["base".into()]).is_err());
+        assert!(classifica_plan(false, true, &["base".into()]).is_err());
+        assert!(classifica_plan(false, false, &[]).is_err());
+        // `newspeak` é a árvore reservada da SPEC-0011, não uma receita.
+        assert!(classifica_plan(false, false, &["newspeak".into()]).is_err());
+        assert!(classifica_plan(true, false, &["newspeak".into()]).is_err());
+    }
 
     #[test]
     fn rectify_newspeak_tem_despacho_proprio() {
