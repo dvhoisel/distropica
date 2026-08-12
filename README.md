@@ -79,6 +79,23 @@ do desenvolvimento, mas não substitui sozinho esse conjunto por artefato.
 Gerar uma imagem para uso privado não exige publicá-la; redistribuí-la
 transfere ao redistribuidor as obrigações das licenças presentes.
 
+O gate automatizado usa `bootstrap/source-bundle --artifact ARQ
+--minitrue-bin MINITRUE_PRODUTOR ... --strict`
+e depois `bootstrap/sbom --bundle DIR --strict`. Para ISO/IMG, a interface
+legada `--media ARQ --live-kernel-config CONFIG --live-util-linux-tar TAR`
+também preserva os campos `MEDIA*`; o EFI usa `--artifact BOOTX64.EFI` com os
+mesmos dois insumos vivos. O tar de util-linux é cotejado com os pinos do
+`build-efi` e entra no inventário como `insumo-live`. Para canal, `ARQ` é o
+`index` diretamente na saída de `channel emit --release`: o `emit.meta` v3
+irmão prova a raiz local e prende esses bytes por `INDEX_SHA256`; as linhas do
+próprio índice — nunca o cache reduzido da mídia — decidem o inventário e
+prendem os objetos de `pool/`. O índice ainda DEVE ser assinado antes da
+publicação. `MINITRUE_PRODUTOR` é exatamente o executável que calculou os
+fingerprints e produziu os registros; em perfil `release`, seu SHA-256 precisa
+coincidir com `OFFICIAL_MINITRUE_SHA256`.
+Sem `--strict`, ambos os scripts conservam o modo diagnóstico de desenvolvimento
+e podem terminar com pendências explícitas.
+
 ## Premissas
 
 Acima de todas, uma lente (**P0**): a Distrópica é **pragmática acima de
@@ -142,14 +159,16 @@ partir de nada além de binários upstream — foi **demonstrada**:
   rectify gcc-pass2` construiu os 16 pacotes até um **gcc nativo** (C e C++)
   hospedado na **glibc**, sem toolchain de outra distro. Essa execução
   **E2-clean** é evidência histórica: ocorreu uma vez, a frio, num rootfs novo
-  com o grafo então vigente. O grafo atual, incluindo `zlib` explícito e os
-  payloads `install-strip` de GCC/binutils, também foi reconstruído uma vez e
-  passou nas provas C, C++, `ar` e Make; ainda falta repeti-lo em dois ambientes
-  limpos para uma nova prova forte (SPEC-0005 §4).
+  com o grafo então vigente. Uma segunda execução histórica, já com `zlib`
+  explícito e os payloads `install-strip` de GCC/binutils, também reconstruiu o
+  grafo que existia naquele momento e passou nas provas C, C++, `ar` e Make;
+  isso não é prova da closure hoje versionada nem substitui duas reconstruções
+  limpas para uma nova prova forte (SPEC-0005 §4).
 - **`minitrue` — implementado** (Rust): mundo A (`/opt`), mundo B (`/usr`) e
   mundo M para metapacotes declarativos (`KIND=meta`, `WORLD=M`, sem payload),
   hash + assinatura (minisign), registros em texto com **fingerprint de build**
-  e **manifesto v2** (conteúdo + tipo, alvo de symlink e árvore mundo A),
+  e **manifesto v3** (conteúdo + tipo, alvo de symlink, árvore mundo A e
+  diretório compartilhado estrutural `D:`),
   empacotamento determinístico (`pack`), imagem de STAGE selada, attestations
   Ed25519 sem replay histórico, toolchain por estágio, journal transacional com
   recuperação global no mundo B, runner de build em rootfs via bwrap e
@@ -166,7 +185,7 @@ partir de nada além de binários upstream — foi **demonstrada**:
   compõe mídias determinísticas nos formatos GPT/FAT32 (`.img`) e ISO9660
   UEFI (`.iso`). Instalação direta e geração de mídia usam o mesmo
   `target.world`, `live.world`, `cache.world`, overlay, árvore Newspeak e cache
-  fechado. O lock v2 autentica `cache.world` separadamente: ele declara
+  fechado. O lock v3 autentica `cache.world` separadamente: ele declara
   disponibilidade offline verificável, não intenção de instalação.
   Perfil, mídia e instalação recebem classes separadas que descrevem apenas
   quais **insumos** foram pinados — nunca se autoatribuem a condição de
@@ -273,17 +292,16 @@ partir de nada além de binários upstream — foi **demonstrada**:
   e com o cabo de rede desligado. Num terceiro boot com VirtIO NAT, obteve DHCP,
   rota e DNS local; depois desligou novamente o cabo, instalou o `ripgrep 15.2.0`
   somente do cache com `minitrue --offline rectify` e terminou com `verify`
-  limpo. Essa é evidência histórica da revisão network-v1. A mídia atual
+  limpo. Essa é evidência histórica da revisão network-v1. A mídia posterior
   `miniplenty-v1` também passou no runner automatizado do VirtualBox: ripgrep,
   Vim e `miniplenty-buildbase` já estavam no sistema; C, C++, biblioteca
   estática e Makefile funcionaram offline; jq foi instalado do binário upstream
   e tree foi compilado da fonte; ambos persistiram após reboot e Zig permaneceu
-  somente no cache. O terceiro boot confirmou DHCP, rota e DNS local. O kernel mantém
-  `CONFIG_MODULES=y`, mas a mídia não distribui módulos:
-  os drivers indispensáveis são built-in e o release
-  `7.1.4-distropica-live` evita procurar acidentalmente os módulos `7.1.4` do
-  target. Isso ainda não é uma ISO oficial publicada nem prova suporte a
-  hardware UEFI genérico.
+  somente no cache. O terceiro boot confirmou DHCP, rota e DNS local. O kernel
+  vivo fixa `CONFIG_MODULES=n`, e a mídia não distribui módulos: os drivers
+  indispensáveis são built-in. O release `7.1.8-distropica-live` permanece
+  distinto do kernel `7.1.8` do target. Isso ainda não é uma ISO oficial
+  publicada nem prova suporte a hardware UEFI genérico.
 - **Bootstrap (Estágio 3) — smoke parcial.** O kernel compilado pelo gcc nativo
   boota em QEMU com raiz 9p somente-leitura e `busybox init`. O login foi
   observado num rootfs com `/etc/shadow` previamente provisionado. O caminho
@@ -295,9 +313,10 @@ partir de nada além de binários upstream — foi **demonstrada**:
   `gcc-pass2` e `binutils-glibc`, com `install-strip`, foram reconstruídas e
   exercitadas uma vez; ainda precisam de rebuild repetido e nova comparação.
 
-Ainda não fechados: publicação de um canal oficial e de um bundle estático
-assinados, reprodução independente da mídia, cobertura de hardware UEFI real,
-runit, a operação administrativa `channel refresh`, `--sync` e o rollback
+Ainda não fechados: reemissão dos payloads do canal oficial para a árvore
+atual, publicação de um bundle estático assinado, reprodução independente da
+mídia, cobertura de hardware UEFI real,
+runit, `--sync` e o rollback
 retido do mundo B entre versões ou de uma sincronização inteira. O Journal
 ainda usa caminhos entre validação e mutação e, portanto, não promete resistir
 a um processo hostil concorrente alterando o mesmo rootfs; migrá-lo integralmente
@@ -318,8 +337,10 @@ sistema-alvo e da disponibilidade de cache, o overlay, a árvore Newspeak, o
 cache opcional, a arquitetura, o `SOURCE_DATE_EPOCH` e a prontidão declarada
 para instalação. `target.world` é intenção de instalação; `cache.world` apenas
 exige que artefatos possam ser verificados offline. O documento atual usa
-`PROFILE_LOCK_FORMAT=2` e `PROFILE_CONTENT_FORMAT=2`; `CACHE_WORLD_SHA256`
-prende a lista normalizada.
+`PROFILE_LOCK_FORMAT=3` e `PROFILE_CONTENT_FORMAT=3`; `CACHE_WORLD_SHA256`
+prende a lista normalizada e `CHANNEL_BOOTSTRAP_SHA256` prende separadamente o
+endpoint do canal, a origem da árvore, a chave e a seed assinada que
+permanecerão no alvo.
 
 O caminho hoje fechado é o de desenvolvimento **offline**, com um cache de
 canal assinado. Os exemplos abaixo supõem esse cache em `$CACHE` e privilégios
@@ -345,17 +366,21 @@ continua sendo uma composição local `development`/`custom`, não uma ISO ofici
 # o script pode compilá-los para x86_64-unknown-linux-musl.
 bootstrap/live/build-efi --output target/BOOTX64.EFI
 
-# 3. Compõe uma ISO instalável com o mesmo perfil e cache (requer xorriso).
+# 3. Reserva um namespace privado para a publicação consistente. O compositor
+# recusa parent pertencente a outro UID ou gravável por grupo/outros.
+install -d -m 0700 target/media-output
+
+# 4. Compõe uma ISO instalável com o mesmo perfil e cache (requer xorriso).
 ./bootstrap/distropica-bootstrap media build \
   --profile profiles/official --mode offline --cache "$CACHE" \
   --format iso --boot-efi target/BOOTX64.EFI \
-  --output target/distropica.iso
+  --output target/media-output/distropica.iso
 
 # A variante para pendrive usa o mesmo payload em GPT/FAT32.
 ./bootstrap/distropica-bootstrap media build \
   --profile profiles/official --mode offline --cache "$CACHE" \
   --format img --boot-efi target/BOOTX64.EFI \
-  --output target/distropica.img
+  --output target/media-output/distropica.img
 ```
 
 A ISO interativa pode ser exercitada de ponta a ponta no VirtualBox. O runner
@@ -507,12 +532,13 @@ real ou apresente essa variante como ISO instalável para pessoas**.
 bootstrap/live/build-efi \
   --install-device /dev/vda \
   --output target/BOOTX64-test.EFI
+install -d -m 0700 target/media-test-output
 ./bootstrap/distropica-bootstrap media build \
   --profile profiles/official --mode offline --cache "$CACHE" \
   --format iso --boot-efi target/BOOTX64-test.EFI \
-  --output target/distropica-test.iso
+  --output target/media-test-output/distropica-test.iso
 bootstrap/live/accept-qemu \
-  --iso target/distropica-test.iso \
+  --iso target/media-test-output/distropica-test.iso \
   --disk target/acceptance-disk.raw \
   --log-dir target/acceptance-logs
 ```
@@ -546,73 +572,97 @@ INCONSISTENT_PROFILE_LOCK_RESULT=refused-before-wipe
 ```
 
 Essa evidência continuará sendo de desenvolvimento. Ela não será pino de
-release, não substituirá um manifesto oficial assinado e não indicará que
-endpoint, chave ou mídia oficial tenham sido publicados.
+release nem substituirá um manifesto oficial assinado. Endpoint, chave e índice
+do canal já estão publicados; a mídia oficial e seu manifesto ainda não.
 
 O perfil `profiles/official` declara `INSTALL_READY=yes`, mas continua com
 `STATUS=development`. A prontidão significa que o world mínimo pode ser
 materializado num alvo vazio quando o cache/canal correto é fornecido; não
-significa release, endpoint público ou mídia oficial. O target atual inclui
-`base`, `linux`, `ripgrep`, `vim` e `miniplenty-buildbase`; o metapacote `KIND=meta`
+significa release ou mídia oficial. O target atual inclui
+`base`, `linux`, `e2fsprogs`, `ripgrep`, `vim` e `miniplenty-buildbase`; o metapacote `KIND=meta`
 fica no mundo M sem payload e agrega Make e a toolchain GCC final. Em
 `--only-binary`, o metapacote é resolvido localmente, mas seus pacotes fonte
 precisam existir como artefatos autenticados do canal: a instalação não deve
 recompilar GCC no computador do usuário. O cache de desenvolvimento usado nos
-testes não é versionado como release. Para registros
-v2 íntegros, `minitrue channel emit --output DIR <pacotes...>` gera artefatos,
-índice v2 e `emit.meta` com `CHANNEL_EMIT_FORMAT=2`; o índice ainda precisa ser
-assinado externamente. Quando o registro veio de canal, o comando reutiliza o
-tar autenticado do cache, revalidando os hashes de transporte e interno. Para
-um build local, só reconstrói a partir das claims quando consegue provar
-topologia, metadados e `ARTIFACT_HASH`; ambiguidade falha fechado. Um pipeline
-de release deve emitir no próprio build e conservar o artefato autenticado, não
-usar a reconstrução posterior como raiz de publicação.
+testes não é versionado como release. Cada build fonte local passa a reter
+atomicamente o tar selado sob o próprio `ARTIFACT_HASH`. `minitrue channel emit
+--release --output DIR <pacotes...>` exige e revalida esses objetos, gera pool,
+índice v2 e `emit.meta` v3 com `INDEX_SHA256` e `RELEASE_ROOT=yes`; o índice
+ainda precisa ser assinado. Sem `--release`, o comando prefere o retido, mas aceita o tar
+autenticado de outro canal ou a reconstrução provada das claims e marca
+`RELEASE_ROOT=no`. Esse fallback é desenvolvimento/recuperação, nunca raiz de
+publicação.
 
 Um canal local assinado de desenvolvimento já contém os 11 artefatos da closure
-atual (`base`, toolchain, kernel, Vim/ncurses e zlib). Ele alimentou a instalação
-direta e a ISO aceita no VirtualBox; não é endpoint nem canal oficial publicado.
+então testada (`base`, toolchain, kernel, Vim/ncurses e zlib). Ele alimentou a
+instalação direta e a ISO aceita no VirtualBox; é evidência histórica distinta
+do endpoint oficial agora publicado.
 Os payloads `install-strip` funcionaram no rebuild e no guest, mas ainda faltam
 dois builders independentes para a afirmação de reprodutibilidade. A ISO não
 tem tamanho fixado por `MEDIA_SIZE_MIB`.
 
 O outro caminho também foi exercitado com os executores musl estáticos: a
-instalação direta `--offline --only-binary` materializou o target atual inteiro
-a partir do mesmo canal, terminou com `minitrue verify` e compilou C/C++/Make.
+instalação direta `--offline --only-binary` materializou o target inteiro então
+versionado a partir do mesmo canal, terminou com `minitrue verify` e compilou
+C/C++/Make.
 Vim começou instalado, enquanto jq e tree foram retificados depois, ainda
 offline, respectivamente do binário upstream e da fonte. O lock teve SHA-256
 `c84d6424646c78204ee822ff0a7617f941419130ea3c05cc60f4b320dc952f67`;
 isso é evidência local do fluxo, não um pino oficial.
 
 `bootstrap/channel-from-rootfs` existe somente para migrar registros históricos
-v1 e sempre produz `TRUST=builder`. Como os exemplos fornecem `$CACHE` por
-override, seus locks são classificados como `custom`; um cache/bootstrap
-versionado dentro do perfil preservaria a classe `development` enquanto o
-`STATUS` continuar assim.
+v1 e sempre produz `TRUST=builder`. Os exemplos fornecem `$CACHE` explicitamente,
+mas seus bytes entram em `CACHE_SHA256`: com o perfil ainda em
+`STATUS=development`, a classe permanece `development`; num perfil de release,
+somente o cache que reproduzir o pino de conteúdo pode chegar a
+`official-inputs`.
 
 O modo `online` incorpora somente o bootstrap de canal fechado pelo lock:
 `channel-config/<nome>` e o par assinado
-`channels/<nome>/{index,index.minisig}`. Os artefatos não entram nessa mídia;
+`channels/<nome>/{index,index.minisig}`, mais `newspeak-origem` com a URL-base
+e a mesma chave oficial usadas por `rectify newspeak`. Os artefatos não entram nessa mídia;
 são obtidos da URL HTTPS pinada durante a instalação. O consumidor, a
-validação minisign e o lock de canal já existem, mas o projeto **ainda não
-publicou** URL, índice, chave e artefatos de um canal oficial. Por isso nenhum
-`channel-bootstrap/` fictício é versionado no perfil oficial: a composição
-online falha cedo até que um bootstrap real seja fornecido pelo perfil ou por
-`--cache DIR`. O Minipax confere o layout e prende seus bytes no perfil; é o
-Minitrue que valida criptograficamente `index.minisig` contra a chave pinada
-antes da seleção. Cada linha v2 obrigatoriamente autentica
+validação minisign e o lock de canal já existem. O perfil oficial versiona o
+bootstrap real de `https://distropica.com.br/canal/oficial/`, inclusive a chave
+pública pinada e uma seed assinada. `--cache DIR` é somente o cache fechado da
+mídia offline e não substitui essa autoridade; `cache.tar` e
+`channel-bootstrap.tar` têm hashes independentes no lock. O Minipax confere o
+layout, prende os bytes e instala o bootstrap no alvo depois de consumir o
+cache. Online, o Minitrue busca o índice corrente e valida criptograficamente
+`index.minisig` contra a chave pinada antes da seleção; offline, usa a seed
+assinada sem consultar a rede. Uma invocação explícita de `rectify` pode
+persistir o snapshot operacional autenticado que usou na própria seleção e no
+lock; não há atualização em background. Cada linha v2 obrigatoriamente
+autentica
 `NAME VERSION ARCH RECIPE_FINGERPRINT PATH SHA256 [REPROCORR]`; a seleção só é
 aceita quando o fingerprint assinado coincide com a receita efetiva. A
 existência de `/etc/minitrue/channels/` é uma decisão administrativa: se o
 diretório estiver vazio, nenhum canal é carregado e a seed do cache não é
 reativada. O modo `offline` exige o cache completo e leva seus objetos na mídia;
 a instalação direta equivalente usa `--offline --cache DIR`.
-`--world`, `--live-world`, `--overlay` e `--cache` explícito criam uma variante
-personalizada, identificada como `custom` no lock e nos manifestos. Saídas de
+
+O endpoint, a chave e o índice do canal estão publicados. Para a árvore
+Newspeak, o perfil já pina a origem e a mesma chave, mas, na auditoria desta
+revisão, `newspeak.tar` e `newspeak.tar.minisig` ainda retornavam 404 nesse
+endpoint; portanto não há E2E oficial de `rectify newspeak`.
+
+Fora de uma instalação, `minitrue channel refresh [canal]...` faz a atualização
+administrativa: baixa e autentica todos os índices selecionados, imprime
+`CHANNEL_REFRESH_FORMAT=1` com hashes e linhas removidas/acrescentadas, força a
+saída antes da primeira mutação e só então troca cada par índice/assinatura
+atomicamente. É a via de avançar snapshots sem instalar; o comando não resolve
+receitas nem instala pacotes.
+`--world`, `--live-world` e `--overlay` explícitos criam uma variante
+personalizada. Um `--cache` fornecido entra integralmente em `CACHE_SHA256` e
+só conserva `official-inputs` quando seus bytes reproduzem o pino de conteúdo
+do perfil de release; qualquer diferença vira `custom`. Saídas de
 mídia recebem os sidecars `.sha256`, `.media.lock` e `.manifest`; cada nome é
-publicado sem
-sobrescrita. O conjunto de quatro arquivos, contudo, ainda não é uma transação
-única contra outros escritores: uma corrida pode deixar sidecars já publicados
-sem a imagem final.
+publicado sem sobrescrita. O diretório pai precisa pertencer ao UID efetivo e
+não ser gravável por grupo/outros. Um journal durável recupera quedas e desfaz
+prefixos incoerentes; os sidecars são promovidos primeiro e a imagem aparece
+por último como marcador de commit. Repetir a mesma requisição reconhece um
+conjunto completo e canônico como sucesso idempotente, sem aceitar mistura de
+gerações.
 
 Um perfil de release precisa pinar três hashes:
 `OFFICIAL_CONTENT_SHA256`, `OFFICIAL_BOOT_EFI_SHA256` e
@@ -630,18 +680,21 @@ use binários estáticos. Por padrão, a casca de desenvolvimento compila ambos
 para `x86_64-unknown-linux-musl` e recusa uma saída que contenha `INTERP`;
 executáveis passados explicitamente por `MINIPAX`/`MINITRUE` continuam sendo
 insumos do usuário e não recebem dessa casca uma alegação de linkagem ou
-proveniência. Neste marco, as árvores Newspeak e overlay são limitadas,
-cada uma, a 128 MiB de conteúdo regular; a árvore de cache, a 384 MiB. Cada
-árvore admite até 50 mil entradas, e o arquivo de entrada `cache.tar` é aceito
-até 416 MiB. Conteúdo e tar normalizado ainda ficam simultaneamente em memória.
+proveniência. Neste marco, as árvores Newspeak e overlay são limitadas, cada
+uma, a 128 MiB de conteúdo regular em memória. O cache é transmitido em fluxo,
+admite até 50 mil entradas e fica limitado a 4 GiB−1 por arquivo pelo FAT32,
+não pela RAM: sua coleta guarda referências, a composição escreve `cache.tar`
+diretamente no destino e a instalação o valida numa passada de cabeçalhos antes
+de extrair noutra. Conteúdo e tar do cache não coexistem integralmente em
+memória.
 Os modos não dependem dos bits preservados pelo Git:
 diretórios são normalizados para `0755` (com `root/` do overlay em `0700`),
 `shadow`/`gshadow` e seus backups para `0600`, regulares executáveis para `0755`
 e os demais para `0644`. Durante o consumo de canal, o snapshot `.tar.zst` e o
 tar descompactado selado coexistem; o pico de RAM pode aproximar a soma dos
 dois. Na instalação viva soma-se ainda a raiz preparada em `/run`, deliberada
-para garantir validação completa antes do disco. Streaming e uma partição de
-dados própria para caches maiores continuam gates de release.
+para garantir validação completa antes do disco. Uma partição de dados própria
+para caches maiores continua sendo gate de release.
 
 Neste marco, a casca pública constrói os binários Rust estáticos quando o
 toolchain Rust/musl, um compilador C compatível e `readelf` estão disponíveis,
@@ -653,7 +706,8 @@ requer `VBoxManage` e `tesseract` e recusa iniciar se já houver um `VBoxSVC` do
 mesmo usuário. Os dois runners de instalação reservam agora 4096 MiB para o
 disco por padrão, coerentes com a toolchain instalada; isso não altera o disco
 histórico de 256 MiB registrado nos blocos de evidência. O bundle estático
-assinado e o canal oficial publicado ainda são gates de release. Na variante
+assinado e a reemissão do canal para as receitas atuais ainda são gates de
+release. Na variante
 ISO, versão e SHA-256 do `xorriso` são registrados e o
 compositor recusa se o binário mudar durante a execução, mas a toolchain e o
 bundle completos ainda não estão pinados. Por isso o repositório **não anuncia

@@ -22,9 +22,9 @@ Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 | Peça | Estado | Nota |
 |---|---|---|
 | Código e documentação próprios | ✅ | `GPL-3.0-or-later`; texto integral, escopo e regra de contribuição versionados |
-| Licença na base e no ambiente vivo | ✅ E2E local | `base` instala a GPL e o aviso de escopo em `/usr/share/licenses/distropica/`, `build-efi` os incorpora no initramfs e a mídia atual foi recomposta e aceita |
-| Inventário completo de terceiros | ⬜ gate de release | gerar por artefato, a partir dos insumos efetivamente distribuídos; os payloads compostos de Zig e `gcc-pass2` usam `NOASSERTION` até o SBOM conclusivo, sem perder licenças nem avisos upstream |
-| Bundle de fontes correspondentes | ✅ `miniplenty-v2` custom | publicado ao lado da ISO: revisão `941383e`, 144 crates vendorizadas, fontes upstream, configs exatas de BusyBox/kernel, receitas registradas, sidecars, inventário TSV e hashes; continua sendo gate por artefato futuro |
+| Licença na base e no ambiente vivo | ✅ implementação + regressão focal; ⬜ mídia final | `base` instala GPL, NOTICE e `LICENSING.md` em `/usr/share/licenses/distropica/`; `build-efi` incorpora os mesmos bytes no initramfs. A mídia final posterior a essa mudança ainda precisa ser recomposta e aceita |
+| Inventário completo de terceiros | 🟡 gerador/parser interno; ⬜ vínculo ao plano e execução final | `bootstrap/sbom --strict` falha por qualquer `SEM EVIDÊNCIA` e produz `licenses.tar` determinístico com `PACOTES`, `INDICE`, `MANIFEST.sha256` e SHA externo; o parser recusa tipos/caminhos/modos/limites e divergência interna. Isso ainda não prova que um bundle autoconsistente corresponde ao conjunto realmente distribuído: a integração com profile/mídia aguarda `PLAN_LOCK_FORMAT=1`, que precisa fornecer nome, versão, fingerprint e hash de cada identidade material |
+| Bundle de fontes correspondentes | ✅ ferramenta e histórico `miniplenty-v2`; ⬜ artefatos novos | `bootstrap/source-bundle --artifact ARQ --minitrue-bin MINITRUE_PRODUTOR --strict` associa ISO, EFI, cache ou índice autenticado de canal pelo hash, recalcula a identidade com o executor produtor explícito e falha por fonte ou evidência de licença incompleta; em perfil `release`, o executor precisa conferir com `OFFICIAL_MINITRUE_SHA256`. EFI/ISO estritos exigem `--live-kernel-config` e o `--live-util-linux-tar` cotejado com os pinos do `build-efi`, registrado como `insumo-live`. `--media` mantém os campos legados. O bundle histórico foi publicado ao lado da ISO; cada artefato futuro continua sendo gate próprio |
 
 Os hashes QEMU final-v10 e VirtualBox network-v1 abaixo são evidência histórica
 anterior à mudança de licença do pacote `base` (revisão funcional `7148ebd`).
@@ -176,6 +176,16 @@ O que a revisão traz, e o que custou:
   libdrm procura `/dev/dri/card0` e libinput procura `/dev/input/event0`. Sem
   as regras `=dri/` e `=input/`, o compositor sobe, não acha vídeo nem teclado
   e morre — sem nada falhar em voz alta.
+- **Áudio HDA com HDMI enumerado primeiro**: as telas da 0.12 recebidas em
+  2026-08-11 mostram a controladora `ATI R6xx HDMI` como card 0 e o codec
+  `HDA ATI SB` como card 1; o `alsamixer` abriu a card 0 e ofereceu somente
+  `S/PDIF [Off]`. A 0.13 não fixa o número dessa máquina: percorre
+  `/proc/asound/pcm`, ranqueia saída analógica acima de neutra e digital,
+  usa `/proc/asound/cards` apenas para rebaixar nomes genéricos, grava
+  `defaults.pcm/ctl` para a placa e o dispositivo escolhidos e executa
+  `alsactl -P restore`/`amixer -c` nessa mesma placa. A regressão com a
+  topologia das fotos exige card 1/device 0; ouvir a mídia 0.13 no hardware
+  físico continua sendo gate separado.
 - **A guarda que a auditoria impôs**: `channel emit` recusou o canal três vezes
   por DEPS incompletos, e as três estavam certas. A mais instrutiva: o libtool
   sobrelinka, e cada extensão do X carrega `libxcb`, `libXau` e `libXdmcp` no
@@ -210,6 +220,15 @@ O que a revisão traz, e o que custou:
   partir do diretório de trabalho do processo — imprevisível e, no limite,
   controlável por terceiros. Não é corrigível sem tocar no payload, e tocar no
   payload obrigaria a remover a marca Firefox.
+
+  **Resolução factual para a 0.13 (2026-08-11):** o Firefox rápido oficial
+  153.0.3 conserva o mesmo `libonnxruntime.so` e o mesmo erro único. A release
+  fica, portanto, temporariamente no payload oficial pt-BR do ESR 140.13.0esr:
+  ele não traz esse objeto e o audit completo fecha com **27 ELF, 279
+  requisitos e zero erro**, sem alterar binário, marca ou regra. O pino não
+  transforma ESR em política permanente: `newspeak/firefox/versao-pinada`
+  exige testar 140.14 em 2026-08-18, 140.15 em 2026-09-15 e só migrar ao ESR
+  153 quando a Mozilla publicar um payload sem o RUNPATH relativo.
 - **A montagem do cache virou script** (`bootstrap/cache-from-channel`). Fazê-la
   à mão custou três iterações de ISO, cada uma descobrindo UM item faltando
   depois de compor 740 MB e bootar: a assinatura do Zig sob NOME DERIVADO
@@ -316,8 +335,8 @@ fechamento provado logo abaixo. `minitrue audit` (SPEC-0013 §4) rodou sobre o
 target `miniplenty-v2` já instalado. O parser foi cotejado arquivo a arquivo com o `readelf` do host nos
 414 ELF do rootfs: **zero** `DT_NEEDED` omitido, zero inventado, zero
 divergência de `PT_INTERP` e zero divergência de versão de símbolo. Sobre essa
-base, o veredito é que a closure atual **não se fecha**, com 11 erros de duas
-naturezas — ambos reais, nenhum falso positivo:
+base, o veredito foi que a closure daquele target histórico **não se fechava**,
+com 11 erros de duas naturezas — ambos reais, nenhum falso positivo:
 
 - **`/bin/bash` não existe na distro**, e a glibc entrega `ldd`, `tzselect`,
   `xtrace` e `sotruss` com `#!/bin/bash`. Esses quatro scripts estão quebrados
@@ -356,7 +375,8 @@ esta distro não tem) e o `dnssort` do ndisc6 (perl).
 ### Fechamento provado — 11 erros viraram 0, agora medidos
 
 O veredito anterior foi obtido em **simulação** (cópia por hardlink com `DEPS`
-editada à mão). Este foi medido sobre a closure real, reconstruída:
+editada à mão). O veredito seguinte foi medido sobre a closure real daquela
+execução, reconstruída:
 
 ```text
 AUDIT_ROOT=target/e2-strip-rebuild-v2-root
@@ -537,58 +557,60 @@ artefato existente muda de hash. A terceira é o bug. A quarta é o conserto.
 | `rectify` mundo B (fonte → /usr) | ✅ | ✅ unit + E2/E2-clean + VBox atual | o aceite compilou tree 2.3.2 da fonte, offline, com `ORIGIN=fonte`; a prova histórica também compilou Make 4.4.1 |
 | Perfis de toolchain (`none`/`seed`/`cross`/`native`) | ✅ | ✅ unit + E2E local offline | `seed`/`cross` em receita fonte implicam Zig no fingerprint e no plano de compilação local; a prova Make instalou Zig antes do build e o manteve fora do `world`. Canal/binário e `none`/`native` não o instalam |
 | Receitas de montagem (sem SRC) | ✅ | ✅ | `build()` gera o pacote (config, esqueleto de `/etc`) — nada a baixar; usada por `base` 0.2, com snapshot autocontido em `files/` e fábrica `/etc` |
-| Metapacotes (`KIND=meta`, mundo M) | ✅ | ✅ unit + instalação direta + VBox atual | agregam somente `DEPS`, não têm SRC, funções de build, payload nem artefato de canal; registro v2 usa `KIND=meta`, `WORLD=M`, `ORIGIN=meta` e manifesto vazio. `miniplenty-buildbase` é o primeiro consumidor |
-| Runner mundo B em rootfs (bwrap, --unshare-net, --clearenv) | ✅ | ✅ | isola rede/ambiente do `build()`, mas o **rootfs fica gravável**; avaliação top-level da receita e mundo A ainda rodam no host |
+| Metapacotes (`KIND=meta`, mundo M) | ✅ | ✅ unit + instalação direta + VBox atual | agregam somente `DEPS`, não têm SRC, funções de build, payload nem artefato de canal; registro v3 usa `KIND=meta`, `WORLD=M`, `ORIGIN=meta` e manifesto vazio. `miniplenty-buildbase` é o primeiro consumidor |
+| Runner mundo B em rootfs (bwrap, --unshare-net, --clearenv) | ✅ | ✅ unit + regressão de cessão | isola rede/ambiente e monta o rootfs **somente-leitura**; somente WORK/STAGE/TMPDIR e cache Zig são graváveis. Avaliação top-level, mundo A e `--root /` ainda não têm essa fronteira |
 | `retry` de ICE | ✅ | — | usado no E2 |
 | `fingerprint` de build | ✅ | ✅ | **transitivo**; inclui `DEPS`, `BUILD_DEPS` e Zig implícito para fonte `seed`/`cross`. Snapshot de `recipe`+`files/`, e o mesmo `files/` autocontido é materializado no `WORK` (symlinks auxiliares são recusados) |
 | Supersessão provisional (`PROVISIONAL` + `SUPERSEDES=`) | ✅ | ✅ | declarativa; no mundo B a cessão volta se a instalação falha. `SUPERSEDES` fica no registro e prova cadeias provisional→provisional; mundo A e restauração ao remover sucessor ainda faltam |
 | `pack` determinístico (v2) | ✅ | ✅ | a parte mais madura. O v2 captura **xattr/capability** em registro PAX por entrada, e a claim `f:` passa a prendê-los — antes um `setcap` sumia no empacotamento e o `verify` não acusava. Versão declarada = mínima exigida do leitor, então árvore sem xattr hasheia idêntico ao v1 e nenhum `REPROCORR`/`ARTIFACT_HASH` migra. Faltam ACL, `trusted.*` e sparse |
-| Manifesto v2 (conteúdo + tipo) | ✅ | ✅ | `f:` prende modo+conteúdo do regular, `l:` prende alvo, `d:` prende modo do diretório-raiz+árvore (payload A e vazios B); leitura v0/v1 mantida |
-| `verify` (presença + integridade por claim) | ✅ | ✅ unit + instalação direta + VBox atual | inspeção confinada ao rootfs; confere conteúdo/tipo/alvo/árvore, denuncia journal pendente/formato futuro e exige que toda `DEPS` de registro v2 tenha registro factual válido. Não verifica `BUILD_DEPS` nem varre regulares órfãos em /usr |
+| Manifesto v3 (conteúdo + tipo + diretório compartilhado) | ✅ | ✅ | mantém `f:`/`l:`/`d:` do v2 e acrescenta `D:` para tipo+modo de diretório estrutural cujo conteúdo é livre; leitura v0/v1/v2 mantida, com migração v2→v3 sob prova |
+| `verify` (presença + integridade por claim) | ✅ | ✅ unit + instalação direta + VBox atual | inspeção confinada ao rootfs; confere conteúdo/tipo/alvo/árvore e tipo+modo de `D:` sem enumerar filhos, denuncia journal pendente/formato futuro e exige que toda `DEPS` de registro tipado tenha registro factual válido. Não verifica `BUILD_DEPS` nem varre regulares órfãos em /usr |
 | `cache verify` (disponibilidade sem instalação) | ✅ | ✅ unit + E2E local + VBox atual | força offline/sem TOFU, confere hashes e assinaturas dos nomes explicitamente passados e não cria registro, link ou entrada no `world`; conferiu jq, Make, tree e Zig na mídia atual. Ainda não resolve nem prova a closure completa da SPEC-0013 |
 | `memoryhole` (+ preserva modificado) | ✅ | 🟡 | sem `--tudo`, sem `--orfaos`; sem rollback do payload |
 | `explain` / `why` (proveniência) | ✅ | ✅ | ORIGIN/hash-arq; ABOUT/REPROCORR congelados no meta, com fallback literal legado sem executar receita histórica; corroboração e reprocorr. Não mostra ainda cadeia completa, aresta tipada, plan lock ou `build-residue` |
+| `rectify newspeak` (árvore gerida) | ✅ | ✅ unit | busca `newspeak.tar{,.minisig}` por HTTPS a partir da origem semeada, exige minisign pela chave pinada antes de interpretar o TAR, valida limites/layout/modos e troca a árvore inteira sob o lock global; assinatura ou árvore inválida preserva a anterior. Origem e chave oficiais estão pinadas, mas os dois objetos retornavam 404 na auditoria desta revisão; falta E2E oficial |
 | `--sync` (convergir ao world) | ⬜ | — | stub; SPEC-0011 |
 | Plano/plan lock e closures tipadas | ⬜ | — | `PLAN_LOCK_FORMAT=1`, `plan` e convergência por um resolvedor comum são norma-alvo da SPEC-0013 |
 | Auditoria ELF/ABI + mapa de provedores (`audit`) | ✅ | ✅ unit + cotejo com `readelf` | `AUDIT_FORMAT=1`; lê `PT_INTERP`, `DT_NEEDED`, `DT_SONAME`, `RPATH`/`RUNPATH`, `verneed`/`verdef` e shebang **sem executar nada** — parser próprio pela tabela de programa, sem `ldd`. Mapa de provedores vem dos registros, resolve usr-merge componente a componente e árvore `d:` do mundo A. Serialização canônica + `CLOSURE_SHA256`. **É gate de `channel emit`**: publicar payload com requisito sem provedor declarado é recusado. `dlopen`/plugin/subprocesso continuam fora do alcance estático, e a composição de mídia ainda não é gateada |
 | PATH/view de build fechado | ⬜ | — | o runner limpa o ambiente, mas ainda expõe `/usr/bin:/bin` do rootfs; ferramentas implícitas podem vazar para o build |
 | `rollback` / `unperson` / `lint` | ⬜ | — | stub |
-| Canal binário assinado | ✅ | ✅ unit + E2E offline | config HTTPS/chave minisign pinada, índice canônico v2 assinado com `RECIPE_FINGERPRINT`, cache endereçado por conteúdo, `.tar.zst` com limites e conferência do tar interno; seleção exige que a identidade autenticada coincida com a receita efetiva. `/etc/minitrue/channels/` existente é autoritativo e, vazio, desativa a seed |
+| Canal binário assinado | ✅ | ✅ unit + E2E offline | config HTTPS/chave minisign pinada, índice canônico v2 assinado com `RECIPE_FINGERPRINT`, cache endereçado por conteúdo, `.tar.zst` com limites e conferência do tar interno; seleção exige que a identidade autenticada coincida com a receita efetiva. Cada `rectify` online é mutação explícita: busca, autentica e pode persistir o snapshot operacional preso no próprio lock; não há avanço em background. Offline usa a seed assinada. `/etc/minitrue/channels/` existente é autoritativo e, vazio, desativa a seed |
 | Resolução `--no-binary` / `--only-binary` | ✅ | ✅ unit + E2E offline histórico | binário de canal preserva mundo B; `--only-binary` resolve metapacotes locais sem artefato, mas exige artefato para cada dependência fonte e não expande `BUILD_DEPS` nem Zig implícito |
 | Lock de canal | ✅ | ✅ unit + E2E offline | `CHANNEL_LOCK_FORMAT=2`; seleção, chave, índice, pacote, fingerprint autenticado, caminho, hash de transporte, `reprocorr` e trust; persistido por hash em `/var/lib/minitrue/channel-locks/` e cotejado semanticamente por `verify` |
-| `channel emit` | ✅ | ✅ unit | `CHANNEL_EMIT_FORMAT=2`; reutiliza o tar autenticado do cache para registros vindos de canal e só reconstrói registros locais quando topologia, metadados e `ARTIFACT_HASH` podem ser provados; emite pool + índice sem assinatura. Release deve emitir no próprio build |
-| `channel keygen` / `channel sign` | ✅ | ✅ unit + cotejo com o `minisign` 0.12 | Assinar deixou de depender do hospedeiro. O consumidor sempre exigiu minisign, mas o produtor chamava o binário `minisign` do host — dependência de host bem no ponto da **raiz de confiança do canal**, o oposto do que o resto da árvore faz. Formato `Ed`/`ED` implementado sobre a ed25519-dalek que as attestations já traziam; `sign` confere com `minisign-verify` o que acabou de escrever, isto é, o produtor é validado pelo consumidor antes de publicar. Chave sem senha só: scrypt exigiria dependência nova e é **recusado**, não ignorado. **Equivalência medida**: para a mesma chave e a mesma mensagem, a assinatura é byte-idêntica à do `minisign` 0.12, e o binário do host valida a nossa. Falta suporte a chave com senha |
-| Gestão de canais (`add/remove/list/refresh`) | ⬜ | — | hoje a configuração é administrada por arquivos estritos; em especial, não há `channel refresh` auditável. A CLI administrativa da SPEC-0009 é gate de release |
-| Lock global por rootfs (flock) | ✅ | ✅ | rectify/memoryhole; auto-libera na saída |
+| `channel emit` | ✅ | ✅ unit | builds locais retêm atomicamente o tar selado por `ARTIFACT_HASH`; `--release` exige/revalida somente esses objetos e marca `RELEASE_ROOT=yes`. `emit.meta` v3 prende o índice exato por `INDEX_SHA256`, impedindo mistura entre emissões. O modo comum prefere retido, permite objeto de canal/reconstrução provada e marca `RELEASE_ROOT=no`; emite pool + índice sem assinatura |
+| `channel keygen` / `channel sign` | ✅ | ✅ unit + fixture `Sc` cotejada com `minisign` 0.12 + cache integrado | O produtor assina sem chamar o binário do host e confere o sidecar com `minisign-verify`. Chaves plain continuam aceitas; chaves minisign `Sc` agora são decriptadas pelo scrypt compatível com libsodium. A passphrase entra somente por `--passphrase-fd N`: fd duplicado `CLOEXEC`, legível, não-TTY, leitura até EOF, máximo 1023 bytes e sem NUL/quebra interna; buffers secretos sob controle do signer são zerados. Custos scrypt forjados fora da faixa oficial são recusados antes de alocar. Senha errada e pública esperada divergente falham sem sidecar; a fixture fixa assina/verifica tanto aqui quanto no `minisign` local. `cache-from-channel` conserva o fd só no pai, fecha-o em todo filho de preparação e o encaminha apenas como stdin do bwrap; recusa fd ausente/TTY, fecha antes do cleanup e descarta cache/sidecar em erro. Sem a opção, o fluxo plain não muda |
+| `channel refresh` administrativo | ✅ | ✅ unit | recusa offline; busca HTTPS, valida chave pinada, minisign e índice canônico de todos os canais selecionados antes de emitir `CHANNEL_REFRESH_FORMAT=1`; descarrega hashes + linhas removidas/acrescentadas antes de trocar atomicamente cada par índice/assinatura; não instala nem cria lock de seleção |
+| Gestão de canais (`add/remove/list`) | ⬜ | — | a configuração e a rotação de chave continuam administradas por arquivos estritos |
+| Lock global por rootfs (flock) | ✅ | ✅ | rectify/memoryhole/channel refresh; auto-libera na saída |
 | Confinamento de caminhos destrutivos | 🟡 | ✅ unit | `openat2(RESOLVE_IN_ROOT)` em inspeção/remoção; Journal aceita usr-merge interno e recusa ancestral que resolve fora do rootfs, mas mutações do Journal ainda usam caminhos após o preflight. Converter tudo a operações fd-relative para fechar TOCTOU contra mutador concorrente é gate de release |
 | Registro transacional do mundo B (meta = commit) | ✅ | ✅ | `manifest`/`recipe`/`meta` entram no journal; `TRANSACTION_ID` do meta, escrito por último, decide recovery |
-| `RECORD_FORMAT=` | ✅ | ✅ | hoje 2; v0/v1 pode migrar in-place sob guardas ou reconstrói; provisional já cedido congela; formato futuro falha fechado |
-| Journal + rollback do mundo B (STAGE→/) | ✅ | ✅ | formato 2 + `txid`; intenção antes da mutação; recovery **global** antes de nova operação; journal legado, >1 ativo ou rollback sobre claim posterior falha fechado e preserva backups. Sem promessa contra perda de energia: falta `fsync` |
+| `RECORD_FORMAT=` | ✅ | ✅ | hoje 3; v2 íntegro sem `SHARED_DIRS` migra transacionalmente sem fetch/build, v0/v1 mantém as guardas anteriores; provisional já cedido congela; formato futuro falha fechado |
+| Journal + rollback do mundo B (STAGE→/) | ✅ | ✅ | formato 3 + `txid`; intenção antes da mutação; recovery **global** antes de nova operação; journal legado, >1 ativo ou rollback sobre claim posterior falha fechado e preserva backups. Sem promessa contra perda de energia: falta `fsync` |
 | `SUPERSEDES=` explícito | ✅ | ✅ | declarado em 6 receitas do E2; colisão não-declarada = doublethink |
 | Assinatura upstream por artefato (`SIG`) | ✅ | ✅ | minisign/signify; cache prende hash do artefato+chave+URL e é revalidado |
 | Verificação OpenPGP / `SIGSUMS` | ⬜ | — | parser reconhece os campos, executor falha explicitamente; Marco 0.2, sem `gpg` externo |
 | `reprocorr` (raiz de confiança) | ✅ | ✅ | build de fonte grava `ARTIFACT_HASH`=`pack(STAGE)`; receita que pina `REPROCORR` exige reprodução (crimestop). SPEC-0009 §8.1 |
-| Attestation + corroboração (`attest`/`corroborate`) | ✅ | ✅ | `ATTEST_FORMAT=1`, ed25519-dalek; versão+fingerprint impedem replay e a emissão exige registro v2, txid, baseline, snapshots e claims íntegros. ≥2 builders pinados concordam. **Independência ainda simulada** (1 máquina) |
+| Attestation + corroboração (`attest`/`corroborate`) | ✅ | ✅ | `ATTEST_FORMAT=1`, ed25519-dalek; versão+fingerprint impedem replay e a emissão exige registro v3, txid, baseline, snapshots e claims íntegros. ≥2 builders pinados concordam. **Independência ainda simulada** (1 máquina) |
 
 ## minipax (perfil, instalação e mídia)
 
 | Recurso | Estado | Testado | Nota |
 |---|---|---|---|
 | CLI única (`install`, `media build`, `lock`) | ✅ | ✅ unit | binário Rust separado; `bootstrap/distropica-bootstrap` apenas o localiza/compila e delega |
-| Perfil estrito + `profile.lock` | ✅ | ✅ unit | `PROFILE_LOCK_FORMAT=2`/`PROFILE_CONTENT_FORMAT=2`; normaliza os três worlds e prende `cache.world` em `CACHE_WORLD_SHA256`, além de Newspeak/overlay/cache, arch, epoch, `MEDIA_SIZE_MIB=512`, `INSTALL_READY` e pinos oficiais. `MEDIA_SIZE_MIB` dimensiona a IMG, não fixa a ISO |
-| Instalação em rootfs (`--target`) | ✅ | ✅ unit + E2E dev atual | prepara FHS/usr-merge, congela Newspeak/cache e, offline, executa `cache verify` antes de `rectify` + `verify`; o target atual inteiro foi materializado de canal numa raiz vazia e passou nas provas de toolchain |
+| Perfil estrito + `profile.lock` | ✅ | ✅ unit | `PROFILE_LOCK_FORMAT=3`/`PROFILE_CONTENT_FORMAT=3`; normaliza os três worlds e prende `cache.world` em `CACHE_WORLD_SHA256`, além de Newspeak, overlay, cache e bootstrap separado em `CHANNEL_BOOTSTRAP_SHA256`, arch, epoch, `MEDIA_SIZE_MIB=1024`, `INSTALL_READY` e pinos oficiais. O vínculo de licenças fica para a revisão posterior ao plan lock |
+| Instalação em rootfs (`--target`) | ✅ | ✅ unit + E2E dev atual | prepara FHS/usr-merge, congela Newspeak/cache e, offline, executa `cache verify` antes de `rectify` + `verify`; depois de consumir o cache instala no alvo o bootstrap versionado do perfil, inclusive `newspeak-origem`, para o override offline não escolher a confiança pós-reboot |
 | Ingestão de mídia (`install-media`) | ✅ | ✅ unit | valida controles sem seguir symlinks, hashes de lock/EFI, coerência modo/cache e reconstitui o perfil byte a byte antes de tocar no target; `--export-boot-efi` cria sem sobrescrever o snapshot EFI validado e o remove se a instalação falhar |
 | Executor e `install.manifest` | ✅ | 🟡 unit + E2E dev | copia Minitrue para `memfd` selado, mede o Minipax, persiste ambos em `/usr/bin`; manifesto prende hashes, classe e opções `OFFLINE`/`FROM_SOURCE`/`ONLY_BINARY`. O target mínimo exige executores estáticos para usá-los após o boot |
 | Retomada e proteção do target | ✅ | ✅ unit | recusa `/`, target sujo e perfil divergente; `--resume` exige marca anterior do Minipax |
 | IMG GPT+FAT32 | ✅ | ✅ unit local | GPT/FAT internos; GUIDs e serial FAT derivam do hash do payload completo. Duas composições da fixture dão o mesmo sha256; ainda não há prova entre builders nem de boot |
 | ISO UEFI/El Torito | ✅ | ✅ unit local | fixa metadados; usa caminho absoluto do `xorriso`, hash antes/depois e ambiente fechado, registra versão+hash e pós-valida `CD001`. Reproduziu só localmente |
-| Sidecars (`.sha256`, `.media.lock`, `.manifest`) | ✅ | ✅ unit | temporários publicados sem sobrescrever antes da imagem; não há transação multi-arquivo, logo corrida/falha pode deixar sidecars sem imagem |
+| Sidecars (`.sha256`, `.media.lock`, `.manifest`) | ✅ | ✅ unit adversarial | staging e journal duráveis, ancorados por FD em parent do UID efetivo sem escrita de grupo/outros; sidecars primeiro e imagem por último; recuperação cobre queda real, rollback e promoção sem misturar gerações; repetição da mesma requisição é idempotente |
 | Classes de insumos de release | ✅ | 🟡 unit | `PROFILE_CLASS`, `MEDIA_CLASS` e `INSTALL_CLASS` podem ser `official-inputs` após os respectivos pinos; isso não declara reprodução oficial |
 | Modos canônicos das árvores | ✅ | ✅ unit | dirs `0755`, `root/` do overlay `0700`, `shadow`/`gshadow` e backups `0600`, executáveis `0755`, demais regulares `0644`; não depende dos modos que o Git preserva |
 | Limites das árvores | ✅ | ✅ unit | Newspeak e overlay: 128 MiB de conteúdo regular cada, **em memória**; cache: **streaming**, teto de 4 GiB−1 (limite do FAT32 para UM arquivo, não de RAM); 50.000 entradas por árvore. Desde 2026-07-30 a árvore de cache é coletada por REFERÊNCIA (`EntryKind::RegularAt`), o `cache.tar` é escrito direto num `Write` com o sha256 saindo do mesmo fluxo, e o payload vai do disco para a mídia com buffer fixo. O instalador faz o mesmo em duas passadas: uma valida a árvore inteira lendo só cabeçalhos, a outra extrai. `payload_hash` inalterado — as ISOs continuam bit a bit idênticas às da versão em memória, o que os testes de reprodutibilidade provam. No canal, `.tar.zst` selado e tar descompactado ainda coexistem |
 | Modo offline/cache | ✅ | ✅ unit + E2E atual | `cache.world` exige jq, Make, tree e Zig. Make também é instalado por depender de `miniplenty-buildbase`; jq/tree começam ausentes para as provas e Zig fica somente no cache. Com o modo gráfico, a árvore passou a **647 MB** — o que só é possível porque o cache virou streaming |
-| Modo online/bootstrap de canal | ✅ | ✅ unit | Minipax exige config + índice/assinatura pareados, rejeita objetos e semeia antes de `rectify`; Minitrue valida minisign no uso. Não há endpoint oficial para E2E |
-| BOOT EFI vivo (kernel+initramfs+Minipax+Minitrue) | ✅ | ✅ E2E QEMU histórico + VirtualBox atual | fixa Linux 7.1.4, BusyBox e executores musl `static-pie`. `CONFIG_MODULES=y`, nenhum `.ko` na mídia e release `7.1.4-distropica-live`; o EFI atual inclui `simpledrm`+`fbcon` e VirtIO de rede built-in, sem fixar o disco |
+| Modo online/bootstrap de canal | ✅ | ✅ unit + assinatura oficial cotejada | Minipax exige `channel-bootstrap.tar` separado, com config + índice/assinatura pareados e `newspeak-origem`; rejeita `cache.tar` online. O endpoint, a chave e o índice do canal estão publicados; o perfil também pina `https://distropica.com.br/newspeak/` e a mesma chave, mas `newspeak.tar{,.minisig}` ainda retornavam 404 na auditoria desta revisão. Falta repetir E2E online |
+| BOOT EFI vivo (kernel+initramfs+Minipax+Minitrue) | ✅ | 🟡 E2E histórico + Kconfig 7.1.8 focal | a composição fixa Linux 7.1.8, BusyBox e executores musl `static-pie`. Como nenhum `.ko` entra na mídia, agora fixa `CONFIG_MODULES=n`; `olddefconfig` manteve built-in os guards de Wi-Fi, disco, vídeo e áudio no ensaio isolado. O timestamp usa forma ISO parseável pelo BusyBox e uma guarda exige round-trip ao epoch, sem fallback silencioso do CPIO para wall-clock. Falta recompor/bootar e reproduzir o EFI com essas mudanças; release `7.1.8-distropica-live` |
 | Instalação por ISO em QEMU/OVMF | ✅ | ✅ E2E final-v10 | aceite histórico e automatizado: antes de escolher disco, materializa closure em `/run` e exporta snapshot EFI validado; depois particiona, copia, verifica, instala EFI e publica o marcador completo por último. Segundo boot ocorreu sem ISO |
 | Instalação por ISO no VirtualBox | ✅ | ✅ E2E local atual | `miniplenty-v1` provou EFI64/VMSVGA/SATA, ejeção antes do wipe, reboot sem ISO, Vim/ripgrep/toolchain por padrão, C/C++/arquivo/Make offline, jq binário, tree fonte, persistência, `verify` e VirtIO/NAT; Zig permaneceu só no cache |
 | Boot da IMG em QEMU/OVMF | 🟡 | — | compositor IMG existe e reproduziu localmente; o aceite funcional final-v10 exercitou somente a ISO |
@@ -596,15 +618,15 @@ artefato existente muda de hash. A terceira é o bug. A quarta é o conserto.
 
 O perfil `profiles/official` continua com `STATUS=development`, mas agora
 declara `INSTALL_READY=yes`. Seu `target.world` contém `base`, `linux`,
-`ripgrep`, `vim` e `miniplenty-buildbase`. A receita meta tem
+`e2fsprogs`, `ripgrep`, `vim` e `miniplenty-buildbase`. A receita meta tem
 `DEPS="base make gcc-pass2"`, registro `KIND=meta`/`WORLD=M` e nenhum payload;
 o fecho final de GCC traz `linux-headers`, glibc, `mathlibs-glibc`, zlib e
 `binutils-glibc`; Vim traz ncurses. Make, GCC/G++, assembler e linker ficam instalados desde o
 primeiro boot, mas apenas `miniplenty-buildbase` é desejo top-level da
 toolchain. Seu `cache.world` contém jq, Make, tree e Zig: essa declaração só
 exige disponibilidade offline; Make é instalado por causa do metapacote,
-jq/tree começam ausentes e Zig fica no cache/sob demanda. O lock v2 separa essas intenções com `TARGET_WORLD_SHA256` e
-`CACHE_WORLD_SHA256`. O perfil fixa `MEDIA_SIZE_MIB=512` para dimensionar a
+jq/tree começam ausentes e Zig fica no cache/sob demanda. O lock v3 separa essas intenções com `TARGET_WORLD_SHA256` e
+`CACHE_WORLD_SHA256`. O perfil fixa `MEDIA_SIZE_MIB=1024` para dimensionar a
 IMG; a ISO segue o tamanho do payload. Os runners atuais usam discos de
 4096 MiB.
 
@@ -614,9 +636,10 @@ Como o cache de desenvolvimento é passado por `--cache`, o E2E recebe classe
 reprodução oficial: isso dependerá do sha256 final pinado num manifesto
 oficial externo assinado.
 
-A closure atual foi reconstruída, exercitada, reemitida no canal local assinado
-e integrada ao cache, lock, EFI e ISO aceitos no VirtualBox. O rebuild repetido
-em ambiente independente ainda é necessário para o claim de reprodutibilidade.
+A closure daquela execução foi reconstruída, exercitada, reemitida no canal
+local assinado e integrada ao cache, lock, EFI e ISO aceitos no VirtualBox.
+Essa evidência histórica não prova a closure hoje versionada; reconstruções
+limpas e repetidas desta são necessárias para o claim de reprodutibilidade.
 
 O aceite final-v10 executou ISO → disco vazio → segundo boot sem ISO, com rede
 ausente e TCG. Duas composições locais da ISO foram byte a byte idênticas. Uma
@@ -695,18 +718,21 @@ RUN_STATE=passed
 FINAL_RESULT=passed
 ```
 
-O runner atual executou a prova: ripgrep 15.2.0, Vim 9.2.0837,
+O runner `miniplenty-v1` executou a prova histórica: ripgrep 15.2.0, Vim 9.2.0837,
 `miniplenty-buildbase`, GNU Make 4.4.1, binutils 2.45 e GCC/G++ 15.3.0 presentes
 desde o primeiro boot; metapacote registrado no mundo M sem payload; componentes
 da toolchain vindos do canal e fora do world explícito; Zig ausente; e, ainda
 sem link, compilação/execução C e C++, criação e link de arquivo estático,
 construção por Makefile e `verify` limpo. Também instalou jq 1.8.2 do binário
 upstream e tree 2.3.2 da fonte, ambos offline, e comprovou sua persistência após
-o terceiro boot. Os hashes da execução atual estão no início deste documento.
+o terceiro boot. Os hashes dessa execução estão no bloco correspondente deste
+documento.
 
 Esses hashes identificam uma execução do workspace
 de desenvolvimento; não serão pinos de release nem substituirão manifesto
-externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
+externo assinado. O endpoint, a chave e o índice do canal estão publicados e
+pinados; os objetos Newspeak ainda retornavam 404 e a mídia desta revisão não
+foi publicada.
 
 ## Bootstrap (SPEC-0005)
 
@@ -714,9 +740,9 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
 |---|---|---|
 | E0 — chroot musl-estático | ✅ | |
 | E1 — `./configure && make` | ✅ | |
-| E2 — glibc + gcc nativo | ✅ | **Evidência histórica E2-clean:** um rootfs novo, com seed limpo, construiu 16 pacotes. O grafo atual com zlib e `install-strip` também foi reconstruído uma vez e passou C/C++/arquivo/Make; falta comparação em dois ambientes limpos |
+| E2 — glibc + gcc nativo | ✅ | **Evidência histórica E2-clean:** um rootfs novo, com seed limpo, construiu 16 pacotes. Um grafo posterior, então vigente, com zlib e `install-strip`, também foi reconstruído uma vez e passou C/C++/arquivo/Make; isso não prova a closure hoje versionada nem substitui a comparação em dois ambientes limpos |
 | E3 — kernel + boot | 🟡 | O smoke anterior bootou Linux 7.1.4 do E2 com raiz 9p. Separadamente, o EFI-stub live atual passou em ISO→disco→boot sem mídia no VirtualBox, cobrindo `simpledrm`/`fbcon`, PS/2, AHCI, `/dev/sda`, VirtIO/NAT, toolchain e `verify`; faltam runit, `.config` de hardware geral e gestão completa de contas |
-| — openssl 4.0.1 (base de confiança do kernel) | ✅ | mundo B, compilado pela toolchain nativa (libcrypto/libssl, `-DZLIB`); SHA conferido no download. Habilita geração/uso da chave de módulos; **attestation usa ed25519-dalek e independe de OpenSSL**. O materializador de `/etc` agora trata symlinks, com regressão coberta |
+| — openssl 4.0.1 (base de confiança do kernel) | ✅ | mundo B, compilado pela toolchain nativa (libcrypto/libssl, `-DZLIB`); SHA conferido no download. Valida CMS e fornece `sign-file -s`, mas nenhuma chave privada entra no build: o certificado e os CMS são públicos/pinados. **Attestation usa ed25519-dalek e independe de OpenSSL** |
 | — base 0.2 (config Fase B) | ✅ E2E local | receita de montagem `GPL-3.0-or-later` com `TOOLCHAIN=none`: além de `/etc/inittab`, `rcS`, `rcK`, `os-release`, `hostname` e a cópia da GPL, sobe interfaces e tenta DHCP IPv4 sem tornar a falha fatal. O fingerprint atual entrou no canal/cache/ISO aceitos; DHCP, rota e DNS local passaram. Não cria `/etc/shadow`, portanto sozinha não fecha login autenticado |
 | E4 — userland vendor / GUI | ⬜ | |
 
@@ -726,11 +752,12 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
 |---|---|
 | Ambiente determinístico (epoch/LC/TZ/umask) | ✅ |
 | `ar` determinístico | ✅ |
+| Kernel target + módulos assinados byte-idênticos (2 builds) | 🟡 desenho e regressões focais fechados; certificado público + manifesto de 45 CMS pinados, `MODULE_SIG_ALL=n`, cobertura/hashes/CMS validados e nenhuma chave privada no build. Dois builds isolados produziram config, System.map e 45 módulos byte-idênticos, mas revelaram 29 bytes variáveis no vmlinux: 3 mtimes de CPIO derivados de `time(NULL)` e o build-id consequente. A causa era o timestamp longo que o `date` BusyBox não parseia; forma ISO + guarda de round-trip ao epoch estão corrigidas. Falta repetir ×2 depois do freeze integrado |
 | m4, gmp, **gcc**, **glibc** byte-idênticos (2 builds) | ✅ histórico para as receitas e os artefatos então medidos; o `gcc-pass2` atual com `install-strip` foi reconstruído uma vez, não ×2 |
 | Hash de artefato via `pack` = `reprocorr` | ✅ histórico (m4/gcc/glibc); payloads atuais de GCC/binutils emitidos e exercitados, ainda sem comparação ×2 |
 | `REPROCORR` pinado + verificado no build | ✅ (`m4` pina; build de fonte grava `ARTIFACT_HASH` e exige reproduzir o pinado — crimestop se divergir) |
 | Cotejo do artefato completo produzido pelo E2-clean | ⬜ (passo posterior à primeira execução a frio) |
-| Identidade declarativa do sistema (`profile.lock`) | ✅ (`PROFILE_LOCK_FORMAT=2`/`PROFILE_CONTENT_FORMAT=2`; inclui `CACHE_WORLD_SHA256`, tamanho, prontidão, hash calculado e os três pinos oficiais) |
+| Identidade declarativa do sistema (`profile.lock`) | ✅ (`PROFILE_LOCK_FORMAT=3`/`PROFILE_CONTENT_FORMAT=3`; inclui `CACHE_WORLD_SHA256`, `CHANNEL_BOOTSTRAP_SHA256`, tamanho, prontidão, hash calculado e os três pinos oficiais) |
 | Executor da instalação medido = executado | ✅ local (`memfd` selado, ambiente fechado e hash no `install.manifest`) |
 | Rootfs instalado byte-a-byte idêntico | ⬜ (`INSTALLED_AT`, uid/gid e demais metadados ainda impedem o claim) |
 | IMG byte-idêntica em duas composições | ✅ local (fixture, mesmo binário/toolchain; GPT/FAT normalizados) |
@@ -775,8 +802,10 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   tanto à closure instalada quanto à disponibilidade de `cache.world`, jq/tree
   ficam disponíveis para as provas e Zig pertence somente ao cache/sob demanda.
   A mídia integrada foi construída e aceita; GCC/binutils foram reemitidos com
-  `install-strip`. Ainda não há
-  endpoint, chave de release, índice ou artefatos oficiais publicados. A
+  `install-strip`. Endpoint, chave e um índice oficial estão publicados e
+  pinados no perfil; os objetos Newspeak ainda retornavam 404 na auditoria
+  desta revisão, e os payloads precisam ser reemitidos contra a árvore
+  atual e a mídia recomposta para constituírem evidência desta revisão. A
   separação nominal de `base` 0.2 para `base-config`, runit e a política uid/gid
   continuam abertos; o agregador de produção agora é a verdadeira meta-receita
   `miniplenty-buildbase`. `profiles/official` permanece
@@ -793,19 +822,22 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   fechou o caminho local do adaptador VirtIO, DHCP IPv4, rota, DNS e gateway
   NAT nessa VM; não permite afirmar acesso à Internet nem suporte genérico a
   controladores NVMe, USB, outras placas de rede, GPUs ou armazenamento
-  encontrados em hardware real. O kernel mantém
-  `CONFIG_MODULES=y`, mas o initramfs não leva módulos; tudo que a instalação
-  precisa deve estar built-in. `LOCALVERSION=-distropica-live` produz o
-  release `7.1.4-distropica-live`, isolando a busca automática de
-  `/lib/modules/7.1.4` que pertence ao kernel do target.
+  encontrados em hardware real. O kernel vivo fixa `CONFIG_MODULES=n`; tudo
+  que a instalação precisa é guardado como built-in depois do
+  `olddefconfig`. `LOCALVERSION=-distropica-live` produz o release
+  `7.1.8-distropica-live`; não há carregador nem busca automática que possa
+  consumir `/lib/modules/7.1.8` do kernel target.
 - **Kernel EFI embutido:** o mesmo `BOOTX64.EFI` da mídia é copiado para a
   ESP do sistema instalado. Como kernel e initramfs estão incorporados, uma
   atualização de `/boot/vmlinuz-*` pelo canal não atualiza automaticamente o
   EFI de boot; retenção/rotação e atualização atômica do EFI são gates.
-- **Publicação da mídia não é transação de conjunto:** os três sidecars são
-  preparados e publicados sem substituição antes da imagem. Isso evita imagem
-  publicada pelo Minipax sem sidecars, mas corrida ou falha pode deixar parte
-  ou todos os sidecars sem imagem; não existe rollback multi-arquivo.
+- **Publicação da mídia usa journal de conjunto:** não há uma syscall atômica
+  para quatro nomes, portanto o compositor trabalha sob lock num parent do UID
+  efetivo, sem escrita por grupo/outros, com staging privado e controles
+  duráveis. Sidecars saem primeiro e a imagem por último; queda, rollback,
+  fallback sem `renameat2` e repetição são recuperados sem misturar gerações.
+  Um conjunto completo e canônico da mesma requisição é aceito de forma
+  idempotente; nomes ou bytes estrangeiros continuam fail-closed.
 - **Escala do Minipax:** o cache **deixou de ser limite de memória** em
   2026-07-30. Newspeak e overlay seguem em memória, a 128 MiB de conteúdo
   regular cada, e isso está certo: são árvores pequenas por natureza. O cache
@@ -861,9 +893,12 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   essa leitura pela metade e tiraria 30 MB da ISO. Vale tentar antes de culpar
   o OVMF.
 - **Escala do canal:** o consumidor sela transporte e tar e limita cada um a
-  16 GiB, mas ainda não limita a quantidade de entradas do tar. Um objeto
-  assinado enorme pode esgotar memória no preflight — sem alcançar o wipe, mas
-  tornando a instalação indisponível. Streaming e limite de entradas são gates.
+  16 GiB. Antes de o leitor de tar alocar extensões, uma passada crua limita
+  também 50.000 entradas lógicas, membros físicos, 4.096 bytes por path/alvo,
+  16 MiB de PAX e 16 GiB de conteúdo regular agregado. O pico ainda inclui
+  transporte compactado + tar descompactado em memfds; streaming autenticado
+  continua desejável para objetos grandes, mas o esgotamento sem teto por
+  quantidade/extensão deixou de existir.
 - **Resgate depois do wipe:** falhas verificadas de cópia, hash, sync e
   desmontagem entram no shell de rescue e o marcador final continua fail-closed.
   Alguns comandos auxiliares pós-wipe ainda dependem apenas de `set -e`; se um
@@ -892,9 +927,10 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   ancestrais. O `flock` impede apenas concorrentes cooperativos; um mutador
   hostil com acesso ao mesmo rootfs pode explorar uma janela TOCTOU. Operações
   integralmente fd-relative e confinadas são gate de release.
-- **Registro v2:** o fast path exige `meta`, `manifest`/`manifest@` e
+- **Registro v3:** o fast path exige `meta`, `manifest`/`manifest@` e
   `recipe`/`recipe@` coerentes com o snapshot corrente; prende conteúdo de
-  regulares, alvo de links e modo+árvore de diretórios. `manifest@` é baseline
+  regulares, alvo de links, modo+árvore de diretórios exclusivos e tipo+modo
+  de diretórios compartilhados `D:`. `manifest@` é baseline
   de provisional e a exceção legado exige dono sucessor para cada claim
   removida (inclusive por sucessor provisional que registre `SUPERSEDES`).
   A claim `f:` passa a prender **xattr/capability** quando o arquivo os tem
@@ -910,14 +946,17 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   diretórios/especiais entre mounts. Aplicar `security.capability` exige
   `CAP_SETFCAP`: sem ele a instalação **falha fechado e reverte**, em vez de
   materializar um sistema que diverge do artefato atestado.
-- **Diretórios compartilhados:** claims `d:` bloqueiam sobreposição
-  pai×descendente entre pacotes. Remoção mundo B usa apenas `rmdir` e preserva
-  diretório que ganhou filhos; mudança de modo de diretório vazio preexistente
-  é recusada, não silenciosamente aceita.
-- **Sandbox parcial:** no mundo B de outro rootfs, bwrap isola rede e ambiente,
-  mas monta o rootfs gravável. A avaliação top-level da receita e o mundo A
-  ainda executam no host. Ideal: parse declarativo ou sandbox de avaliação,
-  rootfs read-only e binds graváveis apenas para WORK/STAGE.
+- **Diretórios compartilhados:** `d:` continua ownership exclusivo e bloqueia
+  sobreposição pai×descendente. Uma receita fonte pode declarar
+  `SHARED_DIRS`; suas entradas estruturais viram `D:` (tipo+modo, filhos
+  livres). Só `DEPS` direta do dono pode depositar descendentes, e cada folha
+  continua com provedor exclusivo. `verify` não atribui filhos ao dono,
+  reconstrução de canal não copia conteúdo vivo, e remoção usa apenas `rmdir`,
+  preservando diretório populado.
+- **Sandbox parcial:** no mundo B de outro rootfs, bwrap isola rede/ambiente e
+  monta o rootfs read-only, com binds graváveis somente para WORK/STAGE/TMPDIR
+  e o cache Zig. A avaliação top-level da receita, o mundo A e builds com
+  `--root /` ainda rodam sem essa fronteira.
 - **Escala de memória:** `Command::output` acumula stdout/stderr de build e
   `install_pkg`; artefatos grandes também ficam integralmente no `memfd` selado.
   Logs/artefatos devem migrar para streaming antes de tratar imagens grandes.
@@ -932,10 +971,12 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   autenticando o publicador, não uma reprodução independente. Também não há
   monotonicidade externa para impedir que um servidor reapresente um índice
   antigo ainda corretamente assinado.
-- **Atualização administrativa de canal:** consumo, lock v2 e emissão existem,
-  mas `channel add/remove/list/refresh` não. Sem um `refresh` explícito que
-  valide assinatura, produza diff auditável e só então avance o snapshot, a
-  operação rolling do canal oficial não está fechada; é gate de release.
+- **Atualização administrativa de canal:** consumo, lock v2, emissão e
+  `channel refresh` existem. O refresh mostra o diff autenticado antes de
+  avançar e não instala; cada `rectify` online é uma mutação explícita que
+  autentica/persiste seu snapshot operacional e congela a própria seleção.
+  Não há atualização em background. `channel add/remove/list` e
+  anti-replay/monotonicidade externa ainda não existem.
 - **Nomes canônicos:** hoje `gcc` = scaffolding, `gcc-pass2` = o GCC real;
   renomeação final ainda pendente mesmo após o E2-clean.
 - **Agregador e configuração-base agora são distintos:**
@@ -943,9 +984,18 @@ externo assinado. Endpoint, chave e publicação oficiais continuam ausentes.
   `base` 0.2 continua sendo a receita com payload de configuração de boot. Uma
   eventual renomeação para `base-config` ainda precisará preservar ownership de
   rootfs já registrados.
-- **Kernel ainda não é reproduzível entre builders:** a receita gera uma nova
-  chave de assinatura de módulos em cada build. A política de release precisa
-  separar o artefato reprodutível da assinatura/chave operacional.
+- **Assinatura de módulos deixou o segredo fora do build:** o kernel target
+  usa `MODULE_SIG_FORCE`, certificado público fixo e um manifesto pinado de 45
+  CMS detached. O build produz `.ko` unsigned, exige cobertura exata, valida
+  hash+CMS e só então reaplica com `sign-file -s`; `MODULE_SIG_ALL=n` e a
+  ausência de `certs/signing_key.pem` são guardas. A regressão cobre assinatura
+  ausente/extra, hash divergente, pino divergente e remoção da chave temporária.
+  A primeira dupla integral confirmou que config, System.map e os 45 módulos
+  eram byte-idênticos e isolou a única divergência no `bzImage`: três mtimes do
+  CPIO default vinham de wall-clock porque o `date` BusyBox rejeitava a forma
+  longa de `KBUILD_BUILD_TIMESTAMP`; o GNU build-id era a quarta diferença,
+  derivada desses bytes. Target e live agora usam forma ISO e abortam se ela
+  não voltar ao `SOURCE_DATE_EPOCH`. Falta repetir ×2 após o freeze integrado.
 - **O `ld` nativo exige `-rpath-link` explícito, e falhar disso responde
   errado em vez de falhar.** O linker desta árvore não resolve sozinho a
   dependência TRANSITIVA de uma biblioteca compartilhada em `/usr/lib`. Isso

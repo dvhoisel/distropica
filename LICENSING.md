@@ -62,17 +62,43 @@ inventário conclusivo de licenças continuam sendo gates dessa futura
 publicação.
 
 Em particular, o tar binário oficial do Zig agrega sysroots, libc++, libunwind
-e outras fontes auxiliares sob várias licenças. Enquanto o inventário exato
-dessa composição não for gerado, sua receita declara `LICENSE=NOASSERTION` em
-vez de atribuir incorretamente MIT ao bundle inteiro. Os textos upstream
-continuam dentro do tar/payload; `NOASSERTION` não autoriza omiti-los.
+e outras fontes auxiliares sob várias licenças. A receita atual declara uma
+expressão composta para esse conjunto, em vez de atribuir incorretamente MIT ao
+bundle inteiro. Os textos upstream continuam dentro do tar/payload, e o SBOM
+arquivo a arquivo do artefato continua sendo gate de publicação.
 
 O mesmo critério conservador vale para `gcc-pass2`: seu payload final combina o
 compilador, bibliotecas cobertas pela GCC Runtime Library Exception, manuais
-GFDL e componentes auxiliares sob outras licenças. Até o SBOM arquivo a arquivo
-ser produzido a partir do novo artefato, a receita declara
-`LICENSE=NOASSERTION`; isso não altera nenhuma licença upstream nem reduz as
-obrigações de fornecer fontes, exceções e avisos correspondentes.
+GFDL e componentes auxiliares sob outras licenças. Sua receita atual também
+declara uma expressão composta explícita; isso não altera nenhuma licença
+upstream nem reduz as obrigações de fornecer fontes, exceções e avisos
+correspondentes. Nesta revisão, todas as receitas da árvore que geram payload
+têm uma declaração específica de licença, sem que isso dispense o inventário
+conclusivo do artefato gerado; metapacotes sem payload não descrevem software de
+terceiro.
+
+## Textos e bundle preparatório
+
+O bundle de fontes e o SBOM não substituem a presença dos avisos junto dos
+binários. O gate estrito `bootstrap/sbom --bundle DIR --strict` parte do
+`INVENTARIO` exato daquele artefato — não de um catálogo global — e produz
+`licenses.tar`, `licenses.tar.sha256`, `PACOTES`, `INDICE` e
+`MANIFEST.sha256`. `PACOTES` e `INDICE` precisam concordar sem pacote ou texto
+ausente/extra; o manifesto prende cada regular por caminho e SHA-256.
+
+Esse fechamento ainda é interno ao bundle. Até `PLAN_LOCK_FORMAT=1` expor
+nome, versão, fingerprint e hash do conjunto material realmente distribuído,
+o Minipax não transporta nem instala esse tar e o profile permanece no formato
+3. Autoconsistência e hash não substituem o vínculo ao plano autenticado. Os
+textos próprios — GPL, NOTICE e este documento — já ficam no caminho estável
+`/usr/share/licenses/distropica/` por meio do pacote `base` e do ambiente vivo.
+
+O formato falha fechado para link, hardlink, arquivo especial, caminho ou modo
+não canônico, divergência entre inventários e conteúdo, arquivo individual
+acima de 32 MiB, conjunto acima de 128 MiB ou mais de 20.000 entradas. Esses
+tetos acomodam o inventário medido sem converter um arquivo de controle em
+canal de armazenamento ilimitado; ultrapassá-los exige revisão explícita do
+formato, não um bypass no compositor.
 
 ## Firmware: a exceção declarada
 
@@ -119,9 +145,10 @@ Isso o coloca numa categoria diferente do firmware e diferente do resto da
   uma escolha de não compilar, que pode ser revertida no dia em que a corrente
   de build couber;
 - o payload **agrega** NSS, NSPR, libvpx, dav1d, ffvpx e mais de uma dezena de
-  componentes sob licenças próprias. Rotular o conjunto como MPL-2.0 seria
-  falso, então a receita declara `LICENSE=NOASSERTION` pelo mesmo critério
-  conservador aplicado ao Zig e ao `gcc-pass2`;
+  componentes sob licenças próprias. Rotular o conjunto apenas como MPL-2.0
+  seria falso; a receita atual declara uma expressão composta, incluindo a
+  evidência `LicenseRef-firefox-about-license`, pelo mesmo critério conservador
+  aplicado ao Zig e ao `gcc-pass2`;
 - a **marca "Firefox" não é software livre**. A política de distribuição da
   Mozilla permite redistribuir o binário oficial *sem modificação*; qualquer
   alteração no payload obrigaria a remover a marca. É por isso que o

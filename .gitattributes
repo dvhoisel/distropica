@@ -1,0 +1,3 @@
+# Preserve the vendored upstream byte while keeping whitespace checks active
+# for every locally maintained Rust/source file in the fork.
+minitrue/vendor-scrypt/CHANGELOG.md -whitespace
