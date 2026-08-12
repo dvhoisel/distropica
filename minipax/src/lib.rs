@@ -1,6 +1,7 @@
 pub mod disco;
 pub mod install;
 pub mod install_disk;
+pub mod licenses;
 pub mod media;
 pub mod media_install;
 pub mod partition;

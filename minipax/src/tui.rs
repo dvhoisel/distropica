@@ -297,7 +297,12 @@ impl Terminal {
     /// As setas movem e o Enter escolhe; os dígitos são atalho direto, porque
     /// num console sem teclado numérico separado a seta é lenta e o instalador
     /// é usado por quem já sabe o que quer.
-    pub fn menu(&mut self, titulo: &str, intro: &[String], itens: &[String]) -> Result<Option<usize>> {
+    pub fn menu(
+        &mut self,
+        titulo: &str,
+        intro: &[String],
+        itens: &[String],
+    ) -> Result<Option<usize>> {
         let detalhados: Vec<(String, String)> =
             itens.iter().map(|i| (i.clone(), String::new())).collect();
         self.menu_detalhado(titulo, intro, &detalhados)
@@ -357,7 +362,13 @@ impl Terminal {
             }
             self.quadro(titulo, &linhas, "setas movem · Enter escolhe · Esc volta")?;
             match self.tecla()? {
-                Tecla::Cima => atual = if atual == 0 { itens.len() - 1 } else { atual - 1 },
+                Tecla::Cima => {
+                    atual = if atual == 0 {
+                        itens.len() - 1
+                    } else {
+                        atual - 1
+                    }
+                }
                 Tecla::Baixo => atual = (atual + 1) % itens.len(),
                 Tecla::Enter => return Ok(Some(atual)),
                 Tecla::Esc | Tecla::Esquerda => return Ok(None),
@@ -668,7 +679,8 @@ mod tests {
     #[test]
     fn quadro_usa_crlf() {
         let (mut t, tela) = Terminal::de_roteiro(b"");
-        t.quadro("teste", &["um".into(), "dois".into()], "rodape").unwrap();
+        t.quadro("teste", &["um".into(), "dois".into()], "rodape")
+            .unwrap();
         drop(t);
         let bruto = String::from_utf8_lossy(&tela.0.borrow()).to_string();
         assert!(!bruto.contains("dois\x1b[K\n"), "linha sem CR antes do LF");
@@ -746,7 +758,10 @@ mod tests {
     #[test]
     fn campo_edita_e_apaga() {
         let (mut t, _) = Terminal::de_roteiro(b"sdaX\x7f\r");
-        assert_eq!(t.campo("t", &[], "disco", "", false).unwrap().as_deref(), Some("sda"));
+        assert_eq!(
+            t.campo("t", &[], "disco", "", false).unwrap().as_deref(),
+            Some("sda")
+        );
     }
 
     /// A senha aparece como asteriscos, e aparece: um campo que não mostra nem
@@ -754,7 +769,10 @@ mod tests {
     #[test]
     fn campo_oculto_mostra_asteriscos_e_nao_o_texto() {
         let (mut t, tela) = Terminal::de_roteiro(b"abc\r");
-        assert_eq!(t.campo("t", &[], "senha", "", true).unwrap().as_deref(), Some("abc"));
+        assert_eq!(
+            t.campo("t", &[], "senha", "", true).unwrap().as_deref(),
+            Some("abc")
+        );
         drop(t);
         let visto = tela.texto();
         assert!(visto.contains("***"), "o comprimento precisa aparecer");
@@ -772,11 +790,11 @@ mod tests {
             // decisão é a do Enter que vem depois.
             (&b"s\r"[..], true),
             (&b"x\x1b"[..], false),
-
         ] {
             let (mut t, _) = Terminal::de_roteiro(roteiro);
             assert_eq!(
-                t.confirma_com_enter("t", &[], "Enter APAGA o disco · Esc volta").unwrap(),
+                t.confirma_com_enter("t", &[], "Enter APAGA o disco · Esc volta")
+                    .unwrap(),
                 esperado,
                 "roteiro {:?}",
                 String::from_utf8_lossy(roteiro)
@@ -796,7 +814,10 @@ mod tests {
         );
         drop(t);
         let visto = tela.texto();
-        assert!(visto.contains("Enter APAGA"), "o rodapé não diz o que o Enter faz");
+        assert!(
+            visto.contains("Enter APAGA"),
+            "o rodapé não diz o que o Enter faz"
+        );
         assert!(visto.contains("Esc volta"));
     }
 
@@ -809,7 +830,10 @@ mod tests {
     /// sobre o que a tela dizia.
     #[test]
     fn o_realce_marca_o_item_escolhido_e_nao_o_rodape() {
-        let itens = vec!["/dev/sda  8,5 GB".to_string(), "/dev/sdb  1,0 TB".to_string()];
+        let itens = vec![
+            "/dev/sda  8,5 GB".to_string(),
+            "/dev/sdb  1,0 TB".to_string(),
+        ];
         let (mut t, tela) = Terminal::de_roteiro(b"\x1b");
         assert_eq!(t.menu("escolha do disco", &[], &itens).unwrap(), None);
         drop(t);
@@ -827,7 +851,11 @@ mod tests {
                 realcadas.push(dentro.trim_end().to_string());
             }
         }
-        assert_eq!(realcadas.len(), 1, "mais de uma coisa brilhando: {realcadas:?}");
+        assert_eq!(
+            realcadas.len(),
+            1,
+            "mais de uma coisa brilhando: {realcadas:?}"
+        );
         assert!(
             realcadas[0].contains("/dev/sda"),
             "o realce não está no item escolhido: {:?}",
@@ -851,8 +879,14 @@ mod tests {
     #[test]
     fn a_posicao_dos_itens_nao_muda_com_a_selecao() {
         let itens = vec![
-            ("Usar o disco inteiro".to_string(), "     apaga TUDO".to_string()),
-            ("Particionar eu mesmo".to_string(), "     abre o cfdisk".to_string()),
+            (
+                "Usar o disco inteiro".to_string(),
+                "     apaga TUDO".to_string(),
+            ),
+            (
+                "Particionar eu mesmo".to_string(),
+                "     abre o cfdisk".to_string(),
+            ),
         ];
 
         // Duas telas: uma com o item 1 escolhido, outra com o 2.
@@ -864,7 +898,11 @@ mod tests {
             // Só o ÚLTIMO quadro interessa: cada tecla redesenha a tela
             // inteira depois de um LIMPA_TELA, então os anteriores são história.
             let texto = tela.texto();
-            let ultimo = texto.rsplit(ansi::LIMPA_TELA).next().unwrap_or("").to_string();
+            let ultimo = texto
+                .rsplit(ansi::LIMPA_TELA)
+                .next()
+                .unwrap_or("")
+                .to_string();
             linhas_por_quadro.push(ultimo.lines().map(|l| l.trim_end().to_string()).collect());
         }
 
@@ -874,7 +912,11 @@ mod tests {
                 .position(|l| l.contains(agulha))
                 .unwrap_or_else(|| panic!("não achei {agulha:?} em {quadro:?}"))
         };
-        for agulha in ["Usar o disco inteiro", "Particionar eu mesmo", "Enter escolhe"] {
+        for agulha in [
+            "Usar o disco inteiro",
+            "Particionar eu mesmo",
+            "Enter escolhe",
+        ] {
             assert_eq!(
                 linha_de(&linhas_por_quadro[0], agulha),
                 linha_de(&linhas_por_quadro[1], agulha),
@@ -895,7 +937,11 @@ mod tests {
         let ultimo = quadro.rsplit(ansi::LIMPA_TELA).next().unwrap_or("");
         let um = ultimo.lines().position(|l| l.contains("1. um")).unwrap();
         let dois = ultimo.lines().position(|l| l.contains("2. dois")).unwrap();
-        assert_eq!(dois - um, 1, "apareceu linha em branco entre itens sem detalhe");
+        assert_eq!(
+            dois - um,
+            1,
+            "apareceu linha em branco entre itens sem detalhe"
+        );
     }
 
     /// A barra precisa ser BARRA: preenchida até a largura, e não só o texto
@@ -913,7 +959,11 @@ mod tests {
             .nth(1)
             .and_then(|r| r.split(ansi::NORMAL).next())
             .expect("nenhuma barra desenhada");
-        assert_eq!(barra.chars().count(), LARGURA, "barra com largura irregular");
+        assert_eq!(
+            barra.chars().count(),
+            LARGURA,
+            "barra com largura irregular"
+        );
     }
 
     /// O marcador do rodapé precisa MUDAR a cada tecla, inclusive numa tecla

@@ -1,5 +1,5 @@
-use crate::profile::{write_new, ResolvedProfile};
-use crate::tree::{self, Entry, EntryKind};
+use crate::profile::{validate_channel_bootstrap, write_new, ResolvedProfile};
+use crate::tree::{Entry, EntryKind};
 use anyhow::{bail, Context, Result};
 use sha2::Digest;
 use std::fs;
@@ -430,6 +430,43 @@ fn apply_entries(root: &Path, entries: &[Entry], replace: bool) -> Result<()> {
     Ok(())
 }
 
+/// Remove somente a AUTORIDADE trazida pelo cache de instalação.
+///
+/// O pool de objetos continua intacto. `channel-config/`, `channels/` e
+/// `newspeak-origem`, porém, não podem sobreviver ao `--cache`: caso contrário
+/// um cache custom poderia acrescentar um segundo canal que a simples
+/// sobreposição do bootstrap versionado não apagaria. A instalação offline
+/// chama isto antes de restaurar o cache (para tornar `--resume` repetível) e
+/// de novo depois de consumi-lo, imediatamente antes de instalar a autoridade
+/// do perfil.
+fn remove_cache_authority(target: &Path) -> Result<()> {
+    let cache = target.join("var/cache/minitrue");
+    crate::ensure_real_dir(&cache, "cache do minitrue no alvo")?;
+    for leaf in ["channel-config", "channels"] {
+        let path = cache.join(leaf);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_dir() => fs::remove_dir_all(&path)?,
+            Ok(_) => bail!(
+                "autoridade de cache precisa ser diretório real: {}",
+                path.display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let origin = cache.join("newspeak-origem");
+    match fs::symlink_metadata(&origin) {
+        Ok(metadata) if metadata.file_type().is_file() => fs::remove_file(&origin)?,
+        Ok(_) => bail!(
+            "newspeak-origem do cache precisa ser arquivo regular real: {}",
+            origin.display()
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
 fn install_snapshot(target: &Path, relative: &str, entries: &[Entry]) -> Result<()> {
     let destination = target.join(relative);
     let temporary = destination.with_file_name(format!(
@@ -529,16 +566,11 @@ pub fn install(profile: &ResolvedProfile, options: &InstallOptions) -> Result<()
     if packages.is_empty() {
         bail!("target.world não pode ser vazio");
     }
-    if options.offline && profile.cache_is_channel_bootstrap {
-        bail!(
-            "instalação --offline exige --cache DIR completo; channel-bootstrap/ contém apenas metadados"
-        );
-    }
     if options.offline && artifacts.cache_entries.is_empty() {
         bail!("instalação --offline exige --cache DIR não vazio");
     }
     if options.only_binary && !options.offline {
-        tree::validate_channel_bootstrap(&artifacts.cache_entries).context(
+        validate_channel_bootstrap(&artifacts.channel_bootstrap_entries).context(
             "instalação online --only-binary exige bootstrap de canal fechado no perfil",
         )?;
     }
@@ -618,10 +650,33 @@ pub fn install(profile: &ResolvedProfile, options: &InstallOptions) -> Result<()
         "var/lib/minitrue/newspeak",
         &artifacts.newspeak_entries,
     )?;
+    // O cache offline atende a instalação inicial. O bootstrap versionado do
+    // perfil é outra coisa: a autoridade que precisa restar no sistema para o
+    // próximo boot. Online ele abre o primeiro rectify; offline ele só é
+    // aplicado depois que o cache congelado da própria mídia foi consumido.
+    if options.offline {
+        // Também no começo: se a execução anterior caiu no meio da promoção
+        // do bootstrap, `--resume` volta primeiro ao cache medido e consegue
+        // repetir toda a sequência sem colisão com uma seed parcialmente nova.
+        remove_cache_authority(&target)?;
+    }
     if !artifacts.cache_entries.is_empty() {
         apply_entries(
             &target.join("var/cache/minitrue"),
             &artifacts.cache_entries,
+            false,
+        )?;
+    }
+    if !options.offline && !artifacts.channel_bootstrap_entries.is_empty() {
+        if options.resume {
+            // Um índice fresco de tentativa anterior pode divergir da seed sem
+            // ser corrupção. Volta ao snapshot medido e deixa o Minitrue
+            // autenticá-lo/avançá-lo novamente, eliminando também sobras.
+            remove_cache_authority(&target)?;
+        }
+        apply_entries(
+            &target.join("var/cache/minitrue"),
+            &artifacts.channel_bootstrap_entries,
             false,
         )?;
     }
@@ -662,6 +717,19 @@ pub fn install(profile: &ResolvedProfile, options: &InstallOptions) -> Result<()
         options,
         profile.epoch,
     )?;
+    if options.offline {
+        // O índice usado para instalar pode ser um snapshot de cache anterior
+        // ou de builder. Remove a autoridade inteira (inclusive canais extras)
+        // e instala a seed OFICIAL do perfil num namespace vazio.
+        remove_cache_authority(&target)?;
+        if !artifacts.channel_bootstrap_entries.is_empty() {
+            apply_entries(
+                &target.join("var/cache/minitrue"),
+                &artifacts.channel_bootstrap_entries,
+                false,
+            )?;
+        }
+    }
     // O sistema resultante precisa conseguir continuar a se retificar depois
     // do primeiro reboot. Persistimos exatamente os dois snapshots medidos,
     // sem reler executáveis mutáveis do host entre hash e cópia.
@@ -741,7 +809,7 @@ mod tests {
         fs::write(
             &fake,
             format!(
-                "#!/bin/sh\nprintf '%s|%s|%s\\n' \"$NEWSPEAK_PATH\" \"$SOURCE_DATE_EPOCH\" \"$*\" >> '{}'\nexit 0\n",
+                "#!/bin/sh\nprintf '%s|%s|%s\\n' \"$NEWSPEAK_PATH\" \"$SOURCE_DATE_EPOCH\" \"$*\" >> '{}'\ncase \" $* \" in\n  *' rectify '*)\n    case \" $* \" in\n      *' --offline '*) ;;\n      *) [ ! -f \"$2/var/cache/minitrue/channels/oficial/index\" ] || printf 'indice-fresco\\n' > \"$2/var/cache/minitrue/channels/oficial/index\" ;;\n    esac\n    ;;\nesac\nexit 0\n",
                 calls.display()
             ),
         )
@@ -778,6 +846,11 @@ mod tests {
         let bootstrap = profile_dir.join("channel-bootstrap");
         fs::create_dir_all(bootstrap.join("channel-config")).unwrap();
         fs::create_dir_all(bootstrap.join("channels/oficial")).unwrap();
+        fs::write(
+            bootstrap.join("newspeak-origem"),
+            b"URL=https://example.invalid/newspeak/\nKEY=pinada\n",
+        )
+        .unwrap();
         fs::write(bootstrap.join("channel-config/oficial"), b"config\n").unwrap();
         fs::write(bootstrap.join("channels/oficial/index"), b"index\n").unwrap();
         fs::write(
@@ -806,10 +879,33 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(error.to_string().contains("apenas metadados"));
+        assert!(error.to_string().contains("cache DIR não vazio"));
         assert!(
             !bootstrap_offline.exists(),
             "bootstrap online não pode preparar um target offline"
+        );
+
+        // Regressão: depois de um rectify online o Minipax não pode repor a
+        // seed antiga por cima do índice fresco que o Minitrue autenticou e
+        // persistiu. O fake representa essa persistência durante `rectify`.
+        let online_seeded_target = temp.path().join("online-seeded-target");
+        install(
+            &bootstrap_profile,
+            &InstallOptions {
+                target: online_seeded_target.clone(),
+                minitrue: Some(fake.clone()),
+                offline: false,
+                from_source: false,
+                only_binary: true,
+                resume: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(online_seeded_target.join("var/cache/minitrue/channels/oficial/index"))
+                .unwrap(),
+            b"indice-fresco\n",
+            "instalação online não pode regredir o snapshot autenticado para a seed"
         );
 
         install(
@@ -838,6 +934,126 @@ mod tests {
             },
         )
         .unwrap();
+        let cache_path = profile.cache_path.as_ref().unwrap();
+        fs::create_dir_all(cache_path.join("channel-config")).unwrap();
+        fs::create_dir_all(cache_path.join("channels/oficial")).unwrap();
+        fs::write(cache_path.join("channel-config/oficial"), b"cache-antigo\n").unwrap();
+        fs::write(
+            cache_path.join("channels/oficial/index"),
+            b"indice-antigo\n",
+        )
+        .unwrap();
+        fs::write(
+            cache_path.join("channels/oficial/index.minisig"),
+            b"assinatura-antiga\n",
+        )
+        .unwrap();
+        fs::write(
+            cache_path.join("channels/oficial/obsoleto"),
+            b"nao pode sobreviver\n",
+        )
+        .unwrap();
+        fs::create_dir_all(cache_path.join("channels/samizdat")).unwrap();
+        fs::write(
+            cache_path.join("channel-config/samizdat"),
+            b"URL=https://cache.invalid/\nKEY=cache\n",
+        )
+        .unwrap();
+        fs::write(cache_path.join("channels/samizdat/index"), b"cache\n").unwrap();
+        fs::write(
+            cache_path.join("channels/samizdat/index.minisig"),
+            b"cache\n",
+        )
+        .unwrap();
+        fs::write(
+            cache_path.join("newspeak-origem"),
+            b"URL=https://cache.invalid/newspeak/\nKEY=cache\n",
+        )
+        .unwrap();
+
+        // Sem bootstrap versionado, o resultado correto é sair sem canal —
+        // nunca promover silenciosamente a autoridade efêmera de --cache.
+        // `profile` foi resolvido antes de channel-bootstrap/ existir.
+        assert!(profile.channel_bootstrap_path.is_none());
+        let untrusted_target = temp.path().join("offline-sem-bootstrap-target");
+        install(
+            &profile,
+            &InstallOptions {
+                target: untrusted_target.clone(),
+                minitrue: Some(fake.clone()),
+                offline: true,
+                from_source: true,
+                only_binary: false,
+                resume: false,
+            },
+        )
+        .unwrap();
+        assert!(!untrusted_target
+            .join("var/cache/minitrue/channel-config")
+            .exists());
+        assert!(!untrusted_target
+            .join("var/cache/minitrue/channels")
+            .exists());
+        assert!(!untrusted_target
+            .join("var/cache/minitrue/newspeak-origem")
+            .exists());
+        assert_eq!(
+            fs::read(
+                untrusted_target
+                    .join("var/cache/minitrue")
+                    .join(&extra_hash)
+            )
+            .unwrap(),
+            extra_payload
+        );
+
+        let profile_with_bootstrap = ResolvedProfile::load(
+            &profile_dir,
+            ProfileOverrides {
+                newspeak: Some(temp.path().join("newspeak")),
+                cache: Some(cache_path.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let seeded_target = temp.path().join("offline-seeded-target");
+        install(
+            &profile_with_bootstrap,
+            &InstallOptions {
+                target: seeded_target.clone(),
+                minitrue: Some(fake.clone()),
+                offline: true,
+                from_source: true,
+                only_binary: false,
+                resume: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(seeded_target.join("var/cache/minitrue/channel-config/oficial")).unwrap(),
+            b"config\n",
+            "o bootstrap versionado precisa vencer o cache usado na instalação"
+        );
+        assert_eq!(
+            fs::read(seeded_target.join("var/cache/minitrue/channels/oficial/index")).unwrap(),
+            b"index\n"
+        );
+        assert_eq!(
+            fs::read(seeded_target.join("var/cache/minitrue/newspeak-origem")).unwrap(),
+            b"URL=https://example.invalid/newspeak/\nKEY=pinada\n"
+        );
+        assert!(
+            !seeded_target
+                .join("var/cache/minitrue/channel-config/samizdat")
+                .exists(),
+            "canal extra do --cache não pode virar autoridade pós-reboot"
+        );
+        assert!(!seeded_target
+            .join("var/cache/minitrue/channels/samizdat")
+            .exists());
+        assert!(!seeded_target
+            .join("var/cache/minitrue/channels/oficial/obsoleto")
+            .exists());
         let calls = fs::read_to_string(calls).unwrap();
         std::env::remove_var("NEWSPEAK_PATH");
         let cache_verify = calls

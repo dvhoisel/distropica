@@ -1,13 +1,16 @@
 use crate::install::{self, InstallOptions};
 use crate::media::{canonical_profile, validate_boot_efi};
-use crate::profile::{normalize_world, ProfileOverrides, ResolvedProfile};
+use crate::profile::{
+    normalize_world, validate_channel_bootstrap, ProfileOverrides, ResolvedProfile,
+};
 use crate::tree::{self, TreePolicy};
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{symlink, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
@@ -53,6 +56,7 @@ const LOCK_FIELDS: &[&str] = &[
     "OVERLAY_SHA256",
     "NEWSPEAK_SHA256",
     "CACHE_SHA256",
+    "CHANNEL_BOOTSTRAP_SHA256",
 ];
 
 pub struct MediaInstallOptions {
@@ -87,6 +91,7 @@ struct MediaSnapshot {
     cache_world: Vec<u8>,
     overlay: Vec<u8>,
     newspeak: Vec<u8>,
+    channel_bootstrap: Option<Vec<u8>>,
     /// Caminho do `cache.tar` NA MÍDIA, não o seu conteúdo: ele é lido em
     /// fluxo, nunca inteiro.
     cache: Option<PathBuf>,
@@ -158,6 +163,14 @@ fn read_regular(path: &Path, what: &str, limit: u64) -> Result<Vec<u8>> {
         bail!("{what} cresceu além de {limit} bytes durante a leitura");
     }
     Ok(bytes)
+}
+
+fn read_optional_regular(path: &Path, what: &str, limit: u64) -> Result<Option<Vec<u8>>> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => read_regular(path, what, limit).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// As mesmas exigências de `read_regular` — arquivo regular real, sem
@@ -287,8 +300,8 @@ fn load_media(source: &Path) -> Result<MediaSnapshot> {
         bail!("profile.lock não confere com PROFILE_LOCK_SHA256 de media.meta");
     }
     let lock_fields = parse_fields(&lock, "profile.lock", LOCK_FIELDS)?;
-    if lock_fields["PROFILE_LOCK_FORMAT"] != "2" {
-        bail!("PROFILE_LOCK_FORMAT desconhecido; esta versão aceita apenas 2");
+    if lock_fields["PROFILE_LOCK_FORMAT"] != "3" {
+        bail!("PROFILE_LOCK_FORMAT desconhecido; esta versão aceita apenas 3");
     }
     validate_class(&lock_fields["PROFILE_CLASS"], "PROFILE_CLASS do lock")?;
     for field in [
@@ -308,6 +321,7 @@ fn load_media(source: &Path) -> Result<MediaSnapshot> {
         "OFFICIAL_BOOT_EFI_SHA256",
         "OFFICIAL_MINITRUE_SHA256",
         "CACHE_SHA256",
+        "CHANNEL_BOOTSTRAP_SHA256",
     ] {
         if lock_fields[field] != "-" && !is_hash(&lock_fields[field]) {
             bail!("profile.lock contém SHA-256 inválido em {field}");
@@ -331,14 +345,20 @@ fn load_media(source: &Path) -> Result<MediaSnapshot> {
     }
 
     let cache_path = payload.join("cache.tar");
-    // Offline: objetos fechados. Online: somente bootstrap de canal, validado
-    // estruturalmente depois da extração. Nos dois casos o tar está preso por
-    // CACHE_SHA256 no profile.lock antes de qualquer escrita no target.
+    // Offline: objetos fechados em cache.tar. Online: não há cache de pacotes;
+    // o bootstrap separado é lido abaixo e preso por CHANNEL_BOOTSTRAP_SHA256.
+    // CACHE_SHA256 prende somente este tar antes de qualquer escrita no target.
     // Em fluxo: confere que é regular, sem hardlink e dentro do teto, e
     // guarda o CAMINHO. O conteúdo será lido duas vezes — uma para validar a
     // estrutura, outra para extrair — e nunca inteiro de uma vez.
-    check_regular(&cache_path, "cache.tar", MAX_CACHE_ARCHIVE_BYTES)?;
-    let cache = Some(cache_path.clone());
+    let cache = match fs::symlink_metadata(&cache_path) {
+        Ok(_) => {
+            check_regular(&cache_path, "cache.tar", MAX_CACHE_ARCHIVE_BYTES)?;
+            Some(cache_path.clone())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
     if (cache.is_some() && lock_fields["CACHE_SHA256"] == "-")
         || (cache.is_none() && lock_fields["CACHE_SHA256"] != "-")
     {
@@ -352,13 +372,49 @@ fn load_media(source: &Path) -> Result<MediaSnapshot> {
     // porque `pack_into` é determinístico: o cache.tar da mídia é byte a byte
     // o que o `profile::artifacts` computou ao compor.
     if lock_fields["CACHE_SHA256"] != "-" {
-        let observado = sha256_stream(&cache_path)?;
+        let observado = sha256_stream(cache.as_ref().expect("presença conferida"))?;
         if observado != lock_fields["CACHE_SHA256"] {
+            bail!("cache.tar da mídia não confere com CACHE_SHA256 do lock ({observado})");
+        }
+    }
+
+    let channel_bootstrap_path = payload.join("channel-bootstrap.tar");
+    let channel_bootstrap = read_optional_regular(
+        &channel_bootstrap_path,
+        "channel-bootstrap.tar",
+        MAX_ARCHIVE_BYTES,
+    )?;
+    if (channel_bootstrap.is_some() && lock_fields["CHANNEL_BOOTSTRAP_SHA256"] == "-")
+        || (channel_bootstrap.is_none() && lock_fields["CHANNEL_BOOTSTRAP_SHA256"] != "-")
+    {
+        bail!("presença de channel-bootstrap.tar diverge de CHANNEL_BOOTSTRAP_SHA256 no lock");
+    }
+    if let Some(bootstrap) = &channel_bootstrap {
+        let observed = sha256(bootstrap);
+        if observed != lock_fields["CHANNEL_BOOTSTRAP_SHA256"] {
             bail!(
-                "cache.tar da mídia não confere com CACHE_SHA256 do lock ({observado})"
+                "channel-bootstrap.tar da mídia não confere com CHANNEL_BOOTSTRAP_SHA256 do lock ({observed})"
             );
         }
     }
+    match mode {
+        DeclaredMode::Online if cache.is_some() => {
+            bail!("mídia online não pode carregar cache.tar de pacotes")
+        }
+        DeclaredMode::Online if channel_bootstrap.is_none() => {
+            bail!("mídia online exige channel-bootstrap.tar")
+        }
+        DeclaredMode::Offline if cache.is_none() => {
+            bail!("mídia offline exige cache.tar")
+        }
+        _ => {}
+    }
+
+    let newspeak = read_regular(
+        &payload.join("newspeak.tar"),
+        "newspeak.tar",
+        MAX_ARCHIVE_BYTES,
+    )?;
 
     Ok(MediaSnapshot {
         profile: read_regular(&payload.join("profile"), "profile", MAX_CONTROL_BYTES)?,
@@ -379,11 +435,8 @@ fn load_media(source: &Path) -> Result<MediaSnapshot> {
             "overlay.tar",
             MAX_ARCHIVE_BYTES,
         )?,
-        newspeak: read_regular(
-            &payload.join("newspeak.tar"),
-            "newspeak.tar",
-            MAX_ARCHIVE_BYTES,
-        )?,
+        newspeak,
+        channel_bootstrap,
         cache,
         metadata,
         lock_fields,
@@ -537,12 +590,10 @@ fn decode_entries<R: Read>(
                 // bytes seguem para o /dev/null do io::copy. É esta passada
                 // que garante que a validação é COMPLETA antes de qualquer
                 // escrita, sem custo de memória.
-                let lidos = std::io::copy(&mut (&mut item).take(declared_size), &mut std::io::sink())?;
+                let lidos =
+                    std::io::copy(&mut (&mut item).take(declared_size), &mut std::io::sink())?;
                 if lidos != declared_size {
-                    bail!(
-                        "conteúdo truncado em {what}: {}",
-                        path.display()
-                    );
+                    bail!("conteúdo truncado em {what}: {}", path.display());
                 }
                 content_bytes += declared_size;
                 DecodedKind::RegularSized(declared_size)
@@ -699,7 +750,10 @@ fn write_entries(
                 anyhow::anyhow!("{what} mudou entre as passadas: {}", path.display())
             })?;
             if item.size() != len {
-                bail!("{what} mudou de tamanho entre as passadas: {}", path.display());
+                bail!(
+                    "{what} mudou de tamanho entre as passadas: {}",
+                    path.display()
+                );
             }
             let destino = destination.join(&path);
             let mut output = OpenOptions::new()
@@ -716,7 +770,7 @@ fn write_entries(
         // Toda entrada prometida foi escrita? Um tar que perdesse uma entrada
         // na segunda passada deixaria um cache incompleto que só falharia bem
         // depois, ao instalar um pacote.
-        for (path, _) in &esperados {
+        for path in esperados.keys() {
             if !destination.join(path).exists() {
                 bail!("{what} não entregou {} na extração", path.display());
             }
@@ -759,10 +813,209 @@ fn write_temporary(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Reserva a saída do EFI por um diretório-pai ancorado. O descritor continua
+/// vivo até o fim da instalação: renomear um ancestral e pôr um symlink no
+/// lugar não redireciona a limpeza para outra árvore.
+#[derive(Debug)]
+struct ReservedBootEfi {
+    parent: OwnedFd,
+    name: OsString,
+    file: File,
+    destination: PathBuf,
+    remove_on_drop: bool,
+}
+
+fn open_export_parent(destination: &Path) -> Result<(OwnedFd, OsString)> {
+    if destination.as_os_str().is_empty() || destination.as_os_str().as_bytes().ends_with(b"/") {
+        bail!(
+            "destino de exportação do BOOTX64.EFI não nomeia um arquivo: {}",
+            destination.display()
+        );
+    }
+    let name = destination
+        .file_name()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "destino de exportação do BOOTX64.EFI não nomeia um arquivo: {}",
+                destination.display()
+            )
+        })?
+        .to_os_string();
+    let parent_path = destination.parent().unwrap_or_else(|| Path::new("."));
+    // Valida toda a forma lexical ANTES de abrir o primeiro componente. Além
+    // de recusar a travessia, isso faz a falha independer da existência dos
+    // componentes que apareçam antes do `..`.
+    for component in parent_path.components() {
+        match component {
+            Component::ParentDir => {
+                bail!(
+                    "destino de exportação não aceita travessia '..': {}",
+                    destination.display()
+                )
+            }
+            Component::Prefix(_) => {
+                bail!(
+                    "destino de exportação tem prefixo inválido: {}",
+                    destination.display()
+                )
+            }
+            Component::RootDir | Component::CurDir | Component::Normal(_) => {}
+        }
+    }
+    let directory_flags = rustix::fs::OFlags::PATH
+        | rustix::fs::OFlags::DIRECTORY
+        | rustix::fs::OFlags::NOFOLLOW
+        | rustix::fs::OFlags::CLOEXEC;
+    let anchor = if destination.is_absolute() {
+        Path::new("/")
+    } else {
+        Path::new(".")
+    };
+    let mut parent = rustix::fs::open(anchor, directory_flags, rustix::fs::Mode::empty())
+        .with_context(|| {
+            format!(
+                "não ancorei o diretório da exportação de BOOTX64.EFI em {}",
+                destination.display()
+            )
+        })?;
+    for component in parent_path.components() {
+        match component {
+            Component::RootDir | Component::CurDir => {}
+            Component::Normal(component) => {
+                parent = rustix::fs::openat(
+                    &parent,
+                    component,
+                    directory_flags,
+                    rustix::fs::Mode::empty(),
+                )
+                .with_context(|| {
+                    format!(
+                        "ancestral da exportação precisa ser diretório real, não symlink: {}",
+                        destination.display()
+                    )
+                })?;
+            }
+            Component::ParentDir => {
+                unreachable!("travessia validada antes de abrir os ancestrais")
+            }
+            Component::Prefix(_) => {
+                unreachable!("prefixo validado antes de abrir os ancestrais")
+            }
+        }
+    }
+    Ok((parent, name))
+}
+
+impl ReservedBootEfi {
+    fn create(destination: &Path, bytes: &[u8]) -> Result<Self> {
+        let (parent, name) = open_export_parent(destination)?;
+        let descriptor = rustix::fs::openat(
+            &parent,
+            &name,
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::EXCL
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        )
+        .with_context(|| {
+            format!(
+                "não reservei a exportação de BOOTX64.EFI em {}",
+                destination.display()
+            )
+        })?;
+        let mut reservation = Self {
+            parent,
+            name,
+            file: File::from(descriptor),
+            destination: destination.to_path_buf(),
+            remove_on_drop: true,
+        };
+        let written = (|| -> Result<()> {
+            reservation.file.write_all(bytes)?;
+            reservation.file.flush()?;
+            reservation
+                .file
+                .set_permissions(fs::Permissions::from_mode(0o600))?;
+            Ok(())
+        })();
+        if let Err(error) = written {
+            return match reservation.remove() {
+                Ok(()) => Err(error),
+                Err(cleanup) => Err(error.context(format!(
+                    "a limpeza fd-relative da exportação também falhou: {cleanup:#}"
+                ))),
+            };
+        }
+        Ok(reservation)
+    }
+
+    /// Remove somente a folha que ainda é o mesmo inode criado por `create`.
+    /// O `O_PATH|O_NOFOLLOW` observa a própria folha (inclusive um symlink), e
+    /// `unlinkat` usa o pai já ancorado em vez de reinterpretar o caminho.
+    fn remove_inner(&self) -> Result<()> {
+        let current = match rustix::fs::openat(
+            &self.parent,
+            &self.name,
+            rustix::fs::OFlags::PATH | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        ) {
+            Ok(descriptor) => File::from(descriptor),
+            Err(rustix::io::Errno::NOENT) => return Ok(()),
+            Err(error) => {
+                return Err(std::io::Error::from(error)).with_context(|| {
+                    format!(
+                        "não reinspecionei a exportação de BOOTX64.EFI em {}",
+                        self.destination.display()
+                    )
+                })
+            }
+        };
+        let expected = self.file.metadata()?;
+        let observed = current.metadata()?;
+        if !observed.file_type().is_file()
+            || observed.dev() != expected.dev()
+            || observed.ino() != expected.ino()
+        {
+            bail!(
+                "exportação de BOOTX64.EFI foi substituída; recuso remover outro objeto em {}",
+                self.destination.display()
+            );
+        }
+        rustix::fs::unlinkat(&self.parent, &self.name, rustix::fs::AtFlags::empty())
+            .map_err(std::io::Error::from)
+            .with_context(|| {
+                format!(
+                    "não removi a exportação de BOOTX64.EFI pelo diretório ancorado: {}",
+                    self.destination.display()
+                )
+            })
+    }
+
+    fn remove(mut self) -> Result<()> {
+        self.remove_on_drop = false;
+        self.remove_inner()
+    }
+
+    fn preserve(mut self) {
+        self.remove_on_drop = false;
+    }
+}
+
+impl Drop for ReservedBootEfi {
+    fn drop(&mut self) {
+        if self.remove_on_drop {
+            let _ = self.remove_inner();
+        }
+    }
+}
+
 fn resolved_from_media(snapshot: &MediaSnapshot, workspace: &Path) -> Result<ResolvedProfile> {
     let profile_dir = workspace.join("profile");
     let newspeak_dir = workspace.join("newspeak");
     let overlay_dir = profile_dir.join("overlay");
+    let channel_bootstrap_dir = profile_dir.join("channel-bootstrap");
     let cache_dir = workspace.join("cache");
     fs::create_dir(&profile_dir)?;
     write_temporary(&profile_dir.join("profile"), &snapshot.profile)?;
@@ -781,10 +1034,17 @@ fn resolved_from_media(snapshot: &MediaSnapshot, workspace: &Path) -> Result<Res
         TreePolicy::Overlay,
         "overlay.tar",
     )?;
+    if let Some(channel_bootstrap) = &snapshot.channel_bootstrap {
+        materialize_archive(
+            channel_bootstrap,
+            &channel_bootstrap_dir,
+            TreePolicy::Cache,
+            "channel-bootstrap.tar",
+        )?;
+    }
     if let Some(cache) = &snapshot.cache {
         materialize_archive_from_file(cache, &cache_dir, TreePolicy::Cache, "cache.tar")?;
     }
-
     let mut profile = ResolvedProfile::load(
         &profile_dir,
         ProfileOverrides {
@@ -812,7 +1072,7 @@ fn resolved_from_media(snapshot: &MediaSnapshot, workspace: &Path) -> Result<Res
     profile.customized = snapshot.lock_fields["PROFILE_CLASS"] == "custom";
     let artifacts = profile.artifacts()?;
     if snapshot.mode == DeclaredMode::Online {
-        tree::validate_channel_bootstrap(&artifacts.cache_entries)?;
+        validate_channel_bootstrap(&artifacts.channel_bootstrap_entries)?;
     }
     if artifacts.lock.as_bytes() != snapshot.lock {
         bail!("payload extraído não reproduz profile.lock byte a byte");
@@ -853,6 +1113,27 @@ pub fn install_media(options: &MediaInstallOptions) -> Result<()> {
         // escrever um byte e sem gastar espaço proporcional ao payload.
         decode_archive(&snapshot.newspeak, TreePolicy::Newspeak, "newspeak.tar")?;
         decode_archive(&snapshot.overlay, TreePolicy::Overlay, "overlay.tar")?;
+        if let Some(channel_bootstrap) = &snapshot.channel_bootstrap {
+            let entries = decode_archive(
+                channel_bootstrap,
+                TreePolicy::Cache,
+                "channel-bootstrap.tar",
+            )?;
+            let entries = entries
+                .into_iter()
+                .map(|entry| tree::Entry {
+                    relative: entry.path,
+                    mode: entry.mode,
+                    kind: match entry.kind {
+                        DecodedKind::Directory => tree::EntryKind::Directory,
+                        DecodedKind::Regular(content) => tree::EntryKind::Regular(content),
+                        DecodedKind::Symlink(target) => tree::EntryKind::Symlink(target),
+                        DecodedKind::RegularSized(_) => unreachable!(),
+                    },
+                })
+                .collect::<Vec<_>>();
+            validate_channel_bootstrap(&entries)?;
+        }
         if let Some(cache) = &snapshot.cache {
             decode_entries(
                 File::open(cache)?,
@@ -864,6 +1145,20 @@ pub fn install_media(options: &MediaInstallOptions) -> Result<()> {
         println!("mídia validada: nada foi escrito, nenhum disco foi tocado");
         return Ok(());
     }
+    // A exportação do EFI RESERVA o destino antes de criar até o workspace.
+    // Assim symlink, travessia, colisão ou pai inválido falham antes de
+    // qualquer mutação no alvo. O guard remove a reserva se uma validação ou a
+    // instalação falhar depois daqui.
+    //
+    // NÃO aponte --export-boot-efi para dentro do --target. A reserva cria o
+    // arquivo, e o `install` recusaria o alvo por não estar vazio. O instalador
+    // vivo exporta para /run, fora da raiz preparada.
+    let exported = options
+        .export_boot_efi
+        .as_deref()
+        .map(|destination| ReservedBootEfi::create(destination, &snapshot.boot))
+        .transpose()?;
+
     // O espaço de trabalho vive DENTRO do alvo quando ele já existe, e é aqui
     // que a decisão importa: é neste diretório que o `cache.tar` é extraído, e
     // são centenas de MiB. Num instalador vivo o TMPDIR é tmpfs — memória — e
@@ -884,40 +1179,6 @@ pub fn install_media(options: &MediaInstallOptions) -> Result<()> {
             .tempdir()?
     };
     let profile = resolved_from_media(&snapshot, workspace.path())?;
-    // A exportação do EFI RESERVA o destino antes de instalar, e isso é
-    // deliberado: um caminho de exportação inválido tem de falhar ANTES de
-    // materializar um sistema inteiro, não depois. Há teste para isso.
-    //
-    // A consequência para quem chama: NÃO aponte --export-boot-efi para dentro
-    // do --target. A reserva cria o arquivo, e o `install` recusaria o alvo por
-    // não estar vazio. O instalador vivo exporta para /run, que é tmpfs — são
-    // 17 MiB, e o payload de verdade já não passa por lá.
-    let exported = if let Some(destination) = &options.export_boot_efi {
-        let mut output = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o600)
-            .open(destination)
-            .with_context(|| {
-                format!(
-                    "não reservei a exportação de BOOTX64.EFI em {}",
-                    destination.display()
-                )
-            })?;
-        let result = (|| -> Result<()> {
-            output.write_all(&snapshot.boot)?;
-            output.flush()?;
-            output.set_permissions(fs::Permissions::from_mode(0o600))?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(destination);
-        }
-        result?;
-        Some(destination)
-    } else {
-        None
-    };
 
     let installed = install::install(
         &profile,
@@ -930,12 +1191,24 @@ pub fn install_media(options: &MediaInstallOptions) -> Result<()> {
             resume: options.resume,
         },
     );
-    if installed.is_err() {
-        if let Some(destination) = exported {
-            let _ = fs::remove_file(destination);
+    match installed {
+        Ok(()) => {
+            if let Some(exported) = exported {
+                exported.preserve();
+            }
+            Ok(())
+        }
+        Err(error) => {
+            if let Some(exported) = exported {
+                if let Err(cleanup) = exported.remove() {
+                    return Err(error.context(format!(
+                        "a limpeza fd-relative da exportação também falhou: {cleanup:#}"
+                    )));
+                }
+            }
+            Err(error)
         }
     }
-    installed
 }
 
 #[cfg(test)]
@@ -967,10 +1240,11 @@ mod tests {
         bytes
     }
 
-    fn media_fixture() -> Fixture {
+    fn media_fixture_with_mode(offline: bool) -> Fixture {
         let temp = tempfile::tempdir().unwrap();
         let profile_dir = temp.path().join("input-profile");
         let newspeak = temp.path().join("input-newspeak");
+        let cache = temp.path().join("input-cache");
         let source = temp.path().join("media");
         let target = temp.path().join("target");
         fs::create_dir(&profile_dir).unwrap();
@@ -990,6 +1264,11 @@ mod tests {
         fs::create_dir_all(bootstrap.join("channel-config")).unwrap();
         fs::create_dir_all(bootstrap.join("channels/oficial")).unwrap();
         fs::write(
+            bootstrap.join("newspeak-origem"),
+            b"URL=https://example.invalid/newspeak/\nKEY=pinada\n",
+        )
+        .unwrap();
+        fs::write(
             bootstrap.join("channel-config/oficial"),
             b"URL=https://channel.example.invalid/\nKEY=pinada\nPRIORITY=100\nTRUST=oficial\n",
         )
@@ -1004,6 +1283,21 @@ mod tests {
             b"assinatura\n",
         )
         .unwrap();
+        if offline {
+            fs::create_dir_all(cache.join("channel-config")).unwrap();
+            fs::create_dir_all(cache.join("channels/oficial")).unwrap();
+            fs::write(
+                cache.join("channel-config/oficial"),
+                b"URL=https://cache-antigo.invalid/\nKEY=outra\n",
+            )
+            .unwrap();
+            fs::write(cache.join("channels/oficial/index"), b"indice antigo\n").unwrap();
+            fs::write(
+                cache.join("channels/oficial/index.minisig"),
+                b"assinatura antiga\n",
+            )
+            .unwrap();
+        }
         let custom_world = temp.path().join("custom.world");
         fs::write(&custom_world, "z\na\n").unwrap();
         for package in ["a", "z"] {
@@ -1019,6 +1313,7 @@ mod tests {
             ProfileOverrides {
                 target_world: Some(custom_world),
                 newspeak: Some(newspeak),
+                cache: offline.then_some(cache),
                 ..Default::default()
             },
         )
@@ -1028,8 +1323,9 @@ mod tests {
         let boot = fake_efi();
         let boot_hash = sha256(&boot);
         let meta = format!(
-            "MEDIA_FORMAT=1\nPROFILE_NAME=official\nPROFILE_CLASS=custom\nMEDIA_CLASS=custom\nPROFILE_LOCK_SHA256={}\nARCH=x86_64\nMODE=online\nBOOT_EFI_SHA256={boot_hash}\nMINIPAX_VERSION={}\n",
+            "MEDIA_FORMAT=1\nPROFILE_NAME=official\nPROFILE_CLASS=custom\nMEDIA_CLASS=custom\nPROFILE_LOCK_SHA256={}\nARCH=x86_64\nMODE={}\nBOOT_EFI_SHA256={boot_hash}\nMINIPAX_VERSION={}\n",
             artifacts.lock_hash,
+            if offline { "offline" } else { "online" },
             crate::VERSION,
         );
         let payload = source.join("distropica");
@@ -1048,13 +1344,14 @@ mod tests {
         .unwrap();
         fs::write(payload.join("overlay.tar"), &artifacts.overlay_tar).unwrap();
         fs::write(payload.join("newspeak.tar"), &artifacts.newspeak_tar).unwrap();
-        // O cache.tar agora vive em disco (streaming), então o teste copia o
-        // temporário em vez de escrever um Vec.
-        fs::copy(
-            artifacts.cache_tar.as_ref().unwrap().path(),
-            payload.join("cache.tar"),
+        fs::write(
+            payload.join("channel-bootstrap.tar"),
+            artifacts.channel_bootstrap_tar.as_ref().unwrap(),
         )
         .unwrap();
+        if let Some(cache) = artifacts.cache_tar.as_ref() {
+            fs::copy(cache.path(), payload.join("cache.tar")).unwrap();
+        }
         fs::write(payload.join("media.meta"), meta).unwrap();
         fs::write(source.join("EFI/BOOT/BOOTX64.EFI"), &boot).unwrap();
 
@@ -1063,7 +1360,7 @@ mod tests {
         fs::write(
             &minitrue,
             format!(
-                "#!/bin/sh\n[ -f \"$2/var/cache/minitrue/channel-config/oficial\" ] || exit 90\nprintf '%s\\n' \"$*\" >> '{}'\nexit 0\n",
+                "#!/bin/sh\n[ -f \"$2/var/cache/minitrue/channel-config/oficial\" ] || exit 90\ncase \" $* \" in *\" --offline \"*) ;; *) [ -f \"$2/var/cache/minitrue/newspeak-origem\" ] || exit 91 ;; esac\nprintf '%s\\n' \"$*\" >> '{}'\nexit 0\n",
                 calls.display()
             ),
         )
@@ -1077,6 +1374,10 @@ mod tests {
             calls,
             expected_lock: artifacts.lock.into_bytes(),
         }
+    }
+
+    fn media_fixture() -> Fixture {
+        media_fixture_with_mode(false)
     }
 
     #[test]
@@ -1110,6 +1411,41 @@ mod tests {
             fs::metadata(exported_efi).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[test]
+    fn midia_offline_consume_cache_mas_deixa_bootstrap_versionado_no_alvo() {
+        let fixture = media_fixture_with_mode(true);
+        install_media(&MediaInstallOptions {
+            source: fixture.source,
+            target: fixture.target.clone(),
+            minitrue: Some(fixture.minitrue),
+            offline: true,
+            from_source: false,
+            only_binary: true,
+            resume: false,
+            export_boot_efi: None,
+            check_only: false,
+        })
+        .unwrap();
+
+        assert_eq!(
+            fs::read(
+                fixture
+                    .target
+                    .join("var/cache/minitrue/channel-config/oficial")
+            )
+            .unwrap(),
+            b"URL=https://channel.example.invalid/\nKEY=pinada\nPRIORITY=100\nTRUST=oficial\n",
+            "o cache da instalação não pode escolher a confiança pós-reboot"
+        );
+        assert_eq!(
+            fs::read(fixture.target.join("var/cache/minitrue/newspeak-origem")).unwrap(),
+            b"URL=https://example.invalid/newspeak/\nKEY=pinada\n"
+        );
+        let calls = fs::read_to_string(fixture.calls).unwrap();
+        assert!(calls.contains("--offline cache verify zig"));
+        assert!(calls.contains("--offline --only-binary rectify a z"));
     }
 
     #[test]
@@ -1174,6 +1510,182 @@ mod tests {
         assert_eq!(fs::read(export).unwrap(), b"NAO-SOBRESCREVER");
         assert!(fs::read_dir(fixture.target).unwrap().next().is_none());
         assert!(!fixture.calls.exists());
+    }
+
+    #[test]
+    fn export_efi_recusa_ancestral_symlink_e_traversal_antes_do_target() {
+        let fixture = media_fixture();
+        let outside = fixture._temp.path().join("fora-export");
+        let shortcut = fixture._temp.path().join("atalho-export");
+        fs::create_dir(&outside).unwrap();
+        symlink(&outside, &shortcut).unwrap();
+
+        let error = install_media(&MediaInstallOptions {
+            source: fixture.source.clone(),
+            target: fixture.target.clone(),
+            minitrue: Some(fixture.minitrue.clone()),
+            offline: false,
+            from_source: false,
+            only_binary: true,
+            resume: false,
+            export_boot_efi: Some(shortcut.join("BOOTX64.EFI")),
+            check_only: false,
+        })
+        .expect_err("ancestral symlink não pode receber a exportação");
+        assert!(error.to_string().contains("ancestral da exportação"));
+        assert!(fs::read_dir(&fixture.target).unwrap().next().is_none());
+        assert!(fs::read_dir(&outside).unwrap().next().is_none());
+        assert!(!fixture.calls.exists());
+
+        let traversal = fixture
+            ._temp
+            .path()
+            .join("diretorio")
+            .join("..")
+            .join("fora-export")
+            .join("BOOTX64.EFI");
+        let error = ReservedBootEfi::create(&traversal, &fake_efi())
+            .expect_err("'..' não pode reinterpretar o pai ancorado");
+        assert!(error.to_string().contains("travessia '..'"));
+        assert!(fs::read_dir(&outside).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn limpeza_export_efi_permanece_no_pai_ancorado_apos_swap_por_symlink() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("export");
+        let detached = directory.path().join("export-renomeado");
+        let outside = directory.path().join("fora");
+        fs::create_dir(&original).unwrap();
+        fs::create_dir(&outside).unwrap();
+        let destination = original.join("BOOTX64.EFI");
+        let reservation = ReservedBootEfi::create(&destination, &fake_efi()).unwrap();
+
+        fs::rename(&original, &detached).unwrap();
+        symlink(&outside, &original).unwrap();
+        fs::write(outside.join("BOOTX64.EFI"), b"NAO-REMOVER").unwrap();
+
+        reservation.remove().unwrap();
+        assert!(!detached.join("BOOTX64.EFI").exists());
+        assert_eq!(
+            fs::read(outside.join("BOOTX64.EFI")).unwrap(),
+            b"NAO-REMOVER"
+        );
+    }
+
+    #[test]
+    fn limpeza_export_efi_nao_segue_folha_trocada_por_symlink() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("BOOTX64.EFI");
+        let victim = directory.path().join("vitima");
+        fs::write(&victim, b"PRESERVAR").unwrap();
+        let reservation = ReservedBootEfi::create(&destination, &fake_efi()).unwrap();
+
+        fs::remove_file(&destination).unwrap();
+        symlink(&victim, &destination).unwrap();
+        let error = reservation
+            .remove()
+            .expect_err("a limpeza não pode remover uma folha substituída");
+
+        assert!(error.to_string().contains("foi substituída"));
+        assert!(fs::symlink_metadata(&destination)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read(victim).unwrap(), b"PRESERVAR");
+    }
+
+    #[test]
+    fn falha_de_instalacao_limpa_export_efi_reservado() {
+        let fixture = media_fixture();
+        fs::write(&fixture.minitrue, "#!/bin/sh\nexit 42\n").unwrap();
+        fs::set_permissions(&fixture.minitrue, fs::Permissions::from_mode(0o755)).unwrap();
+        let export = fixture._temp.path().join("export-em-falha.EFI");
+
+        install_media(&MediaInstallOptions {
+            source: fixture.source,
+            target: fixture.target,
+            minitrue: Some(fixture.minitrue),
+            offline: false,
+            from_source: false,
+            only_binary: true,
+            resume: false,
+            export_boot_efi: Some(export.clone()),
+            check_only: false,
+        })
+        .expect_err("minitrue falso precisa fazer a instalação falhar");
+
+        assert!(!export.exists());
+    }
+
+    #[test]
+    fn falha_de_instalacao_limpa_export_no_pai_original_apos_swap() {
+        let fixture = media_fixture();
+        let export_parent = fixture._temp.path().join("export-em-uso");
+        let detached_parent = fixture._temp.path().join("export-original");
+        let outside = fixture._temp.path().join("export-fora");
+        let ready = fixture._temp.path().join("minitrue-pronto");
+        let proceed = fixture._temp.path().join("minitrue-prossiga");
+        fs::create_dir(&export_parent).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(
+            &fixture.minitrue,
+            format!(
+                "#!/bin/sh\n: > '{}'\nwhile [ ! -e '{}' ]; do sleep 0.01; done\nexit 42\n",
+                ready.display(),
+                proceed.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&fixture.minitrue, fs::Permissions::from_mode(0o755)).unwrap();
+        let export = export_parent.join("BOOTX64.EFI");
+        let options = MediaInstallOptions {
+            source: fixture.source,
+            target: fixture.target,
+            minitrue: Some(fixture.minitrue),
+            offline: false,
+            from_source: false,
+            only_binary: true,
+            resume: false,
+            export_boot_efi: Some(export.clone()),
+            check_only: false,
+        };
+        let worker = std::thread::spawn(move || install_media(&options));
+        // O worker executa a instalação inteira antes de alcançar o minitrue
+        // falso. Contar iterações media mal esse tempo: sob a suíte completa em
+        // paralelo, dez segundos não bastavam e o teste falhava sem nenhum
+        // defeito no código. O prazo é de relógio e generoso de propósito —
+        // só se paga por ele quando o ponto de sincronização de fato não chega.
+        let prazo = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        let mut observed = false;
+        while std::time::Instant::now() < prazo {
+            if ready.exists() {
+                observed = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if !observed {
+            fs::write(&proceed, b"liberar\n").unwrap();
+            let _ = worker.join();
+            panic!("minitrue falso não alcançou o ponto de sincronização");
+        }
+        assert!(
+            export.exists(),
+            "EFI precisa estar reservado antes do minitrue"
+        );
+
+        fs::rename(&export_parent, &detached_parent).unwrap();
+        symlink(&outside, &export_parent).unwrap();
+        fs::write(outside.join("BOOTX64.EFI"), b"NAO-REMOVER").unwrap();
+        fs::write(&proceed, b"liberar\n").unwrap();
+
+        assert!(worker.join().unwrap().is_err());
+        assert!(!detached_parent.join("BOOTX64.EFI").exists());
+        assert_eq!(
+            fs::read(outside.join("BOOTX64.EFI")).unwrap(),
+            b"NAO-REMOVER"
+        );
     }
 
     #[test]

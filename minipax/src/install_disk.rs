@@ -223,7 +223,11 @@ pub fn linhas_de_destruicao(alvo: &Disco) -> Vec<String> {
             alvo.particoes.len()
         ));
         for p in &alvo.particoes {
-            l.push(format!("  · {} — {}", p.nome, disco::tamanho_legivel(p.bytes)));
+            l.push(format!(
+                "  · {} — {}",
+                p.nome,
+                disco::tamanho_legivel(p.bytes)
+            ));
         }
     }
     l.push(String::new());
@@ -265,7 +269,7 @@ pub fn triar(particoes: &[Particao], minimo: u64, ja_usadas: &[String]) -> Triag
     let mut servem = Vec::new();
     let mut recusadas = Vec::new();
     for p in particoes {
-        if ja_usadas.iter().any(|u| *u == p.nome) {
+        if ja_usadas.contains(&p.nome) {
             recusadas.push(format!("{} — já atribuída", p.nome));
         } else if p.bytes < minimo {
             recusadas.push(format!(
@@ -305,7 +309,10 @@ pub fn linhas_do_plano_manual(
     raiz: &Particao,
     troca: Option<&Particao>,
 ) -> Vec<String> {
-    let mut l = vec!["O que vai acontecer com cada partição:".to_string(), String::new()];
+    let mut l = vec![
+        "O que vai acontecer com cada partição:".to_string(),
+        String::new(),
+    ];
     l.push(format!(
         "  /dev/{} ({}) — raiz: FORMATADA em ext4; tudo nela se perde",
         raiz.nome,
@@ -788,13 +795,22 @@ mod tests {
     #[test]
     fn aviso_enumera_o_que_se_perde() {
         let d = disco_de_teste(vec![
-            Particao { nome: "sda1".into(), bytes: 536_870_912 },
-            Particao { nome: "sda2".into(), bytes: 499_000_000_000 },
+            Particao {
+                nome: "sda1".into(),
+                bytes: 536_870_912,
+            },
+            Particao {
+                nome: "sda2".into(),
+                bytes: 499_000_000_000,
+            },
         ]);
         let linhas = linhas_de_destruicao(&d).join("\n");
         assert!(linhas.contains("sda1"));
         assert!(linhas.contains("sda2"));
-        assert!(linhas.contains("499 GB"), "o tamanho de cada partição importa");
+        assert!(
+            linhas.contains("499 GB"),
+            "o tamanho de cada partição importa"
+        );
         assert!(linhas.contains("não tem volta"));
     }
 
@@ -828,9 +844,18 @@ mod tests {
     #[test]
     fn triagem_explica_cada_recusa() {
         let ps = vec![
-            Particao { nome: "sda1".into(), bytes: 1024 * 1024 },
-            Particao { nome: "sda2".into(), bytes: 512 * 1024 * 1024 },
-            Particao { nome: "sda3".into(), bytes: 512 * 1024 * 1024 },
+            Particao {
+                nome: "sda1".into(),
+                bytes: 1024 * 1024,
+            },
+            Particao {
+                nome: "sda2".into(),
+                bytes: 512 * 1024 * 1024,
+            },
+            Particao {
+                nome: "sda3".into(),
+                bytes: 512 * 1024 * 1024,
+            },
         ];
         let t = triar(&ps, 100 * 1024 * 1024, &["sda3".to_string()]);
         assert_eq!(t.servem.len(), 1);
@@ -846,14 +871,26 @@ mod tests {
     /// outro sistema, que é a perda silenciosa desta tela.
     #[test]
     fn plano_manual_diz_o_que_acontece_com_cada_particao() {
-        let esp = Particao { nome: "sda1".into(), bytes: 512 * 1024 * 1024 };
-        let raiz = Particao { nome: "sda2".into(), bytes: 50_000_000_000 };
-        let troca = Particao { nome: "sda3".into(), bytes: 4 * 1024 * 1024 * 1024 };
+        let esp = Particao {
+            nome: "sda1".into(),
+            bytes: 512 * 1024 * 1024,
+        };
+        let raiz = Particao {
+            nome: "sda2".into(),
+            bytes: 50_000_000_000,
+        };
+        let troca = Particao {
+            nome: "sda3".into(),
+            bytes: 4 * 1024 * 1024 * 1024,
+        };
 
         let com_formato = linhas_do_plano_manual(&esp, true, &raiz, Some(&troca)).join("\n");
         assert!(com_formato.contains("sda2") && com_formato.contains("ext4"));
         assert!(com_formato.contains("FORMATADA em FAT32"));
-        assert!(com_formato.contains("carregador"), "falta o aviso do outro sistema");
+        assert!(
+            com_formato.contains("carregador"),
+            "falta o aviso do outro sistema"
+        );
         assert!(com_formato.contains("sda3"));
 
         let preservando = linhas_do_plano_manual(&esp, false, &raiz, None).join("\n");
@@ -882,8 +919,14 @@ mod tests {
         // descobrir isso já no cfdisk custa uma volta inteira.
         assert!(texto.contains("gpt"), "não diz o tipo de rótulo:\n{texto}");
         // A pergunta da assinatura velha, com a resposta.
-        assert!(texto.contains("signature"), "não antecipa a pergunta da assinatura");
-        assert!(texto.contains("Yes"), "antecipa a pergunta e não dá a resposta");
+        assert!(
+            texto.contains("signature"),
+            "não antecipa a pergunta da assinatura"
+        );
+        assert!(
+            texto.contains("Yes"),
+            "antecipa a pergunta e não dá a resposta"
+        );
         // Os três tipos de partição, com o nome que o cfdisk usa.
         for tipo in ["EFI System", "Linux filesystem", "Linux swap"] {
             assert!(texto.contains(tipo), "falta o tipo {tipo:?}");
@@ -904,16 +947,28 @@ mod tests {
             );
         }
         // E o que faz tudo isso valer.
-        assert!(texto.contains("[Write]") && texto.contains("'yes'"),
-                "não diz que sem gravar nada vale");
+        assert!(
+            texto.contains("[Write]") && texto.contains("'yes'"),
+            "não diz que sem gravar nada vale"
+        );
     }
 
     /// A serialização é o contrato com o init. Toda chave sai sempre.
     #[test]
     fn serializacao_traz_todas_as_chaves() {
-        let auto = Decisao::DiscoInteiro { disco: "/dev/sda".into() }.serializa();
-        for chave in ["DISTROPICA_INSTALL_FORMAT=1", "ROTA=disco-inteiro", "DISCO=/dev/sda",
-                      "ESP=", "FORMATAR_ESP=", "RAIZ=", "TROCA="] {
+        let auto = Decisao::DiscoInteiro {
+            disco: "/dev/sda".into(),
+        }
+        .serializa();
+        for chave in [
+            "DISTROPICA_INSTALL_FORMAT=1",
+            "ROTA=disco-inteiro",
+            "DISCO=/dev/sda",
+            "ESP=",
+            "FORMATAR_ESP=",
+            "RAIZ=",
+            "TROCA=",
+        ] {
             assert!(auto.contains(chave), "falta {chave} em:\n{auto}");
         }
 
@@ -929,7 +984,10 @@ mod tests {
         assert!(manual.contains("ESP=/dev/sda1"));
         assert!(manual.contains("FORMATAR_ESP=nao"));
         assert!(manual.contains("RAIZ=/dev/sda2"));
-        assert!(manual.contains("TROCA=\n"), "a troca vazia precisa sair mesmo assim");
+        assert!(
+            manual.contains("TROCA=\n"),
+            "a troca vazia precisa sair mesmo assim"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -962,9 +1020,9 @@ mod tests {
         std::fs::write(sda.join("device/model"), "SSD 860 EVO\n").unwrap();
         std::fs::write(sda.join("device/vendor"), "Samsung\n").unwrap();
         for (p, bytes) in [
-            ("sda1", 536_870_912u64),          // 512 MiB — serve de ESP
-            ("sda2", 400_000_000_000),         // 400 GB — serve de raiz
-            ("sda3", 2 * 1024 * 1024 * 1024),  // 2 GiB — só serve de troca
+            ("sda1", 536_870_912u64),         // 512 MiB — serve de ESP
+            ("sda2", 400_000_000_000),        // 400 GB — serve de raiz
+            ("sda3", 2 * 1024 * 1024 * 1024), // 2 GiB — só serve de troca
         ] {
             std::fs::create_dir_all(sda.join(p)).unwrap();
             std::fs::write(sda.join(p).join("partition"), "1\n").unwrap();
@@ -1005,10 +1063,15 @@ mod tests {
         let (d, tela, raiz) = sessao(b"\r\r\r", DISCO_GRANDE);
         assert_eq!(
             d,
-            Some(Decisao::DiscoInteiro { disco: "/dev/sda".into() })
+            Some(Decisao::DiscoInteiro {
+                disco: "/dev/sda".into()
+            })
         );
         // A mídia NUNCA pode ter sido oferecida.
-        assert!(!tela.texto().contains("sdb"), "o disco da mídia apareceu na lista");
+        assert!(
+            !tela.texto().contains("sdb"),
+            "o disco da mídia apareceu na lista"
+        );
         let _ = std::fs::remove_dir_all(&raiz);
     }
 
@@ -1044,9 +1107,18 @@ mod tests {
         let (d, tela, raiz) = sessao(b"\r\r\r\x1b\x1b\r", 2 * 1024 * 1024 * 1024);
         assert_eq!(d, None);
         let visto = tela.texto();
-        assert!(visto.contains("2,1 GB"), "falta o tamanho do disco:\n{visto}");
-        assert!(visto.contains("4,3 GB"), "falta o quanto seria preciso:\n{visto}");
-        assert!(!visto.contains("Enter APAGA o disco"), "chegou a oferecer a destruição");
+        assert!(
+            visto.contains("2,1 GB"),
+            "falta o tamanho do disco:\n{visto}"
+        );
+        assert!(
+            visto.contains("4,3 GB"),
+            "falta o quanto seria preciso:\n{visto}"
+        );
+        assert!(
+            !visto.contains("Enter APAGA o disco"),
+            "chegou a oferecer a destruição"
+        );
         let _ = std::fs::remove_dir_all(&raiz);
     }
 
@@ -1074,7 +1146,10 @@ mod tests {
         );
         let visto = tela.texto();
         assert!(visto.contains("cfdisk"), "o aviso do cfdisk não apareceu");
-        assert!(visto.contains("carregador"), "faltou o aviso de formatar a ESP");
+        assert!(
+            visto.contains("carregador"),
+            "faltou o aviso de formatar a ESP"
+        );
         let _ = std::fs::remove_dir_all(&raiz);
     }
 
@@ -1085,8 +1160,15 @@ mod tests {
     fn sessao_manual_preserva_a_esp_quando_pedido() {
         let (d, _, raiz) = sessao(b"\r2\r\r\r\r1\r", DISCO_GRANDE);
         match d {
-            Some(Decisao::Manual { formatar_esp, troca, .. }) => {
-                assert!(!formatar_esp, "a ESP seria formatada mesmo tendo escolhido preservar");
+            Some(Decisao::Manual {
+                formatar_esp,
+                troca,
+                ..
+            }) => {
+                assert!(
+                    !formatar_esp,
+                    "a ESP seria formatada mesmo tendo escolhido preservar"
+                );
                 assert_eq!(troca, None, "escolhi 'sem área de troca' e veio troca");
             }
             outro => panic!("esperava decisão manual, veio {outro:?}"),
@@ -1109,10 +1191,15 @@ mod tests {
         for linha in s.lines() {
             let (chave, valor) = linha.split_once('=').expect("linha sem =");
             assert!(
-                chave.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit()),
+                chave
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit()),
                 "chave estranha: {chave}"
             );
-            assert!(!valor.contains(' ') && !valor.contains('"'), "valor perigoso: {valor}");
+            assert!(
+                !valor.contains(' ') && !valor.contains('"'),
+                "valor perigoso: {valor}"
+            );
         }
     }
 }

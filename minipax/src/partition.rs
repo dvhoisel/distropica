@@ -28,6 +28,9 @@ const ENTRY_SIZE: u32 = 128;
 /// uma tabela em endereço errado, num caminho que apaga disco.
 pub const DEFAULT_SECTOR: u64 = 512;
 
+type LbaRange = (u64, u64);
+pub type WrittenLayout = (LbaRange, LbaRange, Option<LbaRange>);
+
 const TYPE_ESP: [u8; 16] = [
     0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11, 0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b,
 ];
@@ -127,7 +130,7 @@ pub fn write_layout(
     esp_mib: u64,
     swap_mib: u64,
     sector: u64,
-) -> Result<((u64, u64), (u64, u64), Option<(u64, u64)>)> {
+) -> Result<WrittenLayout> {
     if !matches!(sector, 512 | 1024 | 2048 | 4096) {
         bail!("setor lógico não suportado: {sector}");
     }
@@ -172,14 +175,13 @@ pub fn write_layout(
     } else {
         swap_mib * 1024 * 1024 / sector
     };
-    let (root_last, swap) = if swap_sectors > 0
-        && root_first + piso_raiz + swap_sectors <= last_usable
-    {
-        let swap_first = last_usable - swap_sectors + 1;
-        (swap_first - 1, Some((swap_first, last_usable)))
-    } else {
-        (last_usable, None)
-    };
+    let (root_last, swap) =
+        if swap_sectors > 0 && root_first + piso_raiz + swap_sectors <= last_usable {
+            let swap_first = last_usable - swap_sectors + 1;
+            (swap_first - 1, Some((swap_first, last_usable)))
+        } else {
+            (last_usable, None)
+        };
 
     let mut entries = vec![0u8; ENTRY_COUNT as usize * ENTRY_SIZE as usize];
     entries[..128].copy_from_slice(&entry(

@@ -1,10 +1,10 @@
 use anyhow::{bail, Context, Result};
 use minipax::install::{self, InstallOptions};
 use minipax::install_disk::{self, Exigencias};
-use minipax::tui::Terminal;
 use minipax::media::{self, MediaFormat, MediaMode, MediaOptions};
 use minipax::media_install::{self, MediaInstallOptions};
 use minipax::profile::{ProfileOverrides, ResolvedProfile};
+use minipax::tui::Terminal;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -26,7 +26,11 @@ opções de perfil:
   --live-world ARQ  substitui live.world e torna o perfil custom
   --overlay DIR     substitui overlay/ e torna o perfil custom
   --newspeak DIR    árvore de receitas (ou DISTROPICA_NEWSPEAK)
-  --cache DIR       offline: cache fechado; online: config+índice de canal
+  --cache DIR       cache fechado para instalação/mídia offline
+
+opção de saída da mídia:
+  --output ARQ      o diretório pai deve pertencer ao UID efetivo e não ser
+                    gravável por grupo/outros (crie-o antes com modo 0700)
 
 opções de install-disk (o instalador de texto da mídia viva):
   --saida ARQ       onde gravar a decisão; precisa não existir
@@ -410,7 +414,10 @@ fn run_install_disk(args: Vec<String>) -> Result<()> {
             // instalação em curso.
             "--midia" => midias.push(take_value(&args, &mut index, &option)?.into()),
             "--efi-bytes" => {
-                efi_bytes = Some(numero(take_value(&args, &mut index, &option)?, "--efi-bytes")?)
+                efi_bytes = Some(numero(
+                    take_value(&args, &mut index, &option)?,
+                    "--efi-bytes",
+                )?)
             }
             "--raiz-minima-bytes" => {
                 raiz_minima = Some(numero(

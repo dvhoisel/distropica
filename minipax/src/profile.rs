@@ -7,8 +7,9 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
-pub const PROFILE_LOCK_FORMAT: &str = "2";
+pub const PROFILE_LOCK_FORMAT: &str = "3";
 const MAX_PROFILE_FILE: u64 = 1024 * 1024;
+const MAX_NEWSPEAK_ORIGIN_FILE: u64 = 16 * 1024;
 
 #[derive(Default)]
 pub struct ProfileOverrides {
@@ -43,9 +44,10 @@ pub struct ResolvedProfile {
     pub overlay_path: Option<PathBuf>,
     pub newspeak_path: PathBuf,
     pub cache_path: Option<PathBuf>,
-    /// `true` somente para o `channel-bootstrap/` autodetectado no perfil.
-    /// Ele fecha descoberta online, mas não é um cache offline completo.
-    pub cache_is_channel_bootstrap: bool,
+    /// Snapshot pequeno e versionado que leva endpoint, chave pinada e o
+    /// índice assinado usado como semente. É deliberadamente separado do
+    /// cache offline: `--cache` não pode mais fazê-lo desaparecer da mídia.
+    pub channel_bootstrap_path: Option<PathBuf>,
     pub customized: bool,
 }
 
@@ -58,6 +60,8 @@ pub struct ProfileArtifacts {
     pub newspeak_entries: Vec<Entry>,
     pub newspeak_tar: Vec<u8>,
     pub cache_entries: Vec<Entry>,
+    pub channel_bootstrap_entries: Vec<Entry>,
+    pub channel_bootstrap_tar: Option<Vec<u8>>,
     /// O `cache.tar` mora em DISCO, não em memória: é o único artefato do
     /// perfil que pode ter centenas de MiB. O temporário é apagado quando este
     /// `ProfileArtifacts` morre, o que dá exatamente a vida útil certa — a
@@ -88,6 +92,10 @@ impl CacheArchive {
         self.len
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     pub fn hash(&self) -> &str {
         &self.hash
     }
@@ -115,6 +123,62 @@ impl<W: std::io::Write> std::io::Write for HashingWriter<W> {
 
 fn sha256(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
+}
+
+/// Valida o bootstrap completo da 0.13 sem ampliar o formato do cache de
+/// pacotes. `tree` continua responsável pelo layout do canal; este módulo
+/// acrescenta a origem da árvore gerida, que também precisa sobreviver no alvo.
+pub(crate) fn validate_channel_bootstrap(entries: &[Entry]) -> Result<()> {
+    let origin_path = Path::new("newspeak-origem");
+    let mut channel_entries = Vec::with_capacity(entries.len());
+    let mut origin = None;
+    for entry in entries {
+        if entry.relative != origin_path {
+            channel_entries.push(entry.clone());
+            continue;
+        }
+        let bytes = match &entry.kind {
+            tree::EntryKind::Regular(bytes) => bytes.clone(),
+            tree::EntryKind::RegularAt { source, len } => {
+                if *len > MAX_NEWSPEAK_ORIGIN_FILE {
+                    bail!("newspeak-origem excede {MAX_NEWSPEAK_ORIGIN_FILE} bytes");
+                }
+                read_small_regular(source, "newspeak-origem")?
+            }
+            _ => bail!("newspeak-origem precisa ser arquivo regular"),
+        };
+        if bytes.len() as u64 > MAX_NEWSPEAK_ORIGIN_FILE {
+            bail!("newspeak-origem excede {MAX_NEWSPEAK_ORIGIN_FILE} bytes");
+        }
+        origin = Some(bytes);
+    }
+    tree::validate_channel_bootstrap(&channel_entries)?;
+
+    let bytes = origin.ok_or_else(|| {
+        anyhow::anyhow!("bootstrap de canal não contém newspeak-origem com URL e chave pinada")
+    })?;
+    let text = std::str::from_utf8(&bytes).context("newspeak-origem não é UTF-8")?;
+    let mut url = None;
+    let mut key = None;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        match line.split_once('=') {
+            Some(("URL", value)) if !value.trim().is_empty() => url = Some(value.trim()),
+            Some(("KEY", value)) if !value.trim().is_empty() => key = Some(value.trim()),
+            _ => {}
+        }
+    }
+    let url = url.ok_or_else(|| anyhow::anyhow!("newspeak-origem não contém URL="))?;
+    if !url.starts_with("https://") {
+        bail!("newspeak-origem exige URL HTTPS");
+    }
+    if key.is_none() {
+        bail!("newspeak-origem não contém KEY=");
+    }
+    Ok(())
 }
 
 fn read_small_regular(path: &Path, what: &str) -> Result<Vec<u8>> {
@@ -281,11 +345,9 @@ impl ResolvedProfile {
         if status == ProfileStatus::Release && !install_ready {
             bail!("STATUS=release exige INSTALL_READY=yes");
         }
-        let explicit_cache = overrides.cache.is_some();
         let customized = overrides.target_world.is_some()
             || overrides.live_world.is_some()
-            || overrides.overlay.is_some()
-            || explicit_cache;
+            || overrides.overlay.is_some();
         let target_world_path = overrides
             .target_world
             .unwrap_or_else(|| directory.join("target.world"));
@@ -308,17 +370,15 @@ impl ResolvedProfile {
             .newspeak
             .or_else(|| std::env::var_os("DISTROPICA_NEWSPEAK").map(PathBuf::from))
             .ok_or_else(|| anyhow::anyhow!("--newspeak ou DISTROPICA_NEWSPEAK é obrigatório"))?;
-        // Um perfil pode versionar apenas o bootstrap do canal. Ele usa o
-        // mesmo snapshot de cache (e portanto o mesmo CACHE_SHA256 do lock),
-        // mas mídias online o restringem estruturalmente a config+índice
-        // assinado. `--cache` continua vencendo para builds custom/offline.
-        let cache_path = overrides.cache.or_else(|| {
-            directory
-                .join("channel-bootstrap")
-                .is_dir()
-                .then(|| directory.join("channel-bootstrap"))
-        });
-        let cache_is_channel_bootstrap = cache_path.is_some() && !explicit_cache;
+        // Cache de pacotes e bootstrap de canal têm ciclos de vida distintos.
+        // O primeiro pode ser um override grande e efêmero de uma composição
+        // offline; o segundo é parte versionada do perfil e precisa sobreviver
+        // ao override para ser instalado no alvo depois que o cache for usado.
+        let cache_path = overrides.cache;
+        let channel_bootstrap_path = directory
+            .join("channel-bootstrap")
+            .is_dir()
+            .then(|| directory.join("channel-bootstrap"));
         crate::ensure_real_file(&target_world_path, "target.world")?;
         crate::ensure_real_file(&live_world_path, "live.world")?;
         crate::ensure_real_dir(&newspeak_path, "árvore newspeak")?;
@@ -327,6 +387,9 @@ impl ResolvedProfile {
         }
         if let Some(path) = &cache_path {
             crate::ensure_real_dir(path, "cache")?;
+        }
+        if let Some(path) = &channel_bootstrap_path {
+            crate::ensure_real_dir(path, "channel-bootstrap")?;
         }
         Ok(Self {
             directory,
@@ -345,7 +408,7 @@ impl ResolvedProfile {
             overlay_path,
             newspeak_path,
             cache_path,
-            cache_is_channel_bootstrap,
+            channel_bootstrap_path,
             customized,
         })
     }
@@ -365,6 +428,15 @@ impl ResolvedProfile {
         };
         let (newspeak_entries, newspeak_tar) =
             tree::snapshot(&self.newspeak_path, TreePolicy::Newspeak, self.epoch)?;
+        let (channel_bootstrap_entries, channel_bootstrap_tar) = match &self.channel_bootstrap_path
+        {
+            Some(path) => {
+                let (entries, archive) = tree::snapshot(path, TreePolicy::Cache, self.epoch)?;
+                validate_channel_bootstrap(&entries)?;
+                (entries, Some(archive))
+            }
+            None => (Vec::new(), None),
+        };
         let (cache_entries, cache_tar) = match &self.cache_path {
             Some(path) => {
                 // Streaming: `collect` devolve os arquivos regulares do cache
@@ -418,8 +490,12 @@ impl ResolvedProfile {
             .as_ref()
             .map(|archive| archive.hash().to_string())
             .unwrap_or_else(|| "-".into());
+        let channel_bootstrap_hash = channel_bootstrap_tar
+            .as_deref()
+            .map(sha256)
+            .unwrap_or_else(|| "-".into());
         let content = format!(
-            "PROFILE_CONTENT_FORMAT=2\nPROFILE_NAME={}\nARCH={}\nSOURCE_DATE_EPOCH={}\nMEDIA_SIZE_MIB={}\nINSTALL_READY={}\nTARGET_WORLD_SHA256={target_world_hash}\nLIVE_WORLD_SHA256={live_world_hash}\nCACHE_WORLD_SHA256={cache_world_hash}\nOVERLAY_SHA256={overlay_hash}\nNEWSPEAK_SHA256={newspeak_hash}\nCACHE_SHA256={cache_hash}\n",
+            "PROFILE_CONTENT_FORMAT=3\nPROFILE_NAME={}\nARCH={}\nSOURCE_DATE_EPOCH={}\nMEDIA_SIZE_MIB={}\nINSTALL_READY={}\nTARGET_WORLD_SHA256={target_world_hash}\nLIVE_WORLD_SHA256={live_world_hash}\nCACHE_WORLD_SHA256={cache_world_hash}\nOVERLAY_SHA256={overlay_hash}\nNEWSPEAK_SHA256={newspeak_hash}\nCACHE_SHA256={cache_hash}\nCHANNEL_BOOTSTRAP_SHA256={channel_bootstrap_hash}\n",
             self.name,
             self.arch,
             self.epoch,
@@ -438,7 +514,7 @@ impl ResolvedProfile {
         }
         .to_string();
         let lock = format!(
-            "PROFILE_LOCK_FORMAT={PROFILE_LOCK_FORMAT}\nPROFILE_NAME={}\nPROFILE_CLASS={}\nPROFILE_CONTENT_SHA256={}\nOFFICIAL_CONTENT_SHA256={}\nARCH={}\nSOURCE_DATE_EPOCH={}\nMEDIA_SIZE_MIB={}\nINSTALL_READY={}\nOFFICIAL_BOOT_EFI_SHA256={}\nOFFICIAL_MINITRUE_SHA256={}\nTARGET_WORLD_SHA256={}\nLIVE_WORLD_SHA256={}\nCACHE_WORLD_SHA256={}\nOVERLAY_SHA256={}\nNEWSPEAK_SHA256={}\nCACHE_SHA256={}\n",
+            "PROFILE_LOCK_FORMAT={PROFILE_LOCK_FORMAT}\nPROFILE_NAME={}\nPROFILE_CLASS={}\nPROFILE_CONTENT_SHA256={}\nOFFICIAL_CONTENT_SHA256={}\nARCH={}\nSOURCE_DATE_EPOCH={}\nMEDIA_SIZE_MIB={}\nINSTALL_READY={}\nOFFICIAL_BOOT_EFI_SHA256={}\nOFFICIAL_MINITRUE_SHA256={}\nTARGET_WORLD_SHA256={}\nLIVE_WORLD_SHA256={}\nCACHE_WORLD_SHA256={}\nOVERLAY_SHA256={}\nNEWSPEAK_SHA256={}\nCACHE_SHA256={}\nCHANNEL_BOOTSTRAP_SHA256={}\n",
             self.name,
             class,
             content_hash,
@@ -455,6 +531,7 @@ impl ResolvedProfile {
             overlay_hash,
             newspeak_hash,
             cache_hash,
+            channel_bootstrap_hash,
         );
         let lock_hash = sha256(lock.as_bytes());
         Ok(ProfileArtifacts {
@@ -466,6 +543,8 @@ impl ResolvedProfile {
             newspeak_entries,
             newspeak_tar,
             cache_entries,
+            channel_bootstrap_entries,
+            channel_bootstrap_tar,
             cache_tar,
             lock,
             lock_hash,
@@ -601,6 +680,11 @@ mod tests {
         let bootstrap = temp.path().join("channel-bootstrap");
         fs::create_dir_all(bootstrap.join("channel-config")).unwrap();
         fs::create_dir_all(bootstrap.join("channels/oficial")).unwrap();
+        fs::write(
+            bootstrap.join("newspeak-origem"),
+            b"URL=https://example.invalid/newspeak/\nKEY=pinada\n",
+        )
+        .unwrap();
         fs::write(bootstrap.join("channel-config/oficial"), b"config\n").unwrap();
         fs::write(bootstrap.join("channels/oficial/index"), b"index-a\n").unwrap();
         fs::write(
@@ -619,12 +703,63 @@ mod tests {
             .unwrap()
         };
         let profile = load();
-        assert_eq!(profile.cache_path.as_deref(), Some(bootstrap.as_path()));
+        assert!(profile.cache_path.is_none());
+        assert_eq!(
+            profile.channel_bootstrap_path.as_deref(),
+            Some(bootstrap.as_path())
+        );
         let first = profile.lock().unwrap();
-        assert!(!first.contains("CACHE_SHA256=-\n"));
+        assert!(first.contains("CACHE_SHA256=-\n"));
+        assert!(!first.contains("CHANNEL_BOOTSTRAP_SHA256=-\n"));
 
         fs::write(bootstrap.join("channels/oficial/index"), b"index-b\n").unwrap();
         assert_ne!(first, load().lock().unwrap());
+
+        fs::remove_file(bootstrap.join("newspeak-origem")).unwrap();
+        assert!(load().artifacts().is_err());
+    }
+
+    #[test]
+    fn cache_offline_nao_substitui_bootstrap_versionado() {
+        let temp = fixture();
+        let bootstrap = temp.path().join("channel-bootstrap");
+        fs::create_dir_all(bootstrap.join("channel-config")).unwrap();
+        fs::create_dir_all(bootstrap.join("channels/oficial")).unwrap();
+        fs::write(
+            bootstrap.join("newspeak-origem"),
+            b"URL=https://example.invalid/newspeak/\nKEY=pinada\n",
+        )
+        .unwrap();
+        fs::write(bootstrap.join("channel-config/oficial"), b"config\n").unwrap();
+        fs::write(bootstrap.join("channels/oficial/index"), b"index\n").unwrap();
+        fs::write(
+            bootstrap.join("channels/oficial/index.minisig"),
+            b"assinatura\n",
+        )
+        .unwrap();
+        let cache = temp.path().join("cache-offline");
+        fs::create_dir(&cache).unwrap();
+        fs::write(cache.join("objeto"), b"payload").unwrap();
+
+        let profile = ResolvedProfile::load(
+            temp.path(),
+            ProfileOverrides {
+                newspeak: Some(temp.path().join("newspeak")),
+                cache: Some(cache.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(profile.cache_path.as_deref(), Some(cache.as_path()));
+        assert_eq!(
+            profile.channel_bootstrap_path.as_deref(),
+            Some(bootstrap.as_path())
+        );
+        let artifacts = profile.artifacts().unwrap();
+        assert!(!artifacts.cache_entries.is_empty());
+        assert!(!artifacts.channel_bootstrap_entries.is_empty());
+        assert!(!artifacts.lock.contains("CACHE_SHA256=-\n"));
+        assert!(!artifacts.lock.contains("CHANNEL_BOOTSTRAP_SHA256=-\n"));
     }
 
     #[test]
@@ -658,6 +793,46 @@ mod tests {
 
         fs::write(temp.path().join("target.world"), "outro\n").unwrap();
         assert_eq!(release.artifacts().unwrap().class, "custom");
+    }
+
+    #[test]
+    fn cache_pinado_pode_ser_oficial_e_qualquer_byte_divergente_rebaixa() {
+        let temp = fixture();
+        let cache = temp.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+        fs::write(cache.join("objeto"), b"bytes pinados").unwrap();
+        let overrides = || ProfileOverrides {
+            newspeak: Some(temp.path().join("newspeak")),
+            cache: Some(cache.clone()),
+            ..Default::default()
+        };
+
+        let development = ResolvedProfile::load(temp.path(), overrides()).unwrap();
+        let lock = development.lock().unwrap();
+        assert!(!lock.contains("CACHE_SHA256=-\n"));
+        let content_hash = lock
+            .lines()
+            .find_map(|line| line.strip_prefix("PROFILE_CONTENT_SHA256="))
+            .unwrap();
+        fs::write(
+            temp.path().join("profile"),
+            format!(
+                "PROFILE_FORMAT=1\nNAME=official\nARCH=x86_64\nSOURCE_DATE_EPOCH=10\nSTATUS=release\nOFFICIAL_CONTENT_SHA256={content_hash}\nOFFICIAL_BOOT_EFI_SHA256={}\nOFFICIAL_MINITRUE_SHA256={}\n",
+                "0".repeat(64),
+                "1".repeat(64),
+            ),
+        )
+        .unwrap();
+
+        let release = ResolvedProfile::load(temp.path(), overrides()).unwrap();
+        assert_eq!(release.artifacts().unwrap().class, "official-inputs");
+
+        fs::write(cache.join("objeto"), b"um byte diferente").unwrap();
+        assert_eq!(
+            release.artifacts().unwrap().class,
+            "custom",
+            "CACHE_SHA256 divergente altera o conteúdo e precisa rebaixar"
+        );
     }
 
     #[test]

@@ -70,7 +70,11 @@ impl Disco {
                 .iter()
                 .map(|p| format!("{} ({})", p.nome, tamanho_legivel(p.bytes)))
                 .collect();
-            format!("      {} partição(ões): {}", self.particoes.len(), lista.join(", "))
+            format!(
+                "      {} partição(ões): {}",
+                self.particoes.len(),
+                lista.join(", ")
+            )
         }
     }
 }
@@ -157,7 +161,7 @@ pub fn candidatos(sysfs: &Path, excluir: &[PathBuf]) -> Result<Vec<Disco>> {
         // setor lógico daria um tamanho oito vezes maior.
         let bytes = setores * 512;
         let caminho = PathBuf::from("/dev").join(&nome);
-        if excluir.iter().any(|e| *e == caminho) {
+        if excluir.contains(&caminho) {
             continue;
         }
 

@@ -57,7 +57,10 @@ pub enum EntryKind {
     /// que permite um cache de centenas de MiB sem custo de memória
     /// proporcional. O tamanho é gravado no `collect` para que o orçamento e
     /// o cabeçalho do tar não precisem reabrir o arquivo.
-    RegularAt { source: PathBuf, len: u64 },
+    RegularAt {
+        source: PathBuf,
+        len: u64,
+    },
     Symlink(PathBuf),
 }
 
@@ -350,10 +353,7 @@ fn collect_dir(
                     .take(remaining + 1)
                     .read_to_end(&mut content)?;
                 if content.len() as u64 > remaining {
-                    bail!(
-                        "árvore excede o limite de {} MiB",
-                        limit / 1024 / 1024
-                    );
+                    bail!("árvore excede o limite de {} MiB", limit / 1024 / 1024);
                 }
                 budget.bytes += content.len() as u64;
                 EntryKind::Regular(content)
@@ -420,8 +420,9 @@ pub fn pack_into<W: std::io::Write>(entries: &[Entry], epoch: u64, sink: W) -> R
                 // desempacotar na máquina do usuário. `take(len)` garante que
                 // não se escreve demais, e a conferência do total garante que
                 // não se escreveu de menos.
-                let file = fs::File::open(source)
-                    .with_context(|| format!("cache: {} sumiu durante a composição", source.display()))?;
+                let file = fs::File::open(source).with_context(|| {
+                    format!("cache: {} sumiu durante a composição", source.display())
+                })?;
                 let mut limited = file.take(*len);
                 header.set_entry_type(tar::EntryType::Regular);
                 header.set_size(*len);
