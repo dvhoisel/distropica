@@ -30,13 +30,20 @@ SIG_UNSAFE_WAIVER_3="files/assinatura-insegura-3"
 build() {
     # Shim do cross gcc (pass-1) que injeta os paths /usr (o pass-1 é
     # --without-headers: não conhece a glibc) e -std=gnu17 (código pré-C23).
-    mkdir -p "$WORK/.tc"
-    cat > "$WORK/.tc/x86_64-distropica-linux-gnu-gcc" <<'SHIM'
+    # O diretório é `.cc-cross`, e NÃO `.tc`: `.tc` é nome reservado pelo
+    # runner, que monta ali os shims da toolchain pinada e entrega o
+    # diretório somente-leitura. É guarda correta — um build que reescreve o
+    # próprio compilador anula a auditoria que ele deveria sustentar —, e o
+    # minitrue chega a recusar receita cujo files/ ocupe esse nome. Esta
+    # receita só quer envolver o gcc cruzado com o sysroot, então usa um
+    # diretório seu.
+    mkdir -p "$WORK/.cc-cross"
+    cat > "$WORK/.cc-cross/x86_64-distropica-linux-gnu-gcc" <<'SHIM'
 #!/bin/sh
 exec /usr/bin/x86_64-distropica-linux-gnu-gcc -isystem /usr/include -B/usr/lib -L/usr/lib -std=gnu17 "$@"
 SHIM
-    chmod +x "$WORK/.tc"/*
-    export PATH="$WORK/.tc:$PATH"
+    chmod +x "$WORK/.cc-cross"/*
+    export PATH="$WORK/.cc-cross:$PATH"
     export CC=x86_64-distropica-linux-gnu-gcc AR=ar RANLIB=ranlib
     # mpfr/mpc acham o gmp recém-feito DENTRO do stage (sem escrever na raiz
     # viva — respeita o contrato "só STAGE", SPEC-0004 §3.2); LD_LIBRARY_PATH

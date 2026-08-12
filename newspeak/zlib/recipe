@@ -11,13 +11,20 @@ SHA256="bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"
 SIG_UNSAFE_WAIVER="files/assinatura-insegura"
 
 build() {
-    mkdir -p "$WORK/.tc"
-    cat > "$WORK/.tc/x86_64-distropica-linux-gnu-gcc" <<'SHIM'
+    # O diretório é `.cc-cross`, e NÃO `.tc`: `.tc` é nome reservado pelo
+    # runner, que monta ali os shims da toolchain pinada e entrega o
+    # diretório somente-leitura. É guarda correta — um build que reescreve o
+    # próprio compilador anula a auditoria que ele deveria sustentar —, e o
+    # minitrue chega a recusar receita cujo files/ ocupe esse nome. Esta
+    # receita só quer envolver o gcc cruzado com o sysroot, então usa um
+    # diretório seu.
+    mkdir -p "$WORK/.cc-cross"
+    cat > "$WORK/.cc-cross/x86_64-distropica-linux-gnu-gcc" <<'SHIM'
 #!/bin/sh
 exec /usr/bin/x86_64-distropica-linux-gnu-gcc -isystem /usr/include -B/usr/lib -L/usr/lib "$@"
 SHIM
-    chmod +x "$WORK/.tc"/*
-    export PATH="$WORK/.tc:$PATH"
+    chmod +x "$WORK/.cc-cross"/*
+    export PATH="$WORK/.cc-cross:$PATH"
     export CC=x86_64-distropica-linux-gnu-gcc AR=ar RANLIB=ranlib
 
     tar -xzf "$DL" --strip-components=1

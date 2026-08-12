@@ -51,17 +51,24 @@ build() {
     # resolver o dep transitivo — o -L cobre só o -l direto. Sem isso, o teste
     # de gmp/mpfr/mpc da configure do gcc falha ("requires GMP 4.2+"). Achado
     # ao rodar o E2 pelo rectify (o build manual não batia neste teste).
-    mkdir -p "$WORK/.tc"
-    cat > "$WORK/.tc/x86_64-distropica-linux-gnu-gcc" <<'SHIM'
+    # O diretório é `.cc-cross`, e NÃO `.tc`: `.tc` é nome reservado pelo
+    # runner, que monta ali os shims da toolchain pinada e entrega o
+    # diretório somente-leitura. É guarda correta — um build que reescreve o
+    # próprio compilador anula a auditoria que ele deveria sustentar —, e o
+    # minitrue chega a recusar receita cujo files/ ocupe esse nome. Esta
+    # receita só quer envolver o gcc cruzado com o sysroot, então usa um
+    # diretório seu.
+    mkdir -p "$WORK/.cc-cross"
+    cat > "$WORK/.cc-cross/x86_64-distropica-linux-gnu-gcc" <<'SHIM'
 #!/bin/sh
 exec /usr/bin/x86_64-distropica-linux-gnu-gcc -isystem /usr/include -B/usr/lib -L/usr/lib -Wl,-rpath-link,/usr/lib "$@"
 SHIM
-    cat > "$WORK/.tc/x86_64-distropica-linux-gnu-g++" <<SHIM
+    cat > "$WORK/.cc-cross/x86_64-distropica-linux-gnu-g++" <<SHIM
 #!/bin/sh
 exec /usr/bin/x86_64-distropica-linux-gnu-g++ -isystem /usr/include/c++/$VERSION -isystem /usr/include/c++/$VERSION/x86_64-distropica-linux-gnu -isystem /usr/include -B/usr/lib -L/usr/lib -Wl,-rpath-link,/usr/lib "\$@"
 SHIM
-    chmod +x "$WORK/.tc"/*
-    export PATH="$WORK/.tc:$PATH"
+    chmod +x "$WORK/.cc-cross"/*
+    export PATH="$WORK/.cc-cross:$PATH"
 
     tar -xJf "$DL" --strip-components=1
     mkdir -p build && cd build
