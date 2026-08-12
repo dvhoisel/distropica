@@ -3,7 +3,12 @@ VERSION=5.44.0
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
-BUILD_DEPS="gcc-pass2 binutils-glibc make"
+# gawk: o script de configuração desta fonte chama awk direto, e declarar
+# `busybox` não garante awk — o gawk supersede o busybox e leva /usr/bin/awk.
+# A varredura anterior procurou arquivos chamados `configure` e por isso não
+# alcançou o `Configure` do perl (C maiúsculo) nem este caso; conferido agora
+# no script da própria fonte pinada.
+BUILD_DEPS="gcc-pass2 binutils-glibc make gawk"
 ABOUT="Perl. Build-tool, não superfície da distro: o kernel o exige (scripts/gen_oid_registry gera lib/oid_registry_data.c — '/bin/sh: perl: not found' no fim do build), e o OID_REGISTRY é puxado por NFS/SMB/crypto (desligar seria pior que ter a ferramenta). Também é dependência do openssl (Configure é perl) e de muito userspace vindouro. Mesma categoria de flex/bison/elfutils. Edge (P7): $VERSION é o stable mais recente do CPAN."
 LICENSE="Artistic-1.0-Perl OR GPL-1.0-or-later"
 SRC="https://www.cpan.org/src/5.0/perl-$VERSION.tar.xz"

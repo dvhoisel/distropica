@@ -3,7 +3,12 @@ VERSION=2.14.3
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc zlib libpng"
-BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf"
+# gawk: o script de configuração desta fonte chama awk direto, e declarar
+# `busybox` não garante awk — o gawk supersede o busybox e leva /usr/bin/awk.
+# A varredura anterior procurou arquivos chamados `configure` e por isso não
+# alcançou o `Configure` do perl (C maiúsculo) nem este caso; conferido agora
+# no script da própria fonte pinada.
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf gawk"
 ABOUT="Rasterizador de fontes: transforma contorno vetorial em pixel. Toda letra que a distro desenhar na tela passa por aqui — fontconfig, cairo, pango e GTK estão todos em cima dele. Construído SEM harfbuzz de propósito: os dois se referenciam mutuamente (o autohinter do FreeType usa harfbuzz para agrupar glifos, e o harfbuzz precisa do FreeType), e quebrar o ciclo pelo lado do FreeType é o caminho padrão. A consequência é autohinting um pouco pior em escritas complexas; a alternativa seria construir FreeType duas vezes, o que fica para quando houver motivo medido."
 LICENSE="FTL OR GPL-2.0-or-later"
 SRC="https://downloads.sourceforge.net/freetype/freetype-$VERSION.tar.xz"
