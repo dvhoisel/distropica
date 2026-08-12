@@ -3,7 +3,13 @@ VERSION=1.1.7
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
-BUILD_DEPS="make gcc-pass2 binutils-glibc"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk"
 ABOUT="Tradutor do protocolo multitouch do kernel: converte os eventos do protocolo A, antigo e sem identidade de contato, no protocolo B com rastreamento de dedo. Exigência dura do libinput — ele recusa configurar sem ela, mesmo num sistema que só tem mouse. Pacote minúsculo e parado no tempo, o que é adequado a uma camada de compatibilidade com uma interface de kernel que não muda mais. É o .tar.gz e não o .tar.bz2 porque é o .gz que o Alpine pina, e assim a conferência é direta."
 LICENSE=MIT
 SRC="https://bitmath.se/org/code/mtdev/mtdev-$VERSION.tar.gz"

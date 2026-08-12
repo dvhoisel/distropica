@@ -7,7 +7,13 @@ TOOLCHAIN=native
 # a mesma razão de eles estarem na expressão GPL-2.0-or-later acima: se são
 # instalados, contam.
 DEPS="glibc busybox"
-BUILD_DEPS="gcc-pass2 binutils-glibc make"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="gcc-pass2 binutils-glibc make gawk"
 # Expressão do que ESTA receita instala, e não do tarball inteiro. O próprio
 # COPYING do upstream reparte, e a repartição importa:
 #

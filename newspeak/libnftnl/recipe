@@ -3,7 +3,13 @@ VERSION=1.3.1
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc libmnl"
-BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf gawk"
 ABOUT="Biblioteca de baixo nível da API nftables do kernel, sobre libmnl. Dependência do nftables, não desejo top-level. Upstream assina o tarball (.sig OpenPGP); a receita pina o SHA-256 até o minitrue verificar OpenPGP (SPEC-0004 §5)."
 LICENSE=GPL-2.0-or-later
 SRC="https://ftp.netfilter.org/pub/libnftnl/libnftnl-$VERSION.tar.xz"

@@ -3,7 +3,13 @@ VERSION=2025.1
 KIND=source
 TOOLCHAIN=native
 DEPS=""
-BUILD_DEPS="meson ninja pkgconf"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="meson ninja pkgconf gawk"
 ABOUT="Os cabeçalhos do protocolo X11 — Xproto.h, Xatom.h, randrproto.h, damageproto.h e mais uns quarenta. Nenhum código: são as definições de fio que cliente e servidor precisam concordar, e o que se instala aqui é só /usr/include/X11 e uma pilha de .pc. Todas as bibliotecas cliente desta corrente os incluem na compilação. Conferência: o Alpine distribui o mesmo release em .tar.gz e este é o .tar.xz, então os sha512 não batem por construção; baixei os dois, extraí e comparei as árvores com diff -r — idênticas — o que corrobora este arquivo pelo hash que o Alpine publica, em vez de fingir que dois formatos dariam o mesmo hash."
 LICENSE=MIT
 SRC="https://www.x.org/releases/individual/proto/xorgproto-$VERSION.tar.xz"

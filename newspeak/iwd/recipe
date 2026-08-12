@@ -3,7 +3,13 @@ VERSION=3.12
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc dbus readline ncurses"
-BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf gawk"
 ABOUT="O daemon de Wi-Fi. Substitui o wpa_supplicant e faz o trabalho inteiro: varredura, autenticação WPA2 e WPA3, e um cliente DHCP próprio — por isso não arrasta wpa_supplicant nem libnl, que seriam mais dois pacotes. Escrito pela Intel sobre a ell, que ele EMBUTE no tarball (134 arquivos em ell/); o --enable-external-ell é opt-in e não o usamos, o que dispensa um pacote separado. Delega criptografia ao kernel pela AF_ALG, então não depende de OpenSSL. Fala D-Bus e só D-Bus: a API dele é uma árvore de objetos no barramento do sistema, e é por ali que o iwgtk conversa com ele. Gere apenas Wi-Fi; a ethernet continua com o udhcpc do busybox no rc.d, que já funciona. Sem unidade systemd, que aqui não existe. O tarball é o .tar.xz do kernel.org, conferido contra o sha256sums.asc assinado que eles publicam e contra o pino do Void — fonte upstream assinada mais uma distro independente, que é conferência melhor que duas distros."
 LICENSE=LGPL-2.1-or-later
 SRC="https://mirrors.edge.kernel.org/pub/linux/network/wireless/iwd-$VERSION.tar.xz"

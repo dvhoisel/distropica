@@ -3,7 +3,13 @@ VERSION=7.1
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc busybox ncurses"
-BUILD_DEPS="gcc-pass2 binutils-glibc make linux-headers"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="gcc-pass2 binutils-glibc make linux-headers gawk"
 ABOUT="O instrumento de medir. O lema desta árvore é que 'funciona' não é 'está correta', e que o que se afirma se mede — e a maior parte dos defeitos que custaram caro aqui foi de chamada de sistema que falhou sem ninguém ver: o openpty sem devpts, o udev_enumerate que voltava vazio com o dispositivo legível ali na frente, o g_settings_schema_source_get_default devolvendo NULL. Nenhum deles gritou; todos apareceriam em uma linha de strace. Sem libunwind e sem libdw: eles dariam pilha simbólica no -k, e trariam duas bibliotecas para um recurso que quase nunca se usa num sistema sem depuradores. Sem libselinux, que não existe aqui."
 LICENSE="LGPL-2.1-or-later AND GPL-2.0-or-later"
 SRC="https://github.com/strace/strace/releases/download/v$VERSION/strace-$VERSION.tar.xz"

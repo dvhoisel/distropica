@@ -3,7 +3,13 @@ VERSION=2.0
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc glib dbus libmnl libnftnl readline ncurses iwd"
-BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf gawk"
 ABOUT="Gerenciador de conexão: cabo e Wi-Fi no mesmo daemon, com perfis, reconexão e prioridade entre interfaces. Entra porque a Ethernet desta árvore era um udhcpc disparado uma vez no boot com -n -q — pegava o lease e SAÍA. Cabo desconectado e reconectado, lease expirado ou roteador reiniciado deixavam a máquina sem IP até o próximo boot, e a própria receita do base já registrava que o conserto exigia um daemon supervisionado. O ConnMan traz cliente DHCP próprio (gdhcp/), então resolve isso sem um terceiro programa. NÃO SUBSTITUI O IWD, e essa é a decisão central: com --disable-wifi --enable-iwd ele descarta o plugin do wpa_supplicant e comanda o iwd que já está aqui pelo D-Bus, de modo que a árvore continua com UM supplicant criptográfico e não dois. A compatibilidade foi medida contra o iwd 3.12 antes de escrever esta receita: das interfaces que o plugin usa, 9 de 9 existem; dos métodos, 8 de 8; dos nomes de erro, 4 de 4. Firewall por nftables e não por iptables, que é o default do upstream: o backend nftables usa libmnl e libnftnl, que a árvore já tem pelo pacote nftables, enquanto o de iptables exigiria xtables, que não temos. WISPr desligado — a detecção de portal cativo exigiria GnuTLS só para isso, e portal cativo se resolve abrindo o navegador. Sem Bluetooth, oFono, neard, dundee e pacrunner: são integrações com daemons que esta árvore não tem. O systemd é opcional no build e só serve para instalar unit files; aqui o daemon sobe por drop-in do rcS, como os demais."
 LICENSE="GPL-2.0-only"
 SRC="https://mirrors.edge.kernel.org/pub/linux/network/connman/connman-$VERSION.tar.xz"

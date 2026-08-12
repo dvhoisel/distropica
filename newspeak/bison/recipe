@@ -2,7 +2,13 @@ NAME=bison
 VERSION=3.8.2
 KIND=source
 DEPS="m4 busybox"
-BUILD_DEPS="binutils make"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="binutils make gawk"
 ABOUT="gerador de parsers LALR; a glibc precisa dele no build. Invoca m4 em runtime"
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/bison/bison-$VERSION.tar.xz"

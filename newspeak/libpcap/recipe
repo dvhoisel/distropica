@@ -3,7 +3,13 @@ VERSION=1.10.6
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc busybox"
-BUILD_DEPS="make gcc-pass2 binutils-glibc flex bison"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="make gcc-pass2 binutils-glibc flex bison gawk"
 ABOUT="Captura de pacote em espaço de usuário — provedor canônico único para tshark e nmap. Usa AF_PACKET com BPF clássico via SO_ATTACH_FILTER, que o kernel atual já habilita (CONFIG_PACKET=y) e que não depende de CONFIG_BPF_SYSCALL. Compilada sem D-Bus, RDMA, Bluetooth, USB e libnl: nenhum desses existe nesta árvore, e deixá-los à sorte da autodetecção tornaria o artefato dependente do que por acaso estivesse instalado no builder."
 LICENSE=BSD-3-Clause
 SRC="https://www.tcpdump.org/release/libpcap-$VERSION.tar.xz"

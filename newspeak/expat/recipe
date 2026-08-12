@@ -3,7 +3,13 @@ VERSION=2.8.3
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
-BUILD_DEPS="make gcc-pass2 binutils-glibc"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk"
 ABOUT="Parser XML em fluxo. Está embaixo de duas coisas que a pilha gráfica exige: a fontconfig, que lê seus arquivos de configuração em XML, e o wayland-scanner, que gera código a partir dos protocolos descritos em XML. É o parser XML mais enxuto que resolve os dois, e por isso está aqui em vez de libxml2 — que traria HTTP, FTP, XPath e XSLT para ler dois arquivos de configuração. Sem o xmlwf, ferramenta de linha de comando que só serve para validar XML à mão."
 LICENSE=MIT
 SRC="https://github.com/libexpat/libexpat/releases/download/R_2_8_3/expat-$VERSION.tar.xz"

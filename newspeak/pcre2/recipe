@@ -3,7 +3,13 @@ VERSION=10.47
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc busybox"
-BUILD_DEPS="make gcc-pass2 binutils-glibc"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk"
 ABOUT="Expressões regulares compatíveis com Perl, segunda geração. Entra por causa da glib: o GRegex é uma casca fina sobre a PCRE2, e a glib não constrói sem ela. Só a variante de 8 bits — a de 16 e a de 32 existem para quem trabalha com UTF-16/UTF-32, e nada nesta árvore o faz. Com JIT, que a própria glib procura: sem ele toda expressão regular do GTK e do GLib passa a ser interpretada. Sem as ferramentas de linha de comando pcre2grep e pcre2test, que são superfície que ninguém pediu."
 LICENSE=BSD-3-Clause
 SRC="https://github.com/PCRE2Project/pcre2/releases/download/pcre2-$VERSION/pcre2-$VERSION.tar.bz2"

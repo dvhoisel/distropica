@@ -3,7 +3,13 @@ VERSION=1.17.0
 KIND=source
 TOOLCHAIN=native
 DEPS=""
-BUILD_DEPS="python-glibc make pkgconf"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="python-glibc make pkgconf gawk"
 ABOUT="A descrição do protocolo X11 em XML, mais o gerador em Python que a transforma em C. O libxcb não traz o código das suas funções: ele o GERA na hora do build a partir destes XMLs, chamando o c_client.py daqui. Por isso é BUILD_DEPS lá e não DEPS — o resultado já está compilado dentro do libxcb.so. Instala também o xcbgen, módulo Python que o gerador importa; é a razão de python-glibc estar nas dependências de construção."
 LICENSE=MIT
 SRC="https://xcb.freedesktop.org/dist/xcb-proto-$VERSION.tar.xz"

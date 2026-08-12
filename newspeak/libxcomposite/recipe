@@ -3,7 +3,13 @@ VERSION=0.4.7
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc libx11 libxcb libxau libxdmcp"
-BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf util-macros xorgproto glibc libx11 libxfixes"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf util-macros xorgproto glibc libx11 libxfixes gawk"
 ABOUT="A extensão Composite: redireciona janelas para buffers fora da tela, que é o que permitiu compositor no X. No Wayland compor é a premissa e não uma extensão — o weston já nasce assim. Entra pelo NEEDED do libxul.so."
 LICENSE=MIT
 SRC="https://www.x.org/releases/individual/lib/libXcomposite-$VERSION.tar.xz"

@@ -3,7 +3,13 @@ VERSION=1.0.5
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
-BUILD_DEPS="make gcc-pass2 binutils-glibc"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk"
 ABOUT="Biblioteca mínima de netlink do projeto netfilter. É a base sobre a qual libnftnl e nftables falam com o kernel; não tem utilidade isolada e não é desejo top-level. Upstream assina o tarball (.sig OpenPGP); a receita pina o SHA-256 até o minitrue verificar OpenPGP (SPEC-0004 §5)."
 LICENSE=LGPL-2.1-or-later
 SRC="https://ftp.netfilter.org/pub/libmnl/libmnl-$VERSION.tar.bz2"

@@ -3,7 +3,13 @@ VERSION=2.6.4
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc m4"
-BUILD_DEPS="gcc-pass2 binutils-glibc make"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="gcc-pass2 binutils-glibc make gawk"
 ABOUT="gerador de scanners léxicos (lex). O kconfig e o dtc do kernel o exigem — 'make defconfig' falha sem ele. 2.6.4 é a última estável (2017; o projeto não lança desde então, então edge = 2.6.4)."
 LICENSE="BSD-3-Clause"
 SRC="https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz"

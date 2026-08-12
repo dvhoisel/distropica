@@ -3,7 +3,13 @@ VERSION=1.13.6
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
-BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc gawk"
 ABOUT="Casca sobre a interface evdev do kernel: lê os eventos crus de teclado, mouse e touchpad de /dev/input e os entrega já normalizados, com o estado do dispositivo mantido entre leituras. O libinput é construído em cima dela. Usa python no build para gerar tabelas a partir dos cabeçalhos do kernel — e é o primeiro pacote da árvore a exigir o interpretador COMPLETO, não o semente."
 LICENSE=MIT
 SRC="https://www.freedesktop.org/software/libevdev/libevdev-$VERSION.tar.xz"

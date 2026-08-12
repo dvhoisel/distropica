@@ -3,7 +3,13 @@ VERSION=1.3.7
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc libx11 libxcb libxau libxdmcp"
-BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf util-macros xorgproto glibc libx11"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf util-macros xorgproto glibc libx11 gawk"
 ABOUT="As extensões comuns do X11 — SHAPE, DPMS, MIT-SHM, XTEST. Um único .so que agrupa o que não coube no protocolo original. Aqui pelo NEEDED do libxul.so, e também porque metade das outras bibliotecas desta corrente (libXrandr, libXi) linkam contra ela."
 LICENSE=MIT
 SRC="https://www.x.org/releases/individual/lib/libXext-$VERSION.tar.xz"

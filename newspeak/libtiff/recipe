@@ -3,7 +3,13 @@ VERSION=4.7.2
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc zlib libjpeg-turbo"
-BUILD_DEPS="gcc-pass2 binutils-glibc make"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="gcc-pass2 binutils-glibc make gawk"
 ABOUT="Leitor de TIFF. Está aqui pelo mesmo motivo do libjpeg-turbo e por nenhum outro: o GTK4 o pede com dependency() incondicional. Sem ele o meson do gtk4 tenta BAIXAR o subprojeto do wrapdb durante o build — o que esta distro não aceita, porque build que busca fonte na rede não é reproduzível e não passa pelo SHA256 pinado da receita. Ao contrário do jpeg, este ainda constrói com autotools, então não precisou de cmake. Sem os utilitários de linha de comando e sem as codificações exóticas — LZMA, WebP, ZSTD e JBIG exigiriam quatro bibliotecas que não existem aqui, para formatos que ninguém nesta árvore abre. Com zlib e jpeg, que são as duas compressões que TIFF de verdade usa."
 LICENSE="libtiff"
 SRC="https://download.osgeo.org/libtiff/tiff-$VERSION.tar.gz"

@@ -3,7 +3,13 @@ VERSION=8.3
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc ncurses"
-BUILD_DEPS="make gcc-pass2 binutils-glibc"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk"
 ABOUT="Edição de linha e histórico para programas interativos: setas, Ctrl-R, completação. Entra por exigência dura do iwd, cujo configure recusa prosseguir sem ela — e a alternativa, --disable-client, seria erro grave nesta árvore: sem compositor, o iwgtk não roda, e o iwctl é a ÚNICA forma de conectar a uma rede. Um Wi-Fi sem interface alguma não serve para nada. Liga-se ao ncurses para saber a capacidade do terminal, o que já existe aqui pelo vim. Sem os patches oficiais do GNU: o 8.3 é a base, e o que o Alpine chama de 8.3.3 é revisão de empacotamento, não nível de patch — verificado no source= deles, que só acrescenta um ajuste próprio de linkagem e um inputrc."
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/readline/readline-$VERSION.tar.gz"

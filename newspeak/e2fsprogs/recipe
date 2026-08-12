@@ -3,7 +3,13 @@ VERSION=1.47.4
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc busybox"
-BUILD_DEPS="make gcc-pass2 binutils-glibc"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk"
 SUPERSEDES="busybox"
 ABOUT="Ferramentas do ext2/3/4 no sistema instalado: e2fsck, mke2fs, tune2fs, resize2fs, dumpe2fs. A raiz passou a ser ext4, e um sistema que não sabe verificar nem redimensionar o próprio disco não é um sistema — é uma demonstração. Supersede os applets equivalentes do busybox, que só fazem ext2. Constrói as próprias libuuid/libblkid porque esta árvore ainda não tem util-linux; sem o wrapper genérico fsck e sem uuidd, que exigiria um daemon. O instalador NÃO usa este pacote: a mídia leva um mke2fs estático próprio, porque o initramfs não tem glibc."
 LICENSE="GPL-2.0-only AND LGPL-2.0-only AND BSD-3-Clause AND MIT"

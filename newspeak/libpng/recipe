@@ -3,7 +3,13 @@ VERSION=1.6.58
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc zlib busybox"
-BUILD_DEPS="make gcc-pass2 binutils-glibc"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk"
 ABOUT="Leitura e escrita de PNG. Está embaixo do cairo, do gdk-pixbuf e dos ícones do GTK — praticamente todo pixel que a pilha gráfica desenha a partir de arquivo passa por aqui. Depende da zlib porque o PNG é, na prática, um contêiner de fluxos deflate. É o tarball .tar.gz e não o .tar.xz por um motivo simples: é o que o Alpine pina, e assim a conferência é direta em vez de depender de eu afirmar que os dois contêm o mesmo."
 LICENSE=Libpng
 SRC="https://downloads.sourceforge.net/libpng/libpng-$VERSION.tar.gz"

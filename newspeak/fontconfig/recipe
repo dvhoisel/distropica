@@ -3,7 +3,13 @@ VERSION=2.18.3
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc freetype expat libpng zlib"
-BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf gperf"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf gperf gawk"
 ABOUT="Descoberta e casamento de fontes: é quem responde 'qual arquivo de fonte atende a este pedido'. O FreeType desenha o glifo, mas não sabe onde as fontes estão nem qual substituir quando a pedida falta; a fontconfig resolve isso, e cairo, pango e GTK dependem dela para qualquer texto. Lê configuração em XML, daí o expat. Precisa do gperf: gera fcobjshash.h e o tarball não o traz pronto. Baixado do GitLab do freedesktop e não do site do projeto: o caminho antigo em freedesktop.org/software responde uma página HTML, e pinar o hash dela seria pinar um erro 404 — foi o que quase aconteceu ao escrever esta receita, e só a conferência contra um canal independente pegou."
 LICENSE=MIT
 SRC="https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/$VERSION/fontconfig-$VERSION.tar.xz"

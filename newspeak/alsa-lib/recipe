@@ -3,7 +3,13 @@ VERSION=1.2.16.1
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
-BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf gawk"
 ABOUT="O som. É a biblioteca cliente da ALSA, a interface de áudio do próprio kernel — não um servidor como PulseAudio ou PipeWire, que ficam de fora. Fala direto com /dev/snd, o que significa um aplicativo por vez com a placa: sem mixagem entre programas. Para um sistema com um navegador e mais nada isso basta, e a alternativa custaria um daemon, D-Bus de sessão e uma dúzia de dependências. libasound.so.2 está no NEEDED do libxul.so, então sem esta biblioteca o Firefox nem carrega — a diferença entre 'roda sem som' e 'não roda' é exatamente ela. Sem --with-pythonlibs e sem os utilitários alsactl/alsamixer, que vêm no alsa-utils e são outro pacote. O /usr/share/alsa que ela instala são as definições de PCM (default, dmix, hw) que a biblioteca lê em tempo de execução; sem eles o dispositivo 'default' não existe e a abertura falha."
 LICENSE=LGPL-2.1-or-later
 SRC="https://www.alsa-project.org/files/pub/lib/alsa-lib-$VERSION.tar.bz2"

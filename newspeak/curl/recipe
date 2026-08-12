@@ -3,7 +3,13 @@ VERSION=8.21.0
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc openssl zlib ca-certificates busybox"
-BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf gawk"
 ABOUT="Cliente HTTP. O BusyBox já traz um applet wget, e ele resolve baixar um arquivo — o que não resolve é ser BIBLIOTECA: o git fala HTTPS pela libcurl, e sem ela um clone por https:// simplesmente não existe, sobrando só ssh:// e git://. É por isso que este pacote entra junto com o git e não sozinho. O ca-certificates está em DEPS e isso não é zelo: um cliente TLS sem loja de raízes falha em toda conexão verificada, e a alternativa que as pessoas encontram é desligar a verificação — exatamente o desfecho que esta árvore não quer induzir. Só HTTP e HTTPS: FTP, SMTP, IMAP, LDAP, RTSP e companhia saem, porque cada protocolo ligado é superfície que ninguém aqui exercita. Sem libssh2, sem libidn2, sem nghttp2 — HTTP/2 exigiria mais uma biblioteca para um ganho que não se mede neste uso."
 LICENSE="curl"
 SRC="https://curl.se/download/curl-$VERSION.tar.xz"

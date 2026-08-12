@@ -3,7 +3,13 @@ VERSION=3.7b
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc ncurses libevent"
-BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf gawk"
 ABOUT="Multiplexador de terminal, e ele ganhou razão de existir junto com o openssh e o minicom que entraram na mesma leva: uma sessão que sobrevive à queda da conexão deixa de ser conforto quando o acesso à máquina é por SSH numa rede ruim ou por serial numa placa que reinicia. Sem ele, ligação caída é trabalho perdido. Também é o que torna o console serial utilizável para mais de uma coisa ao mesmo tempo, num sistema cujo modo gráfico pode nem ter subido. Depende da libevent, que entrou nesta árvore exclusivamente por causa dele."
 LICENSE="ISC AND BSD-2-Clause AND BSD-3-Clause"
 SRC="https://github.com/tmux/tmux/releases/download/$VERSION/tmux-$VERSION.tar.gz"

@@ -3,7 +3,13 @@ VERSION=1.0.16
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf gawk"
 ABOUT="Implementação do algoritmo bidirecional do Unicode: decide a ordem visual de um texto que mistura escrita da esquerda para a direita com árabe ou hebraico. Não é enfeite de internacionalização — o Pango a exige como dependência dura, e sem ela não há GTK. Pacote pequeno e antigo, do tipo que faz uma coisa só; a única decisão aqui é não construir a documentação, que pediria c2man."
 LICENSE=LGPL-2.1-or-later
 SRC="https://github.com/fribidi/fribidi/releases/download/v$VERSION/fribidi-$VERSION.tar.xz"

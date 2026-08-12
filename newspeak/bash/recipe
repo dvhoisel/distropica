@@ -3,7 +3,13 @@ VERSION=5.3
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc ncurses busybox"
-BUILD_DEPS="make gcc-pass2 binutils-glibc"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk"
 ABOUT="GNU Bash 5.3. Entra por necessidade demonstrada, não por gosto: a auditoria de fechamento (SPEC-0013 §4) revelou que a base não tinha shell bash algum, e há software que exige exatamente ele no shebang — o wg-quick do wireguard-tools é o caso concreto. Não é dependência da base: quem precisa dele declara em DEPS. NÃO assume /bin/sh, que continua sendo o ash do busybox; bash fica só em /usr/bin/bash, para quem o pede pelo shebang. Depende de ncurses por causa do termcap do readline."
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/bash/bash-$VERSION.tar.gz"

@@ -3,7 +3,13 @@ VERSION=1.8.13
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc libxcb libxau libxdmcp"
-BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf util-macros xorgproto xtrans libxcb perl"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf util-macros xorgproto xtrans libxcb perl gawk"
 ABOUT="A Xlib. A biblioteca cliente original do X11, de 1987, e a razão de toda esta corrente existir: o libxul.so do Firefox tem libX11.so.6 e libX11-xcb.so.1 no NEEDED — ligação dura, resolvida pelo carregador antes da primeira linha de código rodar. Numa árvore Wayland-only ela nunca abre display nenhum; o Firefox roda no caminho Wayland do GTK e as chamadas Xlib ficam mortas. Mas o ld.so não sabe disso e recusa o binário se o arquivo não existir. É este o custo, medido e não estimado, de embarcar o binário oficial da Mozilla em vez de compilar o Firefox — o que exigiria Rust, clang, cbindgen e nodejs. Compila com o xtrans embutido e conversa com o servidor pelo libxcb. Sem --disable-xf86bigfont, que é extensão de fonte do XFree86 e morreu com ele."
 LICENSE=MIT
 SRC="https://www.x.org/releases/individual/lib/libX11-$VERSION.tar.xz"

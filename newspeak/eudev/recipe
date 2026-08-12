@@ -3,7 +3,13 @@ VERSION=3.2.14
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
-BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf gperf"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf gperf gawk"
 ABOUT="Gerenciador de dispositivos e a libudev. Entra porque o libinput descobre teclado, mouse e touchpad perguntando ao udev quais dispositivos existem e que capacidades têm — sem isso o compositor não encontra entrada nenhuma. É o eudev, fork independente mantido pelo Gentoo, e não o udev do systemd: esta distro não tem systemd nem pretende ter, e o udev de lá não se desacopla. O mdev do BusyBox, que hoje cria os nós de dispositivo no boot, resolve o /dev mas não oferece a libudev que o libinput consulta. Precisa de gperf, como o fontconfig."
 LICENSE="GPL-2.0-or-later AND LGPL-2.1-or-later"
 SRC="https://github.com/eudev-project/eudev/releases/download/v$VERSION/eudev-$VERSION.tar.gz"

@@ -3,7 +3,13 @@ VERSION=2.13.9
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc zlib busybox"
-BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf zlib"
+# gawk: o `./configure` desta fonte chama awk, e nenhuma dependência declarada
+# garante awk — o gawk supersede o busybox e leva /usr/bin/awk embora assim que
+# entra no mesmo plano. Antes disso o applet servia, então a receita parecia
+# correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
+# está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
+# vir antes dele e dispensa a declaração.
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf zlib gawk"
 ABOUT="Leitor e escritor de XML em C. Entra por uma via só: o at-spi2-core o exige (libxml-2.0 >= 2.9.1, dependência dura no meson.build dele), e o at-spi2-core entra porque o backend X11 do GTK3 exige a ponte de acessibilidade — corrente que existe porque o libxul.so do Firefox referencia vinte e um símbolos gdk_x11_*. A versão é a 2.13.9 e não a 2.15, que é a mais recente: o Alpine e o Void pinam a série 2.13 por causa de quebras de ABI nas seguintes, e aqui isso vira corroboração dupla de hash em vez de aventura. Construído sem Python, sem ICU, sem LZMA e sem HTTP: o at-spi2 só analisa os arquivos de definição de interface D-Bus, que são XML local e pequeno. O zlib fica porque a descompressão de documento é barata e já está na árvore."
 LICENSE=MIT
 SRC="https://download.gnome.org/sources/libxml2/2.13/libxml2-$VERSION.tar.xz"
