@@ -1,0 +1,24 @@
+{
+  "node_id": "MDM6VGFnMTQ1MjEwMDE6ZDY5YTU4MDc1MTY5NDEwMzI0ZmU0OTY2NmY2NjQxYmE2YTlkMWY5MQ==",
+  "sha": "d69a58075169410324fe49666f6641ba6a9d1f91",
+  "url": "https://api.github.com/repos/westes/flex/git/tags/d69a58075169410324fe49666f6641ba6a9d1f91",
+  "tagger": {
+    "name": "Will Estes",
+    "email": "westes575@gmail.com",
+    "date": "2017-05-06T20:36:15Z"
+  },
+  "object": {
+    "sha": "ab49343b08c933e32de8de78132649f9560a3727",
+    "type": "commit",
+    "url": "https://api.github.com/repos/westes/flex/git/commits/ab49343b08c933e32de8de78132649f9560a3727"
+  },
+  "tag": "v2.6.4",
+  "message": "version 2.6.4\n-----BEGIN PGP SIGNATURE-----\nVersion: GnuPG v2\n\niQEcBAABCAAGBQJZDjPKAAoJEOSynI1kiFMH7hkIANHGB5y/u1P41hbXZxHFi/8K\n3MzuCK+StxYi2kjsE9YgfnyG8cgDG7b0uLcxeHbs8MYJ8jOPFPzZBoM39d+UhYXv\nS19Fr8uw0XlkXBS+jY4NVwjBgbwFyjnz5xYUtnVWrKZrySUb4+xBsGqCKlcDQLXd\n/SyGMxXp20X6CNNv/mZvwec1V/103ZYhehsP4XP5FB+K84vX0SKHJuObFFVMfex6\n74BBINkFBh7OGi4QBnPucDfa/xaZKaJgeWTu4PeUe0TkG+ViK+uf37L+oT0Vn8q1\nT3mOM3osHpZUeM2O2kAc5NENJPKhofrFwHpWXrhI54lQowOPefehpW+y03Y9j/8=\n=1ddz\n-----END PGP SIGNATURE-----\n",
+  "verification": {
+    "verified": false,
+    "reason": "unknown_key",
+    "signature": "-----BEGIN PGP SIGNATURE-----\nVersion: GnuPG v2\n\niQEcBAABCAAGBQJZDjPKAAoJEOSynI1kiFMH7hkIANHGB5y/u1P41hbXZxHFi/8K\n3MzuCK+StxYi2kjsE9YgfnyG8cgDG7b0uLcxeHbs8MYJ8jOPFPzZBoM39d+UhYXv\nS19Fr8uw0XlkXBS+jY4NVwjBgbwFyjnz5xYUtnVWrKZrySUb4+xBsGqCKlcDQLXd\n/SyGMxXp20X6CNNv/mZvwec1V/103ZYhehsP4XP5FB+K84vX0SKHJuObFFVMfex6\n74BBINkFBh7OGi4QBnPucDfa/xaZKaJgeWTu4PeUe0TkG+ViK+uf37L+oT0Vn8q1\nT3mOM3osHpZUeM2O2kAc5NENJPKhofrFwHpWXrhI54lQowOPefehpW+y03Y9j/8=\n=1ddz\n-----END PGP SIGNATURE-----\n",
+    "payload": "object ab49343b08c933e32de8de78132649f9560a3727\ntype commit\ntag v2.6.4\ntagger Will Estes <westes575@gmail.com> 1494102975 -0400\n\nversion 2.6.4\n",
+    "verified_at": null
+  }
+}
