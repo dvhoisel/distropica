@@ -1,0 +1,52 @@
+#!/bin/sh
+# Regressao da fronteira KBUILD_BUILD_TIMESTAMP -> gen_initramfs.sh.
+set -eu
+
+LC_ALL=C
+TZ=UTC
+export LC_ALL TZ
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+TARGET_RECIPE=$REPO/newspeak/linux/recipe
+LIVE_BUILDER=$REPO/bootstrap/live/build-efi
+EPOCH=1704067200
+
+BUSYBOX_BIN=${BUSYBOX:-$(command -v busybox 2>/dev/null || true)}
+[ -n "$BUSYBOX_BIN" ] && [ -x "$BUSYBOX_BIN" ] || {
+    echo 'FALHOU: BusyBox ausente para provar o parser do builder' >&2
+    exit 1
+}
+
+# E a segunda conversao que o kernel faz em usr/gen_initramfs.sh. A forma
+# longa "Mon Jan ... UTC ..." e aceita pelo GNU date do host, mas nao pelo
+# date do BusyBox distribuido; quando ela falhava, o upstream usava
+# time(NULL) como mtime dos diretorios/nodes do CPIO sem abortar.
+timestamp=$(
+    "$BUSYBOX_BIN" date -u -d "@$EPOCH" '+%Y-%m-%d %H:%M:%S'
+)
+[ "$timestamp" = '2024-01-01 00:00:00' ] || {
+    echo "FALHOU: timestamp canonico inesperado: $timestamp" >&2
+    exit 1
+}
+parsed=$("$BUSYBOX_BIN" date -d "$timestamp" +%s)
+[ "$parsed" = "$EPOCH" ] || {
+    echo "FALHOU: BusyBox reconverteu timestamp para $parsed, nao $EPOCH" >&2
+    exit 1
+}
+
+for source in "$TARGET_RECIPE" "$LIVE_BUILDER"; do
+    grep -F -q "'+%Y-%m-%d %H:%M:%S'" "$source" || {
+        echo "FALHOU: formato parseavel ausente em $source" >&2
+        exit 1
+    }
+    if grep -F -q "'+%a %b %e %T UTC %Y'" "$source"; then
+        echo "FALHOU: formato nao parseavel voltou a $source" >&2
+        exit 1
+    fi
+    grep -F -q 'nao volta ao SOURCE_DATE_EPOCH' "$source" || {
+        echo "FALHOU: guarda de round-trip ausente em $source" >&2
+        exit 1
+    }
+done
+
+echo 'kernel/timestamp: BusyBox faz round-trip ao epoch; wall-clock nao e fallback'

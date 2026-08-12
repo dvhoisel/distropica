@@ -1,0 +1,175 @@
+#!/bin/sh
+# Gera, fora do build, o certificado publico e os CMS detached usados pela
+# receita newspeak/linux. A chave privada nasce somente em /tmp, com modo 0700,
+# nunca e impressa e e removida pelo trap antes da saida.
+set -eu
+
+LC_ALL=C
+export LC_ALL
+umask 077
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+MODULES=
+SIGN_FILE=
+EXTRACT_SIG=
+OUTPUT=
+
+usage() {
+    cat <<'EOF'
+uso: bootstrap/kernel-module-signing-bundle \
+       --modules DIR --sign-file ARQ --extract-sig ARQ --output DIR
+
+DIR pode conter modulos unsigned ou modulos com uma assinatura antiga. Neste
+ultimo caso, extract-module-sig.pl remove a assinatura antes de gerar o CMS.
+A saida precisa nao existir. A chave RSA efemera nunca entra nela.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --modules) MODULES=${2:?}; shift 2 ;;
+        --sign-file) SIGN_FILE=${2:?}; shift 2 ;;
+        --extract-sig) EXTRACT_SIG=${2:?}; shift 2 ;;
+        --output) OUTPUT=${2:?}; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "erro: opcao desconhecida: $1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+[ -n "$MODULES" ] && [ -n "$SIGN_FILE" ] && [ -n "$EXTRACT_SIG" ] && \
+    [ -n "$OUTPUT" ] || { usage >&2; exit 2; }
+[ -d "$MODULES" ] && [ ! -L "$MODULES" ] || {
+    echo "erro: --modules precisa ser diretorio real" >&2; exit 2;
+}
+[ -f "$SIGN_FILE" ] && [ ! -L "$SIGN_FILE" ] || {
+    echo "erro: --sign-file precisa ser arquivo regular" >&2; exit 2;
+}
+[ -f "$EXTRACT_SIG" ] && [ ! -L "$EXTRACT_SIG" ] || {
+    echo "erro: --extract-sig precisa ser arquivo regular" >&2; exit 2;
+}
+[ ! -e "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || {
+    echo "erro: --output ja existe" >&2; exit 2;
+}
+
+MODULES=$(CDPATH= cd -- "$MODULES" && pwd -P)
+case "$MODULES" in /) echo 'erro: recusei usar / como arvore de modulos' >&2; exit 2 ;; esac
+output_parent=$(dirname -- "$OUTPUT")
+output_name=$(basename -- "$OUTPUT")
+case "$output_name" in ''|.|..) echo 'erro: nome de saida invalido' >&2; exit 2 ;; esac
+mkdir -p "$output_parent"
+output_parent=$(CDPATH= cd -- "$output_parent" && pwd -P)
+OUTPUT=$output_parent/$output_name
+[ ! -e "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || {
+    echo "erro: --output apareceu durante o preflight" >&2; exit 2;
+}
+
+# Nao respeita TMPDIR de proposito: ele pode apontar para o worktree/rootfs.
+# /tmp e uma fronteira externa explicita deste utilitario de autoria offline.
+key_dir=$(mktemp -d /tmp/distropica-module-key.XXXXXXXX)
+stage=
+published=no
+cleanup() {
+    # A chave e removida primeiro. Nenhuma mensagem inclui seu caminho.
+    rm -rf -- "$key_dir"
+    if [ "$published" != yes ] && [ -n "$stage" ]; then
+        rm -rf -- "$stage"
+    fi
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+chmod 0700 "$key_dir"
+case "$key_dir" in
+    /tmp/distropica-module-key.*) ;;
+    *) echo 'erro: mktemp devolveu caminho inesperado' >&2; exit 2 ;;
+esac
+case "$key_dir" in
+    "$REPO"|"$REPO"/*|"$MODULES"|"$MODULES"/*)
+        rm -rf -- "$key_dir"
+        echo 'erro: temporario da chave caiu dentro do worktree/rootfs' >&2
+        exit 2
+        ;;
+esac
+stage=$(mktemp -d "$output_parent/.${output_name}.tmp.XXXXXXXX")
+
+mkdir -p "$stage/signatures" "$stage/unsigned"
+private_key=$key_dir/private.pem
+certificate=$stage/certificate.pem
+if ! openssl req -new -newkey rsa:4096 -nodes -x509 -sha512 -days 36500 \
+    -set_serial 0x44495354524f504943410001 \
+    -subj '/O=Distropica/CN=Ministerio da Verdade - modulos' \
+    -keyout "$private_key" -out "$certificate" >/dev/null 2>&1; then
+    echo 'erro: openssl nao gerou a autoridade efemera' >&2
+    exit 1
+fi
+chmod 0600 "$private_key"
+chmod 0644 "$certificate"
+
+(
+    cd "$MODULES"
+    find . -name '*.ko' ! -type f -print > "$stage/nonregular"
+    find . -type f -name '*.ko' -print | sed 's|^\./||' | sort > "$stage/modules"
+)
+[ ! -s "$stage/nonregular" ] || {
+    echo 'erro: arvore contem .ko nao regular' >&2; exit 1;
+}
+[ -s "$stage/modules" ] || { echo 'erro: nenhum .ko encontrado' >&2; exit 1; }
+
+: > "$stage/manifest"
+while IFS= read -r path; do
+    case "$path" in
+        kernel/*.ko) ;;
+        *) echo "erro: caminho de modulo nao canonico: $path" >&2; exit 1 ;;
+    esac
+    case "$path" in *[!A-Za-z0-9_./+-]*)
+        echo "erro: caminho de modulo contem caractere nao canonico: $path" >&2
+        exit 1
+    esac
+    case "/$path/" in *//*|*/../*|*/./*)
+        echo "erro: caminho de modulo inseguro: $path" >&2; exit 1 ;;
+    esac
+    source_module=$MODULES/$path
+    unsigned=$stage/unsigned/$path
+    signature=$stage/signatures/$path.p7s
+    mkdir -p "$(dirname -- "$unsigned")" "$(dirname -- "$signature")"
+    marker=$(tail -c 28 "$source_module" 2>/dev/null || true)
+    if [ "$marker" = '~Module signature appended~' ]; then
+        perl "$EXTRACT_SIG" -0 "$source_module" > "$unsigned" 2>/dev/null || {
+            echo "erro: assinatura antiga malformada em $path" >&2; exit 1;
+        }
+    else
+        cp "$source_module" "$unsigned"
+    fi
+    chmod 0644 "$unsigned"
+    if ! "$SIGN_FILE" -d sha512 "$private_key" "$certificate" "$unsigned" \
+        >/dev/null 2>&1; then
+        echo "erro: sign-file nao gerou CMS para $path" >&2
+        exit 1
+    fi
+    mv "$unsigned.p7s" "$signature"
+    chmod 0644 "$signature"
+    unsigned_hash=$(sha256sum "$unsigned" | awk '{print $1}')
+    signature_hash=$(sha256sum "$signature" | awk '{print $1}')
+    printf '%s\t%s\t%s\n' "$unsigned_hash" "$signature_hash" "$path" \
+        >> "$stage/manifest"
+done < "$stage/modules"
+
+# O output e publico: os corpos unsigned serviram apenas de entrada do signer.
+rm -rf -- "$stage/unsigned" "$stage/modules" "$stage/nonregular"
+chmod 0644 "$stage/manifest"
+
+# Apaga o segredo antes mesmo de publicar o bundle. O trap repete a remocao em
+# qualquer saida e cobre sinais; nenhum comando acima imprimiu chave ou caminho.
+rm -rf -- "$key_dir"
+
+[ ! -e "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || {
+    echo 'erro: saida apareceu durante a geracao' >&2; exit 1;
+}
+mv "$stage" "$OUTPUT"
+published=yes
+
+echo "bundle publico: $OUTPUT"
+echo "CERTIFICATE_SHA256=$(sha256sum "$OUTPUT/certificate.pem" | awk '{print $1}')"
+echo "MANIFEST_SHA256=$(sha256sum "$OUTPUT/manifest" | awk '{print $1}')"
+echo "MODULES=$(wc -l < "$OUTPUT/manifest" | tr -d ' ')"

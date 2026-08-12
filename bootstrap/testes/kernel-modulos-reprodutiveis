@@ -1,0 +1,178 @@
+#!/bin/sh
+# Regressao focal do bundle publico de CMS usado por newspeak/linux.
+set -eu
+
+LC_ALL=C
+export LC_ALL
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+GENERATOR=$REPO/bootstrap/kernel-module-signing-bundle
+APPLY=$REPO/newspeak/linux/files/module-signing/apply-signatures
+TMP=$(mktemp -d /tmp/distropica-teste-module-signing.XXXXXXXX)
+trap 'rm -rf -- "$TMP"' EXIT HUP INT TERM
+mkdir -p "$TMP/bin" "$TMP/original/kernel/sub"
+
+command -v openssl >/dev/null 2>&1 || {
+    echo 'FALHOU: openssl ausente' >&2; exit 1;
+}
+
+# sign-file minimo para a fixture: CMS detached real no modo -d e o mesmo
+# trailer do kernel no modo -s. A receita final usa scripts/sign-file 7.1.8;
+# esta regressao testa o protocolo sem compilar um kernel inteiro.
+cat > "$TMP/bin/sign-file" <<'PERL'
+#!/usr/bin/perl
+use strict;
+use warnings;
+
+if (@ARGV == 5 && $ARGV[0] eq '-d') {
+    my (undef, $hash, $key, $cert, $module) = @ARGV;
+    $hash eq 'sha512' or die "hash\n";
+    system('openssl', 'cms', '-sign', '-binary', '-in', $module,
+           '-signer', $cert, '-inkey', $key, '-md', $hash,
+           '-outform', 'DER', '-out', "$module.p7s",
+           '-nosmimecap', '-nocerts', '-noattr') == 0 or die "cms\n";
+    exit 0;
+}
+if (@ARGV == 5 && $ARGV[0] eq '-s') {
+    my (undef, $sig_path, $hash, $cert, $module) = @ARGV;
+    $hash eq 'sha512' or die "hash\n";
+    open my $mod, '<:raw', $module or die "module\n";
+    local $/;
+    my $body = <$mod>;
+    close $mod;
+    open my $sig_file, '<:raw', $sig_path or die "sig\n";
+    my $sig = <$sig_file>;
+    close $sig_file;
+    my $tmp = "$module.~signed~";
+    open my $out, '>:raw', $tmp or die "out\n";
+    print {$out} $body, $sig, pack('CCCCCxxxN', 0, 0, 2, 0, 0, length($sig)),
+        "~Module signature appended~\n";
+    close $out or die "close\n";
+    rename $tmp, $module or die "rename\n";
+    exit 0;
+}
+die "uso\n";
+PERL
+
+cat > "$TMP/bin/extract-module-sig.pl" <<'PERL'
+#!/usr/bin/perl
+use strict;
+use warnings;
+@ARGV == 2 or die "uso\n";
+my ($part, $module) = @ARGV;
+open my $in, '<:raw', $module or die "module\n";
+local $/;
+my $all = <$in>;
+close $in;
+my $marker = "~Module signature appended~\n";
+length($all) >= length($marker) + 12 or die "curto\n";
+substr($all, -length($marker)) eq $marker or die "marcador\n";
+my $descriptor_at = length($all) - length($marker) - 12;
+my @descriptor = unpack('CCCCCxxxN', substr($all, $descriptor_at, 12));
+my $sig_len = $descriptor[5];
+my $sig_at = $descriptor_at - $sig_len;
+$sig_at >= 0 or die "tamanho\n";
+binmode STDOUT;
+if ($part eq '-0') { print substr($all, 0, $sig_at); exit 0; }
+if ($part eq '-s') { print substr($all, $sig_at, $sig_len); exit 0; }
+if ($part eq '-d') { print join(' ', @descriptor), "\n"; exit 0; }
+die "parte\n";
+PERL
+chmod 0755 "$TMP/bin/sign-file" "$TMP/bin/extract-module-sig.pl"
+
+printf 'modulo-a deterministico\n' > "$TMP/original/kernel/a.ko"
+printf 'modulo-b deterministico\n' > "$TMP/original/kernel/sub/b.ko"
+chmod 0644 "$TMP/original/kernel/a.ko" "$TMP/original/kernel/sub/b.ko"
+
+find /tmp -maxdepth 1 -type d -name 'distropica-module-key.*' -print | sort \
+    > "$TMP/keys.before"
+"$GENERATOR" --modules "$TMP/original" --sign-file "$TMP/bin/sign-file" \
+    --extract-sig "$TMP/bin/extract-module-sig.pl" --output "$TMP/bundle" \
+    > "$TMP/generator.log" 2>&1
+find /tmp -maxdepth 1 -type d -name 'distropica-module-key.*' -print | sort \
+    > "$TMP/keys.after"
+cmp "$TMP/keys.before" "$TMP/keys.after" || {
+    echo 'FALHOU: gerador deixou diretorio da chave efemera' >&2; exit 1;
+}
+if grep -a -E -q 'distropica-module-key|BEGIN ([A-Z0-9 ]+ )?PRIVATE KEY|private[.]pem' \
+    "$TMP/generator.log"; then
+    echo 'FALHOU: log do gerador revelou material/caminho privado' >&2; exit 1
+fi
+if grep -a -R -E -q 'BEGIN ([A-Z0-9 ]+ )?PRIVATE KEY' "$TMP/bundle"; then
+    echo 'FALHOU: segredo entrou no bundle publico' >&2; exit 1
+fi
+[ "$(find "$TMP/bundle/signatures" -type f | wc -l | tr -d ' ')" -eq 2 ] || {
+    echo 'FALHOU: bundle nao cobriu os dois modulos' >&2; exit 1;
+}
+
+cert_hash=$(sha256sum "$TMP/bundle/certificate.pem" | awk '{print $1}')
+manifest_hash=$(sha256sum "$TMP/bundle/manifest" | awk '{print $1}')
+
+fresh_modules() {
+    destination=$1
+    mkdir -p "$destination"
+    cp -R "$TMP/original/." "$destination/"
+}
+
+apply_bundle() {
+    modules=$1
+    bundle=$2
+    "$APPLY" "$modules" "$bundle" "$cert_hash" "$manifest_hash" \
+        "$TMP/bin/sign-file" "$TMP/bin/extract-module-sig.pl"
+}
+
+expect_fail() { # trecho log comando...
+    needle=$1
+    log=$2
+    shift 2
+    if "$@" > "$log" 2>&1; then
+        echo "FALHOU: negativo foi aceito: $needle" >&2
+        exit 1
+    fi
+    grep -F -q "$needle" "$log" || {
+        echo "FALHOU: negativo sem diagnostico: $needle" >&2
+        sed -n '1,20p' "$log" >&2
+        exit 1
+    }
+}
+
+# A aplicacao funciona depois que a chave temporaria ja deixou de existir.
+fresh_modules "$TMP/success"
+apply_bundle "$TMP/success" "$TMP/bundle" > "$TMP/success.log"
+grep -q '2 CMS validados e reaplicados sem chave privada' "$TMP/success.log"
+for path in kernel/a.ko kernel/sub/b.ko; do
+    perl "$TMP/bin/extract-module-sig.pl" -0 "$TMP/success/$path" \
+        > "$TMP/extracted"
+    cmp "$TMP/original/$path" "$TMP/extracted"
+done
+
+# Ausencia de um p7s: cobertura do bundle falha antes de tocar nos modulos.
+cp -R "$TMP/bundle" "$TMP/bundle-missing"
+rm -f "$TMP/bundle-missing/signatures/kernel/a.ko.p7s"
+fresh_modules "$TMP/missing"
+expect_fail 'bundle tem assinatura ausente ou arquivo extra' "$TMP/missing.log" \
+    apply_bundle "$TMP/missing" "$TMP/bundle-missing"
+
+# Hash unsigned divergente: CMS valido para outros bytes nao pode ser anexado.
+fresh_modules "$TMP/bad-hash"
+printf 'adulterado\n' >> "$TMP/bad-hash/kernel/a.ko"
+expect_fail 'hash unsigned diverge: kernel/a.ko' "$TMP/bad-hash.log" \
+    apply_bundle "$TMP/bad-hash" "$TMP/bundle"
+
+# Um CMS extra, ainda que seja copia de um valido, tambem torna o conjunto
+# incoerente. Nao existe assinatura orfa tolerada no bundle.
+cp -R "$TMP/bundle" "$TMP/bundle-extra"
+cp "$TMP/bundle-extra/signatures/kernel/a.ko.p7s" \
+    "$TMP/bundle-extra/signatures/kernel/extra.ko.p7s"
+fresh_modules "$TMP/extra"
+expect_fail 'bundle tem assinatura ausente ou arquivo extra' "$TMP/extra.log" \
+    apply_bundle "$TMP/extra" "$TMP/bundle-extra"
+
+# Pino externo do manifesto: editar hash/path nao vira autoridade nova.
+fresh_modules "$TMP/bad-pin"
+expect_fail 'hash do manifesto de assinaturas diverge' "$TMP/bad-pin.log" \
+    "$APPLY" "$TMP/bad-pin" "$TMP/bundle" "$cert_hash" \
+    0000000000000000000000000000000000000000000000000000000000000000 \
+    "$TMP/bin/sign-file" "$TMP/bin/extract-module-sig.pl"
+
+echo 'kernel/modulos: CMS publico, cobertura e ausencia de segredo passam'
