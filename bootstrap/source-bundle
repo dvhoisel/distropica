@@ -1,7 +1,6 @@
 #!/bin/sh
-# Monta o BUNDLE DE FONTES CORRESPONDENTE de uma mídia, associado pelo hash do
-# artefato — o que a SPEC-0011 §8 exige antes de publicar ISO, EFI, cache ou
-# canal.
+# Monta o BUNDLE DE FONTES CORRESPONDENTE de um artefato, associado pelo hash
+# dele — o que a SPEC-0011 §8 exige antes de publicar ISO, EFI, cache ou canal.
 #
 # Existe porque §8 não é uma recomendação de organização: é a condição que
 # transforma "publiquei um binário" em "publiquei um binário que alguém pode
@@ -13,7 +12,7 @@
 # continua morto. O bundle é o que sobrevive a isso.
 #
 # O que ele contém, item por item do §8:
-#   ARTEFATO      o hash da mídia a que este bundle corresponde, e só dela
+#   ARTEFATO      o hash do artefato a que este bundle corresponde, e só dele
 #   INVENTARIO    legível por máquina: pacote, versão, mundo, licença, hash,
 #                 URL de origem e o arquivo dentro do bundle
 #   distropica-*  a revisão EXATA da árvore, com receitas, configurações,
@@ -23,6 +22,8 @@
 #   upstream/     cada fonte upstream, sob o próprio sha256
 #   kernel/       a fonte e a CONFIGURAÇÃO do Linux, que o §8 nomeia
 #                 expressamente, incluindo a do kernel vivo do EFI
+#   insumo-live   fonte fora de Newspeak que o compositor compila diretamente;
+#                 hoje o util-linux pinado de cfdisk/sfdisk
 #
 # NÃO tenta resolver LICENSE=NOASSERTION. Um bundle completo com licenças por
 # declarar continua bloqueando publicação OFICIAL (§8, último parágrafo); o
@@ -35,58 +36,720 @@ export LC_ALL
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 MEDIA=
+ARTIFACT=
 OUTPUT=
 CACHE=
 MINITRUE_ROOT=
+MINITRUE_BIN=
+PROFILE=$REPO/profiles/official
 LIVE_CONFIG=
+LIVE_UTIL_LINUX_TAR=
+STRICT=no
 
 usage() {
     cat <<'EOF'
-uso: bootstrap/source-bundle --media ARQ --output NOVO-DIR --cache DIR \
-       --minitrue-root ROOTFS [--live-kernel-config ARQ]
+uso: bootstrap/source-bundle (--artifact ARQ | --media ARQ) \
+       --output NOVO-DIR --cache DIR --minitrue-root ROOTFS \
+       --minitrue-bin ARQ [--profile DIR] [--live-kernel-config ARQ] \
+       [--live-util-linux-tar ARQ] [--strict]
 
-  --media ARQ         a mídia (ISO/IMG) a que o bundle corresponde
+  --artifact ARQ      artefato genérico a que o bundle corresponde. Para um
+                      canal, use diretamente DIR/index da saída de
+                      `channel emit --release`: o emit.meta v4 irmão prova a
+                      raiz local e prende esses bytes por INDEX_SHA256; suas
+                      linhas decidem os pacotes e prendem os objetos de pool/.
+                      Assine antes de publicar.
+  --media ARQ         forma legada para ISO/IMG; conserva MEDIA/MEDIA_SHA256
+                      no manifesto, além dos campos genéricos ARTIFACT=...
   --output NOVO-DIR   diretório a criar; não é sobrescrito
   --cache DIR         o mesmo cache offline com que a mídia foi composta;
-                      dele sai a LISTA DE PACOTES, e não da memória de quem
-                      digita o comando
+                      para mídia/cache, os índices, seu fechamento DEPS e
+                      cache.world decidem a lista. Para canal, o próprio
+                      --artifact index decide sozinho o inventário
   --minitrue-root DIR rootfs Distrópica com os registros e o cache de fontes
+  --minitrue-bin ARQ  executor produtor exato usado para recalcular os
+                      fingerprints; nunca cai implicitamente no binário do rootfs
+  --profile DIR       perfil que compôs a mídia; default profiles/official.
+                      Runtime nasce de índice + target.world, e disponibilidade
+                      adicional somente do cache.world deste mesmo perfil
   --live-kernel-config ARQ
                       .config do kernel vivo (o do BOOTX64.EFI). Sem ele o
                       bundle sai sem a configuração do kernel que de fato
                       boota, e o script AVISA — o §8 pede a configuração
                       usada, não uma qualquer.
+  --live-util-linux-tar ARQ
+                      fonte do util-linux compilado pelo build-efi para gerar
+                      cfdisk/sfdisk. VERSION, URL e SHA-256 são lidos dos pinos
+                      do próprio bootstrap/live/build-efi
+  --strict            gate de release: falha se fonte faltar/divergir do hash,
+                      houver LICENSE=NOASSERTION ou faltar insumo vivo exigido
 EOF
 }
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        --artifact) ARTIFACT=${2:?}; shift 2 ;;
         --media) MEDIA=${2:?}; shift 2 ;;
         --output) OUTPUT=${2:?}; shift 2 ;;
         --cache) CACHE=${2:?}; shift 2 ;;
         --minitrue-root) MINITRUE_ROOT=${2:?}; shift 2 ;;
+        --minitrue-bin)
+            [ -z "$MINITRUE_BIN" ] || {
+                echo "erro: --minitrue-bin foi informado mais de uma vez" >&2
+                exit 1
+            }
+            MINITRUE_BIN=${2:?}
+            shift 2
+            ;;
+        --profile) PROFILE=${2:?}; shift 2 ;;
         --live-kernel-config) LIVE_CONFIG=${2:?}; shift 2 ;;
+        --live-util-linux-tar) LIVE_UTIL_LINUX_TAR=${2:?}; shift 2 ;;
+        --strict) STRICT=yes; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "erro: opção desconhecida: $1" >&2; usage >&2; exit 1 ;;
     esac
 done
 
-for required in MEDIA OUTPUT CACHE MINITRUE_ROOT; do
+for required in OUTPUT CACHE MINITRUE_ROOT MINITRUE_BIN; do
     eval "value=\$$required"
     [ -n "$value" ] || {
         echo "erro: --$(echo "$required" | tr 'A-Z_' 'a-z-') é obrigatório" >&2
         exit 1
     }
 done
-[ -f "$MEDIA" ] || { echo "erro: mídia não existe: $MEDIA" >&2; exit 1; }
+if [ -n "$MEDIA" ] && [ -n "$ARTIFACT" ]; then
+    echo "erro: --artifact e --media são mutuamente exclusivos" >&2
+    exit 1
+fi
+if [ -z "$MEDIA" ] && [ -z "$ARTIFACT" ]; then
+    echo "erro: --artifact ou --media é obrigatório" >&2
+    exit 1
+fi
+LEGACY_MEDIA=no
+if [ -n "$MEDIA" ]; then
+    ARTIFACT=$MEDIA
+    LEGACY_MEDIA=yes
+fi
+
+# A revisão é arquivada a partir de REPO mais abaixo, portanto o script muda
+# de diretório. Preserve antes disso o significado de todo caminho recebido:
+# validar um relativo no cwd do operador e depois reutilizá-lo sob REPO tanto
+# pode falhar quanto apontar para outro arquivo homônimo.
+CALLER_DIR=$(pwd -P)
+absolutiza_argumento() { # CAMINHO
+    case "$1" in
+        /*) printf '%s\n' "$1" ;;
+        *) printf '%s/%s\n' "$CALLER_DIR" "$1" ;;
+    esac
+}
+ARTIFACT=$(absolutiza_argumento "$ARTIFACT")
+OUTPUT=$(absolutiza_argumento "$OUTPUT")
+CACHE=$(absolutiza_argumento "$CACHE")
+MINITRUE_ROOT=$(absolutiza_argumento "$MINITRUE_ROOT")
+MINITRUE_BIN=$(absolutiza_argumento "$MINITRUE_BIN")
+PROFILE=$(absolutiza_argumento "$PROFILE")
+if [ -n "$LIVE_CONFIG" ]; then
+    LIVE_CONFIG=$(absolutiza_argumento "$LIVE_CONFIG")
+fi
+if [ -n "$LIVE_UTIL_LINUX_TAR" ]; then
+    LIVE_UTIL_LINUX_TAR=$(absolutiza_argumento "$LIVE_UTIL_LINUX_TAR")
+fi
+if [ "$LEGACY_MEDIA" = yes ]; then
+    MEDIA=$ARTIFACT
+fi
+[ -f "$ARTIFACT" ] && [ ! -L "$ARTIFACT" ] || {
+    echo "erro: artefato precisa ser arquivo regular, não symlink: $ARTIFACT" >&2
+    exit 1
+}
+ARTIFACT_DIR=$(CDPATH= cd -- "$(dirname "$ARTIFACT")" && pwd -P)
+ARTIFACT=$ARTIFACT_DIR/$(basename "$ARTIFACT")
+[ -f "$ARTIFACT" ] && [ ! -L "$ARTIFACT" ] || {
+    echo "erro: artefato deixou de ser arquivo regular ao canonicalizar" >&2
+    exit 1
+}
+if [ "$LEGACY_MEDIA" = yes ]; then
+    MEDIA=$ARTIFACT
+fi
+artefato_regular() {
+    [ -f "$ARTIFACT" ] && [ ! -L "$ARTIFACT" ]
+}
+
+# O executor que produziu o canal é insumo explícito. Rejeite o componente
+# final por symlink antes de tornar o diretório pai físico: canonicalizar um
+# link primeiro apagaria justamente a distinção que precisamos auditar.
+[ -f "$MINITRUE_BIN" ] && [ ! -L "$MINITRUE_BIN" ] && [ -x "$MINITRUE_BIN" ] || {
+    echo "erro: --minitrue-bin precisa ser executável regular, não symlink: $MINITRUE_BIN" >&2
+    exit 1
+}
+MINITRUE_BIN_DIR=$(CDPATH= cd -- "$(dirname "$MINITRUE_BIN")" && pwd -P)
+MINITRUE_BIN=$MINITRUE_BIN_DIR/$(basename "$MINITRUE_BIN")
+[ -f "$MINITRUE_BIN" ] && [ ! -L "$MINITRUE_BIN" ] && [ -x "$MINITRUE_BIN" ] || {
+    echo "erro: --minitrue-bin deixou de ser executável regular ao canonicalizar" >&2
+    exit 1
+}
+MINITRUE_SHA256=$(sha256sum "$MINITRUE_BIN" 2>/dev/null | cut -d' ' -f1)
+case "$MINITRUE_SHA256" in
+    *[!0-9a-f]*|'') echo "erro: não consegui calcular SHA-256 de --minitrue-bin" >&2; exit 1 ;;
+esac
+[ "${#MINITRUE_SHA256}" -eq 64 ] || {
+    echo "erro: SHA-256 não canônico para --minitrue-bin" >&2
+    exit 1
+}
+revalida_minitrue_bin() {
+    [ -f "$MINITRUE_BIN" ] && [ ! -L "$MINITRUE_BIN" ] &&
+        [ -x "$MINITRUE_BIN" ] || {
+        echo "erro: --minitrue-bin deixou de ser executável regular" >&2
+        return 1
+    }
+    minitrue_sha_atual=$(sha256sum "$MINITRUE_BIN" 2>/dev/null | cut -d' ' -f1)
+    [ -f "$MINITRUE_BIN" ] && [ ! -L "$MINITRUE_BIN" ] &&
+        [ "$minitrue_sha_atual" = "$MINITRUE_SHA256" ] || {
+        echo "erro: --minitrue-bin mudou durante a produção do bundle" >&2
+        return 1
+    }
+}
+revalida_minitrue_bin || exit 1
+
+[ -d "$PROFILE" ] && [ ! -L "$PROFILE" ] || {
+    echo "erro: --profile precisa ser diretório regular, não symlink: $PROFILE" >&2
+    exit 1
+}
+TARGET_WORLD=$PROFILE/target.world
+CACHE_WORLD=$PROFILE/cache.world
+for world in "$TARGET_WORLD" "$CACHE_WORLD"; do
+    [ -f "$world" ] && [ ! -L "$world" ] || {
+        echo "erro: $(basename "$world") não é arquivo regular: $world" >&2
+        exit 1
+    }
+done
+
+le_world() { # ARQUIVO PODE-SER-VAZIO
+    awk -v vazio_ok="$2" '
+        {
+            sub(/#.*/, "")
+            sub(/^[[:space:]]+/, "")
+            sub(/[[:space:]]+$/, "")
+            if ($0 == "") next
+            if (NF != 1 || length($1) > 128 || $1 ~ /\.\./ ||
+                $1 !~ /^[a-z0-9][a-z0-9+_.-]*$/ || visto[$1]++) exit 1
+            print $1
+            quantidade++
+        }
+        END { if (vazio_ok != "sim" && quantidade == 0) exit 1 }
+    ' "$1"
+}
+if ! TARGET_WORLD_PACKAGES=$(le_world "$TARGET_WORLD" nao); then
+    echo "erro: target.world vazio, duplicado ou com nome não canônico: $TARGET_WORLD" >&2
+    exit 1
+fi
+if ! CACHE_WORLD_PACKAGES=$(le_world "$CACHE_WORLD" sim); then
+    echo "erro: cache.world duplicado ou com nome não canônico: $CACHE_WORLD" >&2
+    exit 1
+fi
+
+PROFILE_META=$PROFILE/profile
+[ -f "$PROFILE_META" ] && [ ! -L "$PROFILE_META" ] || {
+    echo "erro: profile não é arquivo regular: $PROFILE_META" >&2
+    exit 1
+}
+[ "$(wc -c < "$PROFILE_META")" -le 1048576 ] || {
+    echo "erro: profile excede 1048576 bytes" >&2
+    exit 1
+}
+# Mesma gramática fechada de minipax::profile::parse_config. Este script não
+# pode promover um cache sob um "perfil release" que o próprio compositor
+# recusaria: isso desligaria os pinos de conteúdo/EFI por usar um parser mais
+# permissivo justamente no gate legal da mídia.
+if ! awk '
+    BEGIN {
+        permitidos["PROFILE_FORMAT"] = 1
+        permitidos["NAME"] = 1
+        permitidos["ARCH"] = 1
+        permitidos["SOURCE_DATE_EPOCH"] = 1
+        permitidos["MEDIA_SIZE_MIB"] = 1
+        permitidos["INSTALL_READY"] = 1
+        permitidos["STATUS"] = 1
+        permitidos["OFFICIAL_CONTENT_SHA256"] = 1
+        permitidos["OFFICIAL_BOOT_EFI_SHA256"] = 1
+        permitidos["OFFICIAL_MINITRUE_SHA256"] = 1
+    }
+    {
+        bruto = $0
+        linha = bruto
+        sub(/^[[:space:]]+/, "", linha)
+        sub(/[[:space:]]+$/, "", linha)
+        if (linha == "" || substr(linha, 1, 1) == "#") next
+        if (bruto != linha) exit 1
+        igual = index(linha, "=")
+        if (igual <= 1) exit 1
+        chave = substr(linha, 1, igual - 1)
+        valor = substr(linha, igual + 1)
+        if (!(chave in permitidos) || valor == "" ||
+            chave ~ /[[:space:]]/ || valor ~ /^[[:space:]]/ ||
+            valor ~ /[[:space:]]$/ || vistos[chave]++) exit 1
+        valores[chave] = valor
+    }
+    END {
+        obrigatorios[1] = "PROFILE_FORMAT"
+        obrigatorios[2] = "NAME"
+        obrigatorios[3] = "ARCH"
+        obrigatorios[4] = "SOURCE_DATE_EPOCH"
+        obrigatorios[5] = "STATUS"
+        for (i = 1; i <= 5; i++)
+            if (!(obrigatorios[i] in valores)) exit 1
+        if (valores["PROFILE_FORMAT"] != "1") exit 1
+    }
+' "$PROFILE_META"; then
+    echo "erro: profile não segue o schema canônico PROFILE_FORMAT=1" >&2
+    exit 1
+fi
+campo_perfil_unico() { # CHAVE
+    perfil_chave=$1
+    perfil_quantidade=$(grep -c "^${perfil_chave}=" "$PROFILE_META" || true)
+    [ "$perfil_quantidade" -eq 1 ] || return 1
+    sed -n "s/^${perfil_chave}=//p" "$PROFILE_META"
+}
+PROFILE_FORMAT=$(campo_perfil_unico PROFILE_FORMAT) || exit 1
+PROFILE_NAME=$(campo_perfil_unico NAME) || exit 1
+PROFILE_ARCH=$(campo_perfil_unico ARCH) || exit 1
+PROFILE_EPOCH=$(campo_perfil_unico SOURCE_DATE_EPOCH) || exit 1
+case "$PROFILE_NAME" in
+    ''|[!A-Za-z0-9]*|*[!A-Za-z0-9._-]*)
+        echo "erro: NAME inválido no profile: $PROFILE_NAME" >&2; exit 1 ;;
+esac
+[ "${#PROFILE_NAME}" -le 128 ] || {
+    echo "erro: NAME excede 128 bytes no profile" >&2; exit 1;
+}
+[ "$PROFILE_ARCH" = x86_64 ] || {
+    echo "erro: ARCH não suportada no profile: $PROFILE_ARCH" >&2; exit 1;
+}
+case "$PROFILE_EPOCH" in
+    ''|*[!0-9]*) echo "erro: SOURCE_DATE_EPOCH não é inteiro" >&2; exit 1 ;;
+esac
+if [ "${#PROFILE_EPOCH}" -gt 20 ] ||
+   { [ "${#PROFILE_EPOCH}" -eq 20 ] &&
+     [ "$PROFILE_EPOCH" \> 18446744073709551615 ]; }; then
+    echo "erro: SOURCE_DATE_EPOCH excede u64" >&2
+    exit 1
+fi
+PROFILE_MEDIA_SIZE=$(campo_perfil_unico MEDIA_SIZE_MIB 2>/dev/null || printf '128\n')
+case "$PROFILE_MEDIA_SIZE" in
+    ''|*[!0-9]*) echo "erro: MEDIA_SIZE_MIB não é inteiro" >&2; exit 1 ;;
+esac
+[ "${#PROFILE_MEDIA_SIZE}" -le 5 ] &&
+    [ "$PROFILE_MEDIA_SIZE" -ge 64 ] && [ "$PROFILE_MEDIA_SIZE" -le 65536 ] || {
+    echo "erro: MEDIA_SIZE_MIB precisa ficar entre 64 e 65536" >&2
+    exit 1
+}
+PROFILE_INSTALL_READY=$(campo_perfil_unico INSTALL_READY 2>/dev/null || printf 'yes\n')
+case "$PROFILE_INSTALL_READY" in
+    yes|no) ;;
+    *) echo "erro: INSTALL_READY inválido no profile" >&2; exit 1 ;;
+esac
+if ! PROFILE_STATUS=$(campo_perfil_unico STATUS); then
+    echo "erro: profile precisa ter exatamente um STATUS" >&2
+    exit 1
+fi
+case "$PROFILE_STATUS" in
+    development|release) ;;
+    *) echo "erro: STATUS não canônico no profile: $PROFILE_STATUS" >&2; exit 1 ;;
+esac
+for profile_hash_field in OFFICIAL_CONTENT_SHA256 OFFICIAL_BOOT_EFI_SHA256 \
+                          OFFICIAL_MINITRUE_SHA256; do
+    profile_hash=$(campo_perfil_unico "$profile_hash_field" 2>/dev/null || true)
+    [ -z "$profile_hash" ] || {
+        case "$profile_hash" in
+            *[!0-9a-f]*)
+                echo "erro: $profile_hash_field precisa ser 64 hex minúsculos" >&2
+                exit 1
+                ;;
+        esac
+        [ "${#profile_hash}" -eq 64 ] || {
+            echo "erro: $profile_hash_field precisa ser 64 hex minúsculos" >&2
+            exit 1
+        }
+    }
+done
+if [ "$PROFILE_STATUS" = release ]; then
+    OFFICIAL_CONTENT_SHA256=$(campo_perfil_unico OFFICIAL_CONTENT_SHA256 2>/dev/null || true)
+    OFFICIAL_BOOT_EFI_SHA256=$(campo_perfil_unico OFFICIAL_BOOT_EFI_SHA256 2>/dev/null || true)
+    OFFICIAL_MINITRUE_SHA256=$(campo_perfil_unico OFFICIAL_MINITRUE_SHA256 2>/dev/null || true)
+    [ -n "$OFFICIAL_CONTENT_SHA256" ] && [ -n "$OFFICIAL_BOOT_EFI_SHA256" ] &&
+        [ -n "$OFFICIAL_MINITRUE_SHA256" ] || {
+        echo "erro: STATUS=release exige os três pinos OFFICIAL_*_SHA256" >&2
+        exit 1
+    }
+    [ "$PROFILE_INSTALL_READY" = yes ] || {
+        echo "erro: STATUS=release exige INSTALL_READY=yes" >&2
+        exit 1
+    }
+    if [ "${#OFFICIAL_MINITRUE_SHA256}" -ne 64 ] ||
+       [ "$OFFICIAL_MINITRUE_SHA256" != "$MINITRUE_SHA256" ]; then
+        if [ "$STRICT" = yes ]; then
+            echo "erro: --strict STATUS=release exige --minitrue-bin preso por OFFICIAL_MINITRUE_SHA256" >&2
+            echo "  executor: $MINITRUE_SHA256" >&2
+            echo "  profile:  $OFFICIAL_MINITRUE_SHA256" >&2
+            exit 1
+        fi
+        echo "aviso: --minitrue-bin diverge de OFFICIAL_MINITRUE_SHA256 do profile release" >&2
+    fi
+fi
+
+# Pinos do único util-linux que entra na mídia viva. Eles são lidos como dados,
+# nunca por `.`/eval: build-efi é um programa e executá-lo aqui começaria uma
+# composição em vez de auditar seus insumos.
+BUILD_EFI=$REPO/bootstrap/live/build-efi
+pin_build_efi() { # NOME
+    awk -v nome="$1" '
+        index($0, nome "=") == 1 {
+            quantidade++
+            valor = substr($0, length(nome) + 2)
+        }
+        END {
+            if (quantidade != 1 || valor == "") exit 1
+            print valor
+        }
+    ' "$BUILD_EFI"
+}
+
+UTIL_LINUX_VERSION_PIN=
+UTIL_LINUX_URL_PIN=
+UTIL_LINUX_SHA256_PIN=
+carrega_pinos_util_linux() {
+    [ -f "$BUILD_EFI" ] || return 1
+    UTIL_LINUX_VERSION_PIN=$(pin_build_efi UTIL_LINUX_VERSION) || return 1
+    util_linux_url_raw=$(pin_build_efi UTIL_LINUX_URL) || return 1
+    UTIL_LINUX_SHA256_PIN=$(pin_build_efi UTIL_LINUX_SHA256) || return 1
+    case "$UTIL_LINUX_VERSION_PIN" in
+        *[!A-Za-z0-9._+-]*|'') return 1 ;;
+    esac
+    case "$UTIL_LINUX_SHA256_PIN" in
+        *[!0-9a-f]*|'') return 1 ;;
+    esac
+    [ "${#UTIL_LINUX_SHA256_PIN}" -eq 64 ] || return 1
+    UTIL_LINUX_URL_PIN=$(printf '%s\n' "$util_linux_url_raw" |
+        sed "s/\${UTIL_LINUX_VERSION}/$UTIL_LINUX_VERSION_PIN/g")
+    case "$UTIL_LINUX_URL_PIN" in
+        https://*) ;;
+        *) return 1 ;;
+    esac
+    case "$UTIL_LINUX_URL_PIN" in
+        *'$'*|*' '*|*"	"*) return 1 ;;
+    esac
+}
+
+LIVE_CONTEXT=no
+if [ "$LEGACY_MEDIA" = yes ] || [ -n "$LIVE_CONFIG" ]; then
+    LIVE_CONTEXT=yes
+fi
+LIVE_CONFIG_SHA256=
+if [ -n "$LIVE_CONFIG" ] &&
+   { [ -e "$LIVE_CONFIG" ] || [ -L "$LIVE_CONFIG" ]; }; then
+    [ -f "$LIVE_CONFIG" ] && [ ! -L "$LIVE_CONFIG" ] || {
+        echo "erro: --live-kernel-config precisa ser arquivo regular, não symlink" >&2
+        exit 1
+    }
+    live_config_dir=$(CDPATH= cd -- "$(dirname "$LIVE_CONFIG")" && pwd -P)
+    LIVE_CONFIG=$live_config_dir/$(basename "$LIVE_CONFIG")
+    [ -f "$LIVE_CONFIG" ] && [ ! -L "$LIVE_CONFIG" ] || {
+        echo "erro: --live-kernel-config mudou ao canonicalizar" >&2
+        exit 1
+    }
+    LIVE_CONFIG_SHA256=$(sha256sum "$LIVE_CONFIG" | cut -d' ' -f1)
+    [ -f "$LIVE_CONFIG" ] && [ ! -L "$LIVE_CONFIG" ] || {
+        echo "erro: --live-kernel-config mudou durante o hash" >&2
+        exit 1
+    }
+fi
+LIVE_UTIL_SHA256=
+if [ -n "$LIVE_UTIL_LINUX_TAR" ] &&
+   { [ -e "$LIVE_UTIL_LINUX_TAR" ] || [ -L "$LIVE_UTIL_LINUX_TAR" ]; }; then
+    [ -f "$LIVE_UTIL_LINUX_TAR" ] && [ ! -L "$LIVE_UTIL_LINUX_TAR" ] || {
+        echo "erro: --live-util-linux-tar precisa ser arquivo regular, não symlink" >&2
+        exit 1
+    }
+    live_util_dir=$(CDPATH= cd -- "$(dirname "$LIVE_UTIL_LINUX_TAR")" && pwd -P)
+    LIVE_UTIL_LINUX_TAR=$live_util_dir/$(basename "$LIVE_UTIL_LINUX_TAR")
+    [ -f "$LIVE_UTIL_LINUX_TAR" ] && [ ! -L "$LIVE_UTIL_LINUX_TAR" ] || {
+        echo "erro: --live-util-linux-tar mudou ao canonicalizar" >&2
+        exit 1
+    }
+fi
+if [ "$STRICT" = yes ] && [ "$LIVE_CONTEXT" = yes ] &&
+   { [ -z "$LIVE_CONFIG" ] || [ ! -f "$LIVE_CONFIG" ] ||
+     [ -L "$LIVE_CONFIG" ]; }; then
+    echo "erro: --strict para artefato vivo exige --live-kernel-config válido" >&2
+    exit 1
+fi
+if [ "$STRICT" = yes ] && [ "$LIVE_CONTEXT" = yes ] &&
+   [ -z "$LIVE_UTIL_LINUX_TAR" ]; then
+    echo "erro: --strict para artefato vivo exige --live-util-linux-tar válido" >&2
+    exit 1
+fi
+
+LIVE_UTIL_STATUS=nao-aplicavel
+if [ "$LIVE_CONTEXT" = yes ] || [ -n "$LIVE_UTIL_LINUX_TAR" ]; then
+    if ! carrega_pinos_util_linux; then
+        if [ "$STRICT" = yes ]; then
+            echo "erro: pinos UTIL_LINUX_{VERSION,URL,SHA256} inválidos em $BUILD_EFI" >&2
+            exit 1
+        fi
+        echo "aviso: não li pinos válidos de util-linux em $BUILD_EFI" >&2
+        LIVE_UTIL_STATUS=pinos-invalidos
+    elif [ -z "$LIVE_UTIL_LINUX_TAR" ] || [ ! -f "$LIVE_UTIL_LINUX_TAR" ] ||
+         [ -L "$LIVE_UTIL_LINUX_TAR" ]; then
+        if [ "$STRICT" = yes ]; then
+            echo "erro: --live-util-linux-tar não é arquivo válido: $LIVE_UTIL_LINUX_TAR" >&2
+            exit 1
+        fi
+        echo "aviso: sem --live-util-linux-tar válido; o bundle omite a fonte" >&2
+        echo "       do cfdisk/sfdisk realmente embutido pelo build-efi" >&2
+        LIVE_UTIL_STATUS=ausente
+    else
+        live_util_observado=$(sha256sum "$LIVE_UTIL_LINUX_TAR" | cut -d' ' -f1)
+        [ -f "$LIVE_UTIL_LINUX_TAR" ] && [ ! -L "$LIVE_UTIL_LINUX_TAR" ] || {
+            echo "erro: --live-util-linux-tar mudou durante o hash" >&2
+            exit 1
+        }
+        if [ "$live_util_observado" != "$UTIL_LINUX_SHA256_PIN" ]; then
+            if [ "$STRICT" = yes ]; then
+                echo "erro: util-linux $UTIL_LINUX_VERSION_PIN tem sha256 $live_util_observado" >&2
+                echo "      mas build-efi pina $UTIL_LINUX_SHA256_PIN" >&2
+                exit 1
+            fi
+            echo "aviso: util-linux divergente: $live_util_observado" >&2
+            echo "       build-efi pina:        $UTIL_LINUX_SHA256_PIN" >&2
+            LIVE_UTIL_STATUS=divergente
+        else
+            LIVE_UTIL_SHA256=$live_util_observado
+            LIVE_UTIL_STATUS=valido
+        fi
+    fi
+fi
 [ ! -e "$OUTPUT" ] || { echo "erro: saída já existe: $OUTPUT" >&2; exit 1; }
-[ -d "$CACHE/channels" ] || { echo "erro: cache sem channels/: $CACHE" >&2; exit 1; }
-[ -d "$MINITRUE_ROOT/var/lib/minitrue/records" ] || {
+[ -d "$CACHE/channels" ] && [ ! -L "$CACHE/channels" ] || {
+    echo "erro: cache sem channels/ regular: $CACHE" >&2
+    exit 1
+}
+[ -d "$MINITRUE_ROOT/var/lib/minitrue/records" ] &&
+    [ ! -L "$MINITRUE_ROOT/var/lib/minitrue/records" ] || {
     echo "erro: rootfs sem registros: $MINITRUE_ROOT" >&2; exit 1;
 }
 
 REGISTROS=$MINITRUE_ROOT/var/lib/minitrue/records
 FONTES=$MINITRUE_ROOT/var/cache/minitrue
+
+# Campos que decidem a identidade/payload precisam ser literais e únicos. As
+# receitas são shell executável, mas este auditor nunca escolhe "a primeira"
+# atribuição quando o Minitrue poderia ter avaliado outra depois.
+kind_da_receita() { # RECEITA
+    quantidade_kind=$(grep -c '^KIND=' "$1" || true)
+    suspeitas_kind=$(grep -Ec \
+        '^[[:space:]]*(export[[:space:]]+|readonly[[:space:]]+)?KIND(\+)?=' \
+        "$1" || true)
+    [ "$quantidade_kind" -eq 1 ] && [ "$suspeitas_kind" -eq 1 ] || return 1
+    valor_kind=$(sed -n 's/^KIND=//p' "$1")
+    case "$valor_kind" in
+        source|binary|meta) printf '%s\n' "$valor_kind" ;;
+        *) return 1 ;;
+    esac
+}
+
+version_da_receita() { # RECEITA
+    quantidade_version=$(grep -c '^VERSION=' "$1" || true)
+    suspeitas_version=$(grep -Ec \
+        '^[[:space:]]*(export[[:space:]]+|readonly[[:space:]]+)?VERSION(\+)?=' \
+        "$1" || true)
+    [ "$quantidade_version" -eq 1 ] &&
+        [ "$suspeitas_version" -eq 1 ] || return 1
+    valor_version=$(sed -n 's/^VERSION=//p' "$1")
+    case "$valor_version" in
+        \"*\")
+            valor_version=${valor_version#\"}
+            valor_version=${valor_version%\"}
+            ;;
+        *\"*|*\'*|*[[:space:]]*) return 1 ;;
+    esac
+    case "$valor_version" in
+        ''|*..*|[!A-Za-z0-9]*|*[!A-Za-z0-9._+~-]*) return 1 ;;
+    esac
+    [ "${#valor_version}" -le 128 ] || return 1
+    printf '%s\n' "$valor_version"
+}
+
+campo_meta_unico() { # META CHAVE
+    meta_lido=$1
+    chave_meta=$2
+    quantidade_meta=$(grep -c "^${chave_meta}=" "$meta_lido" || true)
+    [ "$quantidade_meta" -eq 1 ] || return 1
+    sed -n "s/^${chave_meta}=//p" "$meta_lido"
+}
+
+# Forma canônica comum aos índices emitidos e às cópias que entram no cache da
+# mídia. A última LF também é parte dos bytes assináveis do formato.
+pacotes_indice_v4() { # INDEX
+    indice_v4=$1
+    ultimo_indice=$(tail -c 1 "$indice_v4" 2>/dev/null |
+        od -An -t x1 | tr -d '[:space:]')
+    [ "$ultimo_indice" = 0a ] || return 1
+    awk '
+        function hex64(valor) {
+            return length(valor) == 64 && valor ~ /^[0-9a-f]+$/
+        }
+        function nome_valido(valor) {
+            return length(valor) <= 128 && valor !~ /\.\./ &&
+                   valor ~ /^[a-z0-9][a-z0-9+_.-]*$/
+        }
+        function versao_valida(valor) {
+            return length(valor) <= 128 && valor !~ /\.\./ &&
+                   valor ~ /^[A-Za-z0-9][A-Za-z0-9._+~-]*$/
+        }
+        NR == 1 {
+            if ($0 != "CHANNEL_INDEX_FORMAT=4") exit 1
+            next
+        }
+        NR == 2 {
+            if ($0 != "RELEASE_ROOT=yes" && $0 != "RELEASE_ROOT=no") exit 1
+            next
+        }
+        {
+            canonica = $1 " " $2 " " $3 " " $4 " " $5 " " $6 " " $7 " " $8
+            esperada = "pool/" $1 "-" $2 "-x86_64.tar.zst"
+            identidade = $1 SUBSEP $2 SUBSEP $3
+            if (NF != 8 || $0 != canonica || !nome_valido($1) ||
+                !versao_valida($2) || $3 != "x86_64" ||
+                !hex64($4) || $5 != esperada || !hex64($6) ||
+                !hex64($7) || !hex64($8) || identidade_vista[identidade]++ ||
+                (anterior != "" && $0 <= anterior)) exit 1
+            anterior = $0
+            print $1
+            quantidade++
+        }
+        END { if (quantidade == 0) exit 1 }
+    ' "$indice_v4"
+}
+
+# Um índice de canal é o próprio artefato vinculante: sua assinatura prende
+# estas linhas, e estas linhas prendem cada objeto de pool/. Portanto a lista
+# correspondente TEM de sair dele. Usar o índice do cache da mídia aqui
+# permitiria associar o hash do canal público completo a um bundle reduzido
+# que, por exemplo, omitisse o GIMP.
+CHANNEL_INDEX_PACKAGES=
+CHANNEL_INDEX_SHA=
+CHANNEL_EMIT_META_SHA=
+if [ "$LEGACY_MEDIA" = no ] && [ "$(basename "$ARTIFACT")" = index ]; then
+    indice_canal_regular() {
+        [ -f "$ARTIFACT" ] && [ ! -L "$ARTIFACT" ]
+    }
+    indice_canal_regular || {
+        echo "erro: --artifact index precisa ser arquivo regular, não symlink" >&2
+        exit 1
+    }
+    if ! CHANNEL_INDEX_SHA_BEFORE=$(sha256sum "$ARTIFACT" | cut -d' ' -f1); then
+        echo "erro: não consegui calcular o sha256 do índice de canal" >&2
+        exit 1
+    fi
+    indice_canal_regular || {
+        echo "erro: índice de canal deixou de ser arquivo regular durante a validação" >&2
+        exit 1
+    }
+    if ! CHANNEL_INDEX_PACKAGES=$(pacotes_indice_v4 "$ARTIFACT"); then
+        echo "erro: --artifact chamado index não é índice v4 canônico" >&2
+        exit 1
+    fi
+    CHANNEL_INDEX_RELEASE_ROOT=$(sed -n 's/^RELEASE_ROOT=//p' "$ARTIFACT")
+    CHANNEL_PRODUCER_PLAN=$(
+        awk 'NR > 2 { print $8 }' "$ARTIFACT" | sort -u
+    )
+    set -f
+    # shellcheck disable=SC2086 # valores já são hashes canônicos do parser.
+    set -- $CHANNEL_PRODUCER_PLAN
+    set +f
+    [ "$#" -eq 1 ] || {
+        echo "erro: emissão não prende um único PLAN_LOCK produtor" >&2
+        exit 1
+    }
+    CHANNEL_PRODUCER_PLAN=$1
+    CHANNEL_PRODUCER_PLAN_PATH=$(dirname "$ARTIFACT")/plans/$CHANNEL_PRODUCER_PLAN.lock
+    if [ ! -f "$CHANNEL_PRODUCER_PLAN_PATH" ] ||
+       [ -L "$CHANNEL_PRODUCER_PLAN_PATH" ] ||
+       [ "$(sha256sum "$CHANNEL_PRODUCER_PLAN_PATH" 2>/dev/null | cut -d' ' -f1)" != "$CHANNEL_PRODUCER_PLAN" ]; then
+        echo "erro: índice prende PLAN_LOCK produtor ausente/divergente" >&2
+        exit 1
+    fi
+    indice_canal_regular || {
+        echo "erro: índice de canal deixou de ser arquivo regular durante a validação" >&2
+        exit 1
+    }
+    if ! CHANNEL_INDEX_SHA=$(sha256sum "$ARTIFACT" | cut -d' ' -f1); then
+        echo "erro: não consegui recalcular o sha256 do índice de canal" >&2
+        exit 1
+    fi
+    indice_canal_regular || {
+        echo "erro: índice de canal deixou de ser arquivo regular durante a validação" >&2
+        exit 1
+    }
+    if [ "$CHANNEL_INDEX_SHA" != "$CHANNEL_INDEX_SHA_BEFORE" ]; then
+        echo "erro: índice de canal mudou durante a validação" >&2
+        exit 1
+    fi
+    EMIT_META=$(dirname "$ARTIFACT")/emit.meta
+    emit_meta_regular() {
+        [ -f "$EMIT_META" ] && [ ! -L "$EMIT_META" ]
+    }
+    revalida_emit_meta() {
+        emit_meta_regular || {
+            echo "erro: emit.meta deixou de ser arquivo regular" >&2
+            return 1
+        }
+        emit_meta_sha_atual=$(sha256sum "$EMIT_META" 2>/dev/null | cut -d' ' -f1)
+        emit_meta_regular && [ "$emit_meta_sha_atual" = "$CHANNEL_EMIT_META_SHA" ] || {
+            echo "erro: emit.meta mudou durante a produção do bundle" >&2
+            return 1
+        }
+    }
+    release_meta=no
+    meta_problema="emit.meta ausente"
+    if [ -L "$EMIT_META" ] || { [ -e "$EMIT_META" ] && [ ! -f "$EMIT_META" ]; }; then
+        meta_problema="emit.meta não é arquivo regular"
+    elif emit_meta_regular; then
+        meta_problema="emit.meta não é formato 4 canônico de raiz release"
+        meta_hash_count=$(grep -c '^INDEX_SHA256=' "$EMIT_META" || true)
+        if [ "$meta_hash_count" -eq 1 ]; then
+            meta_index_sha=$(sed -n 's/^INDEX_SHA256=//p' "$EMIT_META")
+            case "$meta_index_sha" in
+                *[!0-9a-f]*|'') meta_index_sha=invalid ;;
+            esac
+            if [ "${#meta_index_sha}" -eq 64 ]; then
+                meta_esperado_sha=$(
+                    printf 'CHANNEL_EMIT_FORMAT=4\nARCH=x86_64\nCOMPRESSION=ruzstd-0.8.3-fastest\nINDEX_SIGNED=no\nINDEX_SHA256=%s\nPRODUCER_PLAN_LOCK_SHA256=%s\nRELEASE_ROOT=yes\n' \
+                        "$meta_index_sha" "$CHANNEL_PRODUCER_PLAN" | sha256sum | cut -d' ' -f1
+                )
+                meta_observado_sha=$(sha256sum "$EMIT_META" | cut -d' ' -f1)
+                if [ "$meta_observado_sha" = "$meta_esperado_sha" ]; then
+                    if [ "$meta_index_sha" = "$CHANNEL_INDEX_SHA" ] &&
+                       [ "$CHANNEL_INDEX_RELEASE_ROOT" = yes ]; then
+                        release_meta=yes
+                        CHANNEL_EMIT_META_SHA=$meta_observado_sha
+                    else
+                        meta_problema="INDEX_SHA256/RELEASE_ROOT do emit.meta não corresponde ao index"
+                    fi
+                fi
+            fi
+        fi
+    fi
+    if [ "$STRICT" = yes ] && [ "$release_meta" != yes ]; then
+        echo "erro: --strict recusou índice de canal: $meta_problema" >&2
+        echo "      exige index/emit.meta v4, RELEASE_ROOT=yes, PLAN_LOCK produtor e INDEX_SHA256 correspondentes" >&2
+        echo "      use diretamente a saída de 'channel emit --release' já assinada" >&2
+        exit 1
+    fi
+    if [ "$release_meta" != yes ]; then
+        echo "aviso: $meta_problema; bundle é somente diagnóstico" >&2
+    else
+        revalida_emit_meta || exit 1
+    fi
+fi
 
 # A revisão exata. Working tree suja invalidaria a correspondência: o bundle
 # diria "esta revisão produziu a mídia" enquanto a mídia teria saído de algo
@@ -101,16 +764,315 @@ if [ -n "$(git status --porcelain)" ]; then
     exit 1
 fi
 
-MEDIA_SHA=$(sha256sum "$MEDIA" | cut -d' ' -f1)
+if [ -n "$CHANNEL_INDEX_SHA" ] && ! indice_canal_regular; then
+    echo "erro: índice de canal deixou de ser arquivo regular antes da revalidação" >&2
+    exit 1
+fi
+artefato_regular || {
+    echo "erro: artefato deixou de ser arquivo regular antes do hash" >&2
+    exit 1
+}
+ARTIFACT_SHA=$(sha256sum "$ARTIFACT" | cut -d' ' -f1)
+artefato_regular || {
+    echo "erro: artefato mudou durante o cálculo do hash" >&2
+    exit 1
+}
+if [ -n "$CHANNEL_INDEX_SHA" ] && [ "$ARTIFACT_SHA" != "$CHANNEL_INDEX_SHA" ]; then
+    echo "erro: índice de canal mudou depois de validar emit.meta" >&2
+    exit 1
+fi
+if [ -n "$CHANNEL_INDEX_SHA" ] && ! indice_canal_regular; then
+    echo "erro: índice de canal deixou de ser arquivo regular depois da validação" >&2
+    exit 1
+fi
 # Se a mídia trouxe o manifesto lateral, ele é a segunda opinião sobre o
 # próprio hash — e discordância aqui significa mídia trocada ou corrompida
 # entre a composição e agora.
-if [ -f "$MEDIA.manifest" ]; then
-    declarado=$(grep '^MEDIA_SHA256=' "$MEDIA.manifest" | cut -d= -f2)
-    [ "$declarado" = "$MEDIA_SHA" ] || {
-        echo "erro: o manifesto declara $declarado mas a mídia é $MEDIA_SHA" >&2
+if [ "$LEGACY_MEDIA" = yes ] &&
+   { [ -e "$MEDIA.manifest" ] || [ -L "$MEDIA.manifest" ]; }; then
+    [ -f "$MEDIA.manifest" ] && [ ! -L "$MEDIA.manifest" ] || {
+        echo "erro: manifesto lateral da mídia não é arquivo regular" >&2
         exit 1
     }
+    media_manifest_sha=$(sha256sum "$MEDIA.manifest" | cut -d' ' -f1)
+    declarado=$(grep '^MEDIA_SHA256=' "$MEDIA.manifest" | cut -d= -f2)
+    [ -f "$MEDIA.manifest" ] && [ ! -L "$MEDIA.manifest" ] &&
+        [ "$(sha256sum "$MEDIA.manifest" | cut -d' ' -f1)" = "$media_manifest_sha" ] || {
+        echo "erro: manifesto lateral da mídia mudou durante a leitura" >&2
+        exit 1
+    }
+    [ "$declarado" = "$ARTIFACT_SHA" ] || {
+        echo "erro: o manifesto declara $declarado mas a mídia é $ARTIFACT_SHA" >&2
+        exit 1
+    }
+fi
+
+# Um index/emit.meta coerente consigo mesmo ainda pode ser de OUTRA árvore ou
+# de OUTRO root de build. Antes de ler LICENSE/SRC/SHA256 da árvore corrente,
+# ligue cada linha aos registros que produziram o payload, aos bytes do pool e
+# ao fingerprint transitivo que o executor produtor explícito calcula agora.
+fingerprints_atuais_para() { # NOMES
+    nomes_fingerprint=$1
+    revalida_minitrue_bin || return 1
+    [ -d "$REPO/newspeak" ] && [ ! -L "$REPO/newspeak" ] || {
+        echo "erro: árvore Newspeak efetiva não é diretório regular: $REPO/newspeak" >&2
+        return 1
+    }
+    bwrap_fingerprint=$(command -v bwrap 2>/dev/null || true)
+    [ -n "$bwrap_fingerprint" ] && [ -f "$bwrap_fingerprint" ] &&
+        [ ! -L "$bwrap_fingerprint" ] && [ -x "$bwrap_fingerprint" ] || {
+        echo "erro: bwrap regular/executável é obrigatório para fingerprint confinado" >&2
+        return 1
+    }
+    set -f
+    # shellcheck disable=SC2086 # nomes vieram do índice v4 canônico.
+    set -- $nomes_fingerprint
+    set +f
+    [ "$#" -gt 0 ] || {
+        echo "erro: nenhum pacote para recalcular fingerprint" >&2
+        return 1
+    }
+    if ! fingerprints_raw=$(
+        "$bwrap_fingerprint" --ro-bind "$MINITRUE_ROOT" / \
+            --tmpfs /run \
+            --ro-bind "$MINITRUE_BIN" /run/distropica-minitrue \
+            --ro-bind "$REPO/newspeak" /run/distropica-newspeak \
+            --proc /proc --dev /dev --tmpfs /tmp --unshare-pid --unshare-net \
+            --die-with-parent --new-session --clearenv \
+            --setenv PATH /usr/bin:/bin --setenv LC_ALL C --setenv LANG C \
+            --setenv TZ UTC --setenv NEWSPEAK_PATH /run/distropica-newspeak \
+            /run/distropica-minitrue --root / fingerprint "$@"
+    ); then
+        echo "erro: minitrue fingerprint falhou para o índice vinculante" >&2
+        return 1
+    fi
+    revalida_minitrue_bin || return 1
+    if ! FINGERPRINTS_ATUAIS=$(printf '%s\n' "$fingerprints_raw" | awk '
+        function nome_valido(v) {
+            return length(v) <= 128 && v !~ /\.\./ &&
+                   v ~ /^[a-z0-9][a-z0-9+_.-]*$/
+        }
+        function hex64(v) { return length(v) == 64 && v ~ /^[0-9a-f]+$/ }
+        {
+            canonica = $1 " " $2
+            if (NF != 2 || $0 != canonica || !nome_valido($1) ||
+                !hex64($2) || visto[$1]++ ||
+                (anterior != "" && $0 <= anterior)) exit 1
+            anterior = $0
+            print
+            quantidade++
+        }
+        END { if (quantidade == 0) exit 1 }
+    '); then
+        echo "erro: minitrue fingerprint devolveu saída não canônica" >&2
+        return 1
+    fi
+}
+
+fingerprint_atual_de() { # PACOTE
+    printf '%s\n' "$FINGERPRINTS_ATUAIS" | awk -v nome="$1" '
+        $1 == nome { encontrados++; valor = $2 }
+        END { if (encontrados != 1) exit 1; print valor }
+    '
+}
+
+valida_indice_factual() { # INDEX LAYOUT BASE
+    indice_factual=$1
+    layout_factual=$2
+    base_factual=$3
+    linha_factual=0
+    while read -r nome versao arch recipe_fp caminho transport_sha reprocorr producer_plan resto; do
+        linha_factual=$((linha_factual + 1))
+        [ "$linha_factual" -gt 2 ] || continue
+        receita_canal=$REPO/newspeak/$nome/recipe
+        [ -f "$receita_canal" ] && [ ! -L "$receita_canal" ] || {
+            echo "erro: índice cita $nome sem receita efetiva regular" >&2
+            return 1
+        }
+        if ! kind_canal=$(kind_da_receita "$receita_canal"); then
+            echo "erro: $nome precisa ter exatamente um KIND canônico" >&2
+            return 1
+        fi
+        if [ "$kind_canal" != source ]; then
+            echo "erro: índice cita $nome com KIND=$kind_canal; somente KIND=source tem pool" >&2
+            return 1
+        fi
+        if ! versao_atual=$(version_da_receita "$receita_canal") ||
+           [ "$versao_atual" != "$versao" ]; then
+            echo "erro: índice oferece $nome $versao, mas a receita efetiva exige ${versao_atual:-valor inválido}" >&2
+            return 1
+        fi
+        if ! fp_atual=$(fingerprint_atual_de "$nome") ||
+           [ "$fp_atual" != "$recipe_fp" ]; then
+            echo "erro: fingerprint atual da árvore diverge do índice para $nome" >&2
+            echo "  índice: ${recipe_fp:-ausente}" >&2
+            echo "  árvore: ${fp_atual:-ausente}" >&2
+            return 1
+        fi
+
+        record_dir=$REGISTROS/$nome
+        record_meta=$record_dir/meta
+        [ -d "$record_dir" ] && [ ! -L "$record_dir" ] &&
+            [ -f "$record_meta" ] && [ ! -L "$record_meta" ] || {
+            echo "erro: índice cita $nome sem registro regular no root de emissão" >&2
+            return 1
+        }
+        if ! r_name=$(campo_meta_unico "$record_meta" NAME) ||
+           ! r_version=$(campo_meta_unico "$record_meta" VERSION) ||
+           ! r_kind=$(campo_meta_unico "$record_meta" KIND) ||
+           ! r_fp=$(campo_meta_unico "$record_meta" FINGERPRINT) ||
+           ! r_artifact=$(campo_meta_unico "$record_meta" ARTIFACT_HASH); then
+            echo "erro: registro de $nome não tem identidade factual única" >&2
+            return 1
+        fi
+        if [ "$r_name" != "$nome" ] || [ "$r_version" != "$versao" ] ||
+           [ "$r_kind" != source ] || [ "$r_fp" != "$recipe_fp" ] ||
+           [ "$r_artifact" != "$reprocorr" ]; then
+            echo "erro: índice diverge do registro factual de $nome" >&2
+            return 1
+        fi
+        [ -f "$record_meta" ] && [ ! -L "$record_meta" ] || {
+            echo "erro: registro de $nome mudou durante a validação" >&2
+            return 1
+        }
+
+        case "$layout_factual" in
+            pool)
+                objeto_transporte=$base_factual/$caminho
+                rotulo_transporte=$caminho
+                tipo_transporte='objeto de pool'
+                ;;
+            flat)
+                objeto_transporte=$base_factual/$transport_sha
+                rotulo_transporte=$transport_sha
+                tipo_transporte='objeto content-addressed do cache'
+                ;;
+            *) echo "erro: layout factual interno desconhecido" >&2; return 1 ;;
+        esac
+        [ -f "$objeto_transporte" ] && [ ! -L "$objeto_transporte" ] || {
+            echo "erro: índice cita $tipo_transporte não regular: $rotulo_transporte" >&2
+            return 1
+        }
+        transporte_observado=$(sha256sum "$objeto_transporte" 2>/dev/null | cut -d' ' -f1)
+        [ -f "$objeto_transporte" ] && [ ! -L "$objeto_transporte" ] || {
+            echo "erro: objeto de transporte mudou durante a validação: $rotulo_transporte" >&2
+            return 1
+        }
+        [ "$transporte_observado" = "$transport_sha" ] || {
+            echo "erro: $rotulo_transporte tem sha256 $transporte_observado, índice diz $transport_sha" >&2
+            return 1
+        }
+        case "$layout_factual" in
+            pool) objeto_plano=$base_factual/plans/$producer_plan.lock ;;
+            flat) objeto_plano=$base_factual/$producer_plan ;;
+        esac
+        [ -f "$objeto_plano" ] && [ ! -L "$objeto_plano" ] &&
+            [ "$(sha256sum "$objeto_plano" 2>/dev/null | cut -d' ' -f1)" = "$producer_plan" ] || {
+            echo "erro: índice cita PLAN_LOCK produtor ausente/divergente: $producer_plan" >&2
+            return 1
+        }
+    done < "$indice_factual"
+}
+
+valida_canal_factual() {
+    fingerprints_atuais_para "$CHANNEL_INDEX_PACKAGES" || return 1
+    emissao=$(dirname "$ARTIFACT")
+    pool_dir=$emissao/pool
+    [ -d "$pool_dir" ] && [ ! -L "$pool_dir" ] || {
+        echo "erro: pool da emissão não é diretório regular: $pool_dir" >&2
+        return 1
+    }
+    valida_indice_factual "$ARTIFACT" pool "$emissao"
+}
+
+CACHE_INDEX_PACKAGES=
+CACHE_INDEX_STATE=
+valida_indices_cache_factual() {
+    [ -d "$CACHE/channels" ] && [ ! -L "$CACHE/channels" ] || {
+        echo "erro: cache sem channels/ regular: $CACHE" >&2
+        return 1
+    }
+    quantidade_indices=0
+    pacotes_indices=
+    estado_indices=
+    for indice_cache_factual in "$CACHE"/channels/*/index; do
+        [ -e "$indice_cache_factual" ] || continue
+        canal_dir=$(dirname "$indice_cache_factual")
+        canal_nome=$(basename "$canal_dir")
+        case "$canal_nome" in
+            ''|[!a-z0-9]*|*[!a-z0-9+_.-]*|*..*)
+                echo "erro: índice sob nome de canal não canônico: $canal_nome" >&2
+                return 1
+                ;;
+        esac
+        [ "${#canal_nome}" -le 128 ] && [ -d "$canal_dir" ] &&
+            [ ! -L "$canal_dir" ] && [ -f "$indice_cache_factual" ] &&
+            [ ! -L "$indice_cache_factual" ] || {
+            echo "erro: índice do cache não é arquivo regular: $indice_cache_factual" >&2
+            return 1
+        }
+        if ! nomes_indice_factual=$(pacotes_indice_v4 "$indice_cache_factual"); then
+            echo "erro: índice do cache não é v4 canônico: $indice_cache_factual" >&2
+            return 1
+        fi
+        indice_sha_factual=$(sha256sum "$indice_cache_factual" 2>/dev/null | cut -d' ' -f1)
+        [ -f "$indice_cache_factual" ] && [ ! -L "$indice_cache_factual" ] || {
+            echo "erro: índice do cache mudou durante a leitura: $indice_cache_factual" >&2
+            return 1
+        }
+        estado_indices="${estado_indices}${canal_nome} ${indice_sha_factual}
+"
+        pacotes_indices="$pacotes_indices $nomes_indice_factual"
+        quantidade_indices=$((quantidade_indices + 1))
+    done
+    [ "$quantidade_indices" -gt 0 ] || {
+        echo "erro: cache não contém índice de canal" >&2
+        return 1
+    }
+    set -f
+    # shellcheck disable=SC2086 # todos os nomes vieram do parser canônico.
+    set -- $pacotes_indices
+    set +f
+    pacotes_indices=$(printf '%s\n' "$@" | sed '/^$/d' | sort -u)
+    fingerprints_atuais_para "$pacotes_indices" || return 1
+
+    estado_revalidado=
+    for indice_cache_factual in "$CACHE"/channels/*/index; do
+        [ -e "$indice_cache_factual" ] || continue
+        canal_dir=$(dirname "$indice_cache_factual")
+        canal_nome=$(basename "$canal_dir")
+        [ -d "$canal_dir" ] && [ ! -L "$canal_dir" ] &&
+            [ -f "$indice_cache_factual" ] && [ ! -L "$indice_cache_factual" ] || {
+            echo "erro: índice do cache mudou antes do vínculo factual: $indice_cache_factual" >&2
+            return 1
+        }
+        valida_indice_factual "$indice_cache_factual" flat "$CACHE" || return 1
+        indice_sha_factual=$(sha256sum "$indice_cache_factual" 2>/dev/null | cut -d' ' -f1)
+        [ -f "$indice_cache_factual" ] && [ ! -L "$indice_cache_factual" ] || {
+            echo "erro: índice do cache mudou depois do vínculo factual: $indice_cache_factual" >&2
+            return 1
+        }
+        estado_revalidado="${estado_revalidado}${canal_nome} ${indice_sha_factual}
+"
+    done
+    [ "$estado_revalidado" = "$estado_indices" ] || {
+        echo "erro: conjunto de índices do cache mudou durante a validação factual" >&2
+        return 1
+    }
+    if [ -n "$CACHE_INDEX_STATE" ] &&
+       { [ "$CACHE_INDEX_STATE" != "$estado_indices" ] ||
+         [ "$CACHE_INDEX_PACKAGES" != "$pacotes_indices" ]; }; then
+        echo "erro: índices do cache mudaram durante a produção do bundle" >&2
+        return 1
+    fi
+    CACHE_INDEX_STATE=$estado_indices
+    CACHE_INDEX_PACKAGES=$pacotes_indices
+}
+
+if [ -n "$CHANNEL_INDEX_SHA" ]; then
+    valida_canal_factual || exit 1
+else
+    valida_indices_cache_factual || exit 1
 fi
 
 mkdir -p "$OUTPUT/upstream" "$OUTPUT/vendor" "$OUTPUT/kernel"
@@ -145,27 +1107,246 @@ done
 # ---- os pacotes da mídia, e as fontes de cada um -------------------------
 # TRÊS conjuntos, e não um. A primeira versão deste script leu só o índice do
 # canal e produziu um bundle sem o Firefox — o pacote mais pesado da mídia e o
-# de licença mais delicada. A regra é a mesma que o cache-from-channel já
-# documenta, e está repetida aqui porque errá-la é silencioso:
+# de licença mais delicada. Procurar depois TODO KIND=binary da árvore corrigiu
+# aquela omissão introduzindo a oposta: cargo-c e outras ferramentas exclusivas
+# de build passaram a constar como distribuídas só por terem receita. A regra é
+# a mesma que o cache-from-channel aplica aos bytes efetivamente embarcados:
 #
-#  (a) o índice do canal: os pacotes do Mundo B, que têm artefato de canal;
-#  (b) todo KIND=binary: o Mundo A NÃO entra no índice — o payload dele É o
-#      arquivo publicado pelo upstream, endereçado pelo sha256 da receita;
-#  (c) todo nome em cache.world, independente do KIND: são as fontes de
-#      reconstrução que a mídia offline carrega para o sistema instalado poder
-#      recompilar sem rede.
-pacotes=$(
-    cat "$CACHE"/channels/*/index 2>/dev/null | awk 'NF>=4 {print $1}'
-    for receita in "$REPO"/newspeak/*/recipe; do
-        grep -q '^KIND=binary' "$receita" && basename "$(dirname "$receita")"
+#  (a) o índice do canal/cache: pacotes de Mundo B realmente distribuídos;
+#  (b) KIND=binary no fechamento de EXECUÇÃO dos nomes do índice, seguindo só
+#      DEPS. BUILD_DEPS e a toolchain constroem o payload, mas não viajam por
+#      isso; o payload de Mundo A é o arquivo upstream pinado pela receita;
+#  (c) todo nome em cache.world, independente do KIND: são fontes/artefatos
+#      explicitamente carregados para reconstrução offline.
+#
+# Portanto acrescentar uma receita à árvore, sem torná-la alcançável em runtime
+# nem citá-la em cache.world, não altera o inventário de compliance da mídia.
+nome_canonico() {
+    [ "${#1}" -le 128 ] || return 1
+    case "$1" in
+        ''|[!a-z0-9]*|*[!a-z0-9+_.-]*|*..*) return 1 ;;
+    esac
+}
+
+# Receitas são dados, nunca shell. DEPS pode estar ausente (receitas antigas),
+# ser uma palavra canônica sem aspas ou uma lista canônica entre aspas duplas.
+# Duas atribuições, expansão shell, comentário e espaçamento ambíguo falham:
+# escolher a primeira faria fluxo condicional de shell decidir o escopo legal.
+deps_da_receita() { # RECEITA
+    receita_deps=$1
+    quantidade_deps=$(grep -c '^DEPS=' "$receita_deps" || true)
+    suspeitas_deps=$(grep -Ec \
+        '^[[:space:]]*(export[[:space:]]+|readonly[[:space:]]+)?DEPS(\+)?=' \
+        "$receita_deps" || true)
+    [ "$quantidade_deps" -le 1 ] &&
+        [ "$suspeitas_deps" -eq "$quantidade_deps" ] || return 1
+    awk '
+        index($0, "DEPS=") == 1 {
+            quantidade++
+            valor = substr($0, 6)
+        }
+        END {
+            if (quantidade > 1) exit 1
+            if (quantidade == 0) exit 0
+            if (valor ~ /^"[a-z0-9+_.-]*( [a-z0-9+_.-]+)*"$/) {
+                valor = substr(valor, 2, length(valor) - 2)
+            } else if (valor !~ /^[a-z0-9][a-z0-9+_.-]*$/) {
+                exit 1
+            }
+            if (valor ~ /\.\./) exit 1
+            print valor
+        }
+    ' "$receita_deps"
+}
+
+if [ -n "$CHANNEL_INDEX_PACKAGES" ]; then
+    # Canal: o próprio índice é a lista vinculante. O cache reduzido da mídia
+    # nunca pode reduzir o bundle associado ao canal público.
+    index_packages=$CHANNEL_INDEX_PACKAGES
+    sementes=$index_packages
+else
+    index_packages=$CACHE_INDEX_PACKAGES
+    # A intenção top-level também faz parte do que a mídia promete instalar.
+    # É daqui que entram binários Mundo A sem dependente, como ripgrep/go/rust;
+    # a simples existência da receita continua não contando.
+    sementes="$index_packages $TARGET_WORLD_PACKAGES"
+
+fi
+
+# Índices só atestam payloads de Mundo B. Binary viaja fora do índice, e meta
+# não tem payload atestável; aceitar qualquer dos dois como semente faria uma
+# linha de pool alegar bytes que esse KIND não produz.
+set -f
+# shellcheck disable=SC2086 # nomes vieram de índices/worlds canônicos.
+set -- $index_packages
+index_packages=$*
+set +f
+for nome do
+    receita_semente=$REPO/newspeak/$nome/recipe
+    [ -f "$receita_semente" ] && [ ! -L "$receita_semente" ] || {
+        echo "erro: índice cita '$nome', que não tem receita regular" >&2
+        exit 1
+    }
+    if ! kind_semente=$(kind_da_receita "$receita_semente"); then
+        echo "erro: $nome precisa ter exatamente um KIND canônico" >&2
+        exit 1
+    fi
+    [ "$kind_semente" = source ] || {
+        echo "erro: índice cita $nome com KIND=$kind_semente; somente KIND=source tem pool" >&2
+        exit 1
+    }
+done
+
+set -f
+# shellcheck disable=SC2086 # índice e target.world já foram validados.
+set -- $sementes
+sementes=$*
+set +f
+
+if [ -n "$CHANNEL_INDEX_PACKAGES" ]; then
+    pacotes=$sementes
+else
+    # Ponto fixo de DEPS. O conjunto visitado torna a coleta finita, mas NÃO
+    # transforma ciclo em sucesso: as arestas são auditadas logo depois por
+    # DFS, como exige a SPEC-0013 §2.1.
+    runtime=
+    pendentes=$sementes
+    arestas_runtime=$OUTPUT/.runtime-edges
+    : > "$arestas_runtime"
+    while [ -n "$pendentes" ]; do
+        set -f
+        # shellcheck disable=SC2086 # nomes já vieram de índice canônico/DEPS.
+        set -- $pendentes
+        set +f
+        pendentes=
+        for nome do
+            case " $runtime " in
+                *" $nome "*) continue ;;
+            esac
+            receita_runtime=$REPO/newspeak/$nome/recipe
+            [ -f "$receita_runtime" ] && [ ! -L "$receita_runtime" ] || {
+                echo "erro: fechamento runtime cita '$nome', que não tem receita regular" >&2
+                exit 1
+            }
+            runtime="$runtime $nome"
+            if ! kind_runtime=$(kind_da_receita "$receita_runtime"); then
+                echo "erro: $nome precisa ter exatamente um KIND canônico" >&2
+                exit 1
+            fi
+            if ! dependencias=$(deps_da_receita "$receita_runtime"); then
+                echo "erro: $nome precisa ter zero ou uma DEPS literal canônica" >&2
+                exit 1
+            fi
+            printf '%s\n' "$nome" >> "$arestas_runtime"
+            set -f
+            # shellcheck disable=SC2086 # deps já foi validada palavra a palavra.
+            set -- $dependencias
+            set +f
+            for dependencia do
+                nome_canonico "$dependencia" || {
+                    echo "erro: $nome tem DEPS não canônico" >&2
+                    exit 1
+                }
+                printf '%s\t%s\n' "$nome" "$dependencia" >> "$arestas_runtime"
+            done
+            pendentes="$pendentes $dependencias"
+        done
     done
-    for world in "$REPO"/profiles/*/cache.world; do
-        [ -e "$world" ] || continue
-        sed -e 's/#.*//' -e '/^[[:space:]]*$/d' -e 's/[[:space:]]//g' "$world"
+
+    if ! awk '
+        function visita(no,    quantidade, i, dependencia, partes) {
+            if (estado[no] == 1) {
+                printf "erro: ciclo em DEPS envolvendo %s\n", no > "/dev/stderr"
+                return 0
+            }
+            if (estado[no] == 2) return 1
+            estado[no] = 1
+            quantidade = split(adjacentes[no], partes, " ")
+            for (i = 1; i <= quantidade; i++) {
+                dependencia = partes[i]
+                if (dependencia != "" && !visita(dependencia)) return 0
+            }
+            estado[no] = 2
+            return 1
+        }
+        NF >= 1 {
+            if (!visto[$1]++) ordem[++total] = $1
+            if (NF == 2) adjacentes[$1] = adjacentes[$1] " " $2
+        }
+        END {
+            for (i = 1; i <= total; i++)
+                if (estado[ordem[i]] == 0 && !visita(ordem[i])) exit 1
+        }
+    ' "$arestas_runtime"; then
+        rm -f "$arestas_runtime"
+        exit 1
+    fi
+    rm -f "$arestas_runtime"
+
+    # O ponto fixo também prova completude: todo payload de Mundo B alcançável
+    # precisa ter linha no índice. Meta pode ficar fora porque não tem payload;
+    # binary entra como objeto upstream. Assim um índice só com app, mas sem sua
+    # ponte source, não consegue parecer uma mídia offline completa.
+    binarios_runtime=
+    set -f
+    # shellcheck disable=SC2086 # runtime contém nomes já validados.
+    set -- $runtime
+    set +f
+    for nome do
+        receita_runtime=$REPO/newspeak/$nome/recipe
+        kind_runtime=$(kind_da_receita "$receita_runtime")
+        case "$kind_runtime" in
+            source)
+                case " $index_packages " in
+                    *" $nome "*) ;;
+                    *)
+                        echo "erro: índice incompleto: runtime KIND=source ausente: $nome" >&2
+                        exit 1
+                        ;;
+                esac
+                ;;
+            binary) binarios_runtime="$binarios_runtime $nome" ;;
+            meta) : ;;
+        esac
     done
-)
-pacotes=$(printf '%s\n' $pacotes | sort -u)
-[ -n "$pacotes" ] || { echo "erro: nenhum pacote a empacotar" >&2; exit 1; }
+
+    cache_explicito=$CACHE_WORLD_PACKAGES
+
+    # O índice decide Mundo B; do fechamento só acrescentamos Mundo A. As
+    # raízes meta de target.world já expandiram DEPS acima, mas não têm payload
+    # próprio e portanto não entram no inventário material. cache.world ainda
+    # é considerado integralmente logo abaixo, inclusive para validar KIND.
+    pacotes="$index_packages $binarios_runtime $cache_explicito"
+fi
+set -f
+# shellcheck disable=SC2086 # pacotes contém somente nomes canônicos.
+set -- $pacotes
+set +f
+pacotes=$(printf '%s\n' "$@" | sed '/^$/d' | sort -u)
+
+# cache.world pode acrescentar nós fora do fechamento; valide-os também antes
+# de qualquer leitura de SRC/LICENSE. Meta é uma intenção/resolução sem
+# payload: pode ser raiz ou disponibilidade explícita, mas não gera linha de
+# fonte nem bytes no cache, portanto é filtrado do inventário material.
+pacotes_materiais=
+for nome in $pacotes; do
+    receita_pacote=$REPO/newspeak/$nome/recipe
+    [ -f "$receita_pacote" ] && [ ! -L "$receita_pacote" ] || {
+        echo "erro: inventário cita '$nome', que não tem receita regular" >&2
+        exit 1
+    }
+    if ! kind_pacote=$(kind_da_receita "$receita_pacote"); then
+        echo "erro: $nome precisa ter exatamente um KIND canônico" >&2
+        exit 1
+    fi
+    [ "$kind_pacote" = meta ] || pacotes_materiais="$pacotes_materiais $nome"
+done
+set -f
+# shellcheck disable=SC2086 # nomes já foram validados e deduplicados acima.
+set -- $pacotes_materiais
+set +f
+pacotes=$(printf '%s\n' "$@" | sed '/^$/d' | sort -u)
+[ -n "$pacotes" ] || { echo "erro: nenhum pacote material a empacotar" >&2; exit 1; }
 
 # FONTE CORRESPONDENTE DECLARADA À PARTE.
 #
@@ -184,6 +1365,14 @@ pacotes=$(printf '%s\n' $pacotes | sort -u)
 # arquivo de sonda no diretório da receita.
 # Lê um campo do recipe juntando as linhas terminadas em '\'.
 campo_continuado() {
+    campo_receita=$1
+    campo_chave=$2
+    campo_quantidade=$(grep -c "^${campo_chave}=" "$campo_receita" || true)
+    campo_suspeitas=$(grep -Ec \
+        "^[[:space:]]*(export[[:space:]]+|readonly[[:space:]]+)?${campo_chave}(\\+)?=" \
+        "$campo_receita" || true)
+    [ "$campo_quantidade" -le 1 ] &&
+        [ "$campo_suspeitas" -eq "$campo_quantidade" ] || return 1
     awk -v chave="$2" '
         $0 ~ "^" chave "=" { dentro = 1 }
         dentro {
@@ -203,6 +1392,89 @@ campo_continuado() {
     ' "$1"
 }
 
+campo_linha_unico() { # RECEITA CHAVE
+    linha_receita=$1
+    linha_chave=$2
+    linha_quantidade=$(grep -c "^${linha_chave}=" "$linha_receita" || true)
+    linha_suspeitas=$(grep -Ec \
+        "^[[:space:]]*(export[[:space:]]+|readonly[[:space:]]+)?${linha_chave}(\\+)?=" \
+        "$linha_receita" || true)
+    [ "$linha_quantidade" -eq 1 ] &&
+        [ "$linha_suspeitas" -eq 1 ] || return 1
+    sed -n "s/^${linha_chave}=//p" "$linha_receita"
+}
+
+# O nome content-addressed é uma alegação, não uma prova. Confira a origem e
+# também a cópia final: a segunda leitura fecha a janela entre hash e `cp` e
+# impede que um objeto trocado concorrentemente seja promovido ao bundle.
+promove_objeto_cache() { # HASH ORIGEM DESTINO DESCRICAO
+    esperado=$1
+    origem=$2
+    destino=$3
+    descricao=$4
+    PROMOVIDO=no
+    if [ ! -f "$origem" ] || [ -L "$origem" ]; then
+        observado='objeto ausente, não regular ou link simbólico'
+    else case "$esperado" in
+        *[!0-9a-f]*|'') observado='hash esperado não canônico' ;;
+        *)
+            if [ "${#esperado}" -ne 64 ]; then
+                observado='hash esperado não canônico'
+            elif ! observado=$(sha256sum "$origem" 2>/dev/null | cut -d' ' -f1); then
+                observado='objeto ilegível'
+            fi
+            ;;
+    esac
+    fi
+    if [ "$observado" != "$esperado" ]; then
+        rotulo=aviso
+        [ "$STRICT" = yes ] && rotulo=erro
+        echo "$rotulo: $descricao está sob o nome $esperado, mas tem sha256 $observado" >&2
+        return 1
+    fi
+    if [ -L "$destino" ] || { [ -e "$destino" ] && [ ! -f "$destino" ]; }; then
+        rotulo=aviso
+        [ "$STRICT" = yes ] && rotulo=erro
+        echo "$rotulo: destino de $descricao não é arquivo regular" >&2
+        return 1
+    fi
+    if [ ! -f "$destino" ]; then
+        cp "$origem" "$destino"
+        PROMOVIDO=yes
+    fi
+    if [ -L "$destino" ] || [ ! -f "$destino" ] ||
+       ! observado=$(sha256sum "$destino" 2>/dev/null | cut -d' ' -f1) ||
+       [ "$observado" != "$esperado" ]; then
+        rm -f "$destino"
+        rotulo=aviso
+        [ "$STRICT" = yes ] && rotulo=erro
+        echo "$rotulo: $descricao divergiu durante a cópia para o bundle" >&2
+        return 1
+    fi
+    return 0
+}
+
+copia_sidecar_regular() { # ORIGEM DESTINO DESCRICAO
+    sidecar_origem=$1
+    sidecar_destino=$2
+    sidecar_descricao=$3
+    if [ -L "$sidecar_origem" ] ||
+       { [ -e "$sidecar_origem" ] && [ ! -f "$sidecar_origem" ]; }; then
+        echo "erro: sidecar de $sidecar_descricao não é arquivo regular: $sidecar_origem" >&2
+        return 1
+    fi
+    [ -e "$sidecar_origem" ] || return 0
+    sidecar_sha=$(sha256sum "$sidecar_origem" 2>/dev/null | cut -d' ' -f1)
+    cp "$sidecar_origem" "$sidecar_destino"
+    if [ ! -f "$sidecar_origem" ] || [ -L "$sidecar_origem" ] ||
+       [ ! -f "$sidecar_destino" ] || [ -L "$sidecar_destino" ] ||
+       [ "$(sha256sum "$sidecar_origem" | cut -d' ' -f1)" != "$sidecar_sha" ] ||
+       [ "$(sha256sum "$sidecar_destino" | cut -d' ' -f1)" != "$sidecar_sha" ]; then
+        echo "erro: sidecar de $sidecar_descricao mudou durante a cópia" >&2
+        return 1
+    fi
+}
+
 coletar_correspondentes() {
     decl=$(dirname "$receita")/fontes-correspondentes
     [ -f "$decl" ] || return 0
@@ -210,21 +1482,27 @@ coletar_correspondentes() {
         case "$chash" in ''|\#*) continue ;; esac
         [ -n "$corigem" ] || continue
         if [ -f "$FONTES/$chash" ]; then
-            [ -f "$OUTPUT/upstream/$chash" ] || {
-                cp "$FONTES/$chash" "$OUTPUT/upstream/$chash"
-                copiadas=$((copiadas + 1))
-            }
-            carquivo=upstream/$chash
-            for sidecar in "$FONTES/$chash".minisig "$FONTES/$chash".sig \
-                           "$FONTES/$chash".asc; do
-                [ -f "$sidecar" ] || continue
-                cp "$sidecar" "$OUTPUT/upstream/$(basename "$sidecar")"
-            done
+            if promove_objeto_cache "$chash" "$FONTES/$chash" \
+                "$OUTPUT/upstream/$chash" \
+                "fonte correspondente de $pacote"; then
+                [ "$PROMOVIDO" = no ] || copiadas=$((copiadas + 1))
+                carquivo=upstream/$chash
+                for sidecar in "$FONTES/$chash".minisig "$FONTES/$chash".sig \
+                               "$FONTES/$chash".asc; do
+                    copia_sidecar_regular "$sidecar" \
+                        "$OUTPUT/upstream/$(basename "$sidecar")" \
+                        "fonte correspondente de $pacote" || exit 1
+                done
+            else
+                carquivo='(DIVERGENTE do hash declarado)'
+                faltando="$faltando $pacote"
+                [ "$STRICT" != yes ] || exit 1
+            fi
         else
             # AUSENTE aqui é grave de um jeito que ausência de fonte comum não
             # é: significa mídia levando binário copyleft sem a fonte que a
             # licença exige. Entra na mesma lista de faltantes que já reprova.
-            carquivo='(AUSENTE do cache de fontes)'
+            carquivo='(AUSENTE ou DIVERGENTE no cache de fontes)'
             faltando="$faltando $pacote"
         fi
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
@@ -250,8 +1528,22 @@ for pacote in $pacotes; do
     receita=$REPO/newspeak/$pacote/recipe
     [ -f "$receita" ] || { faltando="$faltando $pacote(sem-receita)"; continue; }
     meta=$REGISTROS/$pacote/meta
-    versao=$(grep '^VERSION=' "$receita" | head -1 | cut -d= -f2- | tr -d '"')
-    mundo=$(grep -q '^KIND=binary' "$receita" && echo A || echo B)
+    if ! versao=$(version_da_receita "$receita"); then
+        echo "erro: $pacote deixou de ter exatamente uma VERSION literal canônica" >&2
+        exit 1
+    fi
+    if ! kind_pacote=$(kind_da_receita "$receita"); then
+        echo "erro: $pacote deixou de ter exatamente um KIND canônico" >&2
+        exit 1
+    fi
+    case "$kind_pacote" in
+        binary) mundo=A ;;
+        source) mundo=B ;;
+        meta)
+            echo "erro: $pacote virou KIND=meta durante o inventário" >&2
+            exit 1
+            ;;
+    esac
     total=$((total + 1))
 
     # A licença vem da RECEITA e não do registro. O registro é um instantâneo
@@ -262,8 +1554,17 @@ for pacote in $pacotes; do
     # linux-headers e make, que têm licença declarada, e deixava passar o
     # Firefox, que não tem. A receita é a declaração corrente e autoritativa,
     # e é ela que viaja neste bundle.
-    licenca=$(grep '^LICENSE=' "$receita" | head -1 | cut -d= -f2- | tr -d '"')
-    [ -n "$licenca" ] || licenca=NOASSERTION
+    if ! licenca=$(campo_linha_unico "$receita" LICENSE); then
+        echo "erro: $pacote precisa ter exatamente uma LICENSE literal" >&2
+        exit 1
+    fi
+    case "$licenca" in
+        \"*\") licenca=${licenca#\"}; licenca=${licenca%\"} ;;
+        *\"*|*\'*|*"\t"*|'')
+            echo "erro: $pacote tem LICENSE não canônica" >&2
+            exit 1
+            ;;
+    esac
     case "$licenca" in
         NOASSERTION) noassertion="$noassertion $pacote" ;;
     esac
@@ -291,8 +1592,11 @@ for pacote in $pacotes; do
     #
     # Ninguém tinha percebido porque até então todo recipe com múltiplas fontes
     # escrevia tudo numa linha só.
-    src=$(campo_continuado "$receita" SRC)
-    hashes=$(campo_continuado "$receita" SHA256)
+    if ! src=$(campo_continuado "$receita" SRC) ||
+       ! hashes=$(campo_continuado "$receita" SHA256); then
+        echo "erro: $pacote tem SRC/SHA256 repetido ou não literal" >&2
+        exit 1
+    fi
     if [ -z "$src" ]; then
         printf '%s\t%s\t%s\t%s\t-\t-\t(receita de montagem, sem fonte upstream)\t-\n' \
             "$pacote" "$versao" "$mundo" "$licenca" >> "$inventario"
@@ -305,19 +1609,25 @@ for pacote in $pacotes; do
         url=$(printf '%s' "$src" | cut -d' ' -f"$indice")
         indice=$((indice + 1))
         if [ -f "$FONTES/$hash" ]; then
-            [ -f "$OUTPUT/upstream/$hash" ] || {
-                cp "$FONTES/$hash" "$OUTPUT/upstream/$hash"
-                copiadas=$((copiadas + 1))
-            }
-            arquivo=upstream/$hash
-            # A assinatura destacada, quando o cache a tem, viaja junto: ela é
-            # a prova de que a fonte é a que o upstream publicou.
-            for sidecar in "$FONTES/$hash".minisig "$FONTES/$hash".sig; do
-                [ -f "$sidecar" ] || continue
-                cp "$sidecar" "$OUTPUT/upstream/$(basename "$sidecar")"
-            done
+            if promove_objeto_cache "$hash" "$FONTES/$hash" \
+                "$OUTPUT/upstream/$hash" "fonte upstream de $pacote"; then
+                [ "$PROMOVIDO" = no ] || copiadas=$((copiadas + 1))
+                arquivo=upstream/$hash
+                # A assinatura destacada, quando o cache a tem, viaja junto:
+                # ela prova qual objeto o upstream publicou.
+                for sidecar in "$FONTES/$hash".minisig "$FONTES/$hash".sig \
+                               "$FONTES/$hash".asc; do
+                    copia_sidecar_regular "$sidecar" \
+                        "$OUTPUT/upstream/$(basename "$sidecar")" \
+                        "fonte upstream de $pacote" || exit 1
+                done
+            else
+                arquivo='(DIVERGENTE do hash declarado)'
+                faltando="$faltando $pacote"
+                [ "$STRICT" != yes ] || exit 1
+            fi
         else
-            arquivo='(AUSENTE do cache de fontes)'
+            arquivo='(AUSENTE ou DIVERGENTE no cache de fontes)'
             faltando="$faltando $pacote"
         fi
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
@@ -327,45 +1637,244 @@ for pacote in $pacotes; do
     coletar_correspondentes
 done
 
+# ---- insumo exclusivamente vivo -----------------------------------------
+# cfdisk/sfdisk são compilados diretamente pelo build-efi, fora da árvore de
+# receitas. Sem esta linha um bundle estrito de EFI/ISO parecia completo e
+# omitia precisamente a fonte de dois binários que a mídia redistribui.
+if [ "$LIVE_UTIL_STATUS" = valido ]; then
+    util_destino=$OUTPUT/upstream/$UTIL_LINUX_SHA256_PIN
+    [ -f "$LIVE_UTIL_LINUX_TAR" ] && [ ! -L "$LIVE_UTIL_LINUX_TAR" ] &&
+        [ "$(sha256sum "$LIVE_UTIL_LINUX_TAR" | cut -d' ' -f1)" = "$LIVE_UTIL_SHA256" ] || {
+        echo "erro: origem do util-linux mudou antes da materialização" >&2
+        exit 1
+    }
+    if [ -e "$util_destino" ] || [ -L "$util_destino" ]; then
+        [ -f "$util_destino" ] && [ ! -L "$util_destino" ] || {
+            echo "erro: destino do util-linux não é arquivo regular" >&2
+            exit 1
+        }
+    else
+        cp "$LIVE_UTIL_LINUX_TAR" "$util_destino"
+        copiadas=$((copiadas + 1))
+    fi
+    [ -f "$LIVE_UTIL_LINUX_TAR" ] && [ ! -L "$LIVE_UTIL_LINUX_TAR" ] &&
+        [ "$(sha256sum "$LIVE_UTIL_LINUX_TAR" | cut -d' ' -f1)" = "$LIVE_UTIL_SHA256" ] &&
+        [ -f "$util_destino" ] && [ ! -L "$util_destino" ] &&
+        [ "$(sha256sum "$util_destino" | cut -d' ' -f1)" = "$UTIL_LINUX_SHA256_PIN" ] || {
+        echo "erro: cópia do util-linux divergiu do pino após materialização" >&2
+        exit 1
+    }
+    util_arquivo=upstream/$UTIL_LINUX_SHA256_PIN
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        util-linux-live "$UTIL_LINUX_VERSION_PIN" LIVE \
+        VARIOUS-see-upstream-README.licensing "$UTIL_LINUX_SHA256_PIN" \
+        "$UTIL_LINUX_URL_PIN" "$util_arquivo" insumo-live >> "$inventario"
+elif [ "$LIVE_CONTEXT" = yes ] || [ -n "$LIVE_UTIL_LINUX_TAR" ]; then
+    faltando="$faltando util-linux-live"
+    if [ -n "$UTIL_LINUX_SHA256_PIN" ]; then
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            util-linux-live "$UTIL_LINUX_VERSION_PIN" LIVE \
+            VARIOUS-see-upstream-README.licensing "$UTIL_LINUX_SHA256_PIN" \
+            "$UTIL_LINUX_URL_PIN" '(AUSENTE ou divergente)' insumo-live \
+            >> "$inventario"
+    fi
+fi
+
 # ---- o kernel, que o §8 nomeia expressamente -----------------------------
+estado_configs_root() {
+    boot_root=$MINITRUE_ROOT/boot
+    if [ -e "$boot_root" ] || [ -L "$boot_root" ]; then
+        [ -d "$boot_root" ] && [ ! -L "$boot_root" ] || {
+            echo "erro: /boot do rootfs não é diretório regular" >&2
+            return 1
+        }
+    else
+        return 0
+    fi
+    for config_root in "$boot_root"/config-*; do
+        [ -e "$config_root" ] || [ -L "$config_root" ] || continue
+        config_nome=$(basename "$config_root")
+        case "$config_nome" in
+            ''|*[!A-Za-z0-9._+-]*)
+                echo "erro: nome de configuração do kernel não canônico: $config_nome" >&2
+                return 1
+                ;;
+        esac
+        [ -f "$config_root" ] && [ ! -L "$config_root" ] || {
+            echo "erro: configuração do kernel não é arquivo regular: $config_root" >&2
+            return 1
+        }
+        config_hash=$(sha256sum "$config_root" | cut -d' ' -f1)
+        [ -f "$config_root" ] && [ ! -L "$config_root" ] || {
+            echo "erro: configuração do kernel mudou durante o hash: $config_root" >&2
+            return 1
+        }
+        printf '%s %s\n' "$config_nome" "$config_hash"
+    done
+}
+if ! KERNEL_CONFIG_STATE=$(estado_configs_root); then
+    exit 1
+fi
 for config in "$MINITRUE_ROOT"/boot/config-*; do
-    [ -f "$config" ] || continue
-    cp "$config" "$OUTPUT/kernel/$(basename "$config")"
+    [ -e "$config" ] || [ -L "$config" ] || continue
+    config_nome=$(basename "$config")
+    config_hash=$(printf '%s\n' "$KERNEL_CONFIG_STATE" | awk -v nome="$config_nome" '
+        $1 == nome { encontrados++; valor = $2 }
+        END { if (encontrados != 1) exit 1; print valor }
+    ') || {
+        echo "erro: configuração do kernel não pertence ao snapshot inicial" >&2
+        exit 1
+    }
+    [ -f "$config" ] && [ ! -L "$config" ] &&
+        [ "$(sha256sum "$config" | cut -d' ' -f1)" = "$config_hash" ] || {
+        echo "erro: configuração do kernel mudou antes da cópia: $config" >&2
+        exit 1
+    }
+    config_destino=$OUTPUT/kernel/$config_nome
+    cp "$config" "$config_destino"
+    [ -f "$config" ] && [ ! -L "$config" ] &&
+        [ "$(sha256sum "$config" | cut -d' ' -f1)" = "$config_hash" ] &&
+        [ -f "$config_destino" ] && [ ! -L "$config_destino" ] &&
+        [ "$(sha256sum "$config_destino" | cut -d' ' -f1)" = "$config_hash" ] || {
+        echo "erro: configuração do kernel mudou durante a cópia: $config" >&2
+        exit 1
+    }
 done
-if [ -n "$LIVE_CONFIG" ] && [ -f "$LIVE_CONFIG" ]; then
-    cp "$LIVE_CONFIG" "$OUTPUT/kernel/config-live"
-else
+if [ -n "$LIVE_CONFIG_SHA256" ]; then
+    [ -f "$LIVE_CONFIG" ] && [ ! -L "$LIVE_CONFIG" ] &&
+        [ "$(sha256sum "$LIVE_CONFIG" | cut -d' ' -f1)" = "$LIVE_CONFIG_SHA256" ] || {
+        echo "erro: configuração do kernel vivo mudou antes da cópia" >&2
+        exit 1
+    }
+    live_config_destino=$OUTPUT/kernel/config-live
+    cp "$LIVE_CONFIG" "$live_config_destino"
+    [ -f "$LIVE_CONFIG" ] && [ ! -L "$LIVE_CONFIG" ] &&
+        [ "$(sha256sum "$LIVE_CONFIG" | cut -d' ' -f1)" = "$LIVE_CONFIG_SHA256" ] &&
+        [ -f "$live_config_destino" ] && [ ! -L "$live_config_destino" ] &&
+        [ "$(sha256sum "$live_config_destino" | cut -d' ' -f1)" = "$LIVE_CONFIG_SHA256" ] || {
+        echo "erro: configuração do kernel vivo mudou durante a cópia" >&2
+        exit 1
+    }
+elif [ "$LIVE_CONTEXT" = yes ]; then
     echo "aviso: sem --live-kernel-config; o bundle sai SEM a configuração do" >&2
     echo "       kernel que de fato boota o sistema instalado" >&2
+elif [ -n "$LIVE_CONFIG" ]; then
+    echo "aviso: --live-kernel-config não é arquivo: $LIVE_CONFIG" >&2
+fi
+
+# O bundle pode levar tempo para copiar/fontes e vendor. Reconfira no fim que
+# o índice vinculante continua sendo o mesmo arquivo regular e os mesmos bytes
+# validados contra emit.meta, em vez de gravar no manifesto uma identidade já
+# trocada durante a coleta.
+if [ -n "$CHANNEL_INDEX_SHA" ]; then
+    valida_canal_factual || exit 1
+    [ -z "$CHANNEL_EMIT_META_SHA" ] || revalida_emit_meta || exit 1
+    indice_canal_regular || {
+        echo "erro: índice de canal deixou de ser arquivo regular durante o bundle" >&2
+        exit 1
+    }
+    channel_index_sha_final=$(sha256sum "$ARTIFACT" | cut -d' ' -f1)
+    indice_canal_regular || {
+        echo "erro: índice de canal deixou de ser arquivo regular durante o bundle" >&2
+        exit 1
+    }
+    [ "$channel_index_sha_final" = "$ARTIFACT_SHA" ] || {
+        echo "erro: índice de canal mudou durante a produção do bundle" >&2
+        exit 1
+    }
+else
+    valida_indices_cache_factual || exit 1
+fi
+revalida_minitrue_bin || exit 1
+
+# O bundle pode levar minutos. Um caminho genérico (ISO, EFI ou cache) precisa
+# da mesma estabilidade já exigida do index: registrar o hash inicial depois
+# de os bytes terem sido substituídos produziria um bundle correspondente a um
+# artefato que já não existe mais naquele caminho.
+artefato_regular || {
+    echo "erro: artefato deixou de ser arquivo regular durante o bundle" >&2
+    exit 1
+}
+artifact_sha_final=$(sha256sum "$ARTIFACT" | cut -d' ' -f1)
+artefato_regular || {
+    echo "erro: artefato deixou de ser arquivo regular durante o bundle" >&2
+    exit 1
+}
+[ "$artifact_sha_final" = "$ARTIFACT_SHA" ] || {
+    echo "erro: artefato mudou durante a produção do bundle" >&2
+    exit 1
+}
+if [ -n "$LIVE_CONFIG_SHA256" ]; then
+    [ -f "$LIVE_CONFIG" ] && [ ! -L "$LIVE_CONFIG" ] &&
+        [ "$(sha256sum "$LIVE_CONFIG" | cut -d' ' -f1)" = "$LIVE_CONFIG_SHA256" ] || {
+        echo "erro: configuração do kernel vivo mudou durante o bundle" >&2
+        exit 1
+    }
+fi
+if [ "$LIVE_UTIL_STATUS" = valido ]; then
+    [ -f "$LIVE_UTIL_LINUX_TAR" ] && [ ! -L "$LIVE_UTIL_LINUX_TAR" ] &&
+        [ "$(sha256sum "$LIVE_UTIL_LINUX_TAR" | cut -d' ' -f1)" = "$LIVE_UTIL_SHA256" ] || {
+        echo "erro: fonte do util-linux mudou durante o bundle" >&2
+        exit 1
+    }
+fi
+if ! kernel_config_state_final=$(estado_configs_root) ||
+   [ "$kernel_config_state_final" != "$KERNEL_CONFIG_STATE" ]; then
+    echo "erro: conjunto de configurações do kernel mudou durante o bundle" >&2
+    exit 1
 fi
 
 # ---- o que este bundle é, e de que artefato ------------------------------
 cat > "$OUTPUT/ARTEFATO" <<FIM
 BUNDLE_FORMAT=1
-MEDIA=$(basename "$MEDIA")
-MEDIA_SHA256=$MEDIA_SHA
+ARTIFACT=$(basename "$ARTIFACT")
+ARTIFACT_SHA256=$ARTIFACT_SHA
+MINITRUE_SHA256=$MINITRUE_SHA256
 DISTROPICA_REVISION=$REVISAO
 PACOTES=$total
 FONTES_UPSTREAM=$copiadas
 FIM
+if [ "$LEGACY_MEDIA" = yes ]; then
+    cat >> "$OUTPUT/ARTEFATO" <<FIM
+MEDIA=$(basename "$MEDIA")
+MEDIA_SHA256=$ARTIFACT_SHA
+FIM
+fi
 
 cat > "$OUTPUT/LEIA-ME" <<'FIM'
 Bundle de fontes correspondente — SPEC-0011 §8.
 
-Este diretório é a fonte correspondente da mídia nomeada em ARTEFATO, e de
-nenhuma outra: o MEDIA_SHA256 ali é o que amarra os dois. Uma mídia diferente
-exige um bundle diferente, ainda que a árvore seja a mesma.
+Este diretório é a fonte correspondente do artefato nomeado em ARTEFATO, e de
+nenhum outro: o ARTIFACT_SHA256 ali é o que amarra os dois. Um artefato
+diferente exige um bundle diferente, ainda que a árvore seja a mesma. No caso
+de um canal, o artefato vinculante é `index` na saída de
+`channel emit --release`; o `emit.meta` v4 irmão prova a raiz local, liga-se
+aos bytes exatos por `INDEX_SHA256` e prende o inventário por
+`PRODUCER_PLAN_LOCK_SHA256`. O índice v4 contém `RELEASE_ROOT=yes` e oito
+campos por pacote; as linhas do índice — não um cache reduzido da mídia —
+decidem o inventário e prendem por SHA-256 todos os objetos publicados em
+pool/ e o plano em plans/. A assinatura do índice continua obrigatória antes
+da publicação.
 
-  ARTEFATO      a que mídia isto corresponde, e de que revisão da árvore
+O `PLAN_LOCK_FORMAT=1` produtor inclui licença, `MATERIAL_ID`,
+`PROVENANCE_SHA256` e fatos ABI tipados (`ABI_REQUIRE`, `ABI_PROVIDE`,
+`ABI_STATIC` e `ABI_NONE`). Isso permite cotejo factual, mas não autoriza por
+si só uma mídia: a API LIVE/profile e o bundle de licenças ainda não estão
+integrados produtivamente, e não se deve alegar esse gate como fechado.
+
+  ARTEFATO      a que artefato isto corresponde, e de que revisão da árvore
+                MINITRUE_SHA256 prende o executor que recalculou fingerprints
   INVENTARIO    uma linha por fonte: pacote, versão, mundo, licença, sha256,
                 a URL de onde veio, onde está aqui dentro, e o TIPO
 
-O tipo é 'upstream' ou 'fonte-correspondente', e a distinção importa. Pacotes
-de Mundo A são instalados a partir de um BINÁRIO publicado pelo upstream, e é
-esse binário que a linha 'upstream' aponta. Quando o binário é copyleft, a
-licença exige também a fonte a partir da qual ele foi construído — e ela vem
-numa segunda linha, marcada 'fonte-correspondente'. É o caso do BusyBox, que a
-mídia carrega como binário estático GPL-2.0-only.
+O tipo é 'upstream', 'fonte-correspondente' ou 'insumo-live', e a distinção
+importa. Pacotes de Mundo A são instalados a partir de um BINÁRIO publicado
+pelo upstream, e é esse binário que a linha 'upstream' aponta. Quando o binário
+é copyleft, a licença exige também a fonte a partir da qual ele foi construído
+— e ela vem numa segunda linha, marcada 'fonte-correspondente'. É o caso do
+BusyBox, que a mídia carrega como binário estático GPL-2.0-only. 'insumo-live'
+é fonte compilada diretamente pelo compositor do EFI, fora de uma receita
+Newspeak; hoje identifica o util-linux que fornece cfdisk/sfdisk.
 
 Uma ressalva que não se deve ler nas entrelinhas: a fonte correspondente
 COMPLETA de um binário inclui a configuração com que ele foi construído, e o
@@ -386,13 +1895,13 @@ elas dizem de onde a fonte veio, e os arquivos em upstream/ são a fonte.
 FIM
 
 echo "bundle: $OUTPUT"
-echo "  mídia:     $MEDIA_SHA"
+echo "  artefato:  $ARTIFACT_SHA"
 echo "  revisão:   $REVISAO"
 echo "  pacotes:   $total"
 echo "  fontes:    $copiadas arquivos, $(du -sh "$OUTPUT/upstream" | cut -f1)"
 echo "  tamanho:   $(du -sh "$OUTPUT" | cut -f1)"
 if [ -n "$faltando" ]; then
-    echo "AVISO: fonte ausente do cache para:$faltando" >&2
+    echo "AVISO: fonte ausente ou divergente no cache para:$faltando" >&2
     echo "       o bundle está INCOMPLETO e não satisfaz o §8" >&2
 fi
 if [ -n "$divergentes" ]; then
@@ -403,4 +1912,8 @@ if [ -n "$noassertion" ]; then
     echo "PENDENTE: LICENSE=NOASSERTION em:$noassertion" >&2
     echo "          o §8 é explícito: isso NÃO libera o artefato para" >&2
     echo "          publicação oficial, mesmo com o bundle completo." >&2
+fi
+if [ "$STRICT" = yes ] && { [ -n "$faltando" ] || [ -n "$noassertion" ]; }; then
+    echo "erro: --strict recusou bundle incompleto ou com licença não declarada" >&2
+    exit 1
 fi

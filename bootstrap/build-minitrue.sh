@@ -8,16 +8,34 @@
 # comparar; sem reprodutibilidade, "confie em nós" seria a única garantia — e
 # ainda por cima na ferramenta que decide o que é confiável no resto do sistema.
 #
-# Uso: bootstrap/build-minitrue.sh [--musl] [diretório-de-saída]
+# Uso: bootstrap/build-minitrue.sh [--musl] [--authoring] [diretório-de-saída]
+#
+# Sem --authoring produz o ÚNICO perfil distribuível: sem a feature Cargo que
+# expõe TOFU. A variante explícita é ferramenta do autor da receita e usa um
+# target separado por padrão, para nunca substituir por acidente o binário que
+# stage0/publicação esperam em target/release/minitrue.
 set -eu
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 MUSL=
+AUTHORING=
 OUT=
 while [ $# -gt 0 ]; do
     case $1 in
         --musl) MUSL=1 ;;
-        *) OUT=$1 ;;
+        --authoring) AUTHORING=1 ;;
+        -h|--help)
+            echo "uso: bootstrap/build-minitrue.sh [--musl] [--authoring] [diretório-de-saída]"
+            exit 0
+            ;;
+        -*) echo "erro: opção desconhecida: $1" >&2; exit 1 ;;
+        *)
+            [ -z "$OUT" ] || {
+                echo "erro: informe no máximo um diretório-de-saída" >&2
+                exit 1
+            }
+            OUT=$1
+            ;;
     esac
     shift
 done
@@ -55,9 +73,20 @@ export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
 # deste script supunha o segundo, lia um binário de uma hora atrás e imprimia o
 # hash DELE como se fosse o do build recém-feito. Um script cujo trabalho é
 # provar reprodutibilidade não pode errar qual arquivo acabou de produzir.
-export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$REPO/target}
+if [ -z "${CARGO_TARGET_DIR:-}" ]; then
+    if [ -n "$AUTHORING" ]; then
+        CARGO_TARGET_DIR=$REPO/target/minitrue-authoring
+    else
+        CARGO_TARGET_DIR=$REPO/target
+    fi
+fi
+export CARGO_TARGET_DIR
 
-set -- --release --locked --offline --manifest-path "$REPO/minitrue/Cargo.toml"
+set -- --release --locked --offline --no-default-features \
+    --manifest-path "$REPO/minitrue/Cargo.toml"
+if [ -n "$AUTHORING" ]; then
+    set -- "$@" --features tofu-authoring
+fi
 if [ -n "$MUSL" ]; then
     rustup target list --installed 2>/dev/null | grep -q '^x86_64-unknown-linux-musl$' || {
         echo "erro: alvo musl ausente (rustup target add x86_64-unknown-linux-musl)" >&2

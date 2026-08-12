@@ -1,5 +1,6 @@
 #!/bin/sh
-# Confere a versão pinada de CADA receita contra o estável mais novo do upstream.
+# Confere a versão pinada de CADA receita contra o estável mais novo do upstream
+# e também versões literais de fontes secundárias em receitas compostas.
 #
 # Exigência de publicação da SPEC-0011 §7.1, e o mecanismo que faltava à P7. A
 # premissa "sempre o estável mais recente" existia desde a SPEC-0001 e foi
@@ -9,17 +10,27 @@
 # mídia instala e não que está atual, e o `channel emit` audita fechamento de
 # dependências, não idade. Este script olha.
 #
-# TRÊS VEREDITOS, E OS TRÊS APARECEM:
+# CINCO VEREDITOS, E OS CINCO APARECEM:
 #
 #   atual        pinado == estável mais novo
 #   atrasado     há estável mais novo, e nenhuma ressalva registrada
 #   pinado       há estável mais novo E existe newspeak/<pkg>/versao-pinada
 #                explicando por quê — a ressalva pragmática da P7
-#   ?            NAO CONFERIDO: o upstream não publica índice legível
+#   ?            NAO CONFERIDO: o upstream respondeu e não deu para ler
+#   !            CONSULTA FALHOU: não se chegou ao upstream (HTTP no motivo)
 #
-# O '?' É A CATEGORIA PERIGOSA e por isso é listada por nome no fim, nunca
-# somada num total. Um relatório que diz "112 de 135 conferidos" e cala sobre os
-# 23 faz parecer conferido o que não foi.
+# '?' E '!' SÃO CATEGORIAS DIFERENTES, e separá-las foi conserto, não enfeite.
+# Enquanto eram uma só, a lista mudava de composição a cada rodada sem que nada
+# mudasse na árvore — 8 numa, 23 na seguinte —, e lista que muda sozinha não dá
+# para agir em cima. São problemas de naturezas opostas: o '!' é o 403 de limite
+# de taxa do GitHub, é do minuto e some sozinho ao rodar de novo; o '?' é defeito
+# DESTA ferramenta, não some sozinho, e cada um só sai daqui com código novo —
+# foi assim que caíram os dois últimos, o '-stable' do libevent e o '3.7b' do
+# tmux, ambos com a árvore JÁ atual e o conferidor sem saber ler.
+#
+# As duas são listadas por nome no fim, nunca somadas num total. Um relatório
+# que diz "112 de 135 conferidos" e cala sobre os 23 faz parecer conferido o que
+# não foi.
 #
 # A RESSALVA MORA FORA DA RECEITA pelo mesmo motivo do `fontes-correspondentes`:
 # o FINGERPRINT cobre o texto do recipe, e acrescentar um campo lá recompilaria
@@ -64,6 +75,12 @@ done
 command -v curl >/dev/null 2>&1 || { echo "erro: curl é necessário" >&2; exit 1; }
 mkdir -p "$CACHE"
 
+# Onde o `busca` deixa recado quando a REQUISIÇÃO falha. É arquivo, e não
+# variável, porque `upstream_de` é chamado dentro de `$( )`: o handler roda em
+# subshell e nada que ele atribua volta para o laço.
+FALHAS=$CACHE/.falhas.$$
+trap 'rm -f "$FALHAS"' EXIT INT TERM
+
 # Lê um campo do recipe juntando as linhas terminadas em '\'. Mesma regra do
 # `source-bundle`, e pela mesma razão: o rust escreve cinco fontes em cinco
 # linhas, e um `grep | head -1` lê só a primeira.
@@ -87,6 +104,72 @@ campo() {
     ' "$1"
 }
 
+# Extrai "componente|versão" de um tarball/zip cujo nome traz uma versão
+# literal. Esta é a forma das fontes secundárias de mathlibs-glibc:
+# mpfr-4.2.2.tar.xz e mpc-1.4.1.tar.xz. Falhar em reconhecer NÃO autoriza
+# ignorar a fonte: o chamador a transforma em "não conferido" e fecha o gate.
+versao_fixa_da_fonte() {  # url
+    arquivo=${1##*/}
+    arquivo=${arquivo%%\?*}
+    case "$arquivo" in
+        *.tar.*) base=${arquivo%.tar.*} ;;
+        *.tgz)   base=${arquivo%.tgz} ;;
+        *.zip)   base=${arquivo%.zip} ;;
+        *) return 1 ;;
+    esac
+    printf '%s\n' "$base" | sed -n \
+        -e 's/^\(.*\)-v\([0-9][0-9A-Za-z._+~-]*\)$/\1|\2/p' \
+        -e 's/^\(.*\)-\([0-9][0-9A-Za-z._+~-]*\)$/\1|\2/p'
+}
+
+# Emite "rótulo|versão|url|erro" para cada versão que precisa ser consultada.
+# A primeira fonte representa VERSION e conserva o comportamento histórico.
+# Fonte secundária que também usa $VERSION (os quatro componentes adicionais
+# do Rust) é o MESMO pino e não deve repetir consulta nem poluir o relatório.
+# Já uma versão secundária LITERAL é software empacotado independente e entra
+# no gate — foi assim que mathlibs-glibc deixou MPC 1.3.1 sobreviver depois de
+# a receita canônica mpc subir para 1.4.1.
+fontes_conferiveis() {  # pacote versao "fontes"
+    fc_pacote=$1
+    fc_versao=$2
+    fc_fontes=$3
+    fc_indice=0
+    for fc_fonte in $fc_fontes; do
+        fc_indice=$((fc_indice + 1))
+        if [ "$fc_indice" -eq 1 ]; then
+            fc_url=$(printf '%s\n' "$fc_fonte" |
+                sed "s/\${VERSION}/$fc_versao/g; s/\$VERSION/$fc_versao/g")
+            printf '%s|%s|%s|\n' "$fc_pacote" "$fc_versao" "$fc_url"
+            continue
+        fi
+        case "$fc_fonte" in
+            *'$VERSION'*|*'${VERSION}'*) continue ;;
+        esac
+        fc_info=$(versao_fixa_da_fonte "$fc_fonte")
+        if [ -n "$fc_info" ]; then
+            fc_componente=${fc_info%%|*}
+            fc_pin=${fc_info#*|}
+            printf '%s/%s|%s|%s|\n' \
+                "$fc_pacote" "$fc_componente" "$fc_pin" "$fc_fonte"
+        else
+            printf '%s/fonte-%s||%s|versão fixa não reconhecida na fonte secundária\n' \
+                "$fc_pacote" "$fc_indice" "$fc_fonte"
+        fi
+    done
+}
+
+# A ressalva da P7 é governança auditável, não apenas a existência de um
+# arquivo-sentinela. Exija motivo e uma data ISO em qualquer linha do arquivo;
+# assim um pino esquecido não permanece verde indefinidamente.
+ressalva_pinada() {  # arquivo
+    [ -f "$1" ] || return 1
+    rp_motivo=$(grep -v '^#' "$1" | grep -v '^[[:space:]]*$' | head -1)
+    [ -n "$rp_motivo" ] || return 1
+    grep -Eq '(^|[^0-9])[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])([^0-9]|$)' "$1" ||
+        return 1
+    printf '%s\n' "$rp_motivo"
+}
+
 # Busca com cache. A chave é o sha256 da URL — nomes de arquivo derivados da URL
 # esbarram em '/' e em limite de tamanho.
 busca() {
@@ -96,13 +179,22 @@ busca() {
         cat "$CACHE/$chave"
         return 0
     fi
-    if curl -fsSL --max-time "$ESPERA" -H 'User-Agent: distropica-versoes' \
-            -o "$CACHE/$chave.tmp" "$url" 2>/dev/null; then
+    # O código HTTP é guardado porque "o upstream não deu resposta legível" e "a
+    # consulta nem chegou lá" são problemas DIFERENTES, e por três rodadas eles
+    # apareceram na mesma lista: o 403 de limite de taxa do GitHub some sozinho
+    # e é do dia, um índice ilegível é defeito DESTA ferramenta e não some. Foi
+    # o que fez a lista de não conferidos mudar de composição entre rodadas sem
+    # que nada tivesse mudado na árvore — e uma lista que muda sozinha não dá
+    # para agir em cima.  000 = nem resposta houve (DNS, timeout, conexão).
+    codigo=$(curl -fsSL --max-time "$ESPERA" -H 'User-Agent: distropica-versoes' \
+                  -w '%{http_code}' -o "$CACHE/$chave.tmp" "$url" 2>/dev/null)
+    if [ "$?" -eq 0 ]; then
         mv "$CACHE/$chave.tmp" "$CACHE/$chave"
         cat "$CACHE/$chave"
         return 0
     fi
     rm -f "$CACHE/$chave.tmp"
+    printf '%s %s\n' "${codigo:-000}" "$url" >> "$FALHAS"
     return 1
 }
 
@@ -112,8 +204,12 @@ busca() {
 maior() {
     grep -vE '(^|[-.])(rc|alpha|beta|pre|dev|snapshot|nightly)[-.0-9]*$' |
         # o sufixo de patch do OpenSSH ('10.4p1') é versão estável, não
-        # pré-lançamento — recusá-lo punha o openssh em "não conferido".
-        grep -E '^[0-9]+(\.[0-9]+)*([a-z][0-9]+)?$' |
+        # pré-lançamento — recusá-lo punha o openssh em "não conferido". E a
+        # letra pode vir SOZINHA: o tmux lança 3.7, 3.7a, 3.7b, e exigir dígito
+        # depois dela matava o 3.7b — sobrava o 3.7, mais VELHO que o pinado, e
+        # o tmux caía em "não conferido" com a árvore já atual. Uma letra só,
+        # que é o que distingue '3.7b' de '1.2.3rc'.
+        grep -E '^[0-9]+(\.[0-9]+)*([a-z][0-9]*)?$' |
         sort -V | tail -1
 }
 
@@ -147,10 +243,11 @@ maior() {
 #   Perl entrou porque o conferidor mandou a árvore para o 5.45.1, que é série
 #   de desenvolvimento — o CPAN lista 5.43.x e 5.45.x ao lado do 5.44.0 estável.
 #
-#   MICRO >= 90 — vale para todos, mas SÓ QUANDO OS DADOS PROVAM: X.Y.Z com
-#   Z >= 90 é rc se, e somente se, existir candidato X.(Y+1).*. É o que separa o
-#   wayland 1.25.91 (existe 1.26.0) do libdrm 2.4.134 (não existe 2.5.x). A
-#   regra deixa de ser palpite sobre o projeto e passa a ser leitura do conjunto.
+#   MICRO >= 90 — no GNOME é pré-release declarado pela família; o librsvg
+#   2.62.90, por exemplo, anuncia dentro do próprio NEWS a crate 2.63.0-beta.0.
+#   Fora do GNOME só vale quando os dados provam: X.Y.Z com Z >= 90 é rc se
+#   existir candidato X.(Y+1).*. É o que separa o wayland 1.25.91 (existe
+#   1.26.0) do libdrm 2.4.134 (não existe 2.5.x).
 filtra_candidatos() {  # versao_pinada [gnome]
     awk -F. -v pin="$1" -v gnome="${2:-nao}" '
         {
@@ -167,9 +264,10 @@ filtra_candidatos() {  # versao_pinada [gnome]
                 split(linha[i], v, ".")
                 if (length(v[1]) > digitos_pin + 1) continue
                 if (usa_impar && v[2] != "" && v[2] % 2 == 1) continue
-                # rc só quando existe minor acima no mesmo major
+                # GNOME declara .90 como pré-release; nas outras famílias a
+                # inferência só vale quando existe minor acima no mesmo major.
                 if (v[3] != "" && v[3] + 0 >= 90 && \
-                    maior_minor[v[1]] + 0 > v[2] + 0) continue
+                    (gnome == "sim" || maior_minor[v[1]] + 0 > v[2] + 0)) continue
                 print linha[i]
             }
         }'
@@ -185,12 +283,26 @@ filtra_candidatos() {  # versao_pinada [gnome]
 #   libdrm-2.4.134           prefixo com hífen, caso comum
 #   v1.26.0                  prefixo de uma letra
 normaliza_tag() {
-    sed -e 's/^[vV]\([0-9]\)/\1/' |
+    # `jpeg-10` no libjpeg-turbo nomeia a compatibilidade com a série IJG,
+    # não uma versão 10 do projeto. Preserve-o como texto não numérico para o
+    # `maior` rejeitar, em vez de promover 3.2.0 para um falso 10.
+    sed -e 's/^jpeg-\([0-9]\)/jpegABI\1/' |
+        sed -e 's/^[vV]\([0-9]\)/\1/' |
         # versão toda em underscores atrás de um prefixo alfabético (R_2_8_2)
         sed -e 's/^[A-Za-z][A-Za-z]*_\([0-9][0-9_]*\)$/\1/' -e '/^[0-9][0-9_]*$/ s/_/./g' |
+        # o Little CMS usa especificamente `lcms2.19.1`. Não generalize para
+        # qualquer palavra colada a dígito: tags históricas como `beta4` (expat)
+        # e `testCI3` (exiv2) não são versões, e viravam falsos 4 e 3.
+        sed -e 's/^lcms\([0-9][0-9.]*\)$/\1/' |
         # prefixo <nome>- onde o nome pode conter dígitos; repete até a string
         # começar por dígito, o que resolve pcre2- e xkbcommon- de uma vez
-        sed -e ':a' -e 's/^[^0-9][^-]*-//' -e 'ta'
+        sed -e ':a' -e 's/^[^0-9][^-]*-//' -e 'ta' |
+        # o json-c sufixa a data da publicação à versão da ABI
+        sed -e 's/^\([0-9][0-9.]*\)-[0-9]\{8\}$/\1/' |
+        # sufixo '-stable' do libevent (release-2.1.13-stable). SÓ este: os
+        # irmãos '-alpha', '-beta' e '-rc' TÊM de sobreviver até o `maior`, que
+        # é quem os recusa. Apagá-los aqui promoveria o 2.2.2-alpha a estável.
+        sed -e 's/-stable$//'
 }
 
 # ---------------------------------------------------------------------------
@@ -207,11 +319,21 @@ de_github() {   # url, versao pinada
     # resultado foi o script mandando atualizar o expat 2.8.2 para "R_2_8_2" e o
     # pcre2 10.47 para "pcre2-10.47" — a própria versão pinada, com o nome da
     # tag em volta.
-    v=$(busca "https://api.github.com/repos/$caminho/releases/latest" |
-        sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1 |
-        normaliza_tag | filtra_candidatos "$2" | maior)
-    [ -n "$v" ] || v=$(busca "https://api.github.com/repos/$caminho/tags?per_page=100" |
-        grep -oE '"name": *"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' |
+    # Nem todo projeto promove a tag estável mais nova a GitHub Release. O
+    # mypaint-brushes, por exemplo, ainda marcava 1.3.1 como `latest` embora a
+    # tag estável 2.0.2 e seu tarball oficial existissem. Compare as duas
+    # autoridades, em vez de só consultar tags quando `releases/latest` falha.
+    v_release=$(busca "https://api.github.com/repos/$caminho/releases/latest" |
+        sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+    # O feed público não consome a cota anônima da API. Consultar também
+    # `/tags?per_page=100` dobrava as requisições e esgotava o limite de 60 no
+    # meio de uma árvore de 170 receitas. O href carrega o nome exato da tag.
+    v_tags=$(busca "https://github.com/$caminho/tags.atom" |
+        grep -oE 'href="[^"]*/releases/tag/[^"]+' |
+        sed 's|.*/releases/tag/||')
+    # Respostas JSON não são obrigadas a terminar em newline. Sem este printf,
+    # `1.10.8` do latest e `1.10.8` das tags viravam `1.10.81.10.8`.
+    v=$(printf '%s\n%s\n' "$v_release" "$v_tags" |
         normaliza_tag | filtra_candidatos "$2" | maior)
     printf '%s' "$v"
 }
@@ -225,13 +347,19 @@ serie_da_url() {  # url
     printf '%s' "$1" | sed -n 's|.*/sources/[^/]*/\([0-9][0-9.]*\)/.*|\1|p'
 }
 
-de_gnome() {    # url, versao pinada
+de_gnome() {    # url, versao pinada, todas_as_series [sim|nao]
     pkg=$(printf '%s' "$1" | sed -n 's|.*/sources/\([^/]*\)/.*|\1|p')
     [ -n "$pkg" ] || return 1
     serie=$(serie_da_url "$1")
+    # Uma ressalva `versao-pinada` só tem valor se for comparada com o topo
+    # estável real. gexiv2 0.14.7, por exemplo, fica em /0.14/ porque o GIMP
+    # recusa >=0.15, enquanto o upstream já está em 0.16.2. Sem abrir as séries
+    # nesse caso, o gate chamava o pino conhecido de "atual".
+    [ "${3:-nao}" = sim ] && serie=
     busca "https://download.gnome.org/sources/$pkg/cache.json" |
-        tr ',' '\n' | grep -oE '"[0-9]+(\.[0-9]+)+"' | tr -d '"' |
-        { [ -n "$serie" ] && grep "^$serie\." || cat; } |
+        tr ',' '\n' | grep -oE '"[0-9]+(\.[0-9]+)*"' | tr -d '"' |
+        awk -v serie="$serie" \
+            'serie == "" || $0 == serie || index($0, serie ".") == 1' |
         filtra_candidatos "$2" sim | maior
 }
 
@@ -293,6 +421,15 @@ de_listagem() {  # url
         grep -oE "$nome-[0-9][0-9A-Za-z.]*\.(tar\.[a-z0-9]+|tgz|zip)" |
         sed "s/^$nome-//; s/\.\(tar\..*\|tgz\|zip\)$//" |
         maior
+}
+
+# O URL do elfutils contém a própria versão como diretório. Consultar apenas o
+# pai do tarball confina a busca à versão já pinada e produz um falso "atual".
+# A autoridade que enumera releases é um nível acima: 0.193/, 0.194/, 0.195/…
+de_elfutils() {
+    busca 'https://sourceware.org/elfutils/ftp/' |
+        grep -oE 'href="[0-9]+(\.[0-9]+)+/"' |
+        sed 's/^href="//; s|/"$||' | maior
 }
 
 de_go() {
@@ -365,10 +502,23 @@ de_busybox_bin() {
         sed 's/-x86_64.*//' | maior
 }
 
+# A listagem dentro de /releases/$VERSION só consegue devolver a própria
+# versão e chamaria qualquer ESR pinado de "atual". A Mozilla publica a linha
+# rápida estável num índice primário legível; compare contra ela para que um
+# `versao-pinada` de ESR apareça como a ressalva que de fato é.
+de_mozilla_firefox() {
+    busca 'https://product-details.mozilla.org/1.0/firefox_versions.json' |
+        sed -n 's/^[[:space:]]*"LATEST_FIREFOX_VERSION":[[:space:]]*"\([^"]*\)".*/\1/p' |
+        head -1
+}
+
 upstream_de() {  # url, versao pinada
     case "$1" in
+        *mozilla.net/pub/firefox/releases/*|*mozilla.org/pub/firefox/releases/*)
+                                      de_mozilla_firefox ;;
+        *sourceware.org/elfutils/ftp/*) de_elfutils ;;
         *github.com/*)               de_github "$1" "$2" ;;
-        *download.gnome.org/*)       de_gnome "$1" "$2" ;;
+        *download.gnome.org/*)       de_gnome "$1" "$2" "${3:-nao}" ;;
         *pypi.org/*|*files.pythonhosted.org/*) de_pypi "$1" ;;
         *gitlab.*|*salsa.debian.org/*) de_gitlab "$1" "$2" ;;
         *kernel.org/*)               de_kernel_org "$1" ;;
@@ -389,52 +539,81 @@ upstream_de() {  # url, versao pinada
 
 atrasados=
 naoconferidos=
+falhou=
 pinados=
 atuais=0
 [ -n "$TSV" ] && printf '# pacote\tpinada\tupstream\tveredito\tmotivo\n' > "$TSV"
 
 for receita in "$REPO"/newspeak/*/recipe; do
     pacote=$(basename "$(dirname "$receita")")
-    versao=$(grep -m1 '^VERSION=' "$receita" | cut -d= -f2- | tr -d '"')
+    versao_receita=$(grep -m1 '^VERSION=' "$receita" | cut -d= -f2- | tr -d '"')
     src=$(campo "$receita" SRC)
-    url=$(printf '%s' "$src" | cut -d' ' -f1)
-    url=$(printf '%s' "$url" | sed "s/\${VERSION}/$versao/g; s/\$VERSION/$versao/g")
 
-    if [ -z "$versao" ] || [ -z "$url" ]; then
+    if [ -z "$versao_receita" ] || [ -z "$src" ]; then
         veredito='-'; nova='-'; motivo='receita de montagem, sem fonte upstream'
         [ -n "$TSV" ] && printf '%s\t%s\t%s\t%s\t%s\n' \
-            "$pacote" "${versao:--}" "-" "$veredito" "$motivo" >> "$TSV"
+            "$pacote" "${versao_receita:--}" "-" "$veredito" "$motivo" >> "$TSV"
         continue
     fi
 
-    nova=$(upstream_de "$url" "$versao" 2>/dev/null | head -1)
-    decl="$REPO/newspeak/$pacote/versao-pinada"
-    motivo=
-    if [ -z "$nova" ]; then
-        veredito='?'
-        naoconferidos="$naoconferidos $pacote"
-    elif [ "$nova" = "$versao" ]; then
-        veredito=atual
-        atuais=$((atuais + 1))
-    elif [ "$(printf '%s\n%s\n' "$versao" "$nova" | sort -V | tail -1)" = "$versao" ]; then
-        # pinado é MAIOR que o que o índice devolveu: quase sempre índice
-        # incompleto ou nome de pacote mal deduzido. Não é "atual".
-        veredito='?'
-        naoconferidos="$naoconferidos $pacote"
-    elif [ -f "$decl" ]; then
-        veredito=pinado
-        motivo=$(grep -v '^#' "$decl" | grep -v '^[[:space:]]*$' | head -1)
-        pinados="$pinados $pacote"
-    else
-        veredito=atrasado
-        atrasados="$atrasados $pacote"
-    fi
+    fontes=$(fontes_conferiveis "$pacote" "$versao_receita" "$src")
+    while IFS='|' read -r rotulo versao url erro_fonte; do
+        [ -n "$rotulo" ] || continue
+        decl="$REPO/newspeak/$pacote/versao-pinada"
+        motivo=
+        nova=
+        if [ -n "$erro_fonte" ]; then
+            # Fonte fixa que o extrator não entende não some em silêncio. É
+            # software no payload sem versão auditada, portanto o gate fecha.
+            veredito='?'
+            motivo=$erro_fonte
+            naoconferidos="$naoconferidos $rotulo"
+        else
+            : > "$FALHAS"
+            todas_series=nao
+            [ -f "$decl" ] && todas_series=sim
+            nova=$(upstream_de "$url" "$versao" "$todas_series" 2>/dev/null | head -1)
+            if [ -z "$nova" ]; then
+                # A falha só vale quando o handler NÃO produziu resposta. O
+                # `de_github` tenta releases/latest e cai nas tags: em projeto
+                # sem releases aquele 404 é caminho normal, não avaria.
+                if [ -s "$FALHAS" ]; then
+                    veredito='!'
+                    motivo="consulta falhou (HTTP $(cut -d' ' -f1 "$FALHAS" | sort -u | tr '\n' '/' | sed 's|/$||'))"
+                    falhou="$falhou $rotulo"
+                else
+                    veredito='?'
+                    naoconferidos="$naoconferidos $rotulo"
+                fi
+            elif [ "$nova" = "$versao" ]; then
+                veredito=atual
+                atuais=$((atuais + 1))
+            elif [ "$(printf '%s\n%s\n' "$versao" "$nova" | sort -V | tail -1)" = "$versao" ]; then
+                # Pinado maior que o índice: índice incompleto ou nome inferido
+                # errado. Não é legítimo promover isso a "atual".
+                veredito='?'
+                naoconferidos="$naoconferidos $rotulo"
+            elif motivo=$(ressalva_pinada "$decl"); then
+                veredito=pinado
+                pinados="$pinados $rotulo"
+            else
+                veredito=atrasado
+                if [ -f "$decl" ]; then
+                    motivo='ressalva sem motivo ou data ISO válida'
+                fi
+                atrasados="$atrasados $rotulo"
+            fi
+        fi
 
-    [ -n "$TSV" ] && printf '%s\t%s\t%s\t%s\t%s\n' \
-        "$pacote" "$versao" "${nova:--}" "$veredito" "$motivo" >> "$TSV"
-    if [ "$SO_PROBLEMAS" = no ] || [ "$veredito" != atual ]; then
-        printf '  %-9s %-22s %-14s %s\n' "$veredito" "$pacote" "$versao" "${nova:-—}"
-    fi
+        [ -n "$TSV" ] && printf '%s\t%s\t%s\t%s\t%s\n' \
+            "$rotulo" "${versao:--}" "${nova:--}" "$veredito" "$motivo" >> "$TSV"
+        if [ "$SO_PROBLEMAS" = no ] || [ "$veredito" != atual ]; then
+            printf '  %-9s %-22s %-14s %s\n' \
+                "$veredito" "$rotulo" "${versao:--}" "${nova:-—}"
+        fi
+    done <<EOF
+$fontes
+EOF
 done
 
 echo
@@ -450,8 +629,14 @@ fi
 if [ -n "$naoconferidos" ]; then
     printf 'NAO CONFERIDO — o upstream não deu resposta legível:%s\n' "$naoconferidos"
 fi
+# Separada da de cima de propósito: esta some ao rodar de novo mais tarde, a de
+# cima não. Juntá-las fazia parecer que a ferramenta tinha 23 buracos quando
+# tinha 8 buracos e 15 consultas recusadas naquele minuto.
+if [ -n "$falhou" ]; then
+    printf 'CONSULTA FALHOU — não chegou ao upstream, tente de novo:%s\n' "$falhou"
+fi
 [ -n "$TSV" ] && echo "relatório: $TSV"
 
-if [ -n "$naoconferidos" ]; then exit 2; fi
+if [ -n "$naoconferidos" ] || [ -n "$falhou" ]; then exit 2; fi
 if [ -n "$atrasados" ]; then exit 1; fi
 exit 0

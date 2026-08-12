@@ -1,0 +1,660 @@
+#!/bin/sh
+# O cache offline não pode confiar no nome content-addressed de um objeto.
+# Exercita os três estados que antes eram indistinguíveis: bytes corretos,
+# arquivo corrompido e symlink sob o sha256 esperado; também força divergência
+# entre a conferência da origem e a cópia final para travar a segunda leitura.
+set -eu
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+TMP=${TMPDIR:-/tmp}/distropica-teste-cache-integridade.$$
+trap 'rm -rf "$TMP"' EXIT
+
+FIXTURE=$TMP/repo
+ROOT=$TMP/root
+EMITTED=$TMP/emitted
+CONFIG=$TMP/oficial
+PROFILE=$FIXTURE/profiles/official
+mkdir -p "$FIXTURE/bootstrap" "$FIXTURE/newspeak/app" \
+    "$FIXTURE/newspeak/ponte" "$FIXTURE/newspeak/runtime-bin" \
+    "$FIXTURE/newspeak/root-bin" \
+    "$FIXTURE/newspeak/cargo-c" "$FIXTURE/newspeak/zig" \
+    "$FIXTURE/newspeak/cache-source" "$FIXTURE/newspeak/metapacote" \
+    "$PROFILE" "$FIXTURE/profiles/other" \
+    "$ROOT/var/cache/minitrue" "$ROOT/tmp" \
+    "$EMITTED/pool" "$EMITTED/plans" "$TMP/fd-probe-bin"
+cp "$REPO/bootstrap/cache-from-channel" "$FIXTURE/bootstrap/cache-from-channel"
+
+# Executáveis usados antes e depois da assinatura denunciam qualquer cópia do
+# descritor secreto. O wrapper real precisa fechá-lo no filho de preparação e
+# no pai antes de cleanup/relatório.
+cat > "$TMP/fd-probe-bin/awk" <<'EOF'
+#!/bin/sh
+set -eu
+fd=${EXPECT_CLOSED_PASSPHRASE_FD:-}
+if [ -n "$fd" ] && [ -e "/proc/$$/fd/$fd" ]; then
+    echo "descritor secreto $fd herdado por awk pré-sign" >&2
+    exit 94
+fi
+exec /usr/bin/awk "$@"
+EOF
+cat > "$TMP/fd-probe-bin/rm" <<'EOF'
+#!/bin/sh
+set -eu
+fd=${EXPECT_CLOSED_PASSPHRASE_FD:-}
+if [ -n "$fd" ] && [ -e "/proc/$$/fd/$fd" ]; then
+    echo "descritor secreto $fd herdado por rm/cleanup" >&2
+    exit 95
+fi
+exec /bin/rm "$@"
+EOF
+chmod +x "$TMP/fd-probe-bin/awk" "$TMP/fd-probe-bin/rm"
+
+cat > "$FIXTURE/bootstrap/enter.sh" <<'EOF'
+#!/bin/sh
+set -eu
+root=$1
+command=${2:-}
+index=$(find "$root/tmp" -path '*/channels/oficial/index' -type f | head -1)
+[ -n "$index" ] || exit 90
+assinatura=assinatura-fixture-plain
+case "$command" in
+    *'channel sign --passphrase-fd 0 '*)
+        # O chamador de teste entrega o segredo em fd 9. O wrapper precisa
+        # duplicá-lo para stdin e fechar o número original antes do enter.
+        [ ! -e /proc/$$/fd/9 ] || exit 93
+        passphrase=
+        IFS= read -r passphrase || exit 91
+        case "$passphrase" in
+            'passphrase fixture Sc 0.13') assinatura=assinatura-fixture-sc ;;
+            'passphrase mata signer') kill -KILL "$$" ;;
+            *) exit 92 ;;
+        esac
+        ;;
+esac
+printf '%s\n' "$assinatura" > "$index.minisig"
+EOF
+chmod +x "$FIXTURE/bootstrap/enter.sh"
+
+printf '%s\n' 'binário necessário em runtime' > "$TMP/runtime-bin"
+RUNTIME_HASH=$(sha256sum "$TMP/runtime-bin" | cut -d' ' -f1)
+printf '%s\n' 'binário desejado diretamente pelo perfil' > "$TMP/root-bin"
+ROOT_HASH=$(sha256sum "$TMP/root-bin" | cut -d' ' -f1)
+printf '%s\n' 'ferramenta exclusiva de build' > "$TMP/cargo-c"
+CARGO_HASH=$(sha256sum "$TMP/cargo-c" | cut -d' ' -f1)
+printf '%s\n' 'toolchain implícita de build' > "$TMP/zig"
+ZIG_HASH=$(sha256sum "$TMP/zig" | cut -d' ' -f1)
+printf '%s\n' 'fonte explicitamente offline' > "$TMP/cache-source"
+CACHE_HASH=$(sha256sum "$TMP/cache-source" | cut -d' ' -f1)
+printf '%s\n' 'payload do app no canal' > "$TMP/channel-app"
+APP_CHANNEL_HASH=$(sha256sum "$TMP/channel-app" | cut -d' ' -f1)
+printf '%s\n' 'payload da ponte no canal' > "$TMP/channel-ponte"
+PONTE_CHANNEL_HASH=$(sha256sum "$TMP/channel-ponte" | cut -d' ' -f1)
+cp "$TMP/channel-app" "$EMITTED/pool/app-1-x86_64.tar.zst"
+cp "$TMP/channel-ponte" "$EMITTED/pool/ponte-1-x86_64.tar.zst"
+printf '%s\n' 'PLAN_LOCK produtor canônico da fixture' > "$TMP/producer.lock"
+PRODUCER_PLAN_HASH=$(sha256sum "$TMP/producer.lock" | cut -d' ' -f1)
+cp "$TMP/producer.lock" "$EMITTED/plans/$PRODUCER_PLAN_HASH.lock"
+
+cat > "$FIXTURE/newspeak/app/recipe" <<'EOF'
+NAME=app
+VERSION=1
+KIND=source
+TOOLCHAIN=native
+DEPS="ponte"
+BUILD_DEPS=""
+LICENSE=MIT
+EOF
+cat > "$FIXTURE/newspeak/ponte/recipe" <<'EOF'
+NAME=ponte
+VERSION=1
+KIND=source
+TOOLCHAIN=seed
+DEPS="runtime-bin"
+BUILD_DEPS="cargo-c"
+LICENSE=MIT
+EOF
+cat > "$FIXTURE/newspeak/metapacote/recipe" <<'EOF'
+NAME=metapacote
+VERSION=1
+KIND=meta
+DEPS="runtime-bin"
+EOF
+cat > "$FIXTURE/newspeak/runtime-bin/recipe" <<EOF
+NAME=runtime-bin
+VERSION=1
+KIND=binary
+DEPS=""
+LICENSE=MIT
+SRC=https://example.invalid/runtime-bin
+SHA256=$RUNTIME_HASH
+EOF
+cat > "$FIXTURE/newspeak/root-bin/recipe" <<EOF
+NAME=root-bin
+VERSION=1
+KIND=binary
+DEPS=""
+LICENSE=MIT
+SRC=https://example.invalid/root-bin
+SHA256=$ROOT_HASH
+EOF
+cat > "$FIXTURE/newspeak/cargo-c/recipe" <<EOF
+NAME=cargo-c
+VERSION=1
+KIND=binary
+DEPS=""
+LICENSE=MIT
+SRC=https://example.invalid/cargo-c
+SHA256=$CARGO_HASH
+EOF
+cat > "$FIXTURE/newspeak/zig/recipe" <<EOF
+NAME=zig
+VERSION=1
+KIND=binary
+DEPS=""
+LICENSE=MIT
+SRC=https://example.invalid/zig
+SHA256=$ZIG_HASH
+EOF
+cat > "$FIXTURE/newspeak/cache-source/recipe" <<EOF
+NAME=cache-source
+VERSION=1
+KIND=source
+TOOLCHAIN=native
+DEPS=""
+BUILD_DEPS=""
+LICENSE=MIT
+SRC=https://example.invalid/cache-source
+SHA256=$CACHE_HASH
+EOF
+printf '%s\n' app metapacote root-bin > "$PROFILE/target.world"
+printf '%s\n' cache-source > "$PROFILE/cache.world"
+# Não pode vazar para o perfil selecionado: a implementação antiga varria
+# profiles/*/cache.world e faria cargo-c entrar por este arquivo alheio.
+printf '%s\n' cargo-c > "$FIXTURE/profiles/other/cache.world"
+{
+    printf '%s\n' 'CHANNEL_INDEX_FORMAT=4' 'RELEASE_ROOT=no'
+    printf 'app 1 x86_64 %064d pool/app-1-x86_64.tar.zst %s %064d %s\n' \
+        0 "$APP_CHANNEL_HASH" 0 "$PRODUCER_PLAN_HASH"
+    printf 'ponte 1 x86_64 %064d pool/ponte-1-x86_64.tar.zst %s %064d %s\n' \
+        0 "$PONTE_CHANNEL_HASH" 0 "$PRODUCER_PLAN_HASH"
+} > "$EMITTED/index"
+cat > "$CONFIG" <<'EOF'
+URL=https://example.invalid/oficial/
+KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+PRIORITY=100
+TRUST=oficial
+EOF
+printf '%s\n' 'segredo de fixture não interpretado pelo stub' > "$ROOT/tmp/canal.key"
+
+roda() { # cache saída [emitido] [perfil]
+    emitido=${3:-$EMITTED}
+    perfil=${4:-$PROFILE}
+    "$FIXTURE/bootstrap/cache-from-channel" \
+        --emitted "$emitido" --output "$2" --channel-config "$CONFIG" \
+        --secret-key /tmp/canal.key --minitrue-root "$ROOT" \
+        --profile "$perfil" \
+        --source-cache "$1"
+}
+
+roda_default() { # cache saída
+    "$FIXTURE/bootstrap/cache-from-channel" \
+        --emitted "$EMITTED" --output "$2" --channel-config "$CONFIG" \
+        --secret-key /tmp/canal.key --minitrue-root "$ROOT" \
+        --source-cache "$1"
+}
+
+roda_channel() { # cache saída canal
+    "$FIXTURE/bootstrap/cache-from-channel" \
+        --emitted "$EMITTED" --output "$2" --channel-config "$CONFIG" \
+        --secret-key /tmp/canal.key --minitrue-root "$ROOT" \
+        --profile "$PROFILE" --channel "$3" \
+        --source-cache "$1"
+}
+
+roda_passphrase() { # cache saída fd
+    EXPECT_CLOSED_PASSPHRASE_FD=$3 \
+    PATH="$TMP/fd-probe-bin:$PATH" \
+    "$FIXTURE/bootstrap/cache-from-channel" \
+        --emitted "$EMITTED" --output "$2" --channel-config "$CONFIG" \
+        --secret-key /tmp/canal.key --minitrue-root "$ROOT" \
+        --profile "$PROFILE" --passphrase-fd "$3" \
+        --source-cache "$1"
+}
+
+cache_base() {
+    mkdir -p "$1"
+    cp "$TMP/cargo-c" "$1/$CARGO_HASH"
+    cp "$TMP/zig" "$1/$ZIG_HASH"
+    cp "$TMP/root-bin" "$1/$ROOT_HASH"
+    cp "$TMP/cache-source" "$1/$CACHE_HASH"
+}
+
+falhas=0
+
+# O canal vira componente de caminho em dois lugares. Nem "." nem ".." podem
+# ser aceitos como nomes, ainda que ambos usem apenas caracteres permitidos.
+for canal_caso in dot dotdot; do
+    case "$canal_caso" in
+        dot) canal=. ;;
+        dotdot) canal=.. ;;
+    esac
+    if roda_channel "$TMP/inexistente" "$TMP/out-channel-$canal_caso" "$canal" \
+        > "$TMP/channel-$canal_caso.log" 2>&1; then
+        echo "  FALHOU  aceitou canal $canal"
+        falhas=$((falhas + 1))
+    elif grep -q 'nome de canal não canônico' "$TMP/channel-$canal_caso.log"; then
+        echo "  ok      recusa canal $canal"
+    else
+        echo "  FALHOU  canal $canal não teve diagnóstico útil"
+        falhas=$((falhas + 1))
+    fi
+done
+
+# O perfil é parte da autoridade de seleção. Diretório/arquivos não podem ser
+# symlinks, e cada world precisa ser uma lista sem duplicatas de nomes canônicos.
+ln -s "$PROFILE" "$TMP/profile-link"
+if roda "$TMP/inexistente" "$TMP/out-profile-link" "$EMITTED" "$TMP/profile-link" \
+    > "$TMP/profile-link.log" 2>&1; then
+    echo '  FALHOU  aceitou diretório de perfil por symlink'
+    falhas=$((falhas + 1))
+elif grep -q 'perfil não é diretório regular' "$TMP/profile-link.log"; then
+    echo '  ok      recusa diretório de perfil por symlink'
+else
+    echo '  FALHOU  symlink de perfil não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+PROFILE_TARGET_LINK=$TMP/profile-target-link
+mkdir -p "$PROFILE_TARGET_LINK"
+ln -s "$PROFILE/target.world" "$PROFILE_TARGET_LINK/target.world"
+cp "$PROFILE/cache.world" "$PROFILE_TARGET_LINK/cache.world"
+if roda "$TMP/inexistente" "$TMP/out-target-link" "$EMITTED" "$PROFILE_TARGET_LINK" \
+    > "$TMP/target-link.log" 2>&1; then
+    echo '  FALHOU  aceitou target.world por symlink'
+    falhas=$((falhas + 1))
+elif grep -q 'target.world não é arquivo regular' "$TMP/target-link.log"; then
+    echo '  ok      recusa target.world por symlink'
+else
+    echo '  FALHOU  symlink de target.world não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+PROFILE_CACHE_LINK=$TMP/profile-cache-link
+mkdir -p "$PROFILE_CACHE_LINK"
+cp "$PROFILE/target.world" "$PROFILE_CACHE_LINK/target.world"
+ln -s "$PROFILE/cache.world" "$PROFILE_CACHE_LINK/cache.world"
+if roda "$TMP/inexistente" "$TMP/out-cache-link" "$EMITTED" "$PROFILE_CACHE_LINK" \
+    > "$TMP/cache-link.log" 2>&1; then
+    echo '  FALHOU  aceitou cache.world por symlink'
+    falhas=$((falhas + 1))
+elif grep -q 'cache.world não é arquivo regular' "$TMP/cache-link.log"; then
+    echo '  ok      recusa cache.world por symlink'
+else
+    echo '  FALHOU  symlink de cache.world não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+PROFILE_DUP=$TMP/profile-duplicado
+mkdir -p "$PROFILE_DUP"
+printf '%s\n' app app > "$PROFILE_DUP/target.world"
+: > "$PROFILE_DUP/cache.world"
+if roda "$TMP/inexistente" "$TMP/out-profile-dup" "$EMITTED" "$PROFILE_DUP" \
+    > "$TMP/profile-dup.log" 2>&1; then
+    echo '  FALHOU  aceitou nome duplicado em target.world'
+    falhas=$((falhas + 1))
+elif grep -q 'target.world vazio, duplicado ou com nome não canônico' "$TMP/profile-dup.log"; then
+    echo '  ok      recusa duplicata em target.world'
+else
+    echo '  FALHOU  duplicata de target.world não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+PROFILE_INVALID=$TMP/profile-invalido
+mkdir -p "$PROFILE_INVALID"
+printf '%s\n' app > "$PROFILE_INVALID/target.world"
+printf '%s\n' '../escape' > "$PROFILE_INVALID/cache.world"
+if roda "$TMP/inexistente" "$TMP/out-profile-invalid" "$EMITTED" "$PROFILE_INVALID" \
+    > "$TMP/profile-invalid.log" 2>&1; then
+    echo '  FALHOU  aceitou nome não canônico em cache.world'
+    falhas=$((falhas + 1))
+elif grep -q 'cache.world duplicado ou com nome não canônico' "$TMP/profile-invalid.log"; then
+    echo '  ok      recusa nome não canônico em cache.world'
+else
+    echo '  FALHOU  cache.world inválido não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+# Um path do índice nunca pode apontar para fora de pool/. A fixture coloca no
+# local de fuga um objeto com o hash certo: a recusa precisa vir da gramática,
+# e o arquivo externo precisa continuar intocado.
+EMITTED_TRAVERSIA=$TMP/emitted-traversia
+mkdir -p "$EMITTED_TRAVERSIA/pool" "$EMITTED_TRAVERSIA/plans"
+cp "$TMP/producer.lock" "$EMITTED_TRAVERSIA/plans/$PRODUCER_PLAN_HASH.lock"
+cp "$TMP/channel-app" "$TMP/fora-do-output"
+FORA_HASH=$(sha256sum "$TMP/fora-do-output" | cut -d' ' -f1)
+{
+    printf '%s\n' 'CHANNEL_INDEX_FORMAT=4' 'RELEASE_ROOT=no'
+    printf 'app 1 x86_64 %064d ../fora-do-output %s %064d %s\n' \
+        0 "$FORA_HASH" 0 "$PRODUCER_PLAN_HASH"
+} > "$EMITTED_TRAVERSIA/index"
+if roda "$TMP/inexistente" "$TMP/out-traversia" "$EMITTED_TRAVERSIA" \
+    > "$TMP/traversia.log" 2>&1; then
+    echo '  FALHOU  aceitou path ../ fora do pool'
+    falhas=$((falhas + 1))
+elif grep -q 'índice v4 canônico' "$TMP/traversia.log" &&
+     [ "$(sha256sum "$TMP/fora-do-output" | cut -d' ' -f1)" = "$FORA_HASH" ]; then
+    echo '  ok      recusa travessia do índice sem tocar objeto externo'
+else
+    echo '  FALHOU  travessia não falhou fechada com diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+# Mesmo com conteúdo correto, o objeto do pool precisa ser ele próprio regular.
+EMITTED_POOL_LINK=$TMP/emitted-pool-link
+mkdir -p "$EMITTED_POOL_LINK/pool" "$EMITTED_POOL_LINK/plans"
+cp "$EMITTED/index" "$EMITTED_POOL_LINK/index"
+cp "$TMP/producer.lock" "$EMITTED_POOL_LINK/plans/$PRODUCER_PLAN_HASH.lock"
+ln -s "$TMP/channel-app" "$EMITTED_POOL_LINK/pool/app-1-x86_64.tar.zst"
+cp "$TMP/channel-ponte" "$EMITTED_POOL_LINK/pool/ponte-1-x86_64.tar.zst"
+if roda "$TMP/inexistente" "$TMP/out-pool-link" "$EMITTED_POOL_LINK" \
+    > "$TMP/pool-link.log" 2>&1; then
+    echo '  FALHOU  aceitou symlink como artefato do pool'
+    falhas=$((falhas + 1))
+elif grep -q 'objeto de pool não regular' "$TMP/pool-link.log"; then
+    echo '  ok      recusa symlink no pool mesmo com alvo íntegro'
+else
+    echo '  FALHOU  symlink do pool não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+EMITTED_POOL_CORROMPIDO=$TMP/emitted-pool-corrompido
+cp -a "$EMITTED" "$EMITTED_POOL_CORROMPIDO"
+printf '%s\n' corrompido > "$EMITTED_POOL_CORROMPIDO/pool/app-1-x86_64.tar.zst"
+if roda "$TMP/inexistente" "$TMP/out-pool-corrompido" "$EMITTED_POOL_CORROMPIDO" \
+    > "$TMP/pool-corrompido.log" 2>&1; then
+    echo '  FALHOU  aceitou bytes divergentes no pool antes da cópia'
+    falhas=$((falhas + 1))
+elif grep -q 'índice diz' "$TMP/pool-corrompido.log"; then
+    echo '  ok      confere hash do pool antes da cópia'
+else
+    echo '  FALHOU  pool divergente não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+# A origem passa na primeira leitura; o cp adulterado muda só a cópia do pool.
+mkdir -p "$TMP/bin-pool"
+cat > "$TMP/bin-pool/cp" <<'EOF'
+#!/bin/sh
+set -eu
+/bin/cp "$@"
+if [ "$#" -eq 3 ] && [ "$1" = -a ] && [ "$2" = "$CORROMPE_POOL" ]; then
+    printf '%s\n' corrompido-durante-copia >> "$3/app-1-x86_64.tar.zst"
+fi
+EOF
+chmod +x "$TMP/bin-pool/cp"
+if PATH="$TMP/bin-pool:$PATH" CORROMPE_POOL="$EMITTED/pool" \
+   roda "$TMP/inexistente" "$TMP/out-pool-copia" \
+       > "$TMP/pool-copia.log" 2>&1; then
+    echo '  FALHOU  não releu o artefato do pool depois da cópia'
+    falhas=$((falhas + 1))
+elif grep -q 'divergiu durante a cópia do pool' "$TMP/pool-copia.log"; then
+    echo '  ok      confere hash do pool depois da cópia'
+else
+    echo '  FALHOU  mutação durante cópia do pool não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+# Todo source de runtime precisa de linha própria: o metapacote pode ficar fora,
+# mas omitir ponte faria o instalador --only-binary falhar depois da mídia pronta.
+EMITTED_SEM_SOURCE=$TMP/emitted-sem-source
+mkdir -p "$EMITTED_SEM_SOURCE/pool"
+cp "$TMP/channel-app" "$EMITTED_SEM_SOURCE/pool/app-1-x86_64.tar.zst"
+head -n 3 "$EMITTED/index" > "$EMITTED_SEM_SOURCE/index"
+mkdir -p "$EMITTED_SEM_SOURCE/plans"
+cp "$TMP/producer.lock" "$EMITTED_SEM_SOURCE/plans/$PRODUCER_PLAN_HASH.lock"
+cache_base "$TMP/cache-ok"
+cp "$TMP/runtime-bin" "$TMP/cache-ok/$RUNTIME_HASH"
+if roda "$TMP/cache-ok" "$TMP/out-sem-source" "$EMITTED_SEM_SOURCE" \
+    > "$TMP/sem-source.log" 2>&1; then
+    echo '  FALHOU  aceitou source runtime ausente do índice'
+    falhas=$((falhas + 1))
+elif grep -q 'runtime KIND=source ausente do índice: ponte' "$TMP/sem-source.log"; then
+    echo '  ok      exige artefato de canal para todo source runtime'
+else
+    echo '  FALHOU  source runtime omitido não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+# Mundo M é local e não emitível. O caso positivo acima alcança metapacote sem
+# linha; esta contraparte prova que inventar payload de canal para ele é erro.
+EMITTED_META=$TMP/emitted-meta
+mkdir -p "$EMITTED_META/pool" "$EMITTED_META/plans"
+cp "$TMP/producer.lock" "$EMITTED_META/plans/$PRODUCER_PLAN_HASH.lock"
+printf '%s\n' payload-meta-invalido > "$EMITTED_META/pool/metapacote-1-x86_64.tar.zst"
+META_CHANNEL_HASH=$(sha256sum "$EMITTED_META/pool/metapacote-1-x86_64.tar.zst" | cut -d' ' -f1)
+{
+    printf '%s\n' 'CHANNEL_INDEX_FORMAT=4' 'RELEASE_ROOT=no'
+    printf 'metapacote 1 x86_64 %064d pool/metapacote-1-x86_64.tar.zst %s %064d %s\n' \
+        0 "$META_CHANNEL_HASH" 0 "$PRODUCER_PLAN_HASH"
+} > "$EMITTED_META/index"
+PROFILE_META=$TMP/profile-meta
+mkdir -p "$PROFILE_META"
+printf '%s\n' metapacote > "$PROFILE_META/target.world"
+: > "$PROFILE_META/cache.world"
+if roda "$TMP/cache-ok" "$TMP/out-meta-index" "$EMITTED_META" "$PROFILE_META" \
+    > "$TMP/meta-index.log" 2>&1; then
+    echo '  FALHOU  aceitou metapacote como entrada de canal'
+    falhas=$((falhas + 1))
+elif grep -q 'KIND=meta, que não possui artefato de canal' "$TMP/meta-index.log"; then
+    echo '  ok      resolve meta localmente e recusa payload de canal'
+else
+    echo '  FALHOU  meta emitido não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+# O resolvedor real recusa ciclos; a seleção do cache precisa recusar o mesmo
+# grafo, não apenas encerrar por deduplicação.
+cp "$FIXTURE/newspeak/ponte/recipe" "$TMP/ponte-recipe"
+sed 's/^DEPS=.*/DEPS="app"/' "$TMP/ponte-recipe" > "$FIXTURE/newspeak/ponte/recipe"
+if roda "$TMP/cache-ok" "$TMP/out-ciclo" > "$TMP/ciclo.log" 2>&1; then
+    echo '  FALHOU  aceitou ciclo em DEPS'
+    falhas=$((falhas + 1))
+elif grep -q 'fechamento runtime contém ciclo' "$TMP/ciclo.log"; then
+    echo '  ok      recusa ciclo no fechamento runtime'
+else
+    echo '  FALHOU  ciclo em DEPS não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+cp "$TMP/ponte-recipe" "$FIXTURE/newspeak/ponte/recipe"
+
+cache_base "$TMP/corrompido"
+printf '%s\n' 'bytes diferentes' > "$TMP/corrompido/$RUNTIME_HASH"
+if roda "$TMP/corrompido" "$TMP/out-corrompido" \
+    > "$TMP/corrompido.log" 2>&1; then
+    echo '  FALHOU  aceitou objeto regular com hash divergente'
+    falhas=$((falhas + 1))
+elif grep -q 'ausentes, não regulares ou divergentes' "$TMP/corrompido.log"; then
+    echo '  ok      recusa bytes divergentes sob nome content-addressed'
+else
+    echo '  FALHOU  objeto divergente não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+cache_base "$TMP/symlink"
+ln -s "$TMP/runtime-bin" "$TMP/symlink/$RUNTIME_HASH"
+if roda "$TMP/symlink" "$TMP/out-symlink" > "$TMP/symlink.log" 2>&1; then
+    echo '  FALHOU  seguiu symlink sob nome content-addressed'
+    falhas=$((falhas + 1))
+elif grep -q 'ausentes, não regulares ou divergentes' "$TMP/symlink.log"; then
+    echo '  ok      recusa symlink mesmo quando o alvo tem o hash correto'
+else
+    echo '  FALHOU  symlink não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+cache_base "$TMP/integro"
+cp "$TMP/runtime-bin" "$TMP/integro/$RUNTIME_HASH"
+if roda_default "$TMP/integro" "$TMP/out-integro" > "$TMP/integro.log" 2>&1 &&
+   [ -f "$TMP/out-integro/$RUNTIME_HASH" ] &&
+   [ ! -L "$TMP/out-integro/$RUNTIME_HASH" ] &&
+   [ "$(sha256sum "$TMP/out-integro/$RUNTIME_HASH" | cut -d' ' -f1)" = "$RUNTIME_HASH" ] &&
+   [ -f "$TMP/out-integro/$CACHE_HASH" ] &&
+   [ "$(sha256sum "$TMP/out-integro/$CACHE_HASH" | cut -d' ' -f1)" = "$CACHE_HASH" ] &&
+   [ -f "$TMP/out-integro/$ROOT_HASH" ] &&
+   [ "$(sha256sum "$TMP/out-integro/$ROOT_HASH" | cut -d' ' -f1)" = "$ROOT_HASH" ] &&
+   [ ! -e "$TMP/out-integro/$CARGO_HASH" ] &&
+   [ ! -e "$TMP/out-integro/$ZIG_HASH" ]; then
+    echo '  ok      official inclui roots/cache; exclui build/toolchain/outro perfil'
+else
+    echo '  FALHOU  seleção fechada do cache produziu conjunto incorreto'
+    falhas=$((falhas + 1))
+fi
+
+if roda_passphrase "$TMP/integro" "$TMP/out-fd-correto" 9 \
+       9<<'EOF' > "$TMP/fd-correto.log" 2>&1
+passphrase fixture Sc 0.13
+EOF
+then
+    if [ "$(cat "$TMP/out-fd-correto/channels/oficial/index.minisig")" = \
+         assinatura-fixture-sc ]; then
+        echo '  ok      chave Sc recebe passphrase somente por fd→stdin'
+    else
+        echo '  FALHOU  assinatura Sc não prova o encaminhamento pelo fd'
+        falhas=$((falhas + 1))
+    fi
+else
+    echo '  FALHOU  passphrase correta por fd não assinou o índice'
+    sed -n '1,20p' "$TMP/fd-correto.log" >&2
+    falhas=$((falhas + 1))
+fi
+
+if roda_passphrase "$TMP/integro" "$TMP/out-fd-errado" 9 \
+       9<<'EOF' > "$TMP/fd-errado.log" 2>&1
+passphrase errada que não pode vazar
+EOF
+then
+    echo '  FALHOU  passphrase errada assinou o índice'
+    falhas=$((falhas + 1))
+elif [ -e "$TMP/out-fd-errado" ] ||
+     grep -Fq 'passphrase errada que não pode vazar' "$TMP/fd-errado.log"; then
+    echo '  FALHOU  erro de passphrase deixou saída/sidecar ou vazou segredo'
+    falhas=$((falhas + 1))
+else
+    echo '  ok      passphrase errada falha sem saída, sidecar ou vazamento'
+fi
+
+if roda_passphrase "$TMP/integro" "$TMP/out-fd-kill" 9 \
+       9<<'EOF' > "$TMP/fd-kill.log" 2>&1
+passphrase mata signer
+EOF
+then
+    echo '  FALHOU  signer morto por SIGKILL produziu sucesso'
+    falhas=$((falhas + 1))
+elif [ -e "$TMP/out-fd-kill" ] ||
+     find "$ROOT/tmp" -maxdepth 1 -name 'cache-from-channel.*' -print -quit |
+         grep -q .; then
+    echo '  FALHOU  SIGKILL no signer deixou cache ou staging'
+    falhas=$((falhas + 1))
+else
+    echo '  ok      SIGKILL no signer fecha fd e remove cache/staging'
+fi
+
+if roda_passphrase "$TMP/integro" "$TMP/out-fd-ausente" 8 \
+       8<&- > "$TMP/fd-ausente.log" 2>&1; then
+    echo '  FALHOU  aceitou descritor de passphrase fechado'
+    falhas=$((falhas + 1))
+elif [ -e "$TMP/out-fd-ausente" ]; then
+    echo '  FALHOU  fd ausente deixou saída parcial'
+    falhas=$((falhas + 1))
+elif grep -q -- '--passphrase-fd não está aberto: 8' "$TMP/fd-ausente.log"; then
+    echo '  ok      recusa fd ausente antes de montar o cache'
+else
+    echo '  FALHOU  fd ausente não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+if command -v script >/dev/null 2>&1 &&
+   script --version 2>/dev/null | grep -q 'util-linux'; then
+    cat > "$TMP/tty-probe" <<'EOF'
+#!/bin/sh
+exec "$CACHE_SCRIPT" --emitted x --output tty-output \
+    --channel-config z --secret-key /x --minitrue-root r \
+    --passphrase-fd 0
+EOF
+    chmod +x "$TMP/tty-probe"
+    if (cd "$TMP" && CACHE_SCRIPT="$FIXTURE/bootstrap/cache-from-channel" \
+        script -qefc './tty-probe' /dev/null </dev/null \
+            > "$TMP/fd-tty.log" 2>&1); then
+        echo '  FALHOU  aceitou TTY como descritor de passphrase'
+        falhas=$((falhas + 1))
+    elif [ -e "$TMP/tty-output" ]; then
+        echo '  FALHOU  fd TTY deixou saída parcial'
+        falhas=$((falhas + 1))
+    elif grep -q -- '--passphrase-fd aponta para um TTY' "$TMP/fd-tty.log"; then
+        echo '  ok      recusa TTY antes de montar o cache'
+    else
+        echo '  FALHOU  fd TTY não teve diagnóstico útil'
+        falhas=$((falhas + 1))
+    fi
+fi
+
+# A origem passa pela primeira leitura; o cp de fixture corrompe somente a
+# cópia do objeto, provando que a segunda leitura não é redundante.
+cache_base "$TMP/copia-corrompida"
+cp "$TMP/runtime-bin" "$TMP/copia-corrompida/$RUNTIME_HASH"
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/cp" <<'EOF'
+#!/bin/sh
+set -eu
+/bin/cp "$@"
+if [ "$#" -eq 2 ] && [ "$1" = "$CORROMPE_ORIGEM" ]; then
+    printf '%s\n' corrompido-depois-do-cp >> "$2"
+fi
+EOF
+chmod +x "$TMP/bin/cp"
+if PATH="$TMP/bin:$PATH" CORROMPE_ORIGEM="$TMP/copia-corrompida/$RUNTIME_HASH" \
+   roda "$TMP/copia-corrompida" "$TMP/out-copia-corrompida" \
+       > "$TMP/copia-corrompida.log" 2>&1; then
+    echo '  FALHOU  não releu o objeto depois da cópia'
+    falhas=$((falhas + 1))
+elif grep -q 'divergiu durante a cópia' "$TMP/copia-corrompida.log"; then
+    echo '  ok      recusa divergência introduzida durante a cópia'
+else
+    echo '  FALHOU  cópia divergente não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+# A primeira atribuição diz vazio e a última introduz runtime-bin. O Minitrue
+# usaria a última; selecionar a primeira omitia o binário. A política fechada
+# recusa a ambiguidade inteira.
+sed 's/^DEPS=.*/DEPS=""/' "$TMP/ponte-recipe" > "$FIXTURE/newspeak/ponte/recipe"
+printf '%s\n' 'DEPS="runtime-bin"' >> "$FIXTURE/newspeak/ponte/recipe"
+if roda "$TMP/cache-ok" "$TMP/out-deps-repetido" \
+    > "$TMP/deps-repetido.log" 2>&1; then
+    echo '  FALHOU  aceitou DEPS repetido e escolheu a primeira atribuição'
+    falhas=$((falhas + 1))
+elif grep -q 'DEPS não canônico ou repetido' "$TMP/deps-repetido.log"; then
+    echo '  ok      recusa DEPS repetido que esconderia runtime binário'
+else
+    echo '  FALHOU  DEPS repetido não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+
+# KIND também decide em qual mundo o payload existe; duas atribuições tornariam
+# a cobertura source/binary/meta dependente de qual linha o leitor escolhesse.
+cp "$TMP/ponte-recipe" "$FIXTURE/newspeak/ponte/recipe"
+printf '%s\n' 'KIND=binary' >> "$FIXTURE/newspeak/ponte/recipe"
+if roda "$TMP/cache-ok" "$TMP/out-kind-repetido" \
+    > "$TMP/kind-repetido.log" 2>&1; then
+    echo '  FALHOU  aceitou KIND repetido'
+    falhas=$((falhas + 1))
+elif grep -q 'KIND não canônico ou repetido' "$TMP/kind-repetido.log"; then
+    echo '  ok      recusa KIND repetido antes de decidir o mundo'
+else
+    echo '  FALHOU  KIND repetido não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+[ "$falhas" -eq 0 ] || exit 1
+echo 'cache-from-channel/integridade: tudo certo'

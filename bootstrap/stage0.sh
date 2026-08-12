@@ -194,7 +194,8 @@ exec "$ROOTFS/opt/zig/current/zig" ar "\$@"
 EOF
     chmod +x "$SHIMS/zcc" "$SHIMS/zar"
     CC_x86_64_unknown_linux_musl="$SHIMS/zcc" AR_x86_64_unknown_linux_musl="$SHIMS/zar" \
-        cargo build --release --quiet --target x86_64-unknown-linux-musl \
+        cargo build --release --quiet --no-default-features \
+        --target x86_64-unknown-linux-musl \
         --manifest-path "$REPO/minitrue/Cargo.toml"
     cp "$CARGO_TARGET_DIR/x86_64-unknown-linux-musl/release/minitrue" "$ROOTFS/usr/bin/minitrue"
     echo "minitrue estático instalado em /usr/bin do rootfs"

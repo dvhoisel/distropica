@@ -1,0 +1,572 @@
+#!/bin/sh
+# Aceite funcional, sem rede e sem display, do GIMP entregue pelo canal.
+#
+# O teste usa a interface pública que um usuário recebe: os executáveis
+# instalados, o batch interpreter Python, a PDB e os loaders/exportadores.
+# Não usa a árvore de build nem chama o Minitrue. A raiz deve estar pronta e
+# o lock dela deve estar livre.
+set -eu
+umask 077
+LC_ALL=C
+export LC_ALL
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+ROOT=
+OUTPUT=$REPO/target/gimp-e2e
+LIMITE=600
+
+uso() {
+    cat <<'EOF'
+uso: bootstrap/testes/gimp-e2e --root DIR [--output DIR] [--timeout SEGUNDOS]
+
+Executa o GIMP 3.2.4 sem interface e sem rede em uma raiz já construída.
+O diretório de evidência não pode existir antes do teste.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --root)
+            [ "$#" -ge 2 ] || { uso >&2; exit 2; }
+            ROOT=$2
+            shift 2
+            ;;
+        --output)
+            [ "$#" -ge 2 ] || { uso >&2; exit 2; }
+            OUTPUT=$2
+            shift 2
+            ;;
+        --timeout)
+            [ "$#" -ge 2 ] || { uso >&2; exit 2; }
+            LIMITE=$2
+            shift 2
+            ;;
+        -h|--help)
+            uso
+            exit 0
+            ;;
+        *)
+            echo "erro: argumento desconhecido: $1" >&2
+            uso >&2
+            exit 2
+            ;;
+    esac
+done
+
+[ -n "$ROOT" ] || { echo 'erro: --root é obrigatório' >&2; exit 2; }
+case "$LIMITE" in
+    ''|*[!0-9]*) echo 'erro: --timeout exige inteiro positivo' >&2; exit 2 ;;
+esac
+[ "$LIMITE" -gt 0 ] || { echo 'erro: --timeout exige inteiro positivo' >&2; exit 2; }
+
+for ferramenta in \
+    bwrap cp dd find flock grep mktemp mv od python3 readlink realpath \
+    sed sha256sum sort tail timeout tr wc; do
+    command -v "$ferramenta" >/dev/null 2>&1 || {
+        echo "erro: $ferramenta é obrigatório" >&2
+        exit 1
+    }
+done
+
+ROOT=$(realpath -e -- "$ROOT")
+[ -d "$ROOT" ] && [ "$ROOT" != / ] || {
+    echo "erro: raiz inválida: $ROOT" >&2
+    exit 1
+}
+[ -d "$ROOT/tmp" ] || { echo 'erro: a raiz não tem /tmp' >&2; exit 1; }
+[ -f "$ROOT/var/lib/minitrue/lock" ] || {
+    echo 'erro: raiz sem lock do Minitrue' >&2
+    exit 1
+}
+
+# Um teste concorrente ao rectify teria resultado indefinido. Não espere pelo
+# lock e abra o arquivo somente para leitura: o aceite nunca grava na raiz.
+exec 9<"$ROOT/var/lib/minitrue/lock"
+flock -n 9 || {
+    echo 'erro: raiz ocupada; não execute o aceite durante rectify/verify/audit' >&2
+    exit 1
+}
+
+OUTPUT_PARENT=$(dirname -- "$OUTPUT")
+OUTPUT_NAME=$(basename -- "$OUTPUT")
+OUTPUT_PARENT=$(realpath -m -- "$OUTPUT_PARENT")
+case "$OUTPUT_PARENT" in
+    "$ROOT"|"$ROOT"/*)
+        echo 'erro: --output deve ficar fora da raiz, que é somente leitura' >&2
+        exit 2
+        ;;
+esac
+mkdir -p -- "$OUTPUT_PARENT"
+OUTPUT_PARENT=$(realpath -e -- "$OUTPUT_PARENT")
+case "$OUTPUT_NAME" in
+    ''|.|..) echo 'erro: nome de --output inválido' >&2; exit 2 ;;
+esac
+OUTPUT=$OUTPUT_PARENT/$OUTPUT_NAME
+[ ! -e "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || {
+    echo "erro: saída já existe: $OUTPUT" >&2
+    exit 1
+}
+
+WORK=$(mktemp -d "$OUTPUT_PARENT/.gimp-e2e-work.XXXXXX")
+WORK_IN_ROOT=/tmp/${WORK##*/}
+STAGING=$(mktemp -d "$OUTPUT_PARENT/.gimp-e2e.XXXXXX")
+CONCLUIDO=0
+limpa() {
+    rc=$?
+    if [ "$CONCLUIDO" -eq 1 ]; then
+        rm -rf -- "$WORK"
+    else
+        echo "erro: aceite falhou; diagnóstico preservado em $WORK" >&2
+        echo "erro: staging preservado em $STAGING" >&2
+    fi
+    trap - EXIT
+    exit "$rc"
+}
+trap limpa EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+mkdir -p "$WORK/home" "$WORK/config" "$WORK/cache" "$WORK/data" "$WORK/run"
+chmod 0700 "$WORK/home" "$WORK/config" "$WORK/cache" "$WORK/data" "$WORK/run"
+
+cat > "$WORK/entrada.svg" <<'SVG'
+<svg xmlns="http://www.w3.org/2000/svg" width="37" height="23" viewBox="0 0 37 23">
+  <rect width="37" height="23" fill="#204060"/>
+  <rect x="7" y="5" width="13" height="11" fill="#f0c020"/>
+</svg>
+SVG
+
+cat > "$WORK/aceite.py" <<'PY'
+import os
+import gi
+import cairo
+
+gi.require_version('Gegl', '0.4')
+gi.require_version('Gimp', '3.0')
+gi.require_version('GimpUi', '3.0')
+gi.require_version('GExiv2', '0.10')
+from gi.repository import Gegl, Gio, Gimp, GimpUi, GExiv2
+
+base = os.environ['DISTROPICA_GIMP_E2E_DIR']
+
+def confere(condicao, mensagem):
+    if not condicao:
+        raise AssertionError(mensagem)
+    print('ok:', mensagem, flush=True)
+
+def arquivo(nome):
+    return Gio.File.new_for_path(os.path.join(base, nome))
+
+def abre(nome, largura=None, altura=None):
+    imagem = Gimp.file_load(Gimp.RunMode.NONINTERACTIVE, arquivo(nome))
+    confere(imagem is not None, 'abre ' + nome)
+    confere(imagem.get_width() > 0 and imagem.get_height() > 0,
+            nome + ' tem dimensões positivas')
+    if largura is not None:
+        confere(imagem.get_width() == largura, nome + ' preserva largura')
+    if altura is not None:
+        confere(imagem.get_height() == altura, nome + ' preserva altura')
+    return imagem
+
+pdb = Gimp.get_pdb()
+confere('DISPLAY' not in os.environ and 'WAYLAND_DISPLAY' not in os.environ,
+        'processo não recebeu display X11 nem Wayland')
+surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 2, 2)
+confere(surface.get_width() == 2 and surface.get_height() == 2,
+        'PyCairo cria superfície sem display')
+surface.finish()
+procedimentos = [
+    'python-fu-eval',
+    'file-png-load', 'file-png-export',
+    'file-jpeg-load', 'file-jpeg-export',
+    'file-tiff-load', 'file-tiff-export',
+    'file-svg-load', 'file-svg-export',
+    'file-pdf-load', 'file-pdf-export',
+    'file-openraster-load', 'file-openraster-export',
+    'python-fu-console',
+    'plug-in-script-fu-eval',
+    'plug-in-metadata-editor', 'plug-in-metadata-viewer',
+    'file-print-gtk',
+]
+for nome in procedimentos:
+    confere(pdb.lookup_procedure(nome) is not None, 'PDB contém ' + nome)
+
+excluidos = [
+    'file-aa-export',
+    'file-exr-load',
+    'file-fits-load', 'file-fits-export',
+    'file-heif-load', 'file-heif-export',
+    'file-heif-av1-load', 'file-heif-av1-export',
+    'file-heif-avci-load',
+    'file-heif-hej2-load', 'file-heif-hej2-export',
+    'file-iff-load',
+    'file-jp2-load', 'file-jp2-export',
+    'file-jpegxl-load', 'file-jpegxl-export',
+    'file-mng-export',
+    'file-ps-load', 'file-ps-export',
+    'file-eps-load', 'file-eps-export',
+    'file-webp-load', 'file-webp-export',
+    'file-wmf-load',
+    'file-xpm-load', 'file-xpm-export',
+]
+for nome in excluidos:
+    confere(pdb.lookup_procedure(nome) is None, 'PDB não contém ' + nome)
+
+# O file-gegl registra esta entrada mesmo sem a operação gegl:exr-save. O
+# teste a exercita abaixo e, fora do processo, prova que nenhum arquivo foi
+# produzido. Portanto a mera presença na PDB não conta como capacidade.
+confere(pdb.lookup_procedure('file-exr-export') is not None,
+        'PDB contém entrada fantasma file-exr-export')
+
+# Importar GimpUi carrega o typelib publicado sem inicializar GTK nem exigir
+# display. A execução do próprio arquivo já prova Python + PyGObject + Gimp.
+confere(GimpUi is not None, 'typelib GimpUi-3.0 carrega sem display')
+
+# Crie pixels por API pública, salve XCF e reabra. A camada RGB sem alfa deixa
+# o caminho JPEG independente de conversões interativas.
+largura, altura = 31, 19
+imagem = Gimp.Image.new(largura, altura, Gimp.ImageBaseType.RGB)
+confere(imagem is not None, 'cria imagem RGB')
+camada = Gimp.Layer.new(imagem, 'distropica-0.13', largura, altura,
+                        Gimp.ImageType.RGB_IMAGE, 100.0, Gimp.LayerMode.NORMAL)
+confere(camada is not None, 'cria camada RGB')
+confere(imagem.insert_layer(camada, None, 0), 'insere camada')
+confere(imagem.set_selected_layers([camada]), 'seleciona camada para exportar')
+cor = Gegl.Color.new('#204060')
+confere(Gimp.context_set_background(cor), 'define cor por GEGL')
+camada.fill(Gimp.FillType.BACKGROUND)
+
+confere(Gimp.file_save(Gimp.RunMode.NONINTERACTIVE, imagem,
+                       arquivo('criada.xcf'), None), 'salva XCF')
+for nome in ('criada.png', 'criada.jpg', 'criada.tiff',
+             'criada.svg', 'criada.pdf', 'criada.ora'):
+    confere(Gimp.file_save(Gimp.RunMode.NONINTERACTIVE, imagem,
+                           arquivo(nome), None), 'exporta ' + nome)
+# O wrapper reporta sucesso apesar de file-gegl cair em passthrough. A prova
+# negativa do arquivo e do warning ocorre no shell após o batch terminar.
+Gimp.file_save(Gimp.RunMode.NONINTERACTIVE, imagem,
+               arquivo('indisponivel.exr'), None)
+print('ok: exercita entrada PDB fantasma de OpenEXR', flush=True)
+imagem.delete()
+
+for nome in ('criada.xcf', 'criada.png', 'criada.jpg',
+             'criada.tiff', 'criada.svg', 'criada.ora'):
+    imagem = abre(nome, largura, altura)
+    imagem.delete()
+
+# PDF rasteriza na resolução padrão do importador; por isso o contrato aqui é
+# abrir e produzir pixels, não preservar dimensão em pontos versus pixels.
+imagem = abre('criada.pdf')
+imagem.delete()
+
+# SVG de entrada independente: prova o importador/librsvg, não apenas que o
+# exportador consegue reabrir o próprio resultado.
+imagem = abre('entrada.svg', 37, 23)
+imagem.delete()
+
+# O construtor com caminho e save_file() sem argumento são do override Python
+# de GExiv2. Abrir, alterar, salvar e reler prova typelib, override e Exiv2.
+jpeg = os.path.join(base, 'criada.jpg')
+metadata = GExiv2.Metadata(jpeg)
+confere(metadata.set_tag_string('Exif.Image.ImageDescription',
+                                'Distropica 0.13 E2E'),
+        'GExiv2 escreve tag EXIF')
+metadata.save_file()
+metadata = GExiv2.Metadata(jpeg)
+confere(metadata.get_tag_string('Exif.Image.ImageDescription') ==
+        'Distropica 0.13 E2E', 'GExiv2 relê tag EXIF')
+imagem = abre('criada.jpg', largura, altura)
+imagem.delete()
+
+# O contexto só consegue devolver e selecionar uma MyPaint brush depois de
+# carregar a coleção mypaint-brushes-2.0. O nome exato não é pinado porque é
+# dado de preferência do GIMP; a identidade da coleção é conferida pelo host.
+mybrush = Gimp.context_get_mypaint_brush()
+confere(isinstance(mybrush, str) and len(mybrush) > 0,
+        'GIMP carregou uma MyPaint brush')
+confere(Gimp.context_set_mypaint_brush(mybrush),
+        'MyPaint brush ativa pode ser selecionada')
+print('MYPAINT_BRUSH=' + mybrush, flush=True)
+
+print('GIMP_E2E_OK', flush=True)
+PY
+
+cat > "$WORK/CAPACIDADES-EXCLUIDAS.txt" <<'EOF'
+Ausências deliberadas do build GIMP 3.2.4:
+- formatos: AA, FITS, HEIF/AVIF, ILBM/IFF, JPEG 2000, JPEG XL, MNG,
+  OpenEXR (importação e exportação), PostScript/EPS, WebP, WMF e XPM.
+  O GIMP registra uma entrada PDB de exportação OpenEXR, mas a operação
+  GEGL necessária não integra a closure e nenhum arquivo é produzido;
+- integrações: ALSA/MIDI, JavaScript, Lua, Vala,
+  sendmail, libunwind e libbacktrace;
+- serviço de consulta de atualizações do próprio GIMP.
+
+Artefatos de desenvolvimento não entregues: completion de Bash, documentação
+gi-docgen, VAPI e suítes de teste upstream.
+
+Fora do escopo deste aceite:
+- RAW precisa de darktable ou RawTherapee, que não pertencem à closure;
+- impressão física exige hardware; a receita mantém impressão em arquivo;
+- a interface gráfica requer Wayland. O Weston distribuído tem somente o
+  backend DRM; não pode ser iniciado como compositor headless aninhado.
+EOF
+
+python3 -c 'import sys; compile(open(sys.argv[1], encoding="utf-8").read(), "aceite.py", "exec")' \
+    "$WORK/aceite.py"
+
+exige_x() {
+    caminho=$1
+    [ -x "$ROOT$caminho" ] || {
+        echo "erro: executável ausente: $caminho" >&2
+        exit 1
+    }
+    printf 'executável\t%s\n' "$caminho" >> "$WORK/inventario-estatico.tsv"
+}
+
+exige_f() {
+    caminho=$1
+    [ -f "$ROOT$caminho" ] || {
+        echo "erro: arquivo ausente: $caminho" >&2
+        exit 1
+    }
+    printf 'arquivo\t%s\n' "$caminho" >> "$WORK/inventario-estatico.tsv"
+}
+
+: > "$WORK/inventario-estatico.tsv"
+for caminho in \
+    /usr/bin/gimp-3.2 \
+    /usr/bin/gimp-console-3.2 \
+    /usr/bin/gimptool-3.2 \
+    /usr/bin/gimp-test-clipboard-3.2 \
+    /usr/lib/gimp/3.0/plug-ins/file-png/file-png \
+    /usr/lib/gimp/3.0/plug-ins/file-jpeg/file-jpeg \
+    /usr/lib/gimp/3.0/plug-ins/file-tiff/file-tiff \
+    /usr/lib/gimp/3.0/plug-ins/file-svg/file-svg \
+    /usr/lib/gimp/3.0/plug-ins/file-pdf-load/file-pdf-load \
+    /usr/lib/gimp/3.0/plug-ins/file-pdf-export/file-pdf-export \
+    /usr/lib/gimp/3.0/plug-ins/python-eval/python-eval.py \
+    /usr/lib/gimp/3.0/plug-ins/python-console/python-console.py \
+    /usr/lib/gimp/3.0/plug-ins/file-openraster/file-openraster.py \
+    /usr/lib/gimp/3.0/plug-ins/script-fu/script-fu \
+    /usr/lib/gimp/3.0/plug-ins/metadata-editor/metadata-editor \
+    /usr/lib/gimp/3.0/plug-ins/metadata-viewer/metadata-viewer \
+    /usr/lib/gimp/3.0/plug-ins/print/print; do
+    exige_x "$caminho"
+done
+
+for caminho in \
+    /usr/share/applications/gimp.desktop \
+    /usr/lib/girepository-1.0/GLib-2.0.typelib \
+    /usr/lib/girepository-1.0/GObject-2.0.typelib \
+    /usr/lib/girepository-1.0/Gio-2.0.typelib \
+    /usr/lib/girepository-1.0/Babl-0.1.typelib \
+    /usr/lib/girepository-1.0/Gegl-0.4.typelib \
+    /usr/lib/girepository-1.0/GExiv2-0.10.typelib \
+    /usr/lib/girepository-1.0/GdkPixbuf-2.0.typelib \
+    /usr/lib/girepository-1.0/HarfBuzz-0.0.typelib \
+    /usr/lib/girepository-1.0/Pango-1.0.typelib \
+    /usr/lib/girepository-1.0/Atk-1.0.typelib \
+    /usr/lib/girepository-1.0/Atspi-2.0.typelib \
+    /usr/lib/girepository-1.0/Gdk-3.0.typelib \
+    /usr/lib/girepository-1.0/Gtk-3.0.typelib \
+    /usr/lib/girepository-1.0/Gimp-3.0.typelib \
+    /usr/lib/girepository-1.0/GimpUi-3.0.typelib \
+    /usr/share/mypaint-data/2.0/brushes/order.conf; do
+    exige_f "$caminho"
+done
+
+for link in gimp gimp-console gimptool gimp-test-clipboard; do
+    [ -L "$ROOT/usr/bin/$link" ] || {
+        echo "erro: /usr/bin/$link não é o link versionado esperado" >&2
+        exit 1
+    }
+done
+[ "$(readlink "$ROOT/usr/bin/gimp")" = gimp-3.2 ] || {
+    echo 'erro: /usr/bin/gimp não aponta para gimp-3.2' >&2
+    exit 1
+}
+[ "$(readlink "$ROOT/usr/bin/gimp-console")" = gimp-console-3.2 ] || {
+    echo 'erro: /usr/bin/gimp-console não aponta para gimp-console-3.2' >&2
+    exit 1
+}
+[ "$(readlink "$ROOT/usr/bin/gimptool")" = gimptool-3.2 ] || {
+    echo 'erro: /usr/bin/gimptool não aponta para gimptool-3.2' >&2
+    exit 1
+}
+[ "$(readlink "$ROOT/usr/bin/gimp-test-clipboard")" = gimp-test-clipboard-3.2 ] || {
+    echo 'erro: /usr/bin/gimp-test-clipboard não aponta para a versão 3.2' >&2
+    exit 1
+}
+grep -Eq '^Exec=gimp-3\.2([[:space:]]|$)' \
+    "$ROOT/usr/share/applications/gimp.desktop" || {
+    echo 'erro: gimp.desktop não executa gimp-3.2' >&2
+    exit 1
+}
+grep -Fxq 'TryExec=gimp-3.2' "$ROOT/usr/share/applications/gimp.desktop" || {
+    echo 'erro: TryExec de gimp.desktop não aponta para gimp-3.2' >&2
+    exit 1
+}
+
+GI_EXTENSION=$(find "$ROOT/usr/lib" -type f -path '*/gi/_gi*.so' -print -quit)
+GEXIV2_OVERRIDE=$(find "$ROOT/usr/lib" -type f -path '*/gi/overrides/GExiv2.py' -print -quit)
+[ -n "$GI_EXTENSION" ] || { echo 'erro: extensão Python gi._gi ausente' >&2; exit 1; }
+[ -n "$GEXIV2_OVERRIDE" ] || { echo 'erro: override Python GExiv2 ausente' >&2; exit 1; }
+printf 'arquivo\t/%s\n' "${GI_EXTENSION#"$ROOT"/}" >> "$WORK/inventario-estatico.tsv"
+printf 'arquivo\t/%s\n' "${GEXIV2_OVERRIDE#"$ROOT"/}" >> "$WORK/inventario-estatico.tsv"
+
+SVG_LOADER=$(find "$ROOT/usr/lib" -type f -name '*pixbufloader_svg.so' -print -quit)
+SVG_CACHE=$(find "$ROOT/usr/lib" -type f -name loaders.cache \
+    -exec grep -q 'pixbufloader_svg' {} \; -print -quit)
+[ -n "$SVG_LOADER" ] || { echo 'erro: loader SVG do GdkPixbuf ausente' >&2; exit 1; }
+[ -n "$SVG_CACHE" ] || { echo 'erro: loader SVG ausente de loaders.cache' >&2; exit 1; }
+printf 'arquivo\t/%s\n' "${SVG_LOADER#"$ROOT"/}" >> "$WORK/inventario-estatico.tsv"
+printf 'arquivo\t/%s\n' "${SVG_CACHE#"$ROOT"/}" >> "$WORK/inventario-estatico.tsv"
+
+MYPAINT=$ROOT/usr/share/mypaint-data/2.0/brushes
+MYPAINT_COUNT=$(find "$MYPAINT" -type f -name '*.myb' | wc -l)
+MYPAINT_PREVIEW_COUNT=$(find "$MYPAINT" -type f -name '*_prev.png' | wc -l)
+[ "$MYPAINT_COUNT" -eq 196 ] || {
+    echo "erro: esperava 196 MyPaint brushes, encontrei $MYPAINT_COUNT" >&2
+    exit 1
+}
+[ "$MYPAINT_PREVIEW_COUNT" -eq 196 ] || {
+    echo "erro: esperava 196 previews MyPaint, encontrei $MYPAINT_PREVIEW_COUNT" >&2
+    exit 1
+}
+if find "$MYPAINT/Dieterle" -type f -name '*.myb' \
+       -exec grep -l 'surfacemap_[xy]' {} \; | grep -q .; then
+    echo 'erro: MyPaint brushes ainda contêm chaves surfacemap obsoletas' >&2
+    exit 1
+fi
+printf 'coleção\t/usr/share/mypaint-data/2.0/brushes\t%s brushes; %s previews\n' \
+    "$MYPAINT_COUNT" "$MYPAINT_PREVIEW_COUNT" \
+    >> "$WORK/inventario-estatico.tsv"
+
+roda_raiz() {
+    timeout --foreground "$LIMITE" \
+        bwrap --ro-bind "$ROOT" / --proc /proc --dev /dev \
+        --tmpfs /tmp --bind "$WORK" "$WORK_IN_ROOT" \
+        --unshare-pid --unshare-net --unshare-ipc --unshare-uts \
+        --die-with-parent --new-session --clearenv \
+        --setenv PATH /usr/bin:/bin \
+        --setenv HOME "$WORK_IN_ROOT/home" \
+        --setenv XDG_CONFIG_HOME "$WORK_IN_ROOT/config" \
+        --setenv XDG_CACHE_HOME "$WORK_IN_ROOT/cache" \
+        --setenv XDG_DATA_HOME "$WORK_IN_ROOT/data" \
+        --setenv XDG_RUNTIME_DIR "$WORK_IN_ROOT/run" \
+        --setenv GIMP3_TEMPDIR "$WORK_IN_ROOT" \
+        --setenv GIMP3_CACHEDIR "$WORK_IN_ROOT/cache" \
+        --setenv DISTROPICA_GIMP_E2E_DIR "$WORK_IN_ROOT" \
+        --setenv LC_ALL C \
+        "$@"
+}
+
+roda_raiz /usr/bin/gimp --version > "$WORK/versao.txt" 2>&1
+grep -Eq '(^|[^0-9])3\.2\.4([^0-9]|$)' "$WORK/versao.txt" || {
+    echo 'erro: /usr/bin/gimp não anunciou 3.2.4' >&2
+    sed -n '1,40p' "$WORK/versao.txt" >&2
+    exit 1
+}
+roda_raiz /usr/bin/gimp-console-3.2 --version > "$WORK/versao-console.txt" 2>&1
+grep -Eq '(^|[^0-9])3\.2\.4([^0-9]|$)' "$WORK/versao-console.txt" || {
+    echo 'erro: gimp-console-3.2 não anunciou 3.2.4' >&2
+    exit 1
+}
+roda_raiz /usr/bin/gimptool-3.2 --version > "$WORK/versao-gimptool.txt" 2>&1
+grep -Fxq '3.2.4' "$WORK/versao-gimptool.txt" || {
+    echo 'erro: gimptool-3.2 não anunciou 3.2.4' >&2
+    exit 1
+}
+roda_raiz /usr/bin/gimp-test-clipboard-3.2 --version \
+    > "$WORK/versao-clipboard.txt" 2>&1
+grep -Eq '(^|[^0-9])3\.2\.4([^0-9]|$)' "$WORK/versao-clipboard.txt" || {
+    echo 'erro: gimp-test-clipboard-3.2 não anunciou 3.2.4' >&2
+    exit 1
+}
+
+# A entrada Python vem por stdin; não há interpolação pelo shell nem limite de
+# tamanho de argv. --no-interface é analisado antes da inicialização do GTK.
+roda_raiz /usr/bin/gimp --no-interface --no-splash --console-messages \
+    --no-shm --new-instance --batch-interpreter=python-fu-eval \
+    --batch=- --quit < "$WORK/aceite.py" > "$WORK/gimp.log" 2>&1
+grep -q '^GIMP_E2E_OK$' "$WORK/gimp.log" || {
+    echo 'erro: o batch terminou sem o marcador de aceite' >&2
+    tail -80 "$WORK/gimp.log" >&2
+    exit 1
+}
+
+for arquivo_saida in criada.xcf criada.png criada.jpg criada.tiff \
+                      criada.svg criada.pdf criada.ora; do
+    [ -s "$WORK/$arquivo_saida" ] || {
+        echo "erro: saída vazia/ausente: $arquivo_saida" >&2
+        exit 1
+    }
+done
+
+[ ! -e "$WORK/indisponivel.exr" ] && [ ! -L "$WORK/indisponivel.exr" ] || {
+    echo 'erro: entrada PDB fantasma produziu arquivo OpenEXR inesperado' >&2
+    exit 1
+}
+grep -Fq 'Failed to set operation type gegl:exr-save' "$WORK/gimp.log" || {
+    echo 'erro: ausência da operação gegl:exr-save não foi provada' >&2
+    exit 1
+}
+
+[ "$(od -An -tx1 -N8 "$WORK/criada.png" | tr -d ' \n')" = 89504e470d0a1a0a ] || {
+    echo 'erro: assinatura PNG inválida' >&2; exit 1;
+}
+[ "$(od -An -tx1 -N3 "$WORK/criada.jpg" | tr -d ' \n')" = ffd8ff ] || {
+    echo 'erro: assinatura JPEG inválida' >&2; exit 1;
+}
+TIFF_MAGIC=$(od -An -tx1 -N4 "$WORK/criada.tiff" | tr -d ' \n')
+[ "$TIFF_MAGIC" = 49492a00 ] || [ "$TIFF_MAGIC" = 4d4d002a ] || {
+    echo 'erro: assinatura TIFF inválida' >&2; exit 1;
+}
+[ "$(dd if="$WORK/criada.pdf" bs=5 count=1 2>/dev/null)" = '%PDF-' ] || {
+    echo 'erro: assinatura PDF inválida' >&2; exit 1;
+}
+[ "$(dd if="$WORK/criada.xcf" bs=9 count=1 2>/dev/null)" = 'gimp xcf ' ] || {
+    echo 'erro: assinatura XCF inválida' >&2; exit 1;
+}
+[ "$(od -An -tc -N2 "$WORK/criada.ora" | tr -d ' \n')" = PK ] || {
+    echo 'erro: assinatura OpenRaster/ZIP inválida' >&2; exit 1;
+}
+grep -q '<svg' "$WORK/criada.svg" || {
+    echo 'erro: saída SVG não contém elemento svg' >&2; exit 1;
+}
+
+cp "$WORK/entrada.svg" "$WORK/aceite.py" \
+   "$WORK/inventario-estatico.tsv" "$WORK/CAPACIDADES-EXCLUIDAS.txt" \
+   "$WORK/versao.txt" "$WORK/versao-console.txt" \
+   "$WORK/versao-gimptool.txt" "$WORK/versao-clipboard.txt" \
+   "$WORK/gimp.log" \
+   "$WORK"/criada.* "$STAGING/"
+cp "$REPO/bootstrap/testes/gimp-e2e" "$STAGING/gimp-e2e"
+
+cat > "$STAGING/RESULTADO.txt" <<EOF
+resultado=PASSOU
+gimp=3.2.4
+modo=headless
+rede=namespace-isolado
+display=nenhum
+rootfs=somente-leitura
+formatos=xcf,png,jpeg,tiff,svg,pdf,openraster
+python=python-fu-eval
+pycairo=superficie-em-memoria
+metadados=GExiv2-override
+mypaint_brushes=$MYPAINT_COUNT
+mypaint_previews=$MYPAINT_PREVIEW_COUNT
+EOF
+
+(
+    cd "$STAGING"
+    find . -type f ! -name SHA256SUMS -print | LC_ALL=C sort |
+    while IFS= read -r item; do
+        sha256sum "$item"
+    done > SHA256SUMS
+)
+
+mv -T -- "$STAGING" "$OUTPUT"
+CONCLUIDO=1
+echo "gimp-e2e: PASSOU; evidência em $OUTPUT"

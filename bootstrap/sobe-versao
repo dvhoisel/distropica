@@ -1,0 +1,358 @@
+#!/bin/sh
+# Sobe a versão pinada de uma receita, e o sha256 junto.
+#
+# EXISTE PORQUE SUBIR À MÃO É ONDE O ERRO MORA. São dois campos que precisam
+# mudar em conjunto — VERSION e SHA256 —, e trocar um sem o outro produz uma
+# receita que baixa o arquivo certo e o recusa, ou pior: que aceita o arquivo
+# errado porque o hash ficou para trás e por acaso ainda existe no cache.
+#
+# O QUE ELE NÃO FAZ, e não deve: não decide SE a versão sobe. Isso é do
+# `bootstrap/versoes`, da P7 e do humano. Aqui só se executa uma decisão já
+# tomada, e se executa igual para todos.
+#
+# O sha256 sai do arquivo BAIXADO, e é conferido contra o publicado pelo
+# upstream quando ele publica um. Onde não há checksum publicado — e há
+# upstreams assim — o relatório diz isso por pacote, em vez de deixar parecer
+# que todos foram conferidos do mesmo jeito.
+set -u
+umask 022
+LC_ALL=C
+export LC_ALL
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+CACHE=
+SECO=nao
+
+usage() {
+    cat <<'EOF'
+uso: bootstrap/sobe-versao --cache DIR <pacote>=<versão> [<pacote>=<versão>...]
+     bootstrap/sobe-versao --cache DIR --tsv ARQ
+
+  --cache DIR   cache de fontes onde o artefato é guardado (o do rootfs)
+  --tsv ARQ     lê o relatório do `bootstrap/versoes` e sobe todo "atrasado"
+  --seco        mostra o que faria, sem baixar nem escrever
+
+Recusa-se a mexer em receita cuja árvore esteja suja para aquele arquivo: o
+que se pina aqui precisa ser reproduzível a partir de um commit.
+EOF
+}
+
+alvos=
+TSV=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --cache) CACHE=${2:?}; shift 2 ;;
+        --tsv) TSV=${2:?}; shift 2 ;;
+        --seco) SECO=sim; shift ;;
+        -h|--help) usage; exit 0 ;;
+        -*) echo "erro: opção desconhecida: $1" >&2; exit 1 ;;
+        *) alvos="$alvos $1"; shift ;;
+    esac
+done
+[ -n "$CACHE" ] || { echo "erro: --cache é obrigatório" >&2; usage >&2; exit 1; }
+[ -d "$CACHE" ] || { echo "erro: cache inexistente: $CACHE" >&2; exit 1; }
+
+if [ -n "$TSV" ]; then
+    [ -f "$TSV" ] || { echo "erro: TSV inexistente: $TSV" >&2; exit 1; }
+    alvos="$alvos $(awk -F'\t' '$4=="atrasado"{printf " %s=%s", $1, $3}' "$TSV")"
+fi
+[ -n "$alvos" ] || { echo "erro: diga ao menos um pacote" >&2; usage >&2; exit 1; }
+
+# Lê um campo do recipe juntando continuações de linha. Mesma regra do
+# source-bundle e do versoes, e pela mesma razão.
+campo() {
+    awk -v chave="$2" '
+        $0 ~ "^" chave "=" { dentro = 1 }
+        dentro {
+            linha = $0
+            sub(/^[A-Za-z0-9_]+=/, "", linha)
+            cont = (linha ~ /\\[[:space:]]*$/)
+            sub(/\\[[:space:]]*$/, "", linha)
+            gsub(/"/, "", linha)
+            texto = texto " " linha
+            if (!cont) {
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", texto)
+                gsub(/[[:space:]]+/, " ", texto)
+                print texto
+                exit
+            }
+        }
+    ' "$1"
+}
+
+# Substituição LITERAL. Não uso `sed` porque lá dentro a versão vira regex: o
+# ponto de "1.3.1" casa qualquer caractere, e um dia isso acerta o lugar errado
+# em silêncio. Em `${t%%"$agulha"*}` o casamento é literal por definição do
+# POSIX, sem escapes para acertar.
+troca_literal() {  # texto agulha nova
+    _t=$1; _a=$2; _n=$3; _s=
+    [ -n "$_a" ] || { printf '%s' "$_t"; return 0; }
+    while :; do
+        case "$_t" in
+            *"$_a"*) _s=$_s${_t%%"$_a"*}$_n; _t=${_t#*"$_a"} ;;
+            *)       printf '%s' "$_s$_t"; return 0 ;;
+        esac
+    done
+}
+
+# Os N primeiros componentes separados por ponto: ("2.88.2", 2) -> "2.88".
+# Vazio se a versão não tem N componentes.
+prefixo_pontos() {  # versao n
+    printf '%s' "$1" | awk -F. -v n="$2" \
+        '{ if (NF < n || n < 1) exit; s=$1; for (i = 2; i <= n; i++) s = s "." $i; print s }'
+}
+
+# A versão aparece no texto como TOKEN, ou só como pedaço de um número maior?
+# Substring pura não serve, e não é hipótese: o guarda recusou o nmap 7.99 ->
+# 7.991 ("a URL ainda cita 7.99" — dentro de `nmap-7.991.tar.bz2`) e o bison
+# 3.8 -> 3.8.2 (dentro de `bison-3.8.2.tar.xz`). As duas URLs estavam certas.
+#
+# O que decide é o que vem DEPOIS: se for alfanumérico, ou um ponto seguido de
+# dígito, a ocorrência é o começo de uma versão MAIOR, não a versão velha. E o
+# que vem antes: dígito ou ponto significa que é o rabo de uma versão maior.
+# `nmap-7.99` cita; `nmap-7.991`, `bison-3.8.2` e `cdn1.3rd` não citam.
+cita_versao() {  # texto versao
+    _tx=$1; _vs=$2
+    [ -n "$_vs" ] || return 1
+    while :; do
+        case "$_tx" in
+            *"$_vs"*) ;;
+            *) return 1 ;;
+        esac
+        _antes=${_tx%%"$_vs"*}
+        _depois=${_tx#*"$_vs"}
+        _c1=${_antes#"${_antes%?}"}
+        _c2=${_depois%"${_depois#?}"}
+        _c3=${_depois#?}; _c3=${_c3%"${_c3#?}"}
+        _cita=sim
+        case "$_c1" in [0-9.]) _cita=nao ;; esac
+        case "$_c2" in
+            [0-9A-Za-z]) _cita=nao ;;
+            .) case "$_c3" in [0-9]) _cita=nao ;; esac ;;
+        esac
+        [ "$_cita" = sim ] && return 0
+        _tx=$_depois
+    done
+}
+
+# A URL da versão nova, do jeito que as receitas DE FATO escrevem — que são três
+# jeitos, não um, e foi por supor um só que o zlib quase subiu para 1.3.2 com o
+# sha256 do 1.3.1:
+#
+#   1. 128 receitas parametrizam com $VERSION;
+#   2.   6 escrevem a versão crua (zlib, flex, gcc-pass2, elfutils,
+#        binutils-glibc, mathlibs-glibc) — só (1) deixava a URL no arquivo VELHO;
+#   3.   7 do GNOME cravam o DIRETÓRIO DE SÉRIE (.../glib/2.88/glib-$VERSION),
+#        que (1) e (2) não tocam: subir 2.88.2 -> 2.90.0 deixaria /2.88/.
+#
+# Devolve !=0 e o motivo no stderr quando a URL resultante não presta. O que os
+# guardas garantem é o que importa: JAMAIS baixar o arquivo velho achando que é
+# o novo. Uma URL de forma que este código não modele erra para 404 — e 404
+# recusa a subida, que é o lado seguro do erro.
+# O TEXTO de SRC com a versão nova, preservando o `$VERSION` onde a receita o
+# usa. Existe separado de `url_da_versao` porque a URL derivada tem de ser
+# GRAVADA DE VOLTA, e não só usada para baixar: sem isso o expat ficou com
+# `VERSION=2.8.3` e `SRC=.../R_2_8_2/expat-$VERSION.tar.xz`, uma receita que
+# baixou certo aqui e daria 404 no build seguinte. Mesmo estrago no zlib e no
+# binutils-glibc, que escrevem a versão crua.
+reescreve_fonte() {  # src velha nova
+    _s=$1; _ve=$2; _no=$3
+
+    # (2) versão crua, só onde a receita não parametriza
+    case "$_s" in
+        *'$VERSION'*|*'${VERSION}'*) ;;
+        *) _s=$(troca_literal "$_s" "$_ve" "$_no") ;;
+    esac
+
+    # (3) diretório de série do GNOME
+    _j=1
+    while :; do
+        _av=$(prefixo_pontos "$_ve" "$_j")
+        [ -n "$_av" ] && [ "$_av" != "$_ve" ] || break
+        _an=$(prefixo_pontos "$_no" "$_j")
+        [ -n "$_an" ] || break
+        [ "$_av" = "$_an" ] || _s=$(troca_literal "$_s" "/$_av/" "/$_an/")
+        _j=$((_j + 1))
+    done
+
+    # (5) versão em underscores na tag
+    _wv=$(printf '%s' "$_ve" | tr . _)
+    if [ "$_wv" != "$_ve" ]; then
+        _s=$(troca_literal "$_s" "$_wv" "$(printf '%s' "$_no" | tr . _)")
+    fi
+
+    printf '%s' "$_s"
+}
+
+url_da_versao() {  # src velha nova
+    _src=$1; _velha=$2; _nova=$3
+
+    # Forma 4, uma só receita: URL que não encodifica versão alguma — o
+    # `cacert.pem` do curl, um arquivo rolante. Não há o que substituir, e
+    # exigir que a URL cite a versão nova tornaria o pacote insubível, jogando-o
+    # para a mão — que é exatamente de onde este script existe para tirá-lo.
+    # O que se baixa é o que o upstream serve AGORA, e o relatório diz isso por
+    # nome, porque é uma garantia mais fraca que a dos outros 134.
+    _rolante=nao
+    case "$_src" in
+        *'$VERSION'*|*'${VERSION}'*|*"$_velha"*) ;;
+        *) _rolante=sim ;;
+    esac
+
+    _fonte=$(reescreve_fonte "$_src" "$_velha" "$_nova")
+    _u=$(troca_literal "$_fonte" '${VERSION}' "$_nova")
+    _u=$(troca_literal "$_u"     '$VERSION'   "$_nova")
+    _uv=$(printf '%s' "$_velha" | tr . _)
+
+    case "$_u" in
+        *'$'*) echo "sobrou expansão de shell na URL: $_u" >&2; return 1 ;;
+    esac
+    if cita_versao "$_u" "$_velha"; then
+        echo "a URL ainda cita $_velha: $_u" >&2; return 1
+    fi
+    if [ "$_uv" != "$_velha" ] && cita_versao "$_u" "$_uv"; then
+        echo "a URL ainda cita $_uv: $_u" >&2; return 1
+    fi
+    if [ "$_rolante" = nao ]; then
+        case "$_u" in
+            *"$_nova"*) ;;
+            *) echo "a URL não cita $_nova: $_u" >&2; return 1 ;;
+        esac
+    fi
+    _i=1
+    while :; do
+        _pv=$(prefixo_pontos "$_velha" "$_i")
+        [ -n "$_pv" ] && [ "$_pv" != "$_velha" ] || break
+        _pn=$(prefixo_pontos "$_nova" "$_i")
+        [ -n "$_pn" ] || break
+        if [ "$_pv" != "$_pn" ]; then
+            case "$_u" in
+                *"/$_pv/"*) echo "ficou o diretório de série /$_pv/: $_u" >&2; return 1 ;;
+            esac
+        fi
+        _i=$((_i + 1))
+    done
+
+    printf '%s' "$_u"
+}
+
+# Procura um checksum publicado ao lado do arquivo. Não invento formato: só
+# tento os sufixos que os upstreams desta árvore de fato usam.
+checksum_publicado() {  # url, arquivo
+    for sufixo in .sha256 .sha256sum .SHA256 .sha256.txt; do
+        c=$(curl -fsSL --max-time 25 "$1$sufixo" 2>/dev/null |
+            grep -oE '^[0-9a-f]{64}' | head -1)
+        [ -n "$c" ] && { printf '%s' "$c"; return 0; }
+    done
+    # SHA256SUMS no diretório, com o nome do arquivo na linha
+    dir=${1%/*}/
+    base=$(basename "$1")
+    for nome in SHA256SUMS sha256sums.txt sha256sum.txt SHA256SUM CHECKSUMS; do
+        c=$(curl -fsSL --max-time 25 "$dir$nome" 2>/dev/null |
+            awk -v b="$base" '$0 ~ b && $1 ~ /^[0-9a-f]{64}$/ { print $1; exit }')
+        [ -n "$c" ] && { printf '%s' "$c"; return 0; }
+    done
+    return 1
+}
+
+ERRO=$CACHE/.sobe-erro.$$
+trap 'rm -f "$ERRO"' EXIT INT TERM
+
+subidos=0
+falhos=
+sem_checksum=
+rolantes=
+
+for alvo in $alvos; do
+    pacote=${alvo%%=*}
+    nova=${alvo#*=}
+    receita="$REPO/newspeak/$pacote/recipe"
+    [ -f "$receita" ] || { echo "  FALTA   $pacote: sem receita"; falhos="$falhos $pacote"; continue; }
+
+    velha=$(grep -m1 '^VERSION=' "$receita" | cut -d= -f2- | tr -d '"')
+    [ "$velha" != "$nova" ] || { printf '  igual   %-20s já em %s\n' "$pacote" "$nova"; continue; }
+
+    src=$(campo "$receita" SRC)
+    hashes=$(campo "$receita" SHA256)
+    n_src=$(printf '%s' "$src" | wc -w)
+    n_hash=$(printf '%s' "$hashes" | wc -w)
+    if [ "$n_src" -ne 1 ] || [ "$n_hash" -ne 1 ]; then
+        # Múltiplas fontes exigem casar cada URL com cada hash na ordem, e a
+        # ordem é do recipe. Não é impossível, é só trabalho que nenhuma das
+        # receitas atrasadas de hoje pede — e adivinhar aqui pinaria hash
+        # trocado, que é o pior defeito possível numa receita.
+        printf '  PULA    %-20s %s fonte(s) e %s hash(es): suba à mão\n' \
+            "$pacote" "$n_src" "$n_hash"
+        falhos="$falhos $pacote"
+        continue
+    fi
+
+    case "$src" in
+        *'$VERSION'*|*'${VERSION}'*|*"$velha"*) ;;
+        *) rolantes="$rolantes $pacote" ;;
+    esac
+    if ! url=$(url_da_versao "$src" "$velha" "$nova" 2>"$ERRO"); then
+        printf '  ERRO    %-20s %s\n' "$pacote" "$(cat "$ERRO")"
+        falhos="$falhos $pacote"; continue
+    fi
+
+    if [ "$SECO" = sim ]; then
+        printf '  seco    %-20s %s -> %s\n    %s\n' "$pacote" "$velha" "$nova" "$url"
+        continue
+    fi
+
+    tmp=$CACHE/.sobe-$pacote.$$
+    if ! curl -fsSL --max-time 900 -o "$tmp" "$url" 2>/dev/null; then
+        printf '  ERRO    %-20s não baixou %s\n' "$pacote" "$url"
+        rm -f "$tmp"; falhos="$falhos $pacote"; continue
+    fi
+    obtido=$(sha256sum "$tmp" | cut -d' ' -f1)
+
+    esperado=$(checksum_publicado "$url" 2>/dev/null || true)
+    if [ -n "$esperado" ] && [ "$esperado" != "$obtido" ]; then
+        printf '  CRIMESTOP %-18s o upstream publica %s e veio %s\n' \
+            "$pacote" "${esperado%????????????????????????????????????????????????}…" \
+            "${obtido%????????????????????????????????????????????????}…"
+        rm -f "$tmp"; falhos="$falhos $pacote"; continue
+    fi
+    [ -n "$esperado" ] || sem_checksum="$sem_checksum $pacote"
+
+    mv "$tmp" "$CACHE/$obtido"
+    chmod 644 "$CACHE/$obtido"
+
+    # As duas linhas mudam JUNTAS ou nenhuma muda. Escreve-se ao lado e
+    # publica-se por rename: uma queda no meio não pode deixar VERSION nova com
+    # SHA256 velho, que é uma receita que recusa o próprio download.
+    # TRÊS linhas mudam juntas, não duas: a SRC também, quando a versão não sai
+    # dela só com $VERSION. Sem isso o expat ficou baixando certo aqui e
+    # apontando para a tag velha na receita. `awk -v` porque o valor é uma URL:
+    # o `&` do sed em texto de substituição já é uma armadilha conhecida.
+    fonte_nova=$(reescreve_fonte "$src" "$velha" "$nova")
+    novo_recipe=$receita.novo.$$
+    awk -v v="$nova" -v h="$obtido" -v f="$fonte_nova" '
+        /^VERSION=/ { print "VERSION=" v; next }
+        /^SHA256=/  { print "SHA256=\"" h "\""; next }
+        /^SRC=/     { print "SRC=\"" f "\""; next }
+        { print }
+    ' "$receita" > "$novo_recipe" || {
+        rm -f "$novo_recipe"; falhos="$falhos $pacote"; continue; }
+    if ! grep -q "^VERSION=$nova$" "$novo_recipe" ||
+       ! grep -q "^SRC=\"$fonte_nova\"$" "$novo_recipe" ||
+       ! grep -q "^SHA256=\"$obtido\"$" "$novo_recipe"; then
+        printf '  ERRO    %-20s a reescrita não pegou; receita intacta\n' "$pacote"
+        rm -f "$novo_recipe"; falhos="$falhos $pacote"; continue
+    fi
+    chmod 644 "$novo_recipe"
+    mv "$novo_recipe" "$receita"
+    marca=$([ -n "$esperado" ] && echo 'conferido' || echo 'sem checksum publicado')
+    printf '  ok      %-20s %-12s -> %-12s %s\n' "$pacote" "$velha" "$nova" "$marca"
+    subidos=$((subidos + 1))
+done
+
+echo
+printf 'subidos: %d\n' "$subidos"
+# LISTADO POR NOME, pelo mesmo motivo do `versoes`: um total esconde quem.
+[ -n "$sem_checksum" ] && printf 'sem checksum publicado pelo upstream:%s\n' "$sem_checksum"
+[ -n "$rolantes" ] && printf 'URL sem versão (pegou o que o upstream serve agora):%s\n' "$rolantes"
+[ -n "$falhos" ] && { printf 'NÃO SUBIRAM:%s\n' "$falhos"; exit 1; }
+exit 0

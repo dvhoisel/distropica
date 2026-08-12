@@ -1,0 +1,196 @@
+#!/bin/sh
+# Regressão dos dois vendors grandes externalizados para a 0.13. Não acessa a
+# rede nem compõe mídia: confere o contrato das receitas e exercita o gate de
+# fonte correspondente num repositório mínimo.
+set -eu
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+TMP=${TMPDIR:-/tmp}/distropica-teste-vendor-externo.$$
+trap 'rm -rf "$TMP"' EXIT
+
+CARGO_SOURCE_SHA=a3b9ca3ec784555391415369f0b21d47342a5b22ff9f073faa1ad4b8b0900dac
+RSVG_VENDOR_SHA=8c37c5df2b4468dce7dd6ce07b1fd53d9fabfa35f7c8dffd856c407d46610690
+CARGO_SOURCE_URL=https://distropica.com.br/sources/cargo-c/cargo-c-0.10.24-corresponding-source.tar.xz
+
+falhas=0
+if [ ! -e "$REPO/newspeak/cargo-c/files/corresponding-source.tar.xz" ] &&
+   [ ! -e "$REPO/newspeak/librsvg/files/vendor.tar.xz" ] &&
+   ! grep -q "$CARGO_SOURCE_SHA" "$REPO/newspeak/cargo-c/recipe" &&
+   grep -Fqx "$CARGO_SOURCE_SHA  $CARGO_SOURCE_URL" \
+       "$REPO/newspeak/cargo-c/fontes-correspondentes"; then
+    echo '  ok      fonte do cargo-c fica fora da receita/cache binário'
+else
+    echo '  FALHOU  fonte do cargo-c voltou a inflar Newspeak ou cache da mídia'
+    falhas=$((falhas + 1))
+fi
+
+if [ ! -e "$REPO/newspeak/librsvg/files/vendor.tar.xz" ] &&
+   grep -Fq 'https://distropica.com.br/sources/librsvg/librsvg-$VERSION-cargo-vendor.tar.xz' \
+       "$REPO/newspeak/librsvg/recipe" &&
+   grep -q "$RSVG_VENDOR_SHA" "$REPO/newspeak/librsvg/recipe" &&
+   grep -Fq 'tar -xJf "$DL_2"' "$REPO/newspeak/librsvg/recipe"; then
+    echo '  ok      vendor do librsvg é SRC por SHA e alimenta DL_2'
+else
+    echo '  FALHOU  vendor do librsvg não está preso como segunda fonte externa'
+    falhas=$((falhas + 1))
+fi
+
+# O source-bundle deve falhar fechado quando a declaração correspondente do
+# cargo-c não estiver no cache de fontes, ainda que seu binário esteja lá.
+FIXTURE=$TMP/repo
+ROOT=$TMP/root
+CACHE=$TMP/cache
+mkdir -p "$FIXTURE/bootstrap" "$FIXTURE/newspeak/aplicativo" \
+    "$FIXTURE/newspeak/cargo-c" "$FIXTURE/profiles/official" \
+    "$ROOT/var/lib/minitrue/records/aplicativo" \
+    "$ROOT/var/cache/minitrue" "$CACHE/channels/oficial" \
+    "$TMP/bin" "$TMP/produtor"
+cp "$REPO/bootstrap/source-bundle" "$FIXTURE/bootstrap/source-bundle"
+
+printf '%s\n' 'binário disponível' > "$TMP/binario"
+BINARY_SHA=$(sha256sum "$TMP/binario" | cut -d' ' -f1)
+printf '%s\n' 'snapshot correspondente disponível' > "$TMP/fonte-correspondente"
+FIXTURE_SOURCE_SHA=$(sha256sum "$TMP/fonte-correspondente" | cut -d' ' -f1)
+cat > "$FIXTURE/newspeak/cargo-c/recipe" <<EOF
+VERSION=0.10.24
+KIND=binary
+LICENSE=MIT
+SRC=https://example.invalid/cargo-c.bin
+SHA256=$BINARY_SHA
+EOF
+cat > "$FIXTURE/newspeak/aplicativo/recipe" <<'EOF'
+VERSION=1
+KIND=source
+LICENSE=MIT
+DEPS="cargo-c"
+EOF
+printf '%s  %s\n' "$FIXTURE_SOURCE_SHA" "$CARGO_SOURCE_URL" > \
+    "$FIXTURE/newspeak/cargo-c/fontes-correspondentes"
+printf '%s\n' aplicativo > "$FIXTURE/profiles/official/target.world"
+: > "$FIXTURE/profiles/official/cache.world"
+printf '%s\n' \
+    'PROFILE_FORMAT=1' \
+    'NAME=official' \
+    'ARCH=x86_64' \
+    'SOURCE_DATE_EPOCH=10' \
+    'STATUS=development' \
+    > "$FIXTURE/profiles/official/profile"
+zero64=0000000000000000000000000000000000000000000000000000000000000000
+two64=2222222222222222222222222222222222222222222222222222222222222222
+printf '%s\n' 'transporte do aplicativo' > "$TMP/transporte"
+TRANSPORT_SHA=$(sha256sum "$TMP/transporte" | cut -d' ' -f1)
+cp "$TMP/transporte" "$CACHE/$TRANSPORT_SHA"
+# O índice v4 cita o PLAN_LOCK do produtor, e o objeto precisa existir de fato:
+# no cache ele é content-addressed plano, do lado do transporte.
+printf '%s\n' 'PLAN_LOCK do produtor' > "$TMP/plano-produtor"
+PRODUCER_PLAN_SHA=$(sha256sum "$TMP/plano-produtor" | cut -d' ' -f1)
+cp "$TMP/plano-produtor" "$CACHE/$PRODUCER_PLAN_SHA"
+# Índice v4: cabeçalho de formato e de raiz, e oito colunas por linha — a
+# oitava é esse PLAN_LOCK do produtor.
+printf '%s\n%s\n' 'CHANNEL_INDEX_FORMAT=4' 'RELEASE_ROOT=no' \
+    > "$CACHE/channels/oficial/index"
+printf 'aplicativo 1 x86_64 %s pool/aplicativo-1-x86_64.tar.zst %s %s %s\n' \
+    "$zero64" "$TRANSPORT_SHA" "$two64" "$PRODUCER_PLAN_SHA" \
+    >> "$CACHE/channels/oficial/index"
+cat > "$ROOT/var/lib/minitrue/records/aplicativo/meta" <<EOF
+NAME=aplicativo
+VERSION=1
+KIND=source
+FINGERPRINT=$zero64
+ARTIFACT_HASH=$two64
+EOF
+cp "$TMP/binario" "$ROOT/var/cache/minitrue/$BINARY_SHA"
+printf '%s\n' 'artefato de teste' > "$TMP/artefato"
+
+cat > "$TMP/bin/git" <<'EOF'
+#!/bin/sh
+case "$1" in
+    rev-parse) printf '%040d\n' 0 ;;
+    status) exit 0 ;;
+    archive) exit 0 ;;
+    *) exit 99 ;;
+esac
+EOF
+cat > "$TMP/bin/zstd" <<'EOF'
+#!/bin/sh
+saida=
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = -o ]; then
+        shift
+        saida=${1:?}
+    fi
+    shift
+done
+[ -n "$saida" ] || exit 2
+dd of="$saida" 2>/dev/null
+EOF
+cat > "$TMP/produtor/minitrue" <<EOF
+#!/bin/sh
+while [ "\$#" -gt 0 ] && [ "\$1" != fingerprint ]; do shift; done
+[ "\${1:-}" = fingerprint ] || exit 2
+printf 'aplicativo %s\n' "$zero64"
+EOF
+cat > "$TMP/bin/bwrap" <<'EOF'
+#!/bin/sh
+set -eu
+executor=
+newspeak=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --ro-bind)
+            [ "$3" != /run/distropica-minitrue ] || executor=$2
+            [ "$3" != /run/distropica-newspeak ] || newspeak=$2
+            shift 3
+            ;;
+        --proc|--dev|--tmpfs) shift 2 ;;
+        --setenv) shift 3 ;;
+        --unshare-pid|--unshare-net|--die-with-parent|--new-session|--clearenv)
+            shift
+            ;;
+        /run/distropica-minitrue)
+            shift
+            NEWSPEAK_PATH=$newspeak "$executor" "$@"
+            exit
+            ;;
+        *) shift ;;
+    esac
+done
+exit 2
+EOF
+chmod +x "$TMP/bin/git" "$TMP/bin/zstd" "$TMP/bin/bwrap" \
+    "$TMP/produtor/minitrue" "$FIXTURE/bootstrap/source-bundle"
+
+roda_bundle() {
+    PATH="$TMP/bin:$PATH" "$FIXTURE/bootstrap/source-bundle" \
+        --artifact "$TMP/artefato" --output "$1" --cache "$CACHE" \
+        --minitrue-root "$ROOT" --minitrue-bin "$TMP/produtor/minitrue" --strict
+}
+
+if roda_bundle "$TMP/ausente" > "$TMP/ausente.log" 2>&1; then
+    echo '  FALHOU  source-bundle --strict aceitou correspondente ausente'
+    falhas=$((falhas + 1))
+elif grep -q 'fonte ausente' "$TMP/ausente.log" &&
+     grep -q -- '--strict recusou' "$TMP/ausente.log"; then
+    echo '  ok      source-bundle --strict exige correspondente externalizada'
+else
+    echo '  FALHOU  correspondente ausente não teve diagnóstico estrito'
+    falhas=$((falhas + 1))
+fi
+
+cp "$TMP/fonte-correspondente" \
+    "$ROOT/var/cache/minitrue/$FIXTURE_SOURCE_SHA"
+if roda_bundle "$TMP/presente" > "$TMP/presente.log" 2>&1 &&
+   [ -f "$TMP/presente/upstream/$FIXTURE_SOURCE_SHA" ] &&
+   awk -F '\t' -v hash="$FIXTURE_SOURCE_SHA" -v url="$CARGO_SOURCE_URL" '
+       $1 == "cargo-c" && $5 == hash && $6 == url &&
+       $7 == "upstream/" hash && $8 == "fonte-correspondente" { achou++ }
+       END { exit !(achou == 1) }
+   ' "$TMP/presente/INVENTARIO"; then
+    echo '  ok      fonte cacheada entra no bundle com tipo correspondente'
+else
+    echo '  FALHOU  fonte cacheada não foi materializada/classificada'
+    falhas=$((falhas + 1))
+fi
+
+[ "$falhas" -eq 0 ] || exit 1
+echo 'vendor externo: tudo certo'

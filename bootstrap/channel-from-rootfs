@@ -67,7 +67,8 @@ command -v minisign >/dev/null 2>&1 || { echo "erro: minisign ausente" >&2; exit
 
 if [ -z "$MINITRUE_BIN" ]; then
     CARGO_TARGET_DIR=${DISTROPICA_TARGET_DIR:-"$REPO/target/channel-export"} \
-        cargo build --locked --release --quiet --manifest-path "$REPO/minitrue/Cargo.toml"
+        cargo build --locked --release --quiet --no-default-features \
+        --manifest-path "$REPO/minitrue/Cargo.toml"
     MINITRUE_BIN=${DISTROPICA_TARGET_DIR:-"$REPO/target/channel-export"}/release/minitrue
 fi
 [ -x "$MINITRUE_BIN" ] || { echo "erro: Minitrue inválido" >&2; exit 1; }

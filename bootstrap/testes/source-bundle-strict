@@ -1,0 +1,1495 @@
+#!/bin/sh
+# Compatibilidade do manifesto genérico/legado e gates de publicação do
+# source-bundle. Usa uma árvore mínima e comandos falsos: não lê a árvore Git
+# real, não baixa crates e não produz artefatos de release.
+set -eu
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+TMP=${TMPDIR:-/tmp}/distropica-teste-source-bundle.$$
+trap '[ "${KEEP_TEST_TMP:-no}" = yes ] || rm -rf "$TMP"' EXIT
+
+FIXTURE=$TMP/repo
+ROOT=$TMP/root
+CACHE=$TMP/cache
+mkdir -p "$FIXTURE/bootstrap/live" "$FIXTURE/newspeak/fonte" \
+    "$FIXTURE/newspeak/sem-licenca" "$FIXTURE/newspeak/extra" \
+    "$FIXTURE/newspeak/correspondente" "$FIXTURE/newspeak/app" \
+    "$FIXTURE/newspeak/grupo" "$FIXTURE/newspeak/ponte" \
+    "$FIXTURE/newspeak/runtime-bin" \
+    "$FIXTURE/newspeak/cargo-c" "$FIXTURE/newspeak/seed" \
+    "$FIXTURE/newspeak/root-bin" "$FIXTURE/newspeak/cache-source" \
+    "$FIXTURE/newspeak/top-meta" "$FIXTURE/newspeak/go" \
+    "$FIXTURE/newspeak/ripgrep" "$FIXTURE/newspeak/rust" \
+    "$FIXTURE/profiles/official" "$FIXTURE/profiles/custom" \
+    "$FIXTURE/profiles/release" "$ROOT/usr/bin" \
+    "$TMP/produtor" \
+    "$ROOT/var/lib/minitrue/records" \
+    "$ROOT/var/cache/minitrue" "$CACHE/channels/oficial" "$TMP/bin" \
+    "$TMP/util-src/util-linux-9.9"
+cp "$REPO/bootstrap/source-bundle" "$FIXTURE/bootstrap/source-bundle"
+
+printf '%s\n' 'fonte disponível' > "$TMP/fonte-real"
+fonte_sha=$(sha256sum "$TMP/fonte-real" | cut -d' ' -f1)
+printf '%s\n' 'fonte correspondente disponível' > "$TMP/correspondente-real"
+correspondente_sha=$(sha256sum "$TMP/correspondente-real" | cut -d' ' -f1)
+printf '%s\n' 'binário runtime distribuído' > "$TMP/runtime-real"
+runtime_sha=$(sha256sum "$TMP/runtime-real" | cut -d' ' -f1)
+printf '%s\n' 'fonte correspondente do runtime' > "$TMP/runtime-fonte-real"
+runtime_fonte_sha=$(sha256sum "$TMP/runtime-fonte-real" | cut -d' ' -f1)
+printf '%s\n' 'cargo-c exclusivamente de build' > "$TMP/cargo-real"
+cargo_sha=$(sha256sum "$TMP/cargo-real" | cut -d' ' -f1)
+printf '%s\n' 'fonte correspondente do cargo-c' > "$TMP/cargo-fonte-real"
+cargo_fonte_sha=$(sha256sum "$TMP/cargo-fonte-real" | cut -d' ' -f1)
+printf '%s\n' 'toolchain exclusivamente de build' > "$TMP/seed-real"
+seed_sha=$(sha256sum "$TMP/seed-real" | cut -d' ' -f1)
+printf '%s\n' 'fonte explícita de reconstrução' > "$TMP/cache-source-real"
+cache_source_sha=$(sha256sum "$TMP/cache-source-real" | cut -d' ' -f1)
+printf '%s\n' 'binário top-level do perfil' > "$TMP/root-bin-real"
+root_bin_sha=$(sha256sum "$TMP/root-bin-real" | cut -d' ' -f1)
+
+cat > "$FIXTURE/newspeak/fonte/recipe" <<EOF
+VERSION=1
+KIND=source
+LICENSE=MIT
+SRC=https://example.invalid/fonte.tar
+SHA256=$fonte_sha
+EOF
+cat > "$FIXTURE/newspeak/sem-licenca/recipe" <<'EOF'
+VERSION=1
+KIND=source
+LICENSE=NOASSERTION
+EOF
+cat > "$FIXTURE/newspeak/extra/recipe" <<'EOF'
+VERSION=1
+KIND=source
+LICENSE=MIT
+BUILD_DEPS="cargo-c"
+EOF
+cat > "$FIXTURE/newspeak/correspondente/recipe" <<EOF
+VERSION=1
+KIND=source
+LICENSE=MIT
+SRC=https://example.invalid/correspondente-binario.tar
+SHA256=$fonte_sha
+EOF
+printf '%s %s\n' "$correspondente_sha" \
+    https://example.invalid/correspondente-fonte.tar \
+    > "$FIXTURE/newspeak/correspondente/fontes-correspondentes"
+cat > "$FIXTURE/newspeak/app/recipe" <<'EOF'
+VERSION=1
+KIND=source
+LICENSE=MIT
+DEPS="grupo"
+EOF
+cat > "$FIXTURE/newspeak/grupo/recipe" <<'EOF'
+VERSION=1
+KIND=meta
+DEPS="ponte"
+EOF
+cat > "$FIXTURE/newspeak/ponte/recipe" <<'EOF'
+VERSION=1
+KIND=source
+LICENSE=MIT
+DEPS="runtime-bin"
+BUILD_DEPS="cargo-c"
+TOOLCHAIN=seed
+EOF
+cat > "$FIXTURE/newspeak/runtime-bin/recipe" <<EOF
+VERSION=1
+KIND=binary
+LICENSE=GPL-2.0-only
+DEPS=""
+SRC=https://example.invalid/runtime-bin
+SHA256=$runtime_sha
+EOF
+printf '%s %s\n' "$runtime_fonte_sha" \
+    https://example.invalid/runtime-bin-source.tar \
+    > "$FIXTURE/newspeak/runtime-bin/fontes-correspondentes"
+cat > "$FIXTURE/newspeak/cargo-c/recipe" <<EOF
+VERSION=1
+KIND=binary
+LICENSE=GPL-2.0-only
+DEPS=""
+SRC=https://example.invalid/cargo-c
+SHA256=$cargo_sha
+EOF
+printf '%s %s\n' "$cargo_fonte_sha" \
+    https://example.invalid/cargo-c-source.tar \
+    > "$FIXTURE/newspeak/cargo-c/fontes-correspondentes"
+cat > "$FIXTURE/newspeak/seed/recipe" <<EOF
+VERSION=1
+KIND=binary
+LICENSE=MIT
+DEPS=""
+SRC=https://example.invalid/seed
+SHA256=$seed_sha
+EOF
+cat > "$FIXTURE/newspeak/cache-source/recipe" <<EOF
+VERSION=1
+KIND=source
+LICENSE=MIT
+DEPS=""
+SRC=https://example.invalid/cache-source.tar
+SHA256=$cache_source_sha
+EOF
+cat > "$FIXTURE/newspeak/root-bin/recipe" <<EOF
+VERSION=1
+KIND=binary
+LICENSE=MIT
+DEPS=""
+SRC=https://example.invalid/root-bin
+SHA256=$root_bin_sha
+EOF
+cat > "$FIXTURE/newspeak/top-meta/recipe" <<'EOF'
+VERSION=1
+KIND=meta
+DEPS="root-bin"
+EOF
+for top_level in go ripgrep rust; do
+    cat > "$FIXTURE/newspeak/$top_level/recipe" <<EOF
+VERSION=1
+KIND=binary
+LICENSE=MIT
+DEPS=""
+SRC=https://example.invalid/$top_level
+SHA256=$root_bin_sha
+EOF
+done
+printf '%s\n' top-meta go ripgrep rust > \
+    "$FIXTURE/profiles/official/target.world"
+printf '%s\n' cache-source > "$FIXTURE/profiles/official/cache.world"
+printf '%s\n' runtime-bin > "$FIXTURE/profiles/custom/target.world"
+: > "$FIXTURE/profiles/custom/cache.world"
+grava_profile_dev() {
+    printf '%s\n' \
+        'PROFILE_FORMAT=1' \
+        'NAME=fixture' \
+        'ARCH=x86_64' \
+        'SOURCE_DATE_EPOCH=10' \
+        'STATUS=development' \
+        > "$1/profile"
+}
+grava_profile_dev "$FIXTURE/profiles/official"
+grava_profile_dev "$FIXTURE/profiles/custom"
+
+for objeto in \
+    "$TMP/runtime-real:$runtime_sha" \
+    "$TMP/runtime-fonte-real:$runtime_fonte_sha" \
+    "$TMP/cargo-real:$cargo_sha" \
+    "$TMP/cargo-fonte-real:$cargo_fonte_sha" \
+    "$TMP/seed-real:$seed_sha" \
+    "$TMP/root-bin-real:$root_bin_sha" \
+    "$TMP/cache-source-real:$cache_source_sha"; do
+    origem=${objeto%%:*}
+    hash=${objeto#*:}
+    cp "$origem" "$ROOT/var/cache/minitrue/$hash"
+done
+
+zero64=0000000000000000000000000000000000000000000000000000000000000000
+one64=1111111111111111111111111111111111111111111111111111111111111111
+two64=2222222222222222222222222222222222222222222222222222222222222222
+three64=3333333333333333333333333333333333333333333333333333333333333333
+four64=4444444444444444444444444444444444444444444444444444444444444444
+five64=5555555555555555555555555555555555555555555555555555555555555555
+printf '%s\n' 'PLAN_LOCK produtor canônico da fixture' > "$TMP/producer.lock"
+producer_plan_sha=$(sha256sum "$TMP/producer.lock" | cut -d' ' -f1)
+cp "$TMP/producer.lock" "$CACHE/$producer_plan_sha"
+printf '%s\n' 'objeto transportado pelo índice do cache' > "$TMP/cache-transport"
+cache_transport_sha=$(sha256sum "$TMP/cache-transport" | cut -d' ' -f1)
+cp "$TMP/cache-transport" "$CACHE/$cache_transport_sha"
+
+grava_record() { # PACOTE FINGERPRINT
+    record_pacote=$1
+    record_fp=$2
+    mkdir -p "$ROOT/var/lib/minitrue/records/$record_pacote"
+    cat > "$ROOT/var/lib/minitrue/records/$record_pacote/meta" <<EOF
+NAME=$record_pacote
+VERSION=1
+KIND=source
+FINGERPRINT=$record_fp
+ARTIFACT_HASH=$two64
+EOF
+}
+for record_pacote in app correspondente extra ponte sem-licenca; do
+    grava_record "$record_pacote" "$zero64"
+done
+grava_record fonte "$one64"
+
+grava_indice_cache() {
+    {
+        printf '%s\n' 'CHANNEL_INDEX_FORMAT=4' 'RELEASE_ROOT=no'
+        for pacote do
+            case "$pacote" in fonte) indice_fp=$one64 ;; *) indice_fp=$zero64 ;; esac
+            printf '%s 1 x86_64 %s pool/%s-1-x86_64.tar.zst %s %s %s\n' \
+                "$pacote" "$indice_fp" "$pacote" "$cache_transport_sha" "$two64" \
+                "$producer_plan_sha"
+        done | sort
+    } > "$CACHE/channels/oficial/index"
+}
+grava_indice_cache fonte
+printf '%s\n' 'canal autenticado que prende pool/ por hash' > "$TMP/channel-index"
+printf '%s\n' 'imagem de instalação' > "$TMP/media.iso"
+printf '%s\n' 'CONFIG_TEST=y' > "$TMP/config-live"
+printf '%s\n' 'licença realista do upstream' > \
+    "$TMP/util-src/util-linux-9.9/README.licensing"
+tar -cJf "$TMP/arquivo-content-addressed" -C "$TMP/util-src" util-linux-9.9
+util_sha=$(sha256sum "$TMP/arquivo-content-addressed" | cut -d' ' -f1)
+cat > "$FIXTURE/bootstrap/live/build-efi" <<EOF
+#!/bin/sh
+UTIL_LINUX_VERSION=9.9
+UTIL_LINUX_URL=https://example.invalid/util-linux-\${UTIL_LINUX_VERSION}.tar.xz
+UTIL_LINUX_SHA256=$util_sha
+EOF
+
+cat > "$TMP/bin/git" <<'EOF'
+#!/bin/sh
+case "$1" in
+    rev-parse) printf '%040d\n' 0 ;;
+    status) exit 0 ;;
+    archive) exit 0 ;;
+    *) echo "git falso: chamada inesperada: $*" >&2; exit 99 ;;
+esac
+EOF
+cat > "$TMP/bin/zstd" <<'EOF'
+#!/bin/sh
+saida=
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = -o ]; then
+        shift
+        saida=${1:?}
+    fi
+    shift
+done
+[ -n "$saida" ] || exit 2
+dd of="$saida" 2>/dev/null
+if [ -n "${MUTATE_ARTIFACT_DURING_BUNDLE:-}" ]; then
+    printf '%s\n' 'troca concorrente' >> "$MUTATE_ARTIFACT_DURING_BUNDLE"
+fi
+if [ -n "${MUTATE_LIVE_CONFIG_DURING_BUNDLE:-}" ]; then
+    printf '%s\n' 'CONFIG_TROCADA=y' >> "$MUTATE_LIVE_CONFIG_DURING_BUNDLE"
+fi
+if [ -n "${MUTATE_LIVE_UTIL_DURING_BUNDLE:-}" ]; then
+    printf '%s\n' 'troca concorrente' >> "$MUTATE_LIVE_UTIL_DURING_BUNDLE"
+fi
+EOF
+cat > "$ROOT/usr/bin/minitrue" <<'EOF'
+#!/bin/sh
+echo 'minitrue stale do rootfs não pode ser executado' >&2
+exit 97
+EOF
+cat > "$TMP/produtor/minitrue" <<EOF
+#!/bin/sh
+set -eu
+while [ "\$#" -gt 0 ] && [ "\$1" != fingerprint ]; do shift; done
+[ "\${1:-}" = fingerprint ] || exit 2
+shift
+modo_b=nao
+grep -q '^# EXECUTOR_B$' "\$0" && modo_b=sim
+quer_app=nao
+quer_cargo=nao
+quer_correspondente=nao
+quer_extra=nao
+quer_fonte=nao
+quer_ponte=nao
+quer_sem_licenca=nao
+for nome do
+    case "\$nome" in
+        app) quer_app=sim ;;
+        correspondente) quer_correspondente=sim ;;
+        extra) quer_extra=sim; quer_cargo=sim ;;
+        fonte) quer_fonte=sim ;;
+        ponte) quer_ponte=sim ;;
+        sem-licenca) quer_sem_licenca=sim ;;
+    esac
+done
+[ "\$quer_app" = nao ] || printf 'app %s\n' "$zero64"
+[ "\$quer_cargo" = nao ] || printf 'cargo-c %s\n' "$three64"
+[ "\$quer_correspondente" = nao ] || printf 'correspondente %s\n' "$zero64"
+if [ "\$quer_extra" = sim ]; then
+    if grep -q '^DRIFT_TRANSITIVO=1$' "\$NEWSPEAK_PATH/cargo-c/recipe"; then
+        printf 'extra %s\n' "$four64"
+    else
+        printf 'extra %s\n' "$zero64"
+    fi
+fi
+if [ "\$quer_fonte" = sim ]; then
+    if [ "\$modo_b" = sim ] ||
+       grep -q '^DRIFT_DIRETO=1$' "\$NEWSPEAK_PATH/fonte/recipe"; then
+        printf 'fonte %s\n' "$five64"
+    else
+        printf 'fonte %s\n' "$one64"
+    fi
+fi
+[ "\$quer_ponte" = nao ] || printf 'ponte %s\n' "$zero64"
+[ "\$quer_sem_licenca" = nao ] || printf 'sem-licenca %s\n' "$zero64"
+EOF
+cp "$TMP/produtor/minitrue" "$TMP/produtor/minitrue-b"
+printf '%s\n' '# EXECUTOR_B' >> "$TMP/produtor/minitrue-b"
+cat > "$TMP/bin/bwrap" <<'EOF'
+#!/bin/sh
+set -eu
+rootfs=
+newspeak=
+executor=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --ro-bind)
+            [ "$3" != / ] || rootfs=$2
+            [ "$3" != /run/distropica-newspeak ] || newspeak=$2
+            [ "$3" != /run/distropica-minitrue ] || executor=$2
+            shift 3
+            ;;
+        --proc|--dev|--tmpfs) shift 2 ;;
+        --setenv) shift 3 ;;
+        --unshare-pid|--unshare-net|--die-with-parent|--new-session|--clearenv)
+            shift
+            ;;
+        /run/distropica-minitrue)
+            shift
+            NEWSPEAK_PATH=$newspeak "$executor" "$@"
+            exit
+            ;;
+        *) echo "bwrap falso: opção inesperada: $1" >&2; exit 99 ;;
+    esac
+done
+exit 2
+EOF
+chmod +x "$TMP/bin/git" "$TMP/bin/zstd" "$TMP/bin/bwrap" \
+    "$ROOT/usr/bin/minitrue" "$TMP/produtor/minitrue" \
+    "$TMP/produtor/minitrue-b" "$FIXTURE/bootstrap/source-bundle"
+producer_sha=$(sha256sum "$TMP/produtor/minitrue" | cut -d' ' -f1)
+cp "$FIXTURE/profiles/official/target.world" \
+    "$FIXTURE/profiles/release/target.world"
+cp "$FIXTURE/profiles/official/cache.world" \
+    "$FIXTURE/profiles/release/cache.world"
+cat > "$FIXTURE/profiles/release/profile" <<EOF
+PROFILE_FORMAT=1
+NAME=release
+ARCH=x86_64
+SOURCE_DATE_EPOCH=10
+INSTALL_READY=yes
+STATUS=release
+OFFICIAL_CONTENT_SHA256=$zero64
+OFFICIAL_BOOT_EFI_SHA256=$one64
+OFFICIAL_MINITRUE_SHA256=$producer_sha
+EOF
+
+roda() {
+    executor_teste=${MINITRUE_TEST_BIN:-$TMP/produtor/minitrue}
+    PATH="$TMP/bin:$PATH" "$FIXTURE/bootstrap/source-bundle" \
+        --minitrue-bin "$executor_teste" "$@"
+}
+
+falhas=0
+
+mkdir -p "$TMP/profile-schema-incompleto"
+printf '%s\n' root-bin > "$TMP/profile-schema-incompleto/target.world"
+: > "$TMP/profile-schema-incompleto/cache.world"
+printf '%s\n' 'STATUS=development' > "$TMP/profile-schema-incompleto/profile"
+if roda --artifact "$TMP/channel-index" --output "$TMP/profile-schema-out" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --profile "$TMP/profile-schema-incompleto" \
+    > "$TMP/profile-schema.log" 2>&1; then
+    echo '  FALHOU  source-bundle aceitou profile que o Minipax recusaria'
+    falhas=$((falhas + 1))
+elif grep -q 'profile não segue o schema canônico PROFILE_FORMAT=1' \
+    "$TMP/profile-schema.log"; then
+    echo '  ok      source-bundle exige o schema canônico do perfil'
+else
+    echo '  FALHOU  profile incompleto sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+# O artefato é a âncora do bundle, não apenas um nome a hashear uma vez. O
+# componente final por symlink e uma troca ocorrida durante a coleta precisam
+# falhar também para ISO/EFI/cache genéricos, não só para `index`.
+ln -s "$TMP/media.iso" "$TMP/media-link.iso"
+if roda --artifact "$TMP/media-link.iso" --output "$TMP/artifact-link-out" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    > "$TMP/artifact-link.log" 2>&1; then
+    echo '  FALHOU  artefato genérico aceitou symlink'
+    falhas=$((falhas + 1))
+elif grep -q 'artefato precisa ser arquivo regular, não symlink' \
+    "$TMP/artifact-link.log"; then
+    echo '  ok      artefato genérico precisa ser regular e não symlink'
+else
+    echo '  FALHOU  symlink de artefato genérico sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+cp "$TMP/media.iso" "$TMP/media-race.iso"
+if MUTATE_ARTIFACT_DURING_BUNDLE="$TMP/media-race.iso" roda \
+    --artifact "$TMP/media-race.iso" --output "$TMP/artifact-race-out" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    > "$TMP/artifact-race.log" 2>&1; then
+    echo '  FALHOU  bundle aceitou artefato trocado durante a coleta'
+    falhas=$((falhas + 1))
+elif grep -q 'artefato mudou durante a produção do bundle' \
+    "$TMP/artifact-race.log"; then
+    echo '  ok      artefato genérico é revalidado depois da coleta'
+else
+    echo '  FALHOU  troca concorrente do artefato sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+# O perfil é parte da alegação de quais bytes a mídia/cache distribui. Tanto o
+# diretório quanto os dois worlds precisam ser entradas regulares; nomes e
+# duplicatas falham antes de criar a saída.
+ln -s "$FIXTURE/profiles/official" "$TMP/profile-link"
+if roda --artifact "$TMP/channel-index" --output "$TMP/profile-link-out" \
+    --cache "$CACHE" --minitrue-root "$ROOT" --profile "$TMP/profile-link" \
+    > "$TMP/profile-link.log" 2>&1; then
+    echo '  FALHOU  --profile aceitou diretório por symlink'
+    falhas=$((falhas + 1))
+elif grep -q -- '--profile precisa ser diretório regular' "$TMP/profile-link.log"; then
+    echo '  ok      --profile precisa ser diretório final regular'
+else
+    echo '  FALHOU  symlink de --profile sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+mkdir -p "$TMP/profile-target-link"
+ln -s "$FIXTURE/profiles/official/target.world" \
+    "$TMP/profile-target-link/target.world"
+: > "$TMP/profile-target-link/cache.world"
+if roda --artifact "$TMP/channel-index" --output "$TMP/target-link-out" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --profile "$TMP/profile-target-link" > "$TMP/target-link.log" 2>&1; then
+    echo '  FALHOU  target.world aceitou symlink'
+    falhas=$((falhas + 1))
+elif grep -q 'target.world não é arquivo regular' "$TMP/target-link.log"; then
+    echo '  ok      target.world precisa ser arquivo regular'
+else
+    echo '  FALHOU  symlink de target.world sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+mkdir -p "$TMP/profile-cache-link"
+printf '%s\n' root-bin > "$TMP/profile-cache-link/target.world"
+ln -s "$FIXTURE/profiles/official/cache.world" \
+    "$TMP/profile-cache-link/cache.world"
+if roda --artifact "$TMP/channel-index" --output "$TMP/cache-link-out" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --profile "$TMP/profile-cache-link" > "$TMP/cache-link.log" 2>&1; then
+    echo '  FALHOU  cache.world aceitou symlink'
+    falhas=$((falhas + 1))
+elif grep -q 'cache.world não é arquivo regular' "$TMP/cache-link.log"; then
+    echo '  ok      cache.world precisa ser arquivo regular'
+else
+    echo '  FALHOU  symlink de cache.world sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+mkdir -p "$TMP/profile-nome-invalido"
+printf '%s\n' '../cargo-c' > "$TMP/profile-nome-invalido/target.world"
+: > "$TMP/profile-nome-invalido/cache.world"
+if roda --artifact "$TMP/channel-index" --output "$TMP/profile-invalido-out" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --profile "$TMP/profile-nome-invalido" \
+    > "$TMP/profile-invalido.log" 2>&1; then
+    echo '  FALHOU  target.world aceitou nome não canônico'
+    falhas=$((falhas + 1))
+elif grep -q 'target.world vazio, duplicado ou com nome não canônico' \
+    "$TMP/profile-invalido.log"; then
+    echo '  ok      nomes de world precisam ser canônicos'
+else
+    echo '  FALHOU  nome inválido de world sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+mkdir -p "$TMP/profile-duplicado"
+printf '%s\n' root-bin > "$TMP/profile-duplicado/target.world"
+printf '%s\n' cache-source cache-source > "$TMP/profile-duplicado/cache.world"
+if roda --artifact "$TMP/channel-index" --output "$TMP/profile-duplicado-out" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --profile "$TMP/profile-duplicado" > "$TMP/profile-duplicado.log" 2>&1; then
+    echo '  FALHOU  cache.world aceitou nome duplicado'
+    falhas=$((falhas + 1))
+elif grep -q 'cache.world duplicado ou com nome não canônico' \
+    "$TMP/profile-duplicado.log"; then
+    echo '  ok      world não pode esconder duplicata na normalização'
+else
+    echo '  FALHOU  duplicata de world sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+# Não existe executor implícito: o binário stale do rootfs acima encerra com
+# 97 e jamais deve ser consultado. A ausência da flag e o componente final por
+# symlink falham antes de qualquer índice ou saída.
+if PATH="$TMP/bin:$PATH" "$FIXTURE/bootstrap/source-bundle" \
+    --artifact "$TMP/channel-index" --output "$TMP/minitrue-ausente" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    > "$TMP/minitrue-ausente.log" 2>&1; then
+    echo '  FALHOU  source-bundle fez fallback para minitrue stale do rootfs'
+    falhas=$((falhas + 1))
+elif grep -q -- '--minitrue-bin é obrigatório' "$TMP/minitrue-ausente.log" &&
+     [ ! -e "$TMP/minitrue-ausente" ]; then
+    echo '  ok      executor produtor precisa ser informado explicitamente'
+else
+    echo '  FALHOU  ausência de --minitrue-bin sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+ln -s "$TMP/produtor/minitrue" "$TMP/minitrue-link"
+if MINITRUE_TEST_BIN="$TMP/minitrue-link" roda \
+    --artifact "$TMP/channel-index" --output "$TMP/minitrue-link-out" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    > "$TMP/minitrue-link.log" 2>&1; then
+    echo '  FALHOU  --minitrue-bin aceitou symlink'
+    falhas=$((falhas + 1))
+elif grep -q -- '--minitrue-bin precisa ser executável regular, não symlink' \
+    "$TMP/minitrue-link.log"; then
+    echo '  ok      executor produtor precisa ser regular e não symlink'
+else
+    echo '  FALHOU  symlink de --minitrue-bin sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+if MINITRUE_TEST_BIN="$TMP/produtor/minitrue-b" roda \
+    --artifact "$TMP/channel-index" --output "$TMP/minitrue-b-out" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    > "$TMP/minitrue-b.log" 2>&1; then
+    echo '  FALHOU  executor B legitimou índice produzido pelo executor A'
+    falhas=$((falhas + 1))
+elif grep -q 'fingerprint atual da árvore diverge do índice para fonte' \
+    "$TMP/minitrue-b.log" && [ ! -e "$TMP/minitrue-b-out" ]; then
+    echo '  ok      executor produtor A×B é factual, sem usar o stale do rootfs'
+else
+    echo '  FALHOU  executor A×B sem diagnóstico de fingerprint'
+    falhas=$((falhas + 1))
+fi
+
+# Cada índice do cache da mídia recebe o mesmo vínculo factual do canal, mas o
+# transporte está achatado pelo campo 6 na raiz do cache.
+mv "$ROOT/var/lib/minitrue/records/fonte/meta" \
+    "$ROOT/var/lib/minitrue/records/fonte/meta.guardado"
+if roda --artifact "$TMP/channel-index" --output "$TMP/cache-sem-record" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    > "$TMP/cache-sem-record.log" 2>&1; then
+    echo '  FALHOU  índice 00.. do cache passou sem record factual'
+    falhas=$((falhas + 1))
+elif grep -q 'índice cita fonte sem registro regular' "$TMP/cache-sem-record.log" &&
+     [ ! -e "$TMP/cache-sem-record" ]; then
+    echo '  ok      índice do cache sem record falha antes de criar bundle'
+else
+    echo '  FALHOU  record ausente no cache sem diagnóstico factual'
+    falhas=$((falhas + 1))
+fi
+mv "$ROOT/var/lib/minitrue/records/fonte/meta.guardado" \
+    "$ROOT/var/lib/minitrue/records/fonte/meta"
+
+sed -i "s/^FINGERPRINT=.*/FINGERPRINT=$four64/" \
+    "$ROOT/var/lib/minitrue/records/fonte/meta"
+if roda --artifact "$TMP/channel-index" --output "$TMP/cache-record-b" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    > "$TMP/cache-record-b.log" 2>&1; then
+    echo '  FALHOU  índice do cache aceitou record divergente'
+    falhas=$((falhas + 1))
+elif grep -q 'índice diverge do registro factual de fonte' \
+    "$TMP/cache-record-b.log"; then
+    echo '  ok      índice do cache prende VERSION/FINGERPRINT/ARTIFACT_HASH'
+else
+    echo '  FALHOU  record divergente do cache sem diagnóstico factual'
+    falhas=$((falhas + 1))
+fi
+sed -i "s/^FINGERPRINT=.*/FINGERPRINT=$one64/" \
+    "$ROOT/var/lib/minitrue/records/fonte/meta"
+
+mv "$CACHE/$cache_transport_sha" "$TMP/cache-transport.guardado"
+if roda --artifact "$TMP/channel-index" --output "$TMP/cache-pool-ausente" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    > "$TMP/cache-pool-ausente.log" 2>&1; then
+    echo '  FALHOU  índice do cache passou sem objeto transportado'
+    falhas=$((falhas + 1))
+elif grep -q 'objeto content-addressed do cache não regular' \
+    "$TMP/cache-pool-ausente.log"; then
+    echo '  ok      campo 6 do índice exige objeto flat regular no cache'
+else
+    echo '  FALHOU  objeto flat ausente sem diagnóstico factual'
+    falhas=$((falhas + 1))
+fi
+mv "$TMP/cache-transport.guardado" "$CACHE/$cache_transport_sha"
+
+mv "$CACHE/$cache_transport_sha" "$TMP/cache-transport.guardado"
+ln -s "$TMP/cache-transport.guardado" "$CACHE/$cache_transport_sha"
+if roda --artifact "$TMP/channel-index" --output "$TMP/cache-pool-link" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    > "$TMP/cache-pool-link.log" 2>&1; then
+    echo '  FALHOU  índice do cache seguiu symlink no objeto flat'
+    falhas=$((falhas + 1))
+elif grep -q 'objeto content-addressed do cache não regular' \
+    "$TMP/cache-pool-link.log"; then
+    echo '  ok      objeto transportado do cache não pode ser symlink'
+else
+    echo '  FALHOU  symlink no transporte flat sem diagnóstico factual'
+    falhas=$((falhas + 1))
+fi
+rm -f "$CACHE/$cache_transport_sha"
+mv "$TMP/cache-transport.guardado" "$CACHE/$cache_transport_sha"
+
+cp "$CACHE/$cache_transport_sha" "$TMP/cache-transport.guardado"
+printf '%s\n' adulterado > "$CACHE/$cache_transport_sha"
+if roda --artifact "$TMP/channel-index" --output "$TMP/cache-pool-divergente" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    > "$TMP/cache-pool-divergente.log" 2>&1; then
+    echo '  FALHOU  índice do cache aceitou transport SHA divergente'
+    falhas=$((falhas + 1))
+elif grep -q 'tem sha256.*índice diz' "$TMP/cache-pool-divergente.log"; then
+    echo '  ok      bytes flat do cache são recalculados contra transport SHA'
+else
+    echo '  FALHOU  objeto flat divergente sem diagnóstico de hash'
+    falhas=$((falhas + 1))
+fi
+mv "$TMP/cache-transport.guardado" "$CACHE/$cache_transport_sha"
+
+sed -i "s/ $one64 pool\/fonte/ $five64 pool\/fonte/" \
+    "$CACHE/channels/oficial/index"
+if roda --artifact "$TMP/channel-index" --output "$TMP/cache-fp-b" \
+    --cache "$CACHE" --minitrue-root "$ROOT" > "$TMP/cache-fp-b.log" 2>&1; then
+    echo '  FALHOU  índice do cache aceitou fingerprint de outra árvore'
+    falhas=$((falhas + 1))
+elif grep -q 'fingerprint atual da árvore diverge do índice para fonte' \
+    "$TMP/cache-fp-b.log"; then
+    echo '  ok      fingerprint atual prende cada linha do índice da mídia'
+else
+    echo '  FALHOU  fingerprint divergente do cache sem diagnóstico factual'
+    falhas=$((falhas + 1))
+fi
+grava_indice_cache fonte
+
+cp "$FIXTURE/newspeak/fonte/recipe" "$TMP/fonte-cache-a"
+printf '%s\n' 'DRIFT_DIRETO=1' >> "$FIXTURE/newspeak/fonte/recipe"
+if roda --artifact "$TMP/channel-index" --output "$TMP/cache-receita-b" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    > "$TMP/cache-receita-b.log" 2>&1; then
+    echo '  FALHOU  mídia/cache A usou receita B corrente'
+    falhas=$((falhas + 1))
+elif grep -q 'fingerprint atual da árvore diverge do índice para fonte' \
+    "$TMP/cache-receita-b.log" && [ ! -e "$TMP/cache-receita-b" ]; then
+    echo '  ok      mídia/cache A recusa receita B antes do inventário'
+else
+    echo '  FALHOU  mídia/cache A×B sem diagnóstico factual'
+    falhas=$((falhas + 1))
+fi
+cp "$TMP/fonte-cache-a" "$FIXTURE/newspeak/fonte/recipe"
+
+mkdir -p "$CACHE/channels/00-secundario"
+{
+    printf '%s\n' 'CHANNEL_INDEX_FORMAT=4' 'RELEASE_ROOT=no'
+    printf 'extra 1 x86_64 %s pool/extra-1-x86_64.tar.zst %s %s %s\n' \
+        "$zero64" "$cache_transport_sha" "$two64" "$producer_plan_sha"
+} > "$CACHE/channels/00-secundario/index"
+mv "$ROOT/var/lib/minitrue/records/extra/meta" \
+    "$ROOT/var/lib/minitrue/records/extra/meta.guardado"
+if roda --artifact "$TMP/channel-index" --output "$TMP/cache-multi-falho" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    > "$TMP/cache-multi-falho.log" 2>&1; then
+    echo '  FALHOU  múltiplos índices aceitaram um canal sem record'
+    falhas=$((falhas + 1))
+elif grep -q 'índice cita extra sem registro regular' "$TMP/cache-multi-falho.log" &&
+     [ ! -e "$TMP/cache-multi-falho" ]; then
+    echo '  ok      todos os índices são validados antes de criar/inventariar'
+else
+    echo '  FALHOU  multi-index não falhou fechado no segundo canal'
+    falhas=$((falhas + 1))
+fi
+mv "$ROOT/var/lib/minitrue/records/extra/meta.guardado" \
+    "$ROOT/var/lib/minitrue/records/extra/meta"
+rm -f "$CACHE/channels/00-secundario/index"
+rmdir "$CACHE/channels/00-secundario"
+
+sha_canal=$(sha256sum "$TMP/channel-index" | cut -d' ' -f1)
+if roda --artifact "$TMP/channel-index" --output "$TMP/generico" \
+    --cache "$CACHE" --minitrue-root "$ROOT" > "$TMP/generico.log" 2>&1 &&
+   grep -qx 'ARTIFACT=channel-index' "$TMP/generico/ARTEFATO" &&
+   grep -qx "ARTIFACT_SHA256=$sha_canal" "$TMP/generico/ARTEFATO" &&
+   grep -qx "MINITRUE_SHA256=$producer_sha" "$TMP/generico/ARTEFATO" &&
+   ! grep -q 'minitrue stale do rootfs' "$TMP/generico.log" &&
+   ! grep -q '^MEDIA=' "$TMP/generico/ARTEFATO"; then
+    echo '  ok      manifesto grava executor produtor, sem usar stale do rootfs'
+else
+    echo '  FALHOU  manifesto genérico'
+    falhas=$((falhas + 1))
+fi
+
+if roda --artifact "$TMP/channel-index" --output "$TMP/strict-fonte" \
+    --cache "$CACHE" --minitrue-root "$ROOT" --strict \
+    > "$TMP/strict-fonte.log" 2>&1; then
+    echo '  FALHOU  --strict aceitou fonte ausente'
+    falhas=$((falhas + 1))
+elif grep -q 'fonte ausente' "$TMP/strict-fonte.log" &&
+     grep -q -- '--strict recusou' "$TMP/strict-fonte.log"; then
+    echo '  ok      --strict recusa fonte ausente'
+else
+    echo '  FALHOU  fonte ausente sem diagnóstico estrito'
+    falhas=$((falhas + 1))
+fi
+
+# Isola LICENSE=NOASSERTION: esta receita não tem fonte upstream, portanto a
+# única razão para o gate falhar é a licença não declarada.
+grava_indice_cache sem-licenca
+if roda --artifact "$TMP/channel-index" --output "$TMP/strict-licenca" \
+    --cache "$CACHE" --minitrue-root "$ROOT" --strict \
+    > "$TMP/strict-licenca.log" 2>&1; then
+    echo '  FALHOU  --strict aceitou LICENSE=NOASSERTION'
+    falhas=$((falhas + 1))
+elif grep -q 'LICENSE=NOASSERTION' "$TMP/strict-licenca.log" &&
+     grep -q -- '--strict recusou' "$TMP/strict-licenca.log"; then
+    echo '  ok      --strict recusa licença não declarada'
+else
+    echo '  FALHOU  LICENSE=NOASSERTION sem diagnóstico estrito'
+    falhas=$((falhas + 1))
+fi
+
+# O modo --media conserva os dois pares no manifesto e inclui a configuração
+# do kernel vivo quando ela é fornecida.
+grava_indice_cache fonte
+printf '%s\n' 'bytes corrompidos sob nome content-addressed' \
+    > "$ROOT/var/cache/minitrue/$fonte_sha"
+if roda --artifact "$TMP/channel-index" \
+    --output "$TMP/strict-fonte-corrompida" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --strict \
+    > "$TMP/strict-fonte-corrompida.log" 2>&1; then
+    echo '  FALHOU  --strict aceitou fonte primária com bytes corrompidos'
+    falhas=$((falhas + 1))
+elif grep -q 'fonte upstream de fonte.*mas tem sha256' \
+    "$TMP/strict-fonte-corrompida.log"; then
+    echo '  ok      --strict recalcula fonte primária antes de promover'
+else
+    echo '  FALHOU  fonte primária corrompida sem diagnóstico de hash'
+    falhas=$((falhas + 1))
+fi
+cp "$TMP/fonte-real" "$ROOT/var/cache/minitrue/$fonte_sha"
+
+grava_indice_cache correspondente
+printf '%s\n' 'bytes errados sob hash da fonte correspondente' \
+    > "$ROOT/var/cache/minitrue/$correspondente_sha"
+if roda --artifact "$TMP/channel-index" \
+    --output "$TMP/strict-correspondente-corrompida" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --strict \
+    > "$TMP/strict-correspondente-corrompida.log" 2>&1; then
+    echo '  FALHOU  --strict aceitou fonte correspondente corrompida'
+    falhas=$((falhas + 1))
+elif grep -q 'fonte correspondente de correspondente.*mas tem sha256' \
+    "$TMP/strict-correspondente-corrompida.log"; then
+    echo '  ok      --strict recalcula fonte correspondente antes de promover'
+else
+    echo '  FALHOU  fonte correspondente corrompida sem diagnóstico de hash'
+    falhas=$((falhas + 1))
+fi
+
+# Um link com alvo de bytes corretos não é um objeto content-addressed regular:
+# seguir o link permitiria materializar arquivo fora do cache auditado.
+grava_indice_cache fonte
+rm -f "$ROOT/var/cache/minitrue/$fonte_sha"
+ln -s "$TMP/fonte-real" "$ROOT/var/cache/minitrue/$fonte_sha"
+if roda --artifact "$TMP/channel-index" \
+    --output "$TMP/strict-fonte-link" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --strict \
+    > "$TMP/strict-fonte-link.log" 2>&1; then
+    echo '  FALHOU  --strict aceitou fonte por link simbólico'
+    falhas=$((falhas + 1))
+elif grep -q 'fonte upstream de fonte.*link simbólico' \
+    "$TMP/strict-fonte-link.log"; then
+    echo '  ok      --strict não segue link em objeto content-addressed'
+else
+    echo '  FALHOU  link de fonte recusado sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+rm -f "$ROOT/var/cache/minitrue/$fonte_sha"
+cp "$TMP/fonte-real" "$ROOT/var/cache/minitrue/$fonte_sha"
+
+printf '%s\n' 'assinatura fora do cache' > "$TMP/assinatura-real"
+ln -s "$TMP/assinatura-real" "$ROOT/var/cache/minitrue/$fonte_sha.minisig"
+if roda --artifact "$TMP/channel-index" \
+    --output "$TMP/strict-sidecar-link" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --strict \
+    > "$TMP/strict-sidecar-link.log" 2>&1; then
+    echo '  FALHOU  --strict seguiu symlink de sidecar'
+    falhas=$((falhas + 1))
+elif grep -q 'sidecar de fonte upstream de fonte não é arquivo regular' \
+    "$TMP/strict-sidecar-link.log"; then
+    echo '  ok      sidecar minisig/sig/asc precisa ser arquivo regular'
+else
+    echo '  FALHOU  sidecar por symlink sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+rm -f "$ROOT/var/cache/minitrue/$fonte_sha.minisig"
+
+# --profile não é decorativo: trocar de perfil troca target.world e
+# cache.world juntos. O perfil custom leva runtime-bin, mas não os dois extras
+# materiais do perfil official.
+grava_indice_cache fonte
+if roda --artifact "$TMP/channel-index" --output "$TMP/profile-custom" \
+    --cache "$CACHE" --minitrue-root "$ROOT" --strict \
+    --profile "$FIXTURE/profiles/custom" > "$TMP/profile-custom.log" 2>&1 &&
+   grep -q "^runtime-bin$(printf '\t')" "$TMP/profile-custom/INVENTARIO" &&
+   ! grep -Eq "^(root-bin|cache-source|go|ripgrep|rust)$(printf '\t')" \
+       "$TMP/profile-custom/INVENTARIO"; then
+    echo '  ok      --profile prende target.world e cache.world da mesma raiz'
+else
+    echo '  FALHOU  --profile não controlou os dois worlds da seleção'
+    falhas=$((falhas + 1))
+fi
+
+grava_indice_cache fonte
+if roda --artifact "$TMP/channel-index" --output "$TMP/release-pin-ok" \
+    --cache "$CACHE" --minitrue-root "$ROOT" --strict \
+    --profile "$FIXTURE/profiles/release" > "$TMP/release-pin-ok.log" 2>&1 &&
+   grep -qx "MINITRUE_SHA256=$producer_sha" \
+       "$TMP/release-pin-ok/ARTEFATO"; then
+    echo '  ok      STATUS=release aceita somente executor preso pelo perfil'
+else
+    echo '  FALHOU  executor correto não satisfez o pin do profile release'
+    falhas=$((falhas + 1))
+fi
+
+if MINITRUE_TEST_BIN="$TMP/produtor/minitrue-b" roda \
+    --artifact "$TMP/channel-index" --output "$TMP/release-pin-b" \
+    --cache "$CACHE" --minitrue-root "$ROOT" --strict \
+    --profile "$FIXTURE/profiles/release" > "$TMP/release-pin-b.log" 2>&1; then
+    echo '  FALHOU  STATUS=release aceitou executor fora do pin'
+    falhas=$((falhas + 1))
+elif grep -q 'STATUS=release exige --minitrue-bin preso por OFFICIAL_MINITRUE_SHA256' \
+    "$TMP/release-pin-b.log" && [ ! -e "$TMP/release-pin-b" ]; then
+    echo '  ok      --strict prende executor a OFFICIAL_MINITRUE_SHA256'
+else
+    echo '  FALHOU  executor fora do pin sem diagnóstico release'
+    falhas=$((falhas + 1))
+fi
+
+# Antes do caso positivo, prove que o índice não pode omitir uma ponte source
+# alcançada em runtime. O meta intermediário não tem payload/linha de pool e é
+# deliberadamente ausente; a ponte, por ser Mundo B material, é obrigatória.
+grava_indice_cache app
+if roda --artifact "$TMP/channel-index" --output "$TMP/indice-incompleto" \
+    --cache "$CACHE" --minitrue-root "$ROOT" --strict \
+    > "$TMP/indice-incompleto.log" 2>&1; then
+    echo '  FALHOU  --strict aceitou índice sem runtime KIND=source'
+    falhas=$((falhas + 1))
+elif grep -q 'índice incompleto: runtime KIND=source ausente: ponte' \
+    "$TMP/indice-incompleto.log"; then
+    echo '  ok      índice precisa cobrir todo runtime KIND=source'
+else
+    echo '  FALHOU  índice incompleto sem diagnóstico do pacote ausente'
+    falhas=$((falhas + 1))
+fi
+
+# A seleção da mídia é o índice + binários no fechamento DEPS + cache.world.
+# cargo-c e seed têm bytes válidos e receita KIND=binary, mas só aparecem em
+# BUILD_DEPS/TOOLCHAIN; sequer sua fonte correspondente pode ser atribuída à
+# mídia. O runtime-bin, ao contrário, precisa levar binário E correspondente.
+grava_indice_cache app ponte
+if roda --artifact "$TMP/channel-index" --output "$TMP/fechamento-runtime" \
+    --cache "$CACHE" --minitrue-root "$ROOT" --strict \
+    > "$TMP/fechamento-runtime.log" 2>&1 &&
+   awk -F '\t' -v primaria="$runtime_sha" -v correspondente="$runtime_fonte_sha" '
+       $1 == "runtime-bin" && $5 == primaria && $8 == "upstream" { primarias++ }
+       $1 == "runtime-bin" && $5 == correspondente &&
+           $8 == "fonte-correspondente" { correspondentes++ }
+       END { exit !(primarias == 1 && correspondentes == 1) }
+   ' "$TMP/fechamento-runtime/INVENTARIO" &&
+   awk -F '\t' -v hash="$cache_source_sha" '
+       $1 == "cache-source" && $5 == hash && $8 == "upstream" { encontrados++ }
+       END { exit !(encontrados == 1) }
+   ' "$TMP/fechamento-runtime/INVENTARIO" &&
+   awk -F '\t' -v hash="$root_bin_sha" '
+       ($1 == "root-bin" || $1 == "go" || $1 == "ripgrep" || $1 == "rust") &&
+           $5 == hash && $8 == "upstream" { encontrados[$1]++ }
+       END { exit !(encontrados["root-bin"] == 1 && encontrados["go"] == 1 &&
+                    encontrados["ripgrep"] == 1 && encontrados["rust"] == 1) }
+   ' "$TMP/fechamento-runtime/INVENTARIO" &&
+   ! grep -Eq '^(cargo-c|seed|grupo|top-meta)\t' \
+       "$TMP/fechamento-runtime/INVENTARIO" &&
+   [ ! -e "$TMP/fechamento-runtime/upstream/$cargo_sha" ] &&
+   [ ! -e "$TMP/fechamento-runtime/upstream/$cargo_fonte_sha" ] &&
+   [ ! -e "$TMP/fechamento-runtime/upstream/$seed_sha" ]; then
+    echo '  ok      índice+world incluem go/ripgrep/rust e meta→binary runtime'
+    echo '  ok      compliance exclui BUILD_DEPS/toolchain não distribuídos'
+    echo '  ok      correspondente só entra para binário efetivamente distribuído'
+else
+    echo '  FALHOU  seleção do inventário não corresponde aos bytes da mídia'
+    falhas=$((falhas + 1))
+fi
+
+# Dados de dependência e o índice do cache controlam caminhos sob newspeak/.
+# No gate estrito, sintaxe fora do formato e índice truncado falham antes de
+# poder ampliar/reduzir silenciosamente o inventário.
+sed -i 's/^DEPS=.*/DEPS="..\/cargo-c"/' "$FIXTURE/newspeak/app/recipe"
+if roda --artifact "$TMP/channel-index" --output "$TMP/deps-invalido" \
+    --cache "$CACHE" --minitrue-root "$ROOT" --strict \
+    > "$TMP/deps-invalido.log" 2>&1; then
+    echo '  FALHOU  --strict aceitou DEPS não canônico no fechamento'
+    falhas=$((falhas + 1))
+elif grep -q 'zero ou uma DEPS literal canônica' "$TMP/deps-invalido.log"; then
+    echo '  ok      fechamento runtime falha fechado em DEPS não canônico'
+else
+    echo '  FALHOU  DEPS não canônico sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+sed -i 's|^DEPS=.*|DEPS="grupo"|' "$FIXTURE/newspeak/app/recipe"
+
+printf '%s\n' 'DEPS="cargo-c"' >> "$FIXTURE/newspeak/app/recipe"
+if roda --artifact "$TMP/channel-index" --output "$TMP/deps-duplicado" \
+    --cache "$CACHE" --minitrue-root "$ROOT" --strict \
+    > "$TMP/deps-duplicado.log" 2>&1; then
+    echo '  FALHOU  --strict aceitou duas atribuições DEPS'
+    falhas=$((falhas + 1))
+elif grep -q 'zero ou uma DEPS literal canônica' \
+    "$TMP/deps-duplicado.log"; then
+    echo '  ok      DEPS duplicado falha fechado, sem escolher primeira linha'
+else
+    echo '  FALHOU  DEPS duplicado sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+sed -i '$d' "$FIXTURE/newspeak/app/recipe"
+
+printf '%s\n' 'KIND=binary' >> "$FIXTURE/newspeak/app/recipe"
+if roda --artifact "$TMP/channel-index" --output "$TMP/kind-duplicado" \
+    --cache "$CACHE" --minitrue-root "$ROOT" --strict \
+    > "$TMP/kind-duplicado.log" 2>&1; then
+    echo '  FALHOU  --strict aceitou duas atribuições KIND'
+    falhas=$((falhas + 1))
+elif grep -q 'exatamente um KIND canônico' "$TMP/kind-duplicado.log"; then
+    echo '  ok      KIND duplicado falha fechado'
+else
+    echo '  FALHOU  KIND duplicado sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+sed -i '$d' "$FIXTURE/newspeak/app/recipe"
+
+sed -i 's/^DEPS=.*/DEPS="app"/' "$FIXTURE/newspeak/ponte/recipe"
+if roda --artifact "$TMP/channel-index" --output "$TMP/ciclo-runtime" \
+    --cache "$CACHE" --minitrue-root "$ROOT" --strict \
+    > "$TMP/ciclo-runtime.log" 2>&1; then
+    echo '  FALHOU  --strict aceitou ciclo no fechamento runtime'
+    falhas=$((falhas + 1))
+elif grep -q 'ciclo em DEPS envolvendo' "$TMP/ciclo-runtime.log"; then
+    echo '  ok      ciclo em DEPS é erro fechado conforme SPEC-0013'
+else
+    echo '  FALHOU  ciclo runtime sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+sed -i 's/^DEPS=.*/DEPS="runtime-bin"/' "$FIXTURE/newspeak/ponte/recipe"
+
+printf '%s\n' 'app 1 fp artefato' > "$CACHE/channels/oficial/index"
+if roda --artifact "$TMP/channel-index" --output "$TMP/cache-index-invalido" \
+    --cache "$CACHE" --minitrue-root "$ROOT" --strict \
+    > "$TMP/cache-index-invalido.log" 2>&1; then
+    echo '  FALHOU  --strict aceitou índice truncado no cache da mídia'
+    falhas=$((falhas + 1))
+elif grep -q 'índice do cache não é v4 canônico' \
+    "$TMP/cache-index-invalido.log"; then
+    echo '  ok      índice do cache falha fechado antes do inventário'
+else
+    echo '  FALHOU  índice truncado do cache sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+grava_indice_cache fonte
+sha_media=$(sha256sum "$TMP/media.iso" | cut -d' ' -f1)
+if roda --media "$TMP/media.iso" --output "$TMP/legado" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --live-kernel-config "$TMP/config-live" \
+    > "$TMP/legado.log" 2>&1 &&
+   grep -qx 'ARTIFACT=media.iso' "$TMP/legado/ARTEFATO" &&
+   grep -qx "ARTIFACT_SHA256=$sha_media" "$TMP/legado/ARTEFATO" &&
+   grep -qx 'MEDIA=media.iso' "$TMP/legado/ARTEFATO" &&
+   grep -qx "MEDIA_SHA256=$sha_media" "$TMP/legado/ARTEFATO" &&
+   cmp -s "$TMP/config-live" "$TMP/legado/kernel/config-live"; then
+    echo '  ok      --media conserva MEDIA* e também grava ARTIFACT*'
+else
+    echo '  FALHOU  compatibilidade do manifesto --media'
+    falhas=$((falhas + 1))
+fi
+
+if roda --media "$TMP/media.iso" --output "$TMP/strict-media" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --live-kernel-config "$TMP/config-live" --strict \
+    > "$TMP/strict-media.log" 2>&1; then
+    echo '  FALHOU  --strict --media aceitou ausência do util-linux vivo'
+    falhas=$((falhas + 1))
+elif grep -q -- '--live-util-linux-tar válido' "$TMP/strict-media.log"; then
+    echo '  ok      --strict --media exige fonte do util-linux vivo'
+else
+    echo '  FALHOU  util-linux vivo ausente sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+if roda --media "$TMP/media.iso" --output "$TMP/strict-media-sem-config" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --live-util-linux-tar "$TMP/arquivo-content-addressed" --strict \
+    > "$TMP/strict-media-sem-config.log" 2>&1; then
+    echo '  FALHOU  --strict --media aceitou ausência da configuração viva'
+    falhas=$((falhas + 1))
+elif grep -q -- '--live-kernel-config válido' "$TMP/strict-media-sem-config.log"; then
+    echo '  ok      --strict --media exige configuração do kernel vivo'
+else
+    echo '  FALHOU  configuração viva ausente sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+ln -s "$TMP/config-live" "$TMP/config-live-link"
+if roda --media "$TMP/media.iso" --output "$TMP/strict-config-link" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --live-kernel-config "$TMP/config-live-link" \
+    --live-util-linux-tar "$TMP/arquivo-content-addressed" --strict \
+    > "$TMP/strict-config-link.log" 2>&1; then
+    echo '  FALHOU  configuração viva aceitou symlink'
+    falhas=$((falhas + 1))
+elif grep -q -- '--live-kernel-config precisa ser arquivo regular, não symlink' \
+    "$TMP/strict-config-link.log"; then
+    echo '  ok      configuração viva precisa ser arquivo regular'
+else
+    echo '  FALHOU  symlink de configuração viva sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+ln -s "$TMP/arquivo-content-addressed" "$TMP/util-linux-link"
+if roda --media "$TMP/media.iso" --output "$TMP/strict-util-link" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --live-kernel-config "$TMP/config-live" \
+    --live-util-linux-tar "$TMP/util-linux-link" --strict \
+    > "$TMP/strict-util-link.log" 2>&1; then
+    echo '  FALHOU  fonte viva do util-linux aceitou symlink'
+    falhas=$((falhas + 1))
+elif grep -q -- '--live-util-linux-tar precisa ser arquivo regular, não symlink' \
+    "$TMP/strict-util-link.log"; then
+    echo '  ok      fonte viva do util-linux precisa ser arquivo regular'
+else
+    echo '  FALHOU  symlink do util-linux vivo sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+cp "$TMP/config-live" "$TMP/config-live-race"
+if MUTATE_LIVE_CONFIG_DURING_BUNDLE="$TMP/config-live-race" roda \
+    --media "$TMP/media.iso" --output "$TMP/strict-config-race" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --live-kernel-config "$TMP/config-live-race" \
+    --live-util-linux-tar "$TMP/arquivo-content-addressed" --strict \
+    > "$TMP/strict-config-race.log" 2>&1; then
+    echo '  FALHOU  configuração viva mudou durante o bundle sem recusa'
+    falhas=$((falhas + 1))
+elif grep -q 'configuração do kernel vivo mudou' \
+    "$TMP/strict-config-race.log"; then
+    echo '  ok      configuração viva é revalidada durante o bundle'
+else
+    echo '  FALHOU  troca da configuração viva sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+cp "$TMP/arquivo-content-addressed" "$TMP/util-linux-race"
+if MUTATE_LIVE_UTIL_DURING_BUNDLE="$TMP/util-linux-race" roda \
+    --media "$TMP/media.iso" --output "$TMP/strict-util-race" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --live-kernel-config "$TMP/config-live" \
+    --live-util-linux-tar "$TMP/util-linux-race" --strict \
+    > "$TMP/strict-util-race.log" 2>&1; then
+    echo '  FALHOU  fonte viva do util-linux mudou sem recusa'
+    falhas=$((falhas + 1))
+elif grep -Eq 'origem do util-linux mudou|fonte do util-linux mudou' \
+    "$TMP/strict-util-race.log"; then
+    echo '  ok      fonte viva do util-linux é revalidada durante o bundle'
+else
+    echo '  FALHOU  troca da fonte viva sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+mkdir -p "$ROOT/boot"
+ln -s "$TMP/config-live" "$ROOT/boot/config-9.9"
+if roda --media "$TMP/media.iso" --output "$TMP/strict-root-config-link" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --live-kernel-config "$TMP/config-live" \
+    --live-util-linux-tar "$TMP/arquivo-content-addressed" --strict \
+    > "$TMP/strict-root-config-link.log" 2>&1; then
+    echo '  FALHOU  configuração instalada do kernel aceitou symlink'
+    falhas=$((falhas + 1))
+elif grep -q 'configuração do kernel não é arquivo regular' \
+    "$TMP/strict-root-config-link.log"; then
+    echo '  ok      configurações instaladas do kernel precisam ser regulares'
+else
+    echo '  FALHOU  symlink em boot/config-* sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+rm -f "$ROOT/boot/config-9.9"
+rmdir "$ROOT/boot"
+
+if roda --artifact "$TMP/channel-index" --output "$TMP/strict-artifact-live" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --live-kernel-config "$TMP/config-live" --strict \
+    > "$TMP/strict-artifact-live.log" 2>&1; then
+    echo '  FALHOU  --artifact vivo estrito aceitou ausência de util-linux'
+    falhas=$((falhas + 1))
+elif grep -q -- '--live-util-linux-tar válido' "$TMP/strict-artifact-live.log"; then
+    echo '  ok      --artifact vivo estrito exige util-linux junto da config'
+else
+    echo '  FALHOU  artefato vivo sem util-linux não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+# Um canal/cache genérico não é artefato vivo: o gate estrito continua válido
+# sem inventar configuração de kernel ou fonte de cfdisk para ele.
+if roda --artifact "$TMP/channel-index" --output "$TMP/strict-generico-ok" \
+    --cache "$CACHE" --minitrue-root "$ROOT" --strict \
+    > "$TMP/strict-generico-ok.log" 2>&1; then
+    echo '  ok      --artifact estrito não vivo não exige insumos do EFI'
+else
+    echo '  FALHOU  gate genérico passou a exigir insumos exclusivos do EFI'
+    falhas=$((falhas + 1))
+fi
+
+printf '%s\n' 'tarball errado' > "$TMP/util-errado"
+if roda --media "$TMP/media.iso" --output "$TMP/strict-hash-errado" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --live-kernel-config "$TMP/config-live" \
+    --live-util-linux-tar "$TMP/util-errado" --strict \
+    > "$TMP/strict-hash-errado.log" 2>&1; then
+    echo '  FALHOU  --strict aceitou util-linux com hash errado'
+    falhas=$((falhas + 1))
+elif grep -q 'build-efi pina' "$TMP/strict-hash-errado.log"; then
+    echo '  ok      --strict coteja o tar do util-linux com build-efi'
+else
+    echo '  FALHOU  hash errado do util-linux sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+# Desenvolvimento conserva a saída diagnóstica: divergência é aviso e fica
+# explícita como ausência no INVENTARIO, nunca é copiada sob o hash esperado.
+if roda --media "$TMP/media.iso" --output "$TMP/dev-hash-errado" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --live-kernel-config "$TMP/config-live" \
+    --live-util-linux-tar "$TMP/util-errado" \
+    > "$TMP/dev-hash-errado.log" 2>&1 &&
+   grep -q 'aviso: util-linux divergente' "$TMP/dev-hash-errado.log" &&
+   grep -q 'util-linux-live.*AUSENTE ou divergente.*insumo-live' \
+       "$TMP/dev-hash-errado/INVENTARIO" &&
+   [ ! -e "$TMP/dev-hash-errado/upstream/$util_sha" ]; then
+    echo '  ok      modo não estrito avisa e não promove tar divergente'
+else
+    echo '  FALHOU  modo diagnóstico do hash divergente'
+    falhas=$((falhas + 1))
+fi
+
+if roda --media "$TMP/media.iso" --output "$TMP/strict-live-ok" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --live-kernel-config "$TMP/config-live" \
+    --live-util-linux-tar "$TMP/arquivo-content-addressed" --strict \
+    > "$TMP/strict-live-ok.log" 2>&1 &&
+   cmp -s "$TMP/arquivo-content-addressed" \
+       "$TMP/strict-live-ok/upstream/$util_sha" &&
+   awk -F '\t' -v hash="$util_sha" '
+       $1 == "util-linux-live" && $2 == "9.9" && $3 == "LIVE" &&
+       $5 == hash &&
+       $6 == "https://example.invalid/util-linux-9.9.tar.xz" &&
+       $7 == "upstream/" hash && $8 == "insumo-live" { encontrados++ }
+       END { exit !(encontrados == 1) }
+   ' "$TMP/strict-live-ok/INVENTARIO"; then
+    echo '  ok      util-linux válido entra uma vez, preso aos pinos dinâmicos'
+else
+    echo '  FALHOU  materialização estrita do util-linux vivo'
+    falhas=$((falhas + 1))
+fi
+
+# O canal público pode ser maior que o cache offline da mídia. O bundle preso
+# ao índice público deriva o inventário do próprio artefato, e não pode omitir
+# um pacote que exista apenas nele (a forma real do caso GIMP).
+mkdir -p "$TMP/emissao-release/pool" "$TMP/emissao-release/plans" \
+    "$ROOT/var/lib/minitrue/records/extra" \
+    "$ROOT/var/lib/minitrue/records/fonte"
+printf '%s\n' 'payload de canal para extra' \
+    > "$TMP/emissao-release/pool/extra-1-x86_64.tar.zst"
+printf '%s\n' 'payload de canal para fonte' \
+    > "$TMP/emissao-release/pool/fonte-1-x86_64.tar.zst"
+extra_transport_sha=$(sha256sum \
+    "$TMP/emissao-release/pool/extra-1-x86_64.tar.zst" | cut -d' ' -f1)
+fonte_transport_sha=$(sha256sum \
+    "$TMP/emissao-release/pool/fonte-1-x86_64.tar.zst" | cut -d' ' -f1)
+cp "$TMP/producer.lock" "$TMP/emissao-release/plans/$producer_plan_sha.lock"
+{
+    printf '%s\n' 'CHANNEL_INDEX_FORMAT=4' 'RELEASE_ROOT=yes'
+    printf 'extra 1 x86_64 %s pool/extra-1-x86_64.tar.zst %s %s %s\n' \
+        "$zero64" "$extra_transport_sha" "$two64" "$producer_plan_sha"
+    printf 'fonte 1 x86_64 %s pool/fonte-1-x86_64.tar.zst %s %s %s\n' \
+        "$one64" "$fonte_transport_sha" "$two64" "$producer_plan_sha"
+} > "$TMP/emissao-release/index"
+cat > "$ROOT/var/lib/minitrue/records/extra/meta" <<EOF
+NAME=extra
+VERSION=1
+KIND=source
+FINGERPRINT=$zero64
+ARTIFACT_HASH=$two64
+EOF
+cat > "$ROOT/var/lib/minitrue/records/fonte/meta" <<EOF
+NAME=fonte
+VERSION=1
+KIND=source
+FINGERPRINT=$one64
+ARTIFACT_HASH=$two64
+EOF
+release_index_sha=$(sha256sum "$TMP/emissao-release/index" | cut -d' ' -f1)
+cat > "$TMP/emissao-release/emit.meta" <<EOF
+CHANNEL_EMIT_FORMAT=4
+ARCH=x86_64
+COMPRESSION=ruzstd-0.8.3-fastest
+INDEX_SIGNED=no
+INDEX_SHA256=$release_index_sha
+PRODUCER_PLAN_LOCK_SHA256=$producer_plan_sha
+RELEASE_ROOT=yes
+EOF
+if roda --artifact "$TMP/emissao-release/index" \
+    --output "$TMP/bundle-canal-completo" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --strict > "$TMP/bundle-canal-completo.log" 2>&1 &&
+   awk -F '\t' '$1 == "extra" { encontrados++ }
+       END { exit !(encontrados == 1) }' \
+       "$TMP/bundle-canal-completo/INVENTARIO"; then
+    echo '  ok      índice público, não cache reduzido, decide pacotes do canal'
+else
+    echo '  FALHOU  bundle do canal omitiu pacote presente só no índice público'
+    falhas=$((falhas + 1))
+fi
+
+# Mesmo index+emit.meta+records de A não autorizam ler SRC/SHA/LICENSE de uma
+# receita B corrente. A checagem é transitiva e acontece antes de criar saída.
+cp "$FIXTURE/newspeak/fonte/recipe" "$TMP/fonte-recipe-a"
+cat > "$FIXTURE/newspeak/fonte/recipe" <<EOF
+VERSION=1
+KIND=source
+LICENSE=Apache-2.0
+SRC=https://example.invalid/fonte-b.tar
+SHA256=$five64
+DRIFT_DIRETO=1
+EOF
+if roda --artifact "$TMP/emissao-release/index" \
+    --output "$TMP/bundle-receita-b" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --strict > "$TMP/bundle-receita-b.log" 2>&1; then
+    echo '  FALHOU  gate usou receita B para index/records de A'
+    falhas=$((falhas + 1))
+elif grep -q 'fingerprint atual da árvore diverge do índice para fonte' \
+    "$TMP/bundle-receita-b.log" && [ ! -e "$TMP/bundle-receita-b" ]; then
+    echo '  ok      index/records A recusam SRC/SHA/LICENSE de receita B'
+else
+    echo '  FALHOU  drift direto de receita sem diagnóstico factual'
+    falhas=$((falhas + 1))
+fi
+cp "$TMP/fonte-recipe-a" "$FIXTURE/newspeak/fonte/recipe"
+
+# O fingerprint do índice é transitivo: mudar apenas BUILD_DEPS de extra
+# através da receita cargo-c também invalida a linha, embora extra em si não
+# tenha mudado.
+printf '%s\n' 'DRIFT_TRANSITIVO=1' >> "$FIXTURE/newspeak/cargo-c/recipe"
+if roda --artifact "$TMP/emissao-release/index" \
+    --output "$TMP/bundle-drift-transitivo" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --strict \
+    > "$TMP/bundle-drift-transitivo.log" 2>&1; then
+    echo '  FALHOU  gate aceitou drift transitivo da receita'
+    falhas=$((falhas + 1))
+elif grep -q 'fingerprint atual da árvore diverge do índice para extra' \
+    "$TMP/bundle-drift-transitivo.log"; then
+    echo '  ok      fingerprint atual prende drift transitivo da árvore'
+else
+    echo '  FALHOU  drift transitivo sem diagnóstico factual'
+    falhas=$((falhas + 1))
+fi
+sed -i '$d' "$FIXTURE/newspeak/cargo-c/recipe"
+
+sed -i "s/^FINGERPRINT=.*/FINGERPRINT=$four64/" \
+    "$ROOT/var/lib/minitrue/records/extra/meta"
+if roda --artifact "$TMP/emissao-release/index" \
+    --output "$TMP/bundle-registro-b" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --strict > "$TMP/bundle-registro-b.log" 2>&1; then
+    echo '  FALHOU  gate aceitou record divergente do índice'
+    falhas=$((falhas + 1))
+elif grep -q 'índice diverge do registro factual de extra' \
+    "$TMP/bundle-registro-b.log"; then
+    echo '  ok      cada linha do índice prende record NAME/VERSION/KIND/FP/hash'
+else
+    echo '  FALHOU  record divergente sem diagnóstico factual'
+    falhas=$((falhas + 1))
+fi
+sed -i "s/^FINGERPRINT=.*/FINGERPRINT=$zero64/" \
+    "$ROOT/var/lib/minitrue/records/extra/meta"
+
+cp "$TMP/emissao-release/pool/extra-1-x86_64.tar.zst" "$TMP/pool-extra-real"
+printf '%s\n' 'payload adulterado' \
+    > "$TMP/emissao-release/pool/extra-1-x86_64.tar.zst"
+if roda --artifact "$TMP/emissao-release/index" \
+    --output "$TMP/bundle-pool-hash" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --strict > "$TMP/bundle-pool-hash.log" 2>&1; then
+    echo '  FALHOU  gate aceitou transport SHA divergente'
+    falhas=$((falhas + 1))
+elif grep -q 'pool/extra-1-x86_64.tar.zst tem sha256.*índice diz' \
+    "$TMP/bundle-pool-hash.log"; then
+    echo '  ok      transport SHA prende os bytes regulares do pool'
+else
+    echo '  FALHOU  pool adulterado sem diagnóstico de transport SHA'
+    falhas=$((falhas + 1))
+fi
+cp "$TMP/pool-extra-real" \
+    "$TMP/emissao-release/pool/extra-1-x86_64.tar.zst"
+
+mv "$TMP/emissao-release/pool" "$TMP/emissao-release/pool.real"
+ln -s pool.real "$TMP/emissao-release/pool"
+if roda --artifact "$TMP/emissao-release/index" \
+    --output "$TMP/bundle-pool-dir-link" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --strict \
+    > "$TMP/bundle-pool-dir-link.log" 2>&1; then
+    echo '  FALHOU  gate aceitou pool/ por symlink'
+    falhas=$((falhas + 1))
+elif grep -q 'pool da emissão não é diretório regular' \
+    "$TMP/bundle-pool-dir-link.log"; then
+    echo '  ok      diretório pool da emissão não pode ser symlink'
+else
+    echo '  FALHOU  symlink do diretório pool sem diagnóstico factual'
+    falhas=$((falhas + 1))
+fi
+rm -f "$TMP/emissao-release/pool"
+mv "$TMP/emissao-release/pool.real" "$TMP/emissao-release/pool"
+
+mv "$TMP/emissao-release/pool/extra-1-x86_64.tar.zst" \
+    "$TMP/emissao-release/pool/extra-1-x86_64.tar.zst.real"
+ln -s extra-1-x86_64.tar.zst.real \
+    "$TMP/emissao-release/pool/extra-1-x86_64.tar.zst"
+if roda --artifact "$TMP/emissao-release/index" \
+    --output "$TMP/bundle-pool-link" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --strict > "$TMP/bundle-pool-link.log" 2>&1; then
+    echo '  FALHOU  gate aceitou objeto de pool por symlink'
+    falhas=$((falhas + 1))
+elif grep -q 'objeto de pool não regular' "$TMP/bundle-pool-link.log"; then
+    echo '  ok      pool vinculado precisa permanecer regular, sem symlink'
+else
+    echo '  FALHOU  symlink de pool sem diagnóstico factual'
+    falhas=$((falhas + 1))
+fi
+rm -f "$TMP/emissao-release/pool/extra-1-x86_64.tar.zst"
+mv "$TMP/emissao-release/pool/extra-1-x86_64.tar.zst.real" \
+    "$TMP/emissao-release/pool/extra-1-x86_64.tar.zst"
+
+mkdir -p "$TMP/emissao-meta-link/plans"
+cp "$TMP/emissao-release/index" "$TMP/emissao-meta-link/index"
+cp "$TMP/producer.lock" "$TMP/emissao-meta-link/plans/$producer_plan_sha.lock"
+ln -s "$TMP/emissao-release/emit.meta" "$TMP/emissao-meta-link/emit.meta"
+if roda --artifact "$TMP/emissao-meta-link/index" \
+    --output "$TMP/bundle-meta-link" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --strict > "$TMP/bundle-meta-link.log" 2>&1; then
+    echo '  FALHOU  gate aceitou emit.meta por symlink'
+    falhas=$((falhas + 1))
+elif grep -q 'emit.meta não é arquivo regular' "$TMP/bundle-meta-link.log"; then
+    echo '  ok      emit.meta v4 precisa ser regular e preso pelos próprios bytes'
+else
+    echo '  FALHOU  symlink de emit.meta sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+# O nome `index` ativa o vínculo de release, mas um symlink não pode ganhar a
+# identidade dos bytes apontados: a entrada precisa permanecer regular em cada
+# revalidação de hash/emit.meta.
+mkdir -p "$TMP/emissao-link"
+ln -s "$TMP/emissao-release/index" "$TMP/emissao-link/index"
+cp "$TMP/emissao-release/emit.meta" "$TMP/emissao-link/emit.meta"
+if roda --artifact "$TMP/emissao-link/index" \
+    --output "$TMP/bundle-canal-link" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --strict > "$TMP/bundle-canal-link.log" 2>&1; then
+    echo '  FALHOU  gate aceitou --artifact index por link simbólico'
+    falhas=$((falhas + 1))
+elif grep -q 'arquivo regular, não symlink' "$TMP/bundle-canal-link.log"; then
+    echo '  ok      --artifact index recusa symlink antes de confiar no hash'
+else
+    echo '  FALHOU  index por symlink sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+mkdir -p "$TMP/emissao-invalida"
+cp "$TMP/emissao-release/emit.meta" "$TMP/emissao-invalida/emit.meta"
+# A linha de seis campos é truncada e nunca uma raiz v4 publicável.
+cut -d' ' -f1-6 "$TMP/emissao-release/index" > "$TMP/emissao-invalida/index"
+if roda --artifact "$TMP/emissao-invalida/index" \
+    --output "$TMP/bundle-canal-invalido" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --strict > "$TMP/bundle-canal-invalido.log" 2>&1; then
+    echo '  FALHOU  gate aceitou índice de release não canônico/truncado'
+    falhas=$((falhas + 1))
+elif grep -q 'não é índice v4 canônico' "$TMP/bundle-canal-invalido.log"; then
+    echo '  ok      índice de canal inválido falha fechado antes do bundle'
+else
+    echo '  FALHOU  índice inválido sem diagnóstico canônico'
+    falhas=$((falhas + 1))
+fi
+
+mkdir -p "$TMP/emissao-sem-raiz"
+cp "$TMP/emissao-release/index" "$TMP/emissao-sem-raiz/index"
+mkdir -p "$TMP/emissao-sem-raiz/plans"
+cp "$TMP/producer.lock" "$TMP/emissao-sem-raiz/plans/$producer_plan_sha.lock"
+if roda --artifact "$TMP/emissao-sem-raiz/index" \
+    --output "$TMP/bundle-canal-sem-raiz" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --strict > "$TMP/bundle-canal-sem-raiz.log" 2>&1; then
+    echo '  FALHOU  gate aceitou índice isolado sem prova de raiz release'
+    falhas=$((falhas + 1))
+elif grep -q 'index/emit.meta v4.*INDEX_SHA256 correspondentes' \
+    "$TMP/bundle-canal-sem-raiz.log"; then
+    echo '  ok      índice isolado não ganha confiança implícita no gate estrito'
+else
+    echo '  FALHOU  índice sem emit.meta release não teve diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+# RELEASE_ROOT sozinho não basta: misturar o index de A com o emit.meta de B
+# precisa morrer no vínculo criptográfico antes de produzir qualquer bundle.
+mkdir -p "$TMP/emissao-b" "$TMP/emissao-misturada/plans"
+{
+    printf '%s\n' 'CHANNEL_INDEX_FORMAT=4' 'RELEASE_ROOT=yes'
+    printf 'extra 2 x86_64 %s pool/extra-2-x86_64.tar.zst %s %s %s\n' \
+        "$zero64" "$one64" "$two64" "$producer_plan_sha"
+} > "$TMP/emissao-b/index"
+emissao_b_sha=$(sha256sum "$TMP/emissao-b/index" | cut -d' ' -f1)
+cat > "$TMP/emissao-b/emit.meta" <<EOF
+CHANNEL_EMIT_FORMAT=4
+ARCH=x86_64
+COMPRESSION=ruzstd-0.8.3-fastest
+INDEX_SIGNED=no
+INDEX_SHA256=$emissao_b_sha
+PRODUCER_PLAN_LOCK_SHA256=$producer_plan_sha
+RELEASE_ROOT=yes
+EOF
+cp "$TMP/emissao-release/index" "$TMP/emissao-misturada/index"
+cp "$TMP/emissao-b/emit.meta" "$TMP/emissao-misturada/emit.meta"
+cp "$TMP/producer.lock" "$TMP/emissao-misturada/plans/$producer_plan_sha.lock"
+if roda --artifact "$TMP/emissao-misturada/index" \
+    --output "$TMP/bundle-canal-misturado" --cache "$CACHE" \
+    --minitrue-root "$ROOT" --strict > "$TMP/bundle-canal-misturado.log" 2>&1; then
+    echo '  FALHOU  gate aceitou index A com emit.meta release de B'
+    falhas=$((falhas + 1))
+elif grep -q 'INDEX_SHA256/RELEASE_ROOT do emit.meta não corresponde ao index' \
+    "$TMP/bundle-canal-misturado.log"; then
+    echo '  ok      vínculo INDEX_SHA256 recusa mistura de duas emissões'
+else
+    echo '  FALHOU  mistura index/emit.meta sem diagnóstico do vínculo'
+    falhas=$((falhas + 1))
+fi
+
+# O script entra no repositório para arquivar a revisão. Caminhos relativos
+# precisam continuar relativos ao cwd do operador, inclusive os dois insumos
+# vivos; antes da regressão eles eram reinterpretados a partir de FIXTURE.
+mkdir -p "$TMP/outside/a/b"
+if (
+    cd "$TMP/outside/a/b"
+    PATH="$TMP/bin:$PATH" "$FIXTURE/bootstrap/source-bundle" \
+        --media ../../../media.iso --output ../../../relativos \
+        --cache ../../../cache --minitrue-root ../../../root \
+        --minitrue-bin ../../../produtor/minitrue \
+        --live-kernel-config ../../../config-live \
+        --live-util-linux-tar ../../../arquivo-content-addressed --strict
+) > "$TMP/relativos.log" 2>&1 &&
+   grep -qx "ARTIFACT_SHA256=$sha_media" "$TMP/relativos/ARTEFATO" &&
+   cmp -s "$TMP/config-live" "$TMP/relativos/kernel/config-live" &&
+   cmp -s "$TMP/arquivo-content-addressed" \
+       "$TMP/relativos/upstream/$util_sha"; then
+    echo '  ok      caminhos relativos preservam o cwd anterior ao cd no repo'
+else
+    echo '  FALHOU  caminhos relativos foram reinterpretados após cd no repo'
+    falhas=$((falhas + 1))
+fi
+
+if [ "$falhas" -eq 0 ]; then
+    echo 'source-bundle/strict: todos os casos passam'
+    exit 0
+fi
+printf 'source-bundle/strict: %d caso(s) falharam\n' "$falhas"
+exit 1

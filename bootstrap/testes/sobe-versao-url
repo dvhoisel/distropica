@@ -1,0 +1,214 @@
+#!/bin/sh
+# A URL que o `bootstrap/sobe-versao` deriva ao subir uma versão.
+#
+# ESTE TESTE EXISTE POR UM QUASE-ACIDENTE. O `sobe-versao` substituía só
+# `$VERSION` na URL, porque eu supus que as receitas escrevessem de um jeito só.
+# Escrevem de três. No ensaio a seco o zlib saiu assim:
+#
+#     zlib  1.3.1 -> 1.3.2
+#     https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+#
+# Solto, aquilo não teria FALHADO: teria baixado o tarball 1.3.1, calculado o
+# sha256 dele e gravado na receita `VERSION=1.3.2` com o hash do 1.3.1. Uma
+# receita que baixa e aceita a coisa errada, sem que nada acuse — nem o build,
+# nem o aceite, nem o `channel emit`.
+#
+# Por isso os casos abaixo são as receitas de verdade, com as versões que
+# estavam pinadas no dia, e não exemplos inventados. E por isso metade dos casos
+# testa a RECUSA: o valor do guarda está em nunca baixar o arquivo velho
+# achando que é o novo.
+set -u
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+TMP=${TMPDIR:-/tmp}/distropica-teste-sobe-versao.$$
+trap 'rm -f "$TMP"' EXIT
+
+sed -n '/^troca_literal()/,/^}/p'  "$REPO/bootstrap/sobe-versao"  > "$TMP"
+sed -n '/^cita_versao()/,/^}/p'    "$REPO/bootstrap/sobe-versao" >> "$TMP"
+sed -n '/^prefixo_pontos()/,/^}/p' "$REPO/bootstrap/sobe-versao" >> "$TMP"
+sed -n '/^reescreve_fonte()/,/^}/p' "$REPO/bootstrap/sobe-versao" >> "$TMP"
+sed -n '/^url_da_versao()/,/^}/p'  "$REPO/bootstrap/sobe-versao" >> "$TMP"
+. "$TMP"
+
+falhas=0
+
+teste() {  # nome velha nova src esperado
+    nome=$1; velha=$2; nova=$3; src=$4; esperado=$5
+    got=$(url_da_versao "$src" "$velha" "$nova" 2>/dev/null)
+    if [ "$got" = "$esperado" ]; then
+        printf '  ok      %-16s %s -> %s\n' "$nome" "$velha" "$nova"
+    else
+        printf '  FALHOU  %-16s %s\n          esperava %s\n' "$nome" "${got:-vazio}" "$esperado"
+        falhas=$((falhas + 1))
+    fi
+}
+
+recusa() {  # nome velha nova src trecho-do-motivo
+    nome=$1; velha=$2; nova=$3; src=$4; trecho=$5
+    motivo=$(url_da_versao "$src" "$velha" "$nova" 2>&1 >/dev/null)
+    if url_da_versao "$src" "$velha" "$nova" >/dev/null 2>&1; then
+        printf '  FALHOU  %-16s aceitou o que devia recusar\n' "$nome"
+        falhas=$((falhas + 1))
+    elif ! printf '%s' "$motivo" | grep -q "$trecho"; then
+        printf '  FALHOU  %-16s recusou por "%s", esperava "%s"\n' "$nome" "$motivo" "$trecho"
+        falhas=$((falhas + 1))
+    else
+        printf '  ok      %-16s recusa: %s\n' "$nome" "$motivo"
+    fi
+}
+
+# --- forma 1: $VERSION, o jeito de 128 receitas ------------------------------
+
+teste nano 9.1 9.2 \
+    'https://ftp.gnu.org/gnu/nano/nano-$VERSION.tar.xz' \
+    'https://ftp.gnu.org/gnu/nano/nano-9.2.tar.xz'
+
+teste chaves 1.0 1.1 \
+    'https://exemplo/${VERSION}/p-${VERSION}.tar' \
+    'https://exemplo/1.1/p-1.1.tar'
+
+# --- forma 2: a versão crua, o jeito de 6 receitas ---------------------------
+
+# O caso que motivou tudo. Duas ocorrências na mesma URL, tag e arquivo.
+teste zlib 1.3.1 1.3.2 \
+    'https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz' \
+    'https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz'
+
+# Versão no NOME DO DIRETÓRIO e no arquivo, sem barra em volta.
+teste gcc-pass2 15.2.0 15.3.0 \
+    'https://ftp.gnu.org/gnu/gcc/gcc-15.2.0/gcc-15.2.0.tar.xz' \
+    'https://ftp.gnu.org/gnu/gcc/gcc-15.3.0/gcc-15.3.0.tar.xz'
+
+# --- forma 3: o diretório de série do GNOME ----------------------------------
+
+# Dentro da mesma série: o diretório NÃO muda. Trocá-lo daria 404.
+teste glib-micro 2.88.2 2.88.3 \
+    'https://download.gnome.org/sources/glib/2.88/glib-$VERSION.tar.xz' \
+    'https://download.gnome.org/sources/glib/2.88/glib-2.88.3.tar.xz'
+
+# Trocando de série: o diretório TEM de mudar junto. Nenhuma das duas regras
+# anteriores toca nele, porque "2.88" não é `$VERSION` nem a versão cheia.
+teste glib-serie 2.88.2 2.90.0 \
+    'https://download.gnome.org/sources/glib/2.88/glib-$VERSION.tar.xz' \
+    'https://download.gnome.org/sources/glib/2.90/glib-2.90.0.tar.xz'
+
+teste gtk3 3.24.52 3.26.0 \
+    'https://download.gnome.org/sources/gtk/3.24/gtk-$VERSION.tar.xz' \
+    'https://download.gnome.org/sources/gtk/3.26/gtk-3.26.0.tar.xz'
+
+# --- forma 5: a versão em underscores na tag ---------------------------------
+
+# O expat pendura o tarball numa tag `R_2_8_2`. Achado ao subir de verdade: sem
+# esta regra a URL saía com o arquivo NOVO na tag VELHA e morria em 404. O
+# `normaliza_tag` do `bootstrap/versoes` já lê esta convenção; escrevê-la aqui é
+# o que faz as duas ferramentas concordarem sobre o mesmo upstream.
+teste expat 2.8.2 2.8.3 \
+    'https://github.com/libexpat/libexpat/releases/download/R_2_8_2/expat-$VERSION.tar.xz' \
+    'https://github.com/libexpat/libexpat/releases/download/R_2_8_3/expat-2.8.3.tar.xz'
+
+# --- o que NÃO pode ser tocado -----------------------------------------------
+
+# `v7.x` do kernel.org não é prefixo pontuado: some ao pular de major, e o
+# script não pode inventar isso. Dentro do mesmo major, tem de ficar quieto.
+teste kernel 7.1.4 7.1.8 \
+    'https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$VERSION.tar.xz' \
+    'https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.1.8.tar.xz'
+
+# Achado POR ESTE TESTE: com a regra 2 solta, "1.3" casava dentro de
+# `cdn1.3rd.example` e a URL saía apontando para `cdn1.4rd.example` — trocava o
+# HOST. Precisou das duas correções: a regra 2 só corre em receita sem $VERSION,
+# e o guarda passou a exigir fronteira de token.
+teste host-parecido 1.3 1.4 \
+    'https://cdn1.3rd.example/pub/p-$VERSION.tar' \
+    'https://cdn1.3rd.example/pub/p-1.4.tar'
+
+# Achados no ensaio a seco contra a árvore, os dois RECUSADOS por engano: a
+# versão velha é PREFIXO da nova, e substring pura acusava citação onde não
+# havia. As duas URLs estavam corretas.
+teste nmap 7.99 7.991 \
+    'https://nmap.org/dist/nmap-$VERSION.tar.bz2' \
+    'https://nmap.org/dist/nmap-7.991.tar.bz2'
+
+teste bison 3.8 3.8.2 \
+    'https://ftp.gnu.org/gnu/bison/bison-$VERSION.tar.xz' \
+    'https://ftp.gnu.org/gnu/bison/bison-3.8.2.tar.xz'
+
+# A outra metade da regra de fronteira, para que "fronteira" não vire cegueira:
+# ponto seguido de LETRA (`.tar`) encerra a versão, então aqui a citação é real
+# e a recusa tem de vir. Sem esta metade, o defeito original — baixar o arquivo
+# velho e gravá-lo como novo — voltaria calado.
+recusa ponto-nao-digito 1.3.1 1.3.2 \
+    'https://exemplo/old-1.3.1.tar.gz?v=$VERSION' \
+    'ainda cita 1.3.1'
+
+# --- forma 4: a URL que não tem versão nenhuma -------------------------------
+
+# Achado varrendo a árvore de verdade: o `cacert.pem` do curl é arquivo rolante,
+# a URL nunca muda. Recusá-lo (por "não cita a versão nova") deixaria o
+# ca-certificates fora do script para sempre. Uma versão anterior deste arquivo
+# exigia RECUSA para "URL sem versão" — e essa regra e este caso são a mesma
+# forma, indistinguíveis: não dá para recusar uma e aceitar a outra. Aceita-se,
+# com a garantia mais fraca dita por nome no relatório.
+teste ca-certificates 2026-06-30 2026-08-09 \
+    'https://curl.se/ca/cacert.pem' \
+    'https://curl.se/ca/cacert.pem'
+
+# --- as recusas ---------------------------------------------------------------
+
+# Expansão que este código não modela (`${VERSION%.*}`). Ninguém escreve assim
+# hoje; se alguém escrever, tem de parar aqui e não numa URL meio substituída.
+recusa expansao-esperta 2.88.2 2.90.0 \
+    'https://download.gnome.org/sources/glib/${VERSION%.*}/glib-${VERSION}.tar.xz' \
+    'expansão de shell'
+
+# A versão velha sobrevivendo em qualquer lugar da URL é o defeito original.
+recusa sobrou-velha 1.3.1 1.3.2 \
+    'https://exemplo/1.3.1/p-$VERSION.tar' \
+    'ainda cita 1.3.1'
+
+# --- a SRC gravada de volta ---------------------------------------------------
+#
+# O `sobe-versao` DERIVA a URL para baixar e tem de GRAVÁ-LA na receita. Sem
+# isso o expat ficou com VERSION=2.8.3 e SRC apontando para a tag R_2_8_2: uma
+# receita que baixou certo na hora da subida e daria 404 no build seguinte —
+# defeito que não aparece em nada até alguém precisar rebaixar a fonte.
+# A reescrita PRESERVA o `$VERSION` onde a receita o usa: trocá-lo pela versão
+# literal transformaria toda receita parametrizada nas seis que não são.
+fonte() {  # nome velha nova src esperado
+    nome=$1; velha=$2; nova=$3; src=$4; esperado=$5
+    got=$(reescreve_fonte "$src" "$velha" "$nova")
+    if [ "$got" = "$esperado" ]; then
+        printf '  ok      %-16s SRC preservada/atualizada\n' "$nome"
+    else
+        printf '  FALHOU  %-16s SRC %s\n          esperava %s\n' "$nome" "$got" "$esperado"
+        falhas=$((falhas + 1))
+    fi
+}
+
+fonte expat 2.8.2 2.8.3 \
+    'https://github.com/libexpat/libexpat/releases/download/R_2_8_2/expat-$VERSION.tar.xz' \
+    'https://github.com/libexpat/libexpat/releases/download/R_2_8_3/expat-$VERSION.tar.xz'
+
+fonte zlib 1.3.1 1.3.2 \
+    'https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz' \
+    'https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz'
+
+fonte glib-serie 2.88.2 2.90.0 \
+    'https://download.gnome.org/sources/glib/2.88/glib-$VERSION.tar.xz' \
+    'https://download.gnome.org/sources/glib/2.90/glib-$VERSION.tar.xz'
+
+# Dentro da mesma série nada muda — nem o diretório, nem o $VERSION.
+fonte glib-micro 2.88.2 2.88.3 \
+    'https://download.gnome.org/sources/glib/2.88/glib-$VERSION.tar.xz' \
+    'https://download.gnome.org/sources/glib/2.88/glib-$VERSION.tar.xz'
+
+fonte nano 9.1 9.2 \
+    'https://ftp.gnu.org/gnu/nano/nano-$VERSION.tar.xz' \
+    'https://ftp.gnu.org/gnu/nano/nano-$VERSION.tar.xz'
+
+echo
+if [ "$falhas" -eq 0 ]; then
+    echo "sobe-versao/url: todos os casos passam"
+    exit 0
+fi
+printf 'sobe-versao/url: %d caso(s) falharam\n' "$falhas"
+exit 1

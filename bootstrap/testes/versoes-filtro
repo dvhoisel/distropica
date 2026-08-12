@@ -11,11 +11,20 @@
 set -u
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 TMP=${TMPDIR:-/tmp}/distropica-teste-versoes.$$
-trap 'rm -f "$TMP"' EXIT
+trap 'rm -f "$TMP" "$TMP.pin-ok" "$TMP.pin-sem-data"' EXIT
 
 sed -n '/^filtra_candidatos()/,/^}/p' "$REPO/bootstrap/versoes"  > "$TMP"
 sed -n '/^maior()/,/^}/p'             "$REPO/bootstrap/versoes" >> "$TMP"
 sed -n '/^normaliza_tag()/,/^}/p'     "$REPO/bootstrap/versoes" >> "$TMP"
+sed -n '/^campo()/,/^}/p'             "$REPO/bootstrap/versoes" >> "$TMP"
+sed -n '/^versao_fixa_da_fonte()/,/^}/p' "$REPO/bootstrap/versoes" >> "$TMP"
+sed -n '/^fontes_conferiveis()/,/^}/p'   "$REPO/bootstrap/versoes" >> "$TMP"
+sed -n '/^de_github()/,/^}/p'            "$REPO/bootstrap/versoes" >> "$TMP"
+sed -n '/^serie_da_url()/,/^}/p'         "$REPO/bootstrap/versoes" >> "$TMP"
+sed -n '/^de_gnome()/,/^}/p'             "$REPO/bootstrap/versoes" >> "$TMP"
+sed -n '/^de_elfutils()/,/^}/p'           "$REPO/bootstrap/versoes" >> "$TMP"
+sed -n '/^de_mozilla_firefox()/,/^}/p'    "$REPO/bootstrap/versoes" >> "$TMP"
+sed -n '/^ressalva_pinada()/,/^}/p'        "$REPO/bootstrap/versoes" >> "$TMP"
 . "$TMP"
 
 falhas=0
@@ -43,6 +52,11 @@ teste libdrm     2.4.134  nao 2.4.134  2.4.134 2.4.133 2.4.89
 # mandava adotar o 2.89.3.
 teste glib       2.88.2   sim 2.88.3   2.89.3 2.89.0 2.88.3 2.88.2
 
+# O tarball 2.62.90 do librsvg declara a crate 2.63.0-beta.0 no NEWS. Dentro
+# da família GNOME, micro >= 90 é pré-release mesmo antes de a série seguinte
+# aparecer no índice.
+teste librsvg    2.62.3   sim 2.62.3   2.62.90 2.62.3 2.62.2
+
 # Minor ímpar que NÃO é desenvolvimento. Deduzir a convenção dos números
 # descartava o 2.11.1, que é release.
 teste minicom    2.10     nao 2.11.1   2.11.1 2.11 2.10 2.9
@@ -55,6 +69,64 @@ teste openssh    10.4p1   nao 10.4p1   10.4p1 10.3p1 9.9p2
 
 # Data como versão inteira, e um candidato que não pode ser confundido com ela.
 teste firmware   20260622 nao 20260622 20260622 20260519 20260405
+
+# O tmux lança 3.7, depois 3.7a, depois 3.7b: a letra SOZINHA é o incremento.
+# Recusá-la elegia o 3.7, mais velho que o pinado, e punha em "não conferido"
+# um pacote que estava atual.
+teste tmux       3.7b     nao 3.7b     3.7 3.7b 3.7a 3.6 3.6b 3.5a
+
+# Um pino só fecha a P7 com motivo e data; um arquivo-sentinela sem data não
+# pode manter o gate verde para sempre.
+printf '%s\n' '# Verificado em 2026-08-11.' 'motivo factual' > "$TMP.pin-ok"
+printf '%s\n' 'motivo sem data' > "$TMP.pin-sem-data"
+got=$(ressalva_pinada "$TMP.pin-ok")
+if [ "$got" = 'motivo factual' ] && ! ressalva_pinada "$TMP.pin-sem-data" >/dev/null; then
+    echo '  ok      ressalva datada           -> motivo/data exigidos'
+else
+    echo '  FALHOU  ressalva datada           -> aceitação incorreta'
+    falhas=$((falhas + 1))
+fi
+
+# ---------------------------------------------------------------------------
+# Receitas compostas. O gate histórico lia só a primeira URL e por isso viu o
+# GMP 6.3.0, mas não o MPC 1.3.1 ainda literal em mathlibs-glibc. Cada fonte
+# secundária fixa precisa virar uma consulta própria. Já as quatro fontes
+# secundárias do Rust repetem $VERSION: consultá-las de novo seria só ruído.
+# ---------------------------------------------------------------------------
+teste_fontes() {  # nome pacote versao fontes esperado
+    nome=$1; pacote=$2; versao=$3; fontes=$4; esperado=$5
+    got=$(fontes_conferiveis "$pacote" "$versao" "$fontes")
+    if [ "$got" = "$esperado" ]; then
+        printf '  ok      fontes %-8s -> %s linha(s)\n' \
+            "$nome" "$(printf '%s\n' "$got" | wc -l)"
+    else
+        printf '  FALHOU  fontes %s\nobtido:\n%s\nesperado:\n%s\n' \
+            "$nome" "$got" "$esperado"
+        falhas=$((falhas + 1))
+    fi
+}
+
+mathlibs_receita="$REPO/newspeak/mathlibs-glibc/recipe"
+mathlibs_versao=$(grep -m1 '^VERSION=' "$mathlibs_receita" | cut -d= -f2- | tr -d '"')
+mathlibs_src=$(campo "$mathlibs_receita" SRC)
+gmp_versao=$(grep -m1 '^VERSION=' "$REPO/newspeak/gmp/recipe" | cut -d= -f2- | tr -d '"')
+mpfr_versao=$(grep -m1 '^VERSION=' "$REPO/newspeak/mpfr/recipe" | cut -d= -f2- | tr -d '"')
+mpc_versao=$(grep -m1 '^VERSION=' "$REPO/newspeak/mpc/recipe" | cut -d= -f2- | tr -d '"')
+mathlibs_esperado=$(printf '%s\n' \
+    "mathlibs-glibc|$gmp_versao|https://ftp.gnu.org/gnu/gmp/gmp-$gmp_versao.tar.xz|" \
+    "mathlibs-glibc/mpfr|$mpfr_versao|https://ftp.gnu.org/gnu/mpfr/mpfr-$mpfr_versao.tar.xz|" \
+    "mathlibs-glibc/mpc|$mpc_versao|https://ftp.gnu.org/gnu/mpc/mpc-$mpc_versao.tar.xz|")
+teste_fontes mathlibs mathlibs-glibc "$mathlibs_versao" \
+    "$mathlibs_src" "$mathlibs_esperado"
+
+rust_receita="$REPO/newspeak/rust/recipe"
+rust_versao=$(grep -m1 '^VERSION=' "$rust_receita" | cut -d= -f2- | tr -d '"')
+rust_src=$(campo "$rust_receita" SRC)
+rust_primeira=${rust_src%% *}
+rust_url=$(printf '%s\n' "$rust_primeira" |
+    sed "s/\${VERSION}/$rust_versao/g; s/\$VERSION/$rust_versao/g")
+rust_esperado="rust|$rust_versao|$rust_url|"
+teste_fontes rust rust "$rust_versao" "$rust_src" "$rust_esperado"
 
 # ---------------------------------------------------------------------------
 # Nomes de tag, e a versão que sai deles.
@@ -80,6 +152,11 @@ tag xkbcommon-1.14.0-beta1 1.14.0-beta1   # prefixo sai; o beta fica para o filt
 tag libdrm-2.4.134         2.4.134
 tag v1.26.0                1.26.0
 tag 1.8.2                  1.8.2          # já normalizada, não se mexe
+tag lcms2.19.1             2.19.1         # prefixo colado, sem hífen
+tag json-c-0.19-20260627   0.19           # data da publicação não é ABI
+tag beta4                  beta4          # tag histórica, não versão 4
+tag testCI3                testCI3        # tag de CI, não versão 3
+tag jpeg-10                jpegABI10      # compatibilidade IJG, não versão 10
 
 # O Perl usa o mesmo esquema do GNOME, e não está no download.gnome.org: o
 # conferidor mandava a árvore para o 5.45.1, que é desenvolvimento. A estável é
@@ -88,6 +165,101 @@ teste perl       5.42.0   sim 5.44.0   5.45.1 5.44.0 5.43.11 5.43.6 5.42.0
 
 # E o beta precisa morrer no filtro seguinte, não aqui.
 teste xkbcommon  1.13.2   nao 1.13.2   1.14.0-beta1 1.13.2 1.12.0
+
+# O libevent, pelo mesmo par de etapas. O '-stable' é ruído e sai já aqui; os
+# irmãos '-alpha' e '-beta' TÊM de chegar inteiros ao `maior`, que é quem sabe
+# recusá-los. Apagar todo sufixo na normalização promoveria o 2.2.2-alpha a
+# estável — e a árvore seguiria um alpha achando que seguia a última estável.
+tag release-2.1.13-stable  2.1.13
+tag release-2.2.2-alpha    2.2.2-alpha
+teste libevent   2.1.13   nao 2.1.13   2.2.2-alpha 2.1.13 2.1.9-beta 2.1.7-rc
+
+# GitHub `latest` pode ficar atrás das tags estáveis. O mypaint-brushes ainda
+# apontava para 1.3.1, enquanto a tag e o tarball oficiais 2.0.2 existiam.
+busca() {
+    case "$1" in
+        # Deliberadamente sem newline: é válido para JSON e reproduz o caso
+        # graphene no qual latest+tags eram concatenados em uma versão falsa.
+        */releases/latest) printf '%s' '{"tag_name": "v1.3.1"}' ;;
+        */tags.atom) printf '%s' '<link href="https://github.com/x/y/releases/tag/v2.0.2"/><link href="https://github.com/x/y/releases/tag/v1.3.1"/>' ;;
+        *) return 1 ;;
+    esac
+}
+got=$(de_github \
+    'https://github.com/mypaint/mypaint-brushes/releases/download/v2.0.2/mypaint-brushes-2.0.2.tar.xz' \
+    2.0.2)
+if [ "$got" = 2.0.2 ]; then
+    echo '  ok      github release+tags       -> 2.0.2'
+else
+    echo "  FALHOU  github release+tags       -> ${got:-vazio} (esperava 2.0.2)"
+    falhas=$((falhas + 1))
+fi
+
+# Série inteira sem ponto: libgudev usa /sources/libgudev/238/ e o índice
+# contém exatamente "238". Exigir "238." apagava o único candidato.
+busca() { printf '%s\n' '{"libgudev": ["237", "238"]}'; }
+got=$(de_gnome \
+    'https://download.gnome.org/sources/libgudev/238/libgudev-238.tar.xz' 238)
+if [ "$got" = 238 ]; then
+    echo '  ok      gnome série inteira       -> 238'
+else
+    echo "  FALHOU  gnome série inteira       -> ${got:-vazio} (esperava 238)"
+    falhas=$((falhas + 1))
+fi
+
+# Uma receita de série paralela (GTK 3, por exemplo) fica confinada à série da
+# URL. Uma receita com `versao-pinada`, porém, precisa mostrar o topo global que
+# justifica a ressalva: gexiv2 0.14.7 é mantido porque o GIMP recusa 0.16.2.
+busca() {
+    printf '%s\n' '{"gexiv2": ["0.14", "0.14.7", "0.16", "0.16.2"]}'
+}
+got_serie=$(de_gnome \
+    'https://download.gnome.org/sources/gexiv2/0.14/gexiv2-0.14.7.tar.xz' \
+    0.14.7 nao)
+got_pin=$(de_gnome \
+    'https://download.gnome.org/sources/gexiv2/0.14/gexiv2-0.14.7.tar.xz' \
+    0.14.7 sim)
+if [ "$got_serie" = 0.14.7 ] && [ "$got_pin" = 0.16.2 ]; then
+    echo '  ok      gnome pino global          -> 0.14.7/0.16.2'
+else
+    echo "  FALHOU  gnome pino global          -> ${got_serie:-vazio}/${got_pin:-vazio} (esperava 0.14.7/0.16.2)"
+    falhas=$((falhas + 1))
+fi
+
+# O tar vive dentro de /ftp/VERSION/. O handler genérico só enxerga a versão
+# já pinada; o índice de releases é /ftp/ e precisa eleger o diretório maior.
+busca() {
+    printf '%s\n' \
+        '<a href="0.192/">0.192/</a>' \
+        '<a href="0.193/">0.193/</a>' \
+        '<a href="0.194/">0.194/</a>' \
+        '<a href="0.195/">0.195/</a>'
+}
+got=$(de_elfutils)
+if [ "$got" = 0.195 ]; then
+    echo '  ok      elfutils índice-pai       -> 0.195'
+else
+    echo "  FALHOU  elfutils índice-pai       -> ${got:-vazio} (esperava 0.195)"
+    falhas=$((falhas + 1))
+fi
+
+# A listagem da pasta 140.13.0esr só mostraria o próprio ESR. O índice oficial
+# da Mozilla precisa expor a linha rápida 153.0.3, para que o relatório marque
+# o ESR como pino consciente em vez de um falso "atual".
+busca() {
+    printf '%s\n' \
+        '{' \
+        '  "FIREFOX_ESR": "140.13.0esr",' \
+        '  "LATEST_FIREFOX_VERSION": "153.0.3"' \
+        '}'
+}
+got=$(de_mozilla_firefox)
+if [ "$got" = 153.0.3 ]; then
+    echo '  ok      firefox linha rápida      -> 153.0.3'
+else
+    echo "  FALHOU  firefox linha rápida      -> ${got:-vazio} (esperava 153.0.3)"
+    falhas=$((falhas + 1))
+fi
 
 echo
 if [ "$falhas" -gt 0 ]; then

@@ -1,0 +1,48 @@
+#!/bin/sh
+# Launcher mínimo do helper nativo. Este arquivo não interpreta nem renderiza
+# LIVE_COMPONENTS/LIVE_RUNNER_PROOF/LIVE_LOCK: há um único contrato, no helper
+# C compilado a partir do snapshot preso. O pin é conferido pelo processo já
+# executado contra /proc/self/exe, antes de despachar qualquer subcomando.
+set -eu
+
+usage() {
+    printf '%s\n' \
+        'uso: live-lock --helper /caminho/absoluto/live-lock-helper --helper-sha256 HEX COMANDO [ARG...]' >&2
+    exit 2
+}
+
+[ "$#" -ge 5 ] || usage
+[ "$1" = --helper ] || usage
+helper=$2
+[ "$3" = --helper-sha256 ] || usage
+helper_sha256=$4
+shift 4
+
+case "$helper" in
+    /*) ;;
+    *) printf '%s\n' 'erro: helper precisa ter caminho absoluto' >&2; exit 1 ;;
+esac
+case "$helper" in
+    *//*|*/./*|*/../*)
+        printf '%s\n' 'erro: caminho do helper não é lexicalmente canônico' >&2
+        exit 1
+        ;;
+esac
+[ -f "$helper" ] && [ -x "$helper" ] && [ ! -L "$helper" ] || {
+    printf '%s\n' 'erro: helper precisa ser executável regular, não symlink' >&2
+    exit 1
+}
+case "$helper_sha256" in
+    *[!0-9a-f]*|'')
+        printf '%s\n' 'erro: pin do helper não é SHA-256 canônico' >&2
+        exit 1
+        ;;
+esac
+[ "${#helper_sha256}" -eq 64 ] || {
+    printf '%s\n' 'erro: pin do helper não tem 64 hex' >&2
+    exit 1
+}
+
+# `exec` é builtin e o caminho é absoluto; não há consulta ao PATH. A guarda
+# de bytes acontece dentro do executável que o kernel efetivamente abriu.
+exec "$helper" --self-sha256 "$helper_sha256" "$@"

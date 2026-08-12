@@ -11,8 +11,9 @@
 #
 # O layout produzido:
 #   channel-config/<canal>          configuração do canal (URL, chave, trust)
-#   channels/<canal>/index          índice canônico v2
+#   channels/<canal>/index          índice canônico v4
 #   channels/<canal>/index.minisig  assinatura do índice
+#   <plan-sha256>                    PLAN_LOCK produtor servido por plans/
 #   pool/<pacote>-<versão>-<arch>.tar.zst
 #   <sha256>                        artefatos upstream do Mundo A
 #   <sha256>.minisig                assinatura sob o hash do ARTEFATO
@@ -24,36 +25,85 @@ umask 022
 LC_ALL=C
 export LC_ALL
 
-REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+REPO=
 EMITTED=
 OUTPUT=
 CHANNEL_CONFIG=
 SECRET_KEY=
+PASSPHRASE_FD=
+PASSPHRASE_FD_SET=no
+PASSPHRASE_FD_VALID=no
 CHANNEL=oficial
 SOURCE_CACHE=
 MINITRUE_ROOT=
+PROFILE=
+CLEANUP_ARMED=no
+KEEP_OUTPUT=no
+staging=
 
 usage() {
-    cat <<'EOF'
+    # `read` e `printf` são builtins: até descobrir qual é o descritor secreto,
+    # nem o caminho de ajuda deve criar um filho que possa herdá-lo.
+    while IFS= read -r line; do
+        printf '%s\n' "$line"
+    done <<'EOF'
 uso: bootstrap/cache-from-channel --emitted DIR --output NOVO-DIR \
        --channel-config ARQ --secret-key ARQ --minitrue-root ROOTFS \
-       [--channel NOME] [--source-cache DIR]...
+       [--passphrase-fd N] \
+       [--profile DIR] [--channel NOME] [--source-cache DIR]...
 
   --emitted DIR        saída de `minitrue channel emit` (index + pool/)
   --output DIR         cache a criar; precisa não existir
   --channel-config ARQ arquivo channel-config/<canal> a copiar
-  --secret-key ARQ     chave minisign para assinar o índice (dentro do rootfs)
+  --secret-key ARQ     chave minisign para assinar o índice (caminho absoluto
+                       dentro do rootfs); a pública derivada precisa coincidir
+                       com KEY= do channel-config antes de assinar
+  --passphrase-fd N    descritor já aberto (0 ou 3–9) de onde a chave Sc lê;
+                       somente esse fd é redirecionado ao stdin do rootfs. Não
+                       use para chave sem senha. Limite: 1023 bytes, até EOF.
   --minitrue-root DIR  rootfs Distrópica de onde rodar o `minitrue channel sign`
+  --profile DIR        perfil cuja intenção entra na mídia; default:
+                       profiles/official. Lê target.world e cache.world.
   --channel NOME       default: oficial
   --source-cache DIR   onde procurar artefatos do Mundo A; repetível.
                        Sempre inclui <rootfs>/var/cache/minitrue.
 
-Os pacotes do Mundo A (KIND=binary) e os de cache.world não entram no índice
-do canal: eles viajam como o ARQUIVO UPSTREAM, endereçado pelo sha256 da
-receita. Este script lê os SHA256 direto das receitas em newspeak/, de modo
-que acrescentar um pacote binário ao perfil não exige lembrar de mais nada.
+Os pacotes do Mundo A (KIND=binary) alcançados por DEPS a partir da união do
+índice com target.world, e os nomes explícitos do cache.world DO MESMO PERFIL,
+viajam como o ARQUIVO UPSTREAM endereçado pelo sha256 da receita. BUILD_DEPS e
+toolchains não ampliam esse conjunto.
 EOF
 }
+
+close_passphrase_fd() {
+    [ "$PASSPHRASE_FD_VALID" = yes ] || return 0
+    if [ "$PASSPHRASE_FD" -eq 0 ]; then
+        exec 0<&-
+    else
+        # O valor só alcança `eval` depois da validação estrita 3–9.
+        eval "exec ${PASSPHRASE_FD}<&-"
+    fi
+    PASSPHRASE_FD_VALID=no
+    PASSPHRASE_FD_SET=no
+}
+
+cleanup_cache_from_channel() {
+    status=$1
+    trap - 0 1 2 15
+    # Feche o segredo ANTES de qualquer `rm`/outro executável disparado pelo
+    # trap. O chamador original conserva sua própria cópia do descritor.
+    close_passphrase_fd
+    if [ "$CLEANUP_ARMED" = yes ]; then
+        [ -z "$staging" ] || rm -rf -- "$staging"
+        [ "$KEEP_OUTPUT" = yes ] || rm -rf -- "$OUTPUT"
+    fi
+    exit "$status"
+}
+
+trap 'cleanup_cache_from_channel "$?"' 0
+trap 'exit 129' 1
+trap 'exit 130' 2
+trap 'exit 143' 15
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -61,7 +111,17 @@ while [ "$#" -gt 0 ]; do
         --output) OUTPUT=${2:?}; shift 2 ;;
         --channel-config) CHANNEL_CONFIG=${2:?}; shift 2 ;;
         --secret-key) SECRET_KEY=${2:?}; shift 2 ;;
+        --passphrase-fd)
+            [ "$PASSPHRASE_FD_SET" = no ] || {
+                echo "erro: --passphrase-fd não pode ser repetido" >&2
+                exit 1
+            }
+            PASSPHRASE_FD=${2:?}
+            PASSPHRASE_FD_SET=yes
+            shift 2
+            ;;
         --minitrue-root) MINITRUE_ROOT=${2:?}; shift 2 ;;
+        --profile) PROFILE=${2:?}; shift 2 ;;
         --channel) CHANNEL=${2:?}; shift 2 ;;
         --source-cache) SOURCE_CACHE="$SOURCE_CACHE ${2:?}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
@@ -69,16 +129,179 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+# Resolva o repositório só com builtins. `dirname`/`pwd` externos aqui
+# herdariam o fd antes de o subshell de preparação ter a chance de fechá-lo.
+case "$0" in
+    */*) script_dir=${0%/*} ;;
+    *) script_dir=. ;;
+esac
+original_directory=$PWD
+CDPATH= cd -P -- "$script_dir/.." || {
+    echo "erro: não consegui resolver o repositório" >&2
+    exit 1
+}
+REPO=$PWD
+CDPATH= cd -P -- "$original_directory" || {
+    echo "erro: não consegui restaurar o diretório corrente" >&2
+    exit 1
+}
+[ -n "$PROFILE" ] || PROFILE=$REPO/profiles/official
+
+if [ "$PASSPHRASE_FD_SET" = yes ]; then
+    case "$PASSPHRASE_FD" in
+        0|[3-9]) ;;
+        *)
+            echo "erro: --passphrase-fd precisa ser 0 ou um descritor de 3 a 9" >&2
+            exit 1
+            ;;
+    esac
+    # Redirecionar um fd fechado é erro fatal em alguns /bin/sh mesmo dentro de
+    # `if`. /proc expõe cada descritor aberto como symlink sem consumir bytes.
+    if [ ! -L "/proc/$$/fd/$PASSPHRASE_FD" ]; then
+        echo "erro: --passphrase-fd não está aberto: $PASSPHRASE_FD" >&2
+        exit 1
+    fi
+    if [ -t "$PASSPHRASE_FD" ]; then
+        echo "erro: --passphrase-fd aponta para um TTY" >&2
+        exit 1
+    fi
+    PASSPHRASE_FD_VALID=yes
+fi
+
 for required in EMITTED OUTPUT CHANNEL_CONFIG SECRET_KEY MINITRUE_ROOT; do
     eval "value=\$$required"
-    [ -n "$value" ] || { echo "erro: --$(echo "$required" | tr 'A-Z_' 'a-z-') é obrigatório" >&2; exit 1; }
+    case "$required" in
+        EMITTED) option=emitted ;;
+        OUTPUT) option=output ;;
+        CHANNEL_CONFIG) option=channel-config ;;
+        SECRET_KEY) option=secret-key ;;
+        MINITRUE_ROOT) option=minitrue-root ;;
+    esac
+    [ -n "$value" ] || {
+        echo "erro: --$option é obrigatório" >&2
+        exit 1
+    }
 done
-[ -d "$EMITTED/pool" ] || { echo "erro: $EMITTED não parece um canal emitido (sem pool/)" >&2; exit 1; }
-[ -f "$EMITTED/index" ] || { echo "erro: $EMITTED não tem index" >&2; exit 1; }
+if [ ! -d "$PROFILE" ] || [ -L "$PROFILE" ]; then
+    echo "erro: perfil não é diretório regular: $PROFILE" >&2
+    exit 1
+fi
+TARGET_WORLD=$PROFILE/target.world
+CACHE_WORLD=$PROFILE/cache.world
+if [ ! -f "$TARGET_WORLD" ] || [ -L "$TARGET_WORLD" ]; then
+    echo "erro: target.world não é arquivo regular: $TARGET_WORLD" >&2
+    exit 1
+fi
+if [ ! -f "$CACHE_WORLD" ] || [ -L "$CACHE_WORLD" ]; then
+    echo "erro: cache.world não é arquivo regular: $CACHE_WORLD" >&2
+    exit 1
+fi
+
+# A partir daqui uma falha deve remover somente a saída que esta invocação vai
+# criar. Faça a guarda no pai para nunca apagar um caminho preexistente.
+[ ! -e "$OUTPUT" ] || {
+    echo "erro: saída já existe: $OUTPUT" >&2
+    exit 1
+}
+[ -f "$CHANNEL_CONFIG" ] || {
+    echo "erro: channel-config não existe: $CHANNEL_CONFIG" >&2
+    exit 1
+}
+
+# Extraia a âncora pública com `read` builtin, sem entregar o fd secreto a
+# grep/sed. O mesmo valor validado será usado pelo subshell e pelo signer no pai.
+PUBLIC_KEY=
+key_count=0
+while IFS= read -r config_line || [ -n "$config_line" ]; do
+    case "$config_line" in
+        KEY=*)
+            key_count=$((key_count + 1))
+            PUBLIC_KEY=${config_line#KEY=}
+            ;;
+    esac
+done < "$CHANNEL_CONFIG"
+[ "$key_count" -eq 1 ] || {
+    echo "erro: channel-config precisa conter exatamente um KEY=" >&2
+    exit 1
+}
+case "$PUBLIC_KEY" in
+    ''|*[!A-Za-z0-9+/=]*)
+        echo "erro: KEY do channel-config não é base64 minisign canônico" >&2
+        exit 1
+        ;;
+esac
+
+staging=$MINITRUE_ROOT/tmp/cache-from-channel.$$
+staged_sidecar=$staging/channels/$CHANNEL/index.minisig
+CLEANUP_ARMED=yes
+
+# Toda preparação que chama executáveis ocorre no filho depois de fechar sua
+# cópia do descritor. O shell pai fica bloqueado aqui e é o único que o conserva
+# para o passo de assinatura.
+prepare_cache() {
+
+# Um world é uma lista de nomes, não uma segunda linguagem. Comentário começa
+# em #; fora dele cada linha útil contém UM nome canônico. Duplicata é erro em
+# vez de ser silenciosamente deduplicada, pois costuma denunciar perfil colado
+# ou intenção divergente. target.world não pode ser vazio; cache.world pode.
+nomes_world() { # ARQUIVO EXIGE_NAO_VAZIO
+    awk -v exige="$2" '
+        {
+            linha = $0
+            sub(/#.*/, "", linha)
+            sub(/^[[:space:]]+/, "", linha)
+            sub(/[[:space:]]+$/, "", linha)
+            if (linha == "") next
+            if (length(linha) > 128 || linha ~ /\.\./ ||
+                linha !~ /^[a-z0-9][a-z0-9+_.-]*$/ || visto[linha]++) exit 1
+            print linha
+            quantidade++
+        }
+        END { if (exige == "sim" && quantidade == 0) exit 1 }
+    ' "$1"
+}
+if ! target_roots=$(nomes_world "$TARGET_WORLD" sim); then
+    echo "erro: target.world vazio, duplicado ou com nome não canônico: $TARGET_WORLD" >&2
+    exit 1
+fi
+if ! cache_world=$(nomes_world "$CACHE_WORLD" nao); then
+    echo "erro: cache.world duplicado ou com nome não canônico: $CACHE_WORLD" >&2
+    exit 1
+fi
+if [ ! -d "$EMITTED/pool" ] || [ -L "$EMITTED/pool" ]; then
+    echo "erro: $EMITTED não tem pool/ regular" >&2
+    exit 1
+fi
+if [ ! -f "$EMITTED/index" ] || [ -L "$EMITTED/index" ]; then
+    echo "erro: $EMITTED não tem index regular" >&2
+    exit 1
+fi
 [ ! -e "$OUTPUT" ] || { echo "erro: saída já existe: $OUTPUT" >&2; exit 1; }
 [ -f "$CHANNEL_CONFIG" ] || { echo "erro: channel-config não existe: $CHANNEL_CONFIG" >&2; exit 1; }
 [ -d "$MINITRUE_ROOT" ] || { echo "erro: rootfs não existe: $MINITRUE_ROOT" >&2; exit 1; }
-
+case "$CHANNEL" in
+    ''|[!a-z0-9]*|*[!a-z0-9._+-]*|*..*)
+        echo "erro: nome de canal não canônico: $CHANNEL" >&2
+        exit 1
+        ;;
+esac
+[ "${#CHANNEL}" -le 128 ] || {
+    echo "erro: nome de canal não canônico: $CHANNEL" >&2
+    exit 1
+}
+# Estes dois valores entram numa linha de comando executada dentro do bwrap.
+# Restringi-los ao alfabeto do próprio formato evita que um caminho fornecido
+# pelo operador se transforme em sintaxe de shell no enter.sh.
+case "$SECRET_KEY" in
+    /*) ;;
+    *) echo "erro: --secret-key precisa ser caminho absoluto dentro do rootfs" >&2; exit 1 ;;
+esac
+case "$SECRET_KEY" in
+    *[!A-Za-z0-9_./-]*|*/../*|*/..|*/./*|*/.|*//* )
+        echo "erro: --secret-key não é caminho canônico seguro: $SECRET_KEY" >&2
+        exit 1
+        ;;
+esac
 # AS RECEITAS QUE CONSTRUÍRAM ESTES PACOTES TÊM DE SER AS QUE VÃO EMBARCAR.
 #
 # O rootfs guarda a própria cópia da árvore de receitas, em
@@ -118,11 +341,136 @@ fi
 
 SOURCE_CACHE="$SOURCE_CACHE $MINITRUE_ROOT/var/cache/minitrue"
 
-cp -a "$EMITTED" "$OUTPUT"
-rm -f "$OUTPUT/emit.meta"
+# O índice é autoridade para nomes, caminhos, hashes e o PLAN_LOCK produtor.
+# Valide o v4 canônico
+# ANTES de usar qualquer campo como caminho. A igualdade do campo 5 com a forma
+# que `channel emit` produz é mais forte que apenas procurar "..": não sobra
+# outra grafia, subdiretório ou escape possível.
+pacotes_indice_emitido() { # INDEX
+    awk '
+        function hex64(valor) {
+            return length(valor) == 64 && valor ~ /^[0-9a-f]+$/
+        }
+        function nome_valido(valor) {
+            return length(valor) <= 128 && valor !~ /\.\./ &&
+                   valor ~ /^[a-z0-9][a-z0-9+_.-]*$/
+        }
+        function versao_valida(valor) {
+            return length(valor) <= 128 && valor !~ /\.\./ &&
+                   valor ~ /^[A-Za-z0-9][A-Za-z0-9._+~-]*$/
+        }
+        NR == 1 {
+            if ($0 != "CHANNEL_INDEX_FORMAT=4") exit 1
+            next
+        }
+        NR == 2 {
+            if ($0 != "RELEASE_ROOT=yes" && $0 != "RELEASE_ROOT=no") exit 1
+            next
+        }
+        {
+            canonica = $1 " " $2 " " $3 " " $4 " " $5 " " $6 " " $7 " " $8
+            esperada = "pool/" $1 "-" $2 "-x86_64.tar.zst"
+            identidade = $1 SUBSEP $2 SUBSEP $3
+            if (NF != 8 || $0 != canonica || !nome_valido($1) ||
+                !versao_valida($2) || $3 != "x86_64" ||
+                !hex64($4) || $5 != esperada || !hex64($6) ||
+                !hex64($7) || !hex64($8) || identidade_vista[identidade]++ ||
+                (anterior != "" && $0 <= anterior)) exit 1
+            anterior = $0
+            print $1
+            quantidade++
+        }
+        END { if (quantidade == 0) exit 1 }
+    ' "$1"
+}
+
+ultimo_byte=$(tail -c 1 "$EMITTED/index" | od -An -t x1 | tr -d '[:space:]')
+if [ "$ultimo_byte" != 0a ] ||
+   ! sementes=$(pacotes_indice_emitido "$EMITTED/index"); then
+    echo "erro: index não é índice v4 canônico emitido pelo minitrue" >&2
+    exit 1
+fi
+if ! index_sha_antes=$(sha256sum "$EMITTED/index" | cut -d' ' -f1); then
+    echo "erro: não consegui calcular o sha256 do index emitido" >&2
+    exit 1
+fi
+
+# Copie apenas o layout conhecido. `cp -a $EMITTED $OUTPUT` aceitava entradas
+# arbitrárias no topo e, pior, preservava um symlink de pool que o sha256sum
+# seguinte atravessava. O índice é copiado separado e precisa continuar sendo
+# o mesmo arquivo regular validado acima.
 mkdir -p "$OUTPUT/channel-config" "$OUTPUT/channels/$CHANNEL"
+cp -a "$EMITTED/index" "$OUTPUT/channels/$CHANNEL/index"
+indice_copiado=$OUTPUT/channels/$CHANNEL/index
+if [ ! -f "$indice_copiado" ] || [ -L "$indice_copiado" ]; then
+    echo "erro: cópia do index não virou arquivo regular" >&2
+    rm -rf "$OUTPUT"
+    exit 1
+fi
+index_sha_copiado=$(sha256sum "$indice_copiado" | cut -d' ' -f1)
+index_sha_origem=$(sha256sum "$EMITTED/index" | cut -d' ' -f1)
+if [ "$index_sha_copiado" != "$index_sha_antes" ] ||
+   [ "$index_sha_origem" != "$index_sha_antes" ] ||
+   ! sementes_copiadas=$(pacotes_indice_emitido "$indice_copiado") ||
+   [ "$sementes_copiadas" != "$sementes" ]; then
+    echo "erro: index divergiu durante a cópia" >&2
+    rm -rf "$OUTPUT"
+    exit 1
+fi
 cp "$CHANNEL_CONFIG" "$OUTPUT/channel-config/$CHANNEL"
-mv "$OUTPUT/index" "$OUTPUT/channels/$CHANNEL/index"
+
+# Os índices v4 prendem o PLAN_LOCK produtor em cada linha. Para o cache
+# offline, `ensure_pinned_url` procura qualquer objeto pinado diretamente pelo
+# hash na raiz; copie portanto cada `plans/<hash>.lock` também para `<hash>`.
+planos_produtores=$(awk 'NR > 2 { print $8 }' "$indice_copiado" | sort -u)
+planos_copiados=0
+for producer in $planos_produtores; do
+    origem_plano=$EMITTED/plans/$producer.lock
+    destino_plano=$OUTPUT/$producer
+    if [ ! -f "$origem_plano" ] || [ -L "$origem_plano" ] ||
+       [ "$(sha256sum "$origem_plano" 2>/dev/null | cut -d' ' -f1)" != "$producer" ]; then
+        echo "erro: índice prende PLAN_LOCK produtor ausente/divergente: $producer" >&2
+        rm -rf "$OUTPUT"
+        exit 1
+    fi
+    cp "$origem_plano" "$destino_plano"
+    if [ ! -f "$destino_plano" ] || [ -L "$destino_plano" ] ||
+       [ "$(sha256sum "$destino_plano" 2>/dev/null | cut -d' ' -f1)" != "$producer" ] ||
+       [ ! -f "$origem_plano" ] || [ -L "$origem_plano" ] ||
+       [ "$(sha256sum "$origem_plano" 2>/dev/null | cut -d' ' -f1)" != "$producer" ]; then
+        echo "erro: PLAN_LOCK produtor mudou durante a cópia: $producer" >&2
+        rm -rf "$OUTPUT"
+        exit 1
+    fi
+    planos_copiados=$((planos_copiados + 1))
+done
+
+linhas_indice=$OUTPUT/.channel-index-rows.$$
+sed '1,2d' "$indice_copiado" > "$linhas_indice"
+
+# Primeira leitura dos objetos ainda na origem: arquivo regular, nunca symlink,
+# e conteúdo preso pelo campo 6. A segunda leitura acontece depois de copiar.
+while read -r name version arch fingerprint path artifact reprocorr producer rest; do
+    objeto=$EMITTED/$path
+    if [ ! -f "$objeto" ] || [ -L "$objeto" ]; then
+        echo "erro: índice cita objeto de pool não regular: $path" >&2
+        rm -rf "$OUTPUT"
+        exit 1
+    fi
+    observado=$(sha256sum "$objeto" 2>/dev/null | cut -d' ' -f1)
+    if [ "$observado" != "$artifact" ]; then
+        echo "erro: $path tem sha256 $observado, índice diz $artifact" >&2
+        rm -rf "$OUTPUT"
+        exit 1
+    fi
+done < "$linhas_indice"
+
+cp -a "$EMITTED/pool" "$OUTPUT/pool"
+if [ ! -d "$OUTPUT/pool" ] || [ -L "$OUTPUT/pool" ]; then
+    echo "erro: cópia do pool não virou diretório regular" >&2
+    rm -rf "$OUTPUT"
+    exit 1
+fi
 
 # O CACHE OFFLINE NÃO TEM pool/. Essa é a diferença entre os dois layouts, e
 # ela custou uma tentativa de ISO: `channel emit` produz a árvore do
@@ -133,65 +481,300 @@ mv "$OUTPUT/index" "$OUTPUT/channels/$CHANNEL/index"
 # instalador recusá-la no boot com "artefato ausente/inválido no cache",
 # apontando para uma URL — e não para o passo que esqueceu de achatar.
 #
-# O campo 6 de cada linha do índice é o sha256 do artefato; o campo 5 é o
-# caminho no pool. A conferência é explícita porque um pool corrompido daria
-# um cache que só falha na máquina do usuário.
+# O campo 6 de cada linha do índice é o sha256 do artefato; o campo 5 já foi
+# provado igual ao caminho canônico. Releia origem E cópia: mutação concorrente,
+# bytes corrompidos e symlink falham antes de promover o nome content-addressed.
 achatados=0
-while read -r name version arch fingerprint path artifact rest; do
-    [ -n "$artifact" ] || continue
-    [ -e "$OUTPUT/$path" ] || {
-        echo "erro: índice cita $path, que não está no pool emitido" >&2
+while read -r name version arch fingerprint path artifact reprocorr producer rest; do
+    origem=$EMITTED/$path
+    copiado=$OUTPUT/$path
+    if [ ! -f "$origem" ] || [ -L "$origem" ] ||
+       [ ! -f "$copiado" ] || [ -L "$copiado" ]; then
+        echo "erro: $path deixou de ser arquivo regular durante a cópia" >&2
         rm -rf "$OUTPUT"
         exit 1
-    }
-    observado=$(sha256sum "$OUTPUT/$path" | cut -d' ' -f1)
-    [ "$observado" = "$artifact" ] || {
-        echo "erro: $path tem sha256 $observado, índice diz $artifact" >&2
+    fi
+    observado_origem=$(sha256sum "$origem" 2>/dev/null | cut -d' ' -f1)
+    observado_copia=$(sha256sum "$copiado" 2>/dev/null | cut -d' ' -f1)
+    if [ "$observado_origem" != "$artifact" ] ||
+       [ "$observado_copia" != "$artifact" ]; then
+        echo "erro: $path divergiu durante a cópia do pool" >&2
+        echo "  esperado: $artifact" >&2
+        echo "  origem:   ${observado_origem:-ilegível}" >&2
+        echo "  cópia:    ${observado_copia:-ilegível}" >&2
         rm -rf "$OUTPUT"
         exit 1
-    }
-    mv "$OUTPUT/$path" "$OUTPUT/$artifact"
+    fi
+    destino=$OUTPUT/$artifact
+    if [ -e "$destino" ] || [ -L "$destino" ]; then
+        # Dois payloads podem ser byte a byte iguais. Deduplicar só depois de
+        # provar que o objeto já promovido é exatamente o mesmo arquivo regular.
+        if [ ! -f "$destino" ] || [ -L "$destino" ] ||
+           [ "$(sha256sum "$destino" | cut -d' ' -f1)" != "$artifact" ]; then
+            echo "erro: colisão no objeto content-addressed $artifact" >&2
+            rm -rf "$OUTPUT"
+            exit 1
+        fi
+        rm -f "$copiado"
+    else
+        mv "$copiado" "$destino"
+    fi
+    if [ ! -f "$destino" ] || [ -L "$destino" ] ||
+       [ "$(sha256sum "$destino" | cut -d' ' -f1)" != "$artifact" ]; then
+        echo "erro: promoção content-addressed falhou para $path" >&2
+        rm -rf "$OUTPUT"
+        exit 1
+    fi
     achatados=$((achatados + 1))
-done < "$OUTPUT/channels/$CHANNEL/index"
+done < "$linhas_indice"
 rmdir "$OUTPUT/pool" 2>/dev/null || {
     echo "erro: sobrou coisa no pool/ depois de achatar" >&2
     ls "$OUTPUT/pool" >&2
     rm -rf "$OUTPUT"
     exit 1
 }
+rm -f "$linhas_indice"
 
 # Artefatos UPSTREAM que viajam fora do índice. São dois conjuntos, e confundir
 # um com o outro custou uma tentativa de ISO:
 #
-#  (a) todo KIND=binary — o Mundo A não tem artefato de canal, o payload É o
-#      arquivo publicado pelo upstream;
-#  (b) todo pacote nomeado em cache.world, INDEPENDENTE do KIND — ali estão as
+#  (a) KIND=binary no fechamento de EXECUÇÃO do índice + target.world.
+#      O Mundo A não tem artefato de canal, o payload É o arquivo publicado
+#      pelo upstream. O fechamento segue somente DEPS: BUILD_DEPS e a
+#      toolchain constroem o payload, mas não viajam na mídia por isso;
+#  (b) todo pacote no cache.world do MESMO perfil, INDEPENDENTE do KIND —
 #      "fontes de reconstrução obrigatórias na mídia offline", e o make e o
 #      tree são KIND=source: o que a mídia carrega é o TARBALL DE FONTE deles,
 #      para que o sistema instalado possa recompilá-los sem rede.
 #
 # A primeira versão deste script só olhava (a), e o instalador parou com
 # "artefato ausente do cache: https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz".
+# Depois, procurar todo KIND=binary da árvore fez o erro oposto: ferramentas
+# exclusivas de construção (cargo-c, inclusive) passaram a engrossar a mídia
+# mesmo sem serem alcançadas em runtime. As raízes agora são o índice e a
+# intenção target.world do perfil; acrescentar só uma receita não altera o cache.
 copiados=0
 faltando=
-wanted=$(
-    for recipe in "$REPO"/newspeak/*/recipe; do
-        grep -q '^KIND=binary' "$recipe" && basename "$(dirname "$recipe")"
-    done
-    for world in "$REPO"/profiles/*/cache.world; do
-        [ -e "$world" ] || continue
-        sed -e 's/#.*//' -e '/^[[:space:]]*$/d' -e 's/[[:space:]]//g' "$world"
-    done
-    )
-wanted=$(printf '%s\n' $wanted | sort -u)
 
-for name in $wanted; do
-    recipe=$REPO/newspeak/$name/recipe
-    [ -e "$recipe" ] || {
-        echo "erro: cache.world cita '$name', que não tem receita" >&2
+nome_canonico() {
+    [ "${#1}" -le 128 ] || return 1
+    case "$1" in
+        ''|[!a-z0-9]*|*[!a-z0-9+_.-]*|*..*) return 1 ;;
+    esac
+}
+
+# Retorna o valor literal de DEPS como palavras. As receitas são dados, não
+# shell: não se dá `source` nelas. Ausência equivale ao default vazio do
+# Minitrue; presença aceita uma palavra sem aspas ou lista entre aspas duplas.
+# Mais de uma atribuição é recusada: a avaliação do Minitrue usa o valor FINAL,
+# portanto escolher a primeira poderia esconder dependências acrescentadas por
+# uma segunda linha.
+deps_da_receita() {
+    receita=$1
+    quantidade=$(grep -c '^DEPS=' "$receita" || true)
+    suspeitas=$(grep -Ec '^[[:space:]]*(export[[:space:]]+|readonly[[:space:]]+)?DEPS(\+)?=' "$receita" || true)
+    [ "$quantidade" -le 1 ] && [ "$suspeitas" -eq "$quantidade" ] || return 1
+    valor=$(awk '
+        index($0, "DEPS=") == 1 {
+            quantidade++
+            valor = substr($0, 6)
+        }
+        END {
+            if (quantidade > 1) exit 1
+            if (quantidade == 0) exit 0
+            if (valor ~ /^"[a-z0-9+_.-]*( [a-z0-9+_.-]+)*"$/) {
+                valor = substr(valor, 2, length(valor) - 2)
+            } else if (valor !~ /^[a-z0-9][a-z0-9+_.-]*$/) {
+                exit 1
+            }
+            if (valor ~ /\.\./) exit 1
+            print valor
+        }
+    ' "$receita") || return 1
+    set -f
+    # shellcheck disable=SC2086 # separação em nomes é o formato de DEPS.
+    set -- $valor
+    set +f
+    for dependencia do
+        nome_canonico "$dependencia" || return 1
+    done
+    printf '%s\n' "$@"
+}
+
+kind_da_receita() {
+    receita=$1
+    quantidade=$(grep -c '^KIND=' "$receita" || true)
+    suspeitas=$(grep -Ec '^[[:space:]]*(export[[:space:]]+|readonly[[:space:]]+)?KIND(\+)?=' "$receita" || true)
+    [ "$quantidade" -eq 1 ] && [ "$suspeitas" -eq 1 ] || return 1
+    valor=$(sed -n 's/^KIND=//p' "$receita")
+    case "$valor" in
+        source|binary|meta) printf '%s\n' "$valor" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Colete o grafo de DEPS inteiro antes de decidir payloads. Os arquivos ficam
+# dentro de OUTPUT e são removidos antes da assinatura; toda saída por erro já
+# elimina OUTPUT, portanto nunca viram conteúdo da mídia.
+grafo=$OUTPUT/.runtime-graph.$$
+nos=$grafo.nodes
+arestas=$grafo.edges
+tipos=$grafo.kinds
+: > "$nos"
+: > "$arestas"
+: > "$tipos"
+
+sementes_set=
+set -f
+# shellcheck disable=SC2086 # nomes vieram do índice v4 já validado.
+set -- $sementes
+set +f
+for name do
+    sementes_set="$sementes_set $name"
+done
+
+runtime=
+# O índice lista apenas Mundo B. target.world acrescenta desejos top-level que
+# não aparecem nele — em especial binários Mundo A como ripgrep, Go e Rust, e
+# metapacotes locais. A closure de ambos continua seguindo SOMENTE DEPS.
+pendentes="$sementes $target_roots"
+while [ -n "$pendentes" ]; do
+    set -f
+    # shellcheck disable=SC2086 # `pendentes` contém somente nomes validados.
+    set -- $pendentes
+    set +f
+    pendentes=
+    for name do
+        case " $runtime " in
+            *" $name "*) continue ;;
+        esac
+        recipe=$REPO/newspeak/$name/recipe
+        [ -f "$recipe" ] || {
+            echo "erro: fechamento runtime cita '$name', que não tem receita" >&2
+            rm -rf "$OUTPUT"
+            exit 1
+        }
+        if ! kind=$(kind_da_receita "$recipe"); then
+            echo "erro: $name tem KIND não canônico ou repetido" >&2
+            rm -rf "$OUTPUT"
+            exit 1
+        fi
+        if ! deps=$(deps_da_receita "$recipe"); then
+            echo "erro: $name tem DEPS não canônico ou repetido" >&2
+            rm -rf "$OUTPUT"
+            exit 1
+        fi
+        runtime="$runtime $name"
+        printf 'N %s\n' "$name" >> "$nos"
+        printf '%s %s\n' "$name" "$kind" >> "$tipos"
+        set -f
+        # shellcheck disable=SC2086 # deps_da_receita validou cada nome.
+        set -- $deps
+        set +f
+        for dependencia do
+            printf 'E %s %s\n' "$name" "$dependencia" >> "$arestas"
+            pendentes="$pendentes $dependencia"
+        done
+    done
+done
+
+# O resolvedor real é DFS e recusa ciclos. Um ponto fixo que apenas deduplicasse
+# nós terminaria silenciosamente e descreveria um plano que o instalador jamais
+# consegue executar.
+if ! awk '
+    $1 == "N" { no[$2] = 1 }
+    $1 == "E" { no[$2] = 1; no[$3] = 1; aresta[$2 SUBSEP $3] = 1 }
+    END {
+        for (n in no) quantidade++
+        for (e in aresta) {
+            split(e, ponta, SUBSEP)
+            grau[ponta[2]]++
+        }
+        while (removidos < quantidade) {
+            candidato = ""
+            for (n in no)
+                if (!removido[n] && grau[n] == 0) { candidato = n; break }
+            if (candidato == "") exit 1
+            removido[candidato] = 1
+            removidos++
+            for (e in aresta) {
+                split(e, ponta, SUBSEP)
+                if (ponta[1] == candidato) grau[ponta[2]]--
+            }
+        }
+    }
+' "$nos" "$arestas"; then
+    echo "erro: fechamento runtime contém ciclo em DEPS" >&2
+    rm -rf "$OUTPUT"
+    exit 1
+fi
+
+# Índices de canal só atestam Mundo B (`KIND=source`). Mundo A viaja como SRC
+# upstream e Mundo M é resolvido localmente, sem payload. Em sentido inverso,
+# cada source alcançado precisa estar no índice: faltar um faria --only-binary
+# tentar compilar ou falhar somente durante a instalação da mídia.
+runtime_binary=
+while read -r name kind; do
+    case " $sementes_set " in *" $name "*) no_indice=sim ;; *) no_indice=nao ;; esac
+    case "$kind:$no_indice" in
+        source:sim|meta:nao) ;;
+        binary:nao) runtime_binary="$runtime_binary $name" ;;
+        source:nao)
+            echo "erro: runtime KIND=source ausente do índice: $name" >&2
+            rm -rf "$OUTPUT"
+            exit 1
+            ;;
+        binary:sim|meta:sim)
+            echo "erro: índice contém $name KIND=$kind, que não possui artefato de canal" >&2
+            rm -rf "$OUTPUT"
+            exit 1
+            ;;
+        *)
+            echo "erro: KIND inesperado no fechamento runtime: $name ($kind)" >&2
+            rm -rf "$OUTPUT"
+            exit 1
+            ;;
+    esac
+done < "$tipos"
+rm -f "$nos" "$arestas" "$tipos"
+
+cache_explicit=
+set -f
+# shellcheck disable=SC2086 # cache.world é uma lista de nomes.
+set -- $cache_world
+set +f
+for name do
+    nome_canonico "$name" || {
+        echo "erro: cache.world cita nome de pacote não canônico: '$name'" >&2
         rm -rf "$OUTPUT"
         exit 1
     }
+    cache_explicit="$cache_explicit $name"
+done
+
+wanted=
+set -f
+# shellcheck disable=SC2086 # as duas listas contêm somente nomes validados.
+set -- $runtime_binary $cache_explicit
+set +f
+for name do
+    recipe=$REPO/newspeak/$name/recipe
+    [ -f "$recipe" ] || {
+        echo "erro: fechamento runtime/cache.world cita '$name', que não tem receita" >&2
+        rm -rf "$OUTPUT"
+        exit 1
+    }
+    wanted="$wanted $name"
+done
+
+set -f
+# shellcheck disable=SC2086 # `wanted` contém somente nomes validados.
+set -- $wanted
+set +f
+wanted=$(printf '%s\n' "$@" | sed '/^$/d' | sort -u)
+
+for name in $wanted; do
+    recipe=$REPO/newspeak/$name/recipe
     # TODOS os hashes, e não o primeiro. O SHA256 de uma receita é uma LISTA
     # separada por espaço, e pode ocupar várias linhas com contrabarra de
     # continuação — o rust traz cinco componentes assim. A versão anterior desta
@@ -212,13 +795,38 @@ for name in $wanted; do
     for source in $SOURCE_CACHE; do
         # Todos ou nenhum: um pacote de Mundo A com cinco artefatos e quatro no
         # cache instalaria pela metade, e o defeito só apareceria no boot.
+        # O NOME content-addressed também não é prova do conteúdo. Aceitar só a
+        # presença permitia copiar bytes corrompidos (ou seguir um symlink) sob
+        # o sha256 esperado e produzir uma mídia que só reprovaria no instalador.
         completo=sim
         for h in $hashes; do
-            [ -e "$source/$h" ] || { completo=nao; break; }
+            objeto=$source/$h
+            if [ ! -f "$objeto" ] || [ -L "$objeto" ]; then
+                completo=nao
+                break
+            fi
+            observado=$(sha256sum "$objeto" 2>/dev/null | cut -d' ' -f1)
+            if [ "$observado" != "$h" ]; then
+                completo=nao
+                break
+            fi
         done
         [ "$completo" = sim ] || continue
         for h in $hashes; do
             cp "$source/$h" "$OUTPUT/$h"
+            if [ ! -f "$OUTPUT/$h" ] || [ -L "$OUTPUT/$h" ]; then
+                echo "erro: cópia de $name/$h não virou arquivo regular" >&2
+                rm -rf "$OUTPUT"
+                exit 1
+            fi
+            observado=$(sha256sum "$OUTPUT/$h" 2>/dev/null | cut -d' ' -f1)
+            if [ "$observado" != "$h" ]; then
+                echo "erro: objeto de $name divergiu durante a cópia" >&2
+                echo "  esperado: $h" >&2
+                echo "  observado: ${observado:-ilegível}" >&2
+                rm -rf "$OUTPUT"
+                exit 1
+            fi
         done
         # TODAS as assinaturas associadas, e não só a de nome óbvio. O minitrue
         # indexa o sidecar por sha256(hash_do_artefato + chave + URL) — ver
@@ -240,21 +848,97 @@ for name in $wanted; do
 done
 
 [ -z "$faltando" ] || {
-    echo "erro: artefatos do Mundo A ausentes em todos os caches:$faltando" >&2
+    echo "erro: artefatos do Mundo A ausentes, não regulares ou divergentes em todos os caches:$faltando" >&2
     echo "  procurei em:$SOURCE_CACHE" >&2
     rm -rf "$OUTPUT"
     exit 1
 }
+
+# A seleção e as cópias acima podem ser demoradas. Reprenda o índice exato
+# imediatamente antes de assinar para que uma mutação concorrente não faça o
+# cache carregar objetos decididos por A e uma assinatura sobre B.
+if [ ! -f "$indice_copiado" ] || [ -L "$indice_copiado" ] ||
+   ! index_sha_final=$(sha256sum "$indice_copiado" | cut -d' ' -f1) ||
+   [ "$index_sha_final" != "$index_sha_antes" ] ||
+   ! sementes_finais=$(pacotes_indice_emitido "$indice_copiado") ||
+   [ "$sementes_finais" != "$sementes" ]; then
+    echo "erro: index mudou durante a montagem do cache" >&2
+    rm -rf "$OUTPUT"
+    exit 1
+fi
+for producer in $planos_produtores; do
+    origem_plano=$EMITTED/plans/$producer.lock
+    destino_plano=$OUTPUT/$producer
+    if [ ! -f "$origem_plano" ] || [ -L "$origem_plano" ] ||
+       [ ! -f "$destino_plano" ] || [ -L "$destino_plano" ] ||
+       [ "$(sha256sum "$origem_plano" 2>/dev/null | cut -d' ' -f1)" != "$producer" ] ||
+       [ "$(sha256sum "$destino_plano" 2>/dev/null | cut -d' ' -f1)" != "$producer" ]; then
+        echo "erro: PLAN_LOCK produtor mudou durante a montagem: $producer" >&2
+        rm -rf "$OUTPUT"
+        exit 1
+    fi
+done
 
 # Assinar o índice DENTRO do rootfs, com o minitrue de lá: a chave e o binário
 # vivem no mesmo mundo, e o hospedeiro não precisa ter minisign.
 staging=$MINITRUE_ROOT/tmp/cache-from-channel.$$
 rm -rf "$staging"
 cp -a "$OUTPUT" "$staging"
-"$REPO/bootstrap/enter.sh" "$MINITRUE_ROOT" \
-    "minitrue channel sign ${SECRET_KEY} /tmp/$(basename "$staging")/channels/$CHANNEL/index" >/dev/null
-cp "$staging/channels/$CHANNEL/index.minisig" "$OUTPUT/channels/$CHANNEL/index.minisig"
-rm -rf "$staging"
+staged_sidecar=$staging/channels/$CHANNEL/index.minisig
+printf '%s %s %s\n' "$achatados" "$copiados" "$planos_copiados" > "$staging/.cache-from-channel-counts"
+}
+
+(
+    close_passphrase_fd
+    prepare_cache
+)
+
+# Leitura builtin: o pai ainda conserva o fd, portanto não execute sequer `cat`
+# antes de entregá-lo exclusivamente ao stdin do signer.
+if ! IFS=' ' read -r achatados copiados planos_copiados < "$staging/.cache-from-channel-counts"; then
+    echo "erro: preparação não registrou suas contagens" >&2
+    exit 1
+fi
+case "$achatados:$copiados:$planos_copiados" in
+    *[!0-9:]*)
+        echo "erro: preparação registrou contagens inválidas" >&2
+        exit 1
+        ;;
+esac
+
+staging_leaf=${staging##*/}
+if [ "$PASSPHRASE_FD_SET" = yes ]; then
+    sign_command="minitrue channel sign --passphrase-fd 0 ${SECRET_KEY} /tmp/${staging_leaf}/channels/$CHANNEL/index ${PUBLIC_KEY}"
+    if [ "$PASSPHRASE_FD" -eq 0 ]; then
+        sign_ok=false
+        "$REPO/bootstrap/enter.sh" "$MINITRUE_ROOT" "$sign_command" \
+            >/dev/null && sign_ok=true
+    else
+        # O redirecionamento duplica somente o fd escolhido em stdin. Fechá-lo
+        # no subshell impede que o número original atravesse enter.sh/bwrap.
+        sign_ok=false
+        (
+            eval "exec ${PASSPHRASE_FD}<&-"
+            "$REPO/bootstrap/enter.sh" "$MINITRUE_ROOT" "$sign_command"
+        ) <&"$PASSPHRASE_FD" >/dev/null && sign_ok=true
+    fi
+else
+    sign_ok=false
+    "$REPO/bootstrap/enter.sh" "$MINITRUE_ROOT" \
+        "minitrue channel sign ${SECRET_KEY} /tmp/${staging_leaf}/channels/$CHANNEL/index ${PUBLIC_KEY}" \
+        >/dev/null && sign_ok=true
+fi
+
+# A partir daqui nenhum cleanup, `cp`, `rm` nem relatório pode herdar o segredo.
+close_passphrase_fd
+if [ "$sign_ok" != true ] || [ ! -f "$staged_sidecar" ] ||
+   [ -L "$staged_sidecar" ]; then
+    echo "erro: assinatura do índice falhou; cache descartado" >&2
+    exit 1
+fi
+cp "$staged_sidecar" "$OUTPUT/channels/$CHANNEL/index.minisig"
+rm -rf -- "$staging"
+staging=
 
 # O que o `minipax media build --mode offline` exige existir; se faltar
 # qualquer um, ele recusa a mídia — mas só depois de compor, e a mensagem não
@@ -267,9 +951,12 @@ for required in "channel-config/$CHANNEL" "channels/$CHANNEL/index" \
     }
 done
 
+KEEP_OUTPUT=yes
 echo "cache: $OUTPUT"
-echo "  $(wc -l < "$OUTPUT/channels/$CHANNEL/index") pacotes no índice"
+linhas_indice_final=$(wc -l < "$OUTPUT/channels/$CHANNEL/index")
+echo "  $((linhas_indice_final - 2)) pacotes no índice"
 echo "  $achatados artefatos do canal achatados por sha256"
+echo "  $planos_copiados PLAN_LOCKs produtores por sha256"
 echo "  $copiados artefatos do Mundo A"
 echo "  $(ls "$OUTPUT"/*.minisig 2>/dev/null | wc -l) assinaturas"
 echo "  $(du -sm "$OUTPUT" | cut -f1) MB"

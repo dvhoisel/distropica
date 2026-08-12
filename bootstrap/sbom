@@ -24,23 +24,34 @@ set -eu
 umask 022
 LC_ALL=C
 export LC_ALL
+# A forma canônica abaixo depende de GNU tar e blocking factor 20. Variáveis do
+# operador não podem injetar exclude/transform nem mudar o padding do arquivo.
+unset TAR_OPTIONS
+tar_version=$(tar --version 2>/dev/null | sed -n '1p')
+case "$tar_version" in
+    'tar (GNU tar) '*) ;;
+    *) echo "erro: bootstrap/sbom exige GNU tar; observado: $tar_version" >&2; exit 1 ;;
+esac
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 BUNDLE=
+STRICT=no
 
 usage() {
     cat <<'EOF'
-uso: bootstrap/sbom --bundle DIR
+uso: bootstrap/sbom --bundle DIR [--strict]
 
   --bundle DIR   bundle de fontes produzido pelo bootstrap/source-bundle.
                  O INVENTARIO dele dá a lista de pacotes e o hash de cada
                  fonte; a saída vai para <bundle>/licencas/.
+  --strict       gate de release: falha se algum pacote ficar SEM EVIDÊNCIA
 EOF
 }
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --bundle) BUNDLE=${2:?}; shift 2 ;;
+        --strict) STRICT=yes; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "erro: opção desconhecida: $1" >&2; usage >&2; exit 1 ;;
     esac
@@ -53,6 +64,14 @@ done
 BUNDLE=$(CDPATH= cd -- "$BUNDLE" && pwd -P)
 SAIDA=$BUNDLE/licencas
 [ ! -e "$SAIDA" ] || { echo "erro: $SAIDA já existe" >&2; exit 1; }
+[ ! -e "$BUNDLE/licenses.tar" ] || {
+    echo "erro: $BUNDLE/licenses.tar já existe" >&2
+    exit 1
+}
+[ ! -e "$BUNDLE/licenses.tar.sha256" ] || {
+    echo "erro: $BUNDLE/licenses.tar.sha256 já existe" >&2
+    exit 1
+}
 mkdir -p "$SAIDA"
 
 INDICE=$SAIDA/INDICE
@@ -63,25 +82,83 @@ printf '# pacote\tcomponente\tsha256\tprimeira-linha\n' > "$INDICE"
 # componente que ninguém sabia estar ali.
 PADRAO='(^|/)(LICEN[SC]E|COPYING|NOTICE|COPYRIGHT|uganda)[^/]*$'
 
+# Alguns upstreams (libdrm e outros projetos antigos do X.org) não publicam
+# um COPYING separado: a concessão inteira mora no cabeçalho dos arquivos.
+# Isto é só um fallback, usado quando o tar NÃO tem nenhum nome casado acima.
+# Exigir uma concessão longa evita promover qualquer ocorrência solta de
+# "copyright" a texto de licença.
+PADRAO_CONCESSAO='Permission is hereby granted, free of charge|Redistribution and use in source and binary forms, with or without modification|GNU (LESSER |AFFERO )?GENERAL PUBLIC LICENSE|Mozilla Public License|Apache License, Version [0-9]|ISC License'
+
 sem_metadado=
 com_texto=
 total_arquivos=0
 
 registra() { # pacote arquivo-no-bundle rotulo
     hash=$(sha256sum "$2" | cut -d' ' -f1)
-    primeira=$(grep -m1 -a '[A-Za-z]' "$2" 2>/dev/null | cut -c1-72 | tr -d '\t')
-    printf '%s\t%s\t%s\t%s\n' "$1" "$3" "$hash" "$primeira" >> "$INDICE"
+    componente=$(ascii_hex "$3")
+    primeira=$(preview_hex "$2")
+    printf '%s\t%s\t%s\t%s\n' "$1" "$componente" "$hash" "$primeira" >> "$INDICE"
     total_arquivos=$((total_arquivos + 1))
 }
 
+# Campos textuais do INDICE nunca carregam controles, barra invertida ou UTF-8
+# parcial. A gramática pública é `hex:` seguido de pares [0-9a-f]. Componente
+# codifica todos os octetos; preview codifica no máximo os 72 primeiros octetos
+# da primeira linha que contém uma letra ASCII. O próprio INDICE é só ASCII.
+ascii_hex() {
+    if printf '%s' "$1" | LC_ALL=C grep -q '[[:cntrl:]\\]'; then
+        echo 'erro: componente do INDICE contém controle ASCII ou barra invertida' >&2
+        return 1
+    fi
+    printf 'hex:'
+    printf '%s' "$1" | od -An -tx1 -v | tr -d ' \n'
+}
+
+preview_hex() {
+    preview=$(
+        LC_ALL=C grep -m1 -a '[A-Za-z]' "$1" 2>/dev/null |
+            dd bs=1 count=72 2>/dev/null |
+            od -An -tx1 -v | tr -d ' \n'
+    )
+    # grep acrescenta o separador quando ele cabe nos 72 octetos. CR, tab,
+    # backslash etc. continuam factuais, mas somente como pares hex ASCII.
+    case "$preview" in *0a) preview=${preview%0a} ;; esac
+    printf 'hex:%s' "$preview"
+}
+
 # Uma linha por fonte no INVENTARIO; a coluna 1 é o pacote e a 5 o sha256. A
-# coluna 8 ('upstream' ou 'fonte-correspondente') é lida para não acabar
+# coluna 8 ('upstream', 'fonte-correspondente' ou 'insumo-live') é lida para não acabar
 # grudada no campo `arquivo` pelo read — o último nome absorve o que sobra, e
 # um campo silenciosamente contaminado é o tipo de coisa que só aparece meses
 # depois, quando alguém confia nele.
 while IFS="$(printf '\t')" read -r pacote versao mundo licenca hash origem arquivo tipo; do
     case "$pacote" in '#'*|'') continue ;; esac
-    [ -n "$hash" ] && [ "$hash" != '-' ] || continue
+    if [ -z "$hash" ] || [ "$hash" = '-' ]; then
+        # Receitas de montagem da própria Distrópica não têm tar upstream:
+        # seu código e payload são cobertos pela concessão do repositório.
+        # Elas não podem desaparecer do inventário só porque não houve objeto
+        # em upstream/ para o laço examinar.
+        if [ "$licenca" = GPL-3.0-or-later ] && [ "$tipo" = '-' ]; then
+            destino=$SAIDA/$pacote
+            mkdir -p "$destino"
+            for proprio in LICENSE NOTICE LICENSING.md; do
+                [ -f "$REPO/$proprio" ] || {
+                    echo "erro: texto próprio ausente: $REPO/$proprio" >&2
+                    exit 1
+                }
+                case "$proprio" in
+                    LICENSE) nome=GPL-3.0-or-later.txt ;;
+                    *) nome=$proprio ;;
+                esac
+                cp "$REPO/$proprio" "$destino/$nome"
+                registra "$pacote" "$destino/$nome" "distropica/$nome (payload próprio)"
+            done
+            com_texto="$com_texto $pacote"
+        else
+            sem_metadado="$sem_metadado $pacote"
+        fi
+        continue
+    fi
     fonte=$BUNDLE/upstream/$hash
     [ -f "$fonte" ] || continue
 
@@ -89,8 +166,13 @@ while IFS="$(printf '\t')" read -r pacote versao mundo licenca hash origem arqui
     tipo=$(file -b "$fonte" 2>/dev/null || echo desconhecido)
     achou=nao
 
-    case "$tipo" in
-        *"gzip compressed"*|*"XZ compressed"*|*"bzip2 compressed"*|*"POSIX tar"*|*"Zstandard"*)
+    # O conteúdo, não a heurística do `file`, decide se isto é tar. O tarball
+    # MUSL oficial do ripgrep 15.2.0 começa com bytes que o `file` chamou de
+    # "DOS/MBR boot sector"; por isso ele ficou sem LICENSE-MIT e COPYING no
+    # SBOM mesmo carregando os dois. `tar -tf` é ao mesmo tempo a sonda e a
+    # primeira das duas passagens que já fazíamos.
+    lista=$(mktemp "$SAIDA/.lista-$pacote.XXXXXX")
+    if tar -tf "$fonte" > "$lista" 2>/dev/null; then
             # DUAS passagens sobre o arquivo, e não N+1. A versão anterior
             # listava com `tar -t` e depois chamava `tar -xO` UMA VEZ POR TEXTO
             # casado — e cada uma dessas chamadas redescomprime o tarball
@@ -99,18 +181,27 @@ while IFS="$(printf '\t')" read -r pacote versao mundo licenca hash origem arqui
             # descompressões do mesmo arquivo; a extração da árvore toda levou
             # quarenta minutos. Agora é uma listagem mais uma extração que
             # recebe todos os alvos de uma vez por -T.
-            alvos=$(tar -tf "$fonte" 2>/dev/null | grep -E "$PADRAO" || true)
+            # Case-insensitive é deliberado e travado por caso real: libcap
+            # escreve `License`, e libxml2 escreve `Copyright`.
+            alvos=$(grep -Ei "$PADRAO" "$lista" || true)
             if [ -n "$alvos" ]; then
                 mkdir -p "$destino"
                 bruto=$(mktemp -d "$SAIDA/.extraindo-$pacote.XXXXXX")
                 # --no-same-owner/--no-same-permissions: o conteúdo vem de
                 # tarball de terceiro, e nada aqui justifica deixá-lo escolher
                 # dono ou modo de arquivo nesta máquina.
-                printf '%s\n' "$alvos" | tar -xf "$fonte" -C "$bruto" -T - \
-                    --no-same-owner --no-same-permissions >/dev/null 2>&1 || true
+                # --verbatim-files-from impede que um membro cujo nome comece
+                # com '-' seja interpretado como OPCAO do tar. A lista vem do
+                # proprio artefato, nao da linha de comando do operador.
+                printf '%s\n' "$alvos" | tar -xf "$fonte" -C "$bruto" \
+                    --verbatim-files-from -T - --no-same-owner \
+                    --no-same-permissions >/dev/null 2>&1 || true
                 printf '%s\n' "$alvos" | while IFS= read -r alvo; do
                     [ -n "$alvo" ] || continue
-                    [ -f "$bruto/$alvo" ] || continue
+                    # Uma entrada LICENSE que seja link simbolico nao e texto
+                    # materializado pelo artefato. Segui-la poderia ate copiar
+                    # um arquivo do hospedeiro se o alvo fosse absoluto.
+                    [ -f "$bruto/$alvo" ] && [ ! -L "$bruto/$alvo" ] || continue
                     # Nome achatado: a hierarquia INTEIRA vira o nome, com o
                     # primeiro componente e tudo. Tirá-lo parecia limpeza —
                     # remove o redundante 'gcc-15.3.0/' — mas PERDE EVIDÊNCIA
@@ -125,10 +216,10 @@ while IFS="$(printf '\t')" read -r pacote versao mundo licenca hash origem arqui
                     cp "$bruto/$alvo" "$destino/$plano" 2>/dev/null || continue
                     [ -s "$destino/$plano" ] || { rm -f "$destino/$plano"; continue; }
                     hash=$(sha256sum "$destino/$plano" | cut -d' ' -f1)
-                    primeira=$(grep -m1 -a '[A-Za-z]' "$destino/$plano" 2>/dev/null |
-                        cut -c1-72 | tr -d '\t')
-                    printf '%s\t%s\t%s\t%s\n' "$pacote" "$alvo" "$hash" "$primeira" \
-                        >> "$INDICE"
+                    componente=$(ascii_hex "$alvo")
+                    primeira=$(preview_hex "$destino/$plano")
+                    printf '%s\t%s\t%s\t%s\n' "$pacote" "$componente" "$hash" \
+                        "$primeira" >> "$INDICE"
                 done
                 rm -rf "$bruto"
                 # O laço acima roda em subshell (está depois de um pipe), então
@@ -139,9 +230,40 @@ while IFS="$(printf '\t')" read -r pacote versao mundo licenca hash origem arqui
                 else
                     rmdir "$destino" 2>/dev/null || true
                 fi
+            else
+                # Sem COPYING/License: procura uma concessão integral em um
+                # arquivo regular da fonte. Extrai UMA vez, limita candidatos
+                # a 1 MiB e escolhe deterministicamente o mais raso e depois
+                # o primeiro por nome. No libdrm isto colhe o cabeçalho MIT do
+                # Android.bp; não são necessários N `tar -xO` sobre o mesmo
+                # fluxo comprimido.
+                bruto=$(mktemp -d "$SAIDA/.extraindo-$pacote.XXXXXX")
+                tar -xf "$fonte" -C "$bruto" --no-same-owner \
+                    --no-same-permissions >/dev/null 2>&1 || true
+                fallback=$(
+                    find "$bruto" -type f -size -1048577c -printf '%d\t%p\n' \
+                        2>/dev/null | sort -n -k1,1 -k2,2 | cut -f2- |
+                    while IFS= read -r candidato; do
+                        if LC_ALL=C grep -aEq "$PADRAO_CONCESSAO" "$candidato" \
+                            2>/dev/null; then
+                            printf '%s\n' "$candidato"
+                            break
+                        fi
+                    done
+                )
+                if [ -n "$fallback" ] && [ -f "$fallback" ]; then
+                    mkdir -p "$destino"
+                    alvo=${fallback#"$bruto/"}
+                    plano=$(printf '%s' "$alvo" | sed 's|/|__|g')
+                    cp "$fallback" "$destino/$plano"
+                    registra "$pacote" "$destino/$plano" "$alvo (concessão em cabeçalho de fonte)"
+                    achou=sim
+                fi
+                rm -rf "$bruto"
             fi
-            ;;
-        *ELF*)
+    else
+        case "$tipo" in
+            *ELF*)
             # Binário Go: o compilador grava o grafo de módulos DENTRO do
             # executável. É evidência melhor que um arquivo de texto solto,
             # porque não pode divergir do que foi de fato compilado.
@@ -152,8 +274,25 @@ while IFS="$(printf '\t')" read -r pacote versao mundo licenca hash origem arqui
                 registra "$pacote" "$destino/go-modules.txt" '(grafo de módulos Go, do próprio binário)'
                 achou=sim
             fi
-            ;;
-    esac
+                ;;
+            *text*)
+                # Há fontes que já são um único arquivo de dados, não um tar.
+                # O certdata.txt da Mozilla é o caso medido: o cacert.pem traz
+                # no próprio cabeçalho o SHA256 dessa fonte correspondente, e
+                # a concessão MPL mora no início dela. Só colhe quando o texto
+                # contém uma concessão reconhecível; "é texto" sozinho não é
+                # evidência de licença.
+                if LC_ALL=C grep -aEq "$PADRAO_CONCESSAO" "$fonte" 2>/dev/null; then
+                    mkdir -p "$destino"
+                    cp "$fonte" "$destino/fonte-textual"
+                    registra "$pacote" "$destino/fonte-textual" \
+                        '(fonte textual correspondente com concessão)'
+                    achou=sim
+                fi
+                ;;
+        esac
+    fi
+    rm -f "$lista"
 
     if [ "$achou" = sim ]; then
         com_texto="$com_texto $pacote"
@@ -162,6 +301,16 @@ while IFS="$(printf '\t')" read -r pacote versao mundo licenca hash origem arqui
     fi
 done < "$BUNDLE/INVENTARIO"
 
+# A ordem interna dos tarballs upstream não é parte do formato público do
+# bundle. Canonicaliza o índice pela linha completa antes de prendê-lo no
+# manifesto; duas extrações da mesma seleção produzem os mesmos bytes.
+indice_ordenado=$(mktemp "$SAIDA/.indice.XXXXXX")
+{
+    sed -n '1p' "$INDICE"
+    sed '1d' "$INDICE" | LC_ALL=C sort
+} > "$indice_ordenado"
+mv "$indice_ordenado" "$INDICE"
+
 cat > "$SAIDA/LEIA-ME" <<'FIM'
 Evidência de licenciamento, extraída dos artefatos.
 
@@ -169,7 +318,9 @@ Cada subdiretório é um pacote; cada arquivo dentro dele é um texto de licenç
 ou aviso que veio DE DENTRO do artefato daquele pacote. O nome do arquivo é o
 caminho original com '/' virando '__', para que se veja de onde no artefato
 cada texto saiu. O INDICE traz pacote, caminho original, sha256 e a primeira
-linha significativa de cada um.
+linha significativa de cada um. Caminho e preview usam a gramática ASCII
+canônica `hex:` + pares hexadecimais minúsculos; o preview cobre no máximo os
+primeiros 72 octetos da linha.
 
 Isto é EVIDÊNCIA, não decisão. Nenhuma expressão SPDX foi inferida aqui: os
 artefatos desta árvore são agregados, e rotular um agregado com a licença do
@@ -219,4 +370,131 @@ if [ -n "$sem_evidencia" ]; then
     echo >&2
     echo "Para binário copyleft isto é obrigação não cumprida, e não pendência:" >&2
     echo "declare a fonte em newspeak/<pacote>/fontes-correspondentes." >&2
+    if [ "$STRICT" = yes ]; then
+        echo "erro: --strict recusou SBOM com pacote sem evidência" >&2
+        exit 1
+    fi
+fi
+
+# O diretório acima continua útil como evidência humana durante o
+# desenvolvimento. Só o modo estrito, porém, pode transformá-lo no payload
+# consumível pelo Minipax: nesse ponto já se provou que TODO pacote selecionado
+# tem ao menos uma evidência, e não apenas que os arquivos encontrados parecem
+# licenças.
+if [ "$STRICT" = yes ]; then
+    PACOTES=$SAIDA/PACOTES
+    pacotes_brutos=$(mktemp "$SAIDA/.pacotes.XXXXXX")
+    awk -F '\t' '
+        NR == 1 { next }
+        NF != 8 {
+            print "erro: INVENTARIO não tem oito campos na linha " NR > "/dev/stderr"
+            failed = 1
+            next
+        }
+        {
+            row = $1 FS $2 FS $3 FS $4
+            if (($1 in seen) && seen[$1] != row) {
+                print "erro: pacote " $1 " tem metadados conflitantes no INVENTARIO" > "/dev/stderr"
+                failed = 1
+            }
+            seen[$1] = row
+        }
+        END {
+            if (failed) exit 2
+            for (package in seen) print seen[package]
+        }
+    ' "$BUNDLE/INVENTARIO" > "$pacotes_brutos"
+    {
+        printf '# pacote\tversao\tmundo\tlicenca\n'
+        LC_ALL=C sort "$pacotes_brutos"
+    } > "$PACOTES"
+    rm -f "$pacotes_brutos"
+
+    selecionados=$(mktemp "$SAIDA/.pacotes-selecionados.XXXXXX")
+    evidenciados=$(mktemp "$SAIDA/.pacotes-evidenciados.XXXXXX")
+    sed '1d' "$PACOTES" | cut -f1 | LC_ALL=C sort -u > "$selecionados"
+    sed '1d' "$INDICE" | cut -f1 | LC_ALL=C sort -u > "$evidenciados"
+    if ! cmp -s "$selecionados" "$evidenciados"; then
+        echo "erro: o índice de licenças não cobre exatamente os pacotes distribuídos" >&2
+        diff -u "$selecionados" "$evidenciados" >&2 || true
+        rm -f "$selecionados" "$evidenciados"
+        exit 1
+    fi
+    rm -f "$selecionados" "$evidenciados"
+
+    mkdir -p "$SAIDA/distropica"
+    cp "$REPO/LICENSE" "$SAIDA/distropica/GPL-3.0-or-later.txt"
+    cp "$REPO/NOTICE" "$SAIDA/distropica/NOTICE"
+    cp "$REPO/LICENSING.md" "$SAIDA/distropica/LICENSING.md"
+
+    # O formato público não herda o bit executável acidental de um LICENSE
+    # upstream. Diretórios são 0755 e TODO regular é 0644 antes do manifesto e
+    # do GNU tar; o consumidor pode assim exigir um único cabeçalho canônico em
+    # vez de reproduzir modos não semânticos vindos de terceiros.
+    find "$SAIDA" -type d -exec chmod 0755 {} +
+    find "$SAIDA" -type f -exec chmod 0644 {} +
+
+    # O manifesto cobre cada regular e exclui somente a si próprio. Nomes com
+    # controle ou barra invertida são recusados em vez de depender do escape
+    # particular de `sha256sum`; o parser do alvo recebe assim uma gramática
+    # pequena: 64 hex, dois espaços e caminho UTF-8 canônico.
+    newline='
+'
+    tab=$(printf '\t')
+    cr=$(printf '\r')
+    find "$SAIDA" -type f -exec sh -c '
+        root=$1
+        newline=$2
+        tab=$3
+        cr=$4
+        shift 4
+        for path do
+            relative=${path#"$root"/}
+            case "$relative" in
+                *"$newline"*|*"$tab"*|*"$cr"*|*\\*)
+                    echo "erro: caminho não canônico no bundle de licenças: $relative" >&2
+                    exit 1
+                    ;;
+            esac
+            if printf '%s' "$relative" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+                echo "erro: caminho com controle ASCII no bundle de licenças" >&2
+                exit 1
+            fi
+            printf %s "$relative" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 || {
+                echo "erro: caminho não UTF-8 no bundle de licenças" >&2
+                exit 1
+            }
+        done
+    ' sh "$SAIDA" "$newline" "$tab" "$cr" {} +
+
+    (
+        cd "$SAIDA"
+        find . -type f ! -path './MANIFEST.sha256' -printf '%P\n' |
+            LC_ALL=C sort |
+            while IFS= read -r path; do
+                hash=$(sha256sum -- "$path" | cut -d' ' -f1)
+                printf '%s  %s\n' "$hash" "$path"
+            done > MANIFEST.sha256
+    )
+
+    lista=$(mktemp "$BUNDLE/.licenses-list.XXXXXX")
+    temporario=$(mktemp "$BUNDLE/.licenses-tar.XXXXXX")
+    trap 'rm -f "$lista" "$temporario"' EXIT HUP INT TERM
+    (
+        cd "$SAIDA"
+        find . -mindepth 1 -printf '%P\0' | LC_ALL=C sort -z > "$lista"
+        tar --create --file "$temporario" --format=gnu --blocking-factor=20 --mtime=@0 \
+            --owner=0 --group=0 --numeric-owner \
+            --mode='u+rwX,go+rX,go-w' --no-recursion \
+            --null --verbatim-files-from --files-from "$lista"
+    )
+    chmod 0644 "$temporario"
+    mv "$temporario" "$BUNDLE/licenses.tar"
+    hash_bundle=$(sha256sum "$BUNDLE/licenses.tar" | cut -d' ' -f1)
+    printf '%s  licenses.tar\n' "$hash_bundle" > "$BUNDLE/licenses.tar.sha256"
+    chmod 0644 "$BUNDLE/licenses.tar.sha256"
+    rm -f "$lista"
+    trap - EXIT HUP INT TERM
+    echo "  bundle instalável: $BUNDLE/licenses.tar"
+    echo "  sha256:            $hash_bundle"
 fi

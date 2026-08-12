@@ -1,0 +1,1428 @@
+#!/bin/sh
+# Regressão focal do lock do EFI vivo. Não compila BusyBox, kernel nem EFI.
+set -eu
+umask 077
+LC_ALL=C
+export LC_ALL
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+SOURCE=$REPO/bootstrap/live/live-lock-helper.c
+CONFIG=$REPO/bootstrap/live/busybox-1.35.0.config
+BUILDER=$REPO/bootstrap/live/build-efi
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/distropica-live-lock-test.XXXXXXXX")
+trap 'chmod -R u+rwX -- "$TMP" 2>/dev/null || true; rm -rf -- "$TMP"' EXIT HUP INT TERM
+mkdir "$TMP/bin" "$TMP/a" "$TMP/b" "$TMP/bad" "$TMP/tree-a" "$TMP/tree-b"
+chmod 0700 "$TMP" "$TMP/bin" "$TMP/a" "$TMP/b" "$TMP/bad" \
+    "$TMP/tree-a" "$TMP/tree-b"
+
+EMPTY=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+ABC=ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+MULTI=248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1
+FAILURES=0
+
+ok() { printf '  ok      %s\n' "$*"; }
+fail() { printf '  FALHOU  %s\n' "$*" >&2; FAILURES=$((FAILURES + 1)); }
+must_fail() { # descrição comando...
+    description=$1
+    shift
+    if "$@" >"$TMP/bad/last.log" 2>&1; then
+        fail "$description"
+    else
+        ok "$description"
+    fi
+}
+
+cc -std=c17 -O2 -Wall -Wextra -Werror -o "$TMP/bin/live-lock-helper" "$SOURCE"
+HELPER=$TMP/bin/live-lock-helper
+
+# SHA-256 interno: vetores FIPS conhecidos e cotejo com ferramenta do harness.
+: > "$TMP/a/empty"
+printf abc > "$TMP/a/abc"
+printf '%s' 'abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq' > "$TMP/a/multi"
+chmod 0600 "$TMP/a/empty" "$TMP/a/abc" "$TMP/a/multi"
+if [ "$("$HELPER" sha256 "$TMP/a/empty")" = "$EMPTY" ] &&
+   [ "$("$HELPER" sha256 "$TMP/a/abc")" = "$ABC" ] &&
+   [ "$("$HELPER" sha256 "$TMP/a/multi")" = "$MULTI" ]; then
+    ok 'SHA-256 interno passa vazio, abc e vetor multi-bloco'
+else
+    fail 'SHA-256 interno divergiu de vetor conhecido'
+fi
+if [ "$("$HELPER" sha256 "$TMP/a/multi")" = "$(sha256sum "$TMP/a/multi" | awk '{print $1}')" ]; then
+    ok 'helper e sha256sum concordam no harness'
+else
+    fail 'helper e sha256sum divergiram'
+fi
+
+# Inputs read-only pinados podem ser root-owned (o runner normal vive em
+# /usr/bin), mas continuam regulares, nlink=1, sem 0022 e sob fd-walk
+# no-follow. Isso não relaxa WORK/output/staging, testados mais abaixo.
+ROOT_READONLY_RUNNER=
+for root_runner_candidate in /usr/bin/bwrap /usr/bin/true; do
+    if [ -f "$root_runner_candidate" ] && [ ! -L "$root_runner_candidate" ] &&
+       [ "$(stat -Lc %u "$root_runner_candidate")" -eq 0 ] &&
+       [ "$(stat -Lc %h "$root_runner_candidate")" -eq 1 ]; then
+        ROOT_READONLY_RUNNER=$root_runner_candidate
+        break
+    fi
+done
+if [ -n "$ROOT_READONLY_RUNNER" ] &&
+   ROOT_READONLY_RUNNER_SHA=$("$HELPER" sha256 "$ROOT_READONLY_RUNNER"); then
+    ok 'input read-only pinado aceita runner root-owned sob /usr/bin'
+else
+    fail 'host não ofereceu runner root-owned regular/nlink=1 utilizável'
+    ROOT_READONLY_RUNNER=/usr/bin/true
+    ROOT_READONLY_RUNNER_SHA=$ABC
+fi
+
+ROOT_WRITABLE_INPUT=
+for root_writable_base in /usr/lib/systemd /usr/local /opt /etc; do
+    [ -d "$root_writable_base" ] || continue
+    ROOT_WRITABLE_INPUT=$(find "$root_writable_base" -xdev -type f -uid 0 \
+        -links 1 -perm /0022 -print -quit 2>/dev/null || true)
+    [ -z "$ROOT_WRITABLE_INPUT" ] || break
+done
+if [ -n "$ROOT_WRITABLE_INPUT" ]; then
+    if "$HELPER" sha256 "$ROOT_WRITABLE_INPUT" \
+        >"$TMP/bad/root-writable.log" 2>&1; then
+        fail 'input root-owned com 0022 foi aceito'
+    elif grep -Fq 'insumo permite escrita a grupo/outros' \
+        "$TMP/bad/root-writable.log"; then
+        ok 'input root-owned group/world-writable é recusado pela policy'
+    else
+        fail 'input root-owned writable falhou antes da guarda de modo'
+    fi
+else
+    ok 'host sem fixture root-owned writable; guarda de modo permanece ativa'
+fi
+
+make_runner() { # destino mode
+    destination=$1
+    mode=$2
+    helper_binary=$("$HELPER" sha256 "$HELPER")
+    if [ "$mode" = release ]; then authenticated=yes; runner_path=/usr/bin/bwrap; pin=$ABC
+    else authenticated=no; runner_path=development-host; pin=$EMPTY
+    fi
+    {
+        printf '%s\n' \
+            'LIVE_RUNNER_PROOF_FORMAT=1' \
+            'VARIANT=live-efi' \
+            "BUILD_MODE=$mode" \
+            "AUTHENTICATED=$authenticated" \
+            'RUNNER_ID=fixture-runner' \
+            "RUNNER_PATH=$runner_path" \
+            "RUNNER_SHA256=$pin" \
+            'BUILDER_ID=fixture-builder' \
+            "BUILDER_LOCK_SHA256=$pin" \
+            "BUILDER_ROOTFS_TREE_SHA256=$pin" \
+            "SOURCE_SNAPSHOT_SHA256=$pin" \
+            "BUILD_EFI_SOURCE_SHA256=$pin" \
+            "LIVE_LOCK_SOURCE_SHA256=$pin" \
+            "LIVE_LOCK_HELPER_SOURCE_SHA256=$pin" \
+            "LIVE_LOCK_HELPER_BINARY_SHA256=$helper_binary" \
+            "BUSYBOX_CONFIG_SHA256=$pin" \
+            "LINUX_TAR_SHA256=$pin" \
+            "BUSYBOX_TAR_SHA256=$pin" \
+            "E2FSPROGS_TAR_SHA256=$pin" \
+            "NCURSES_TAR_SHA256=$pin" \
+            "UTIL_LINUX_TAR_SHA256=$pin" \
+            "MINIPAX_BINARY_SHA256=$pin" \
+            "MINITRUE_BINARY_SHA256=$pin" \
+            "ZIG_TAR_SHA256=$pin" \
+            "ZIG_BINARY_SHA256=$pin" \
+            "MUSL_TREE_SHA256=$pin" \
+            'SOURCE_DATE_EPOCH=1704067200'
+    } > "$destination"
+    chmod 0600 "$destination"
+}
+
+descriptor() { # id -> materiality role artifact
+    case "$1" in
+        busybox-config) echo 'identity-only identity-only config' ;;
+        busybox-source|e2fsprogs-source|linux-source|live-lock-helper-source|ncurses-source|util-linux-source)
+            echo 'identity-only identity-only source' ;;
+        busybox-static|e2fsprogs-static|minipax-static|minitrue-static|util-linux-static)
+            echo 'material runtime payload' ;;
+        cargo-locks|minipax-crates|minitrue-crates|vendor-scrypt)
+            echo 'identity-only identity-only provenance' ;;
+        linux-config) echo 'identity-only identity-only config' ;;
+        live-lock-helper-static|toolchain-builder|toolchain-musl|toolchain-zig)
+            echo 'identity-only identity-only tool' ;;
+        ncurses-static|runtime-musl-static) echo 'material runtime linked-input' ;;
+        overlay-files) echo 'material runtime overlay' ;;
+        scripts-live) echo 'material runtime script' ;;
+        *) return 1 ;;
+    esac
+}
+
+IDS='busybox-config busybox-source busybox-static cargo-locks e2fsprogs-source e2fsprogs-static linux-config linux-source live-lock-helper-source live-lock-helper-static minipax-crates minipax-static minitrue-crates minitrue-static ncurses-source ncurses-static overlay-files runtime-musl-static scripts-live toolchain-builder toolchain-musl toolchain-zig util-linux-source util-linux-static vendor-scrypt'
+SCHEMA='ENTRY_SCHEMA=id|variant|status|materiality|role|artifact_kind|origin_kind|source_id|provenance|license|license_evidence_sha256|input_sha256|payload_sha256|config_sha256|contract_sha256|toolchain_id|toolchain_sha256'
+
+make_inputs() { # destino runner mode
+    destination=$1
+    runner=$2
+    mode=$3
+    runner_sha=$(sha256sum "$runner" | awk '{print $1}')
+    contract_hash=$EMPTY
+    [ "$mode" != release ] || contract_hash=$ABC
+    {
+        printf '%s\n' \
+            'LIVE_COMPONENT_INPUTS_FORMAT=1' \
+            'VARIANT=live-efi' \
+            "BUILD_MODE=$mode" \
+            "$([ "$mode" = release ] && echo RELEASE_INPUTS_COMPLETE=yes || echo RELEASE_INPUTS_COMPLETE=no)" \
+            'SOURCE_DATE_EPOCH=1704067200' \
+            "RUNNER_PROOF_SHA256=$runner_sha" \
+            "BUILD_CONTRACT_SHA256=$contract_hash" \
+            'ENTRY_COUNT=25' \
+            "$SCHEMA"
+        for id in $IDS; do
+            set -- $(descriptor "$id")
+            materiality=$1; role=$2; artifact=$3
+            if [ "$materiality" = material ]; then
+                status=produced; license=MIT; evidence=$ABC
+                input_hash=$ABC; payload_hash=$ABC
+            else
+                status=consumed; license=-; evidence=$EMPTY
+                input_hash=$EMPTY; payload_hash=$EMPTY
+            fi
+            printf 'ENTRY=%s|live-efi|%s|%s|%s|%s|repo|fixture:%s|fixture:%s|%s|%s|%s|%s|%s|%s|fixture-toolchain|%s\n' \
+                "$id" "$status" "$materiality" "$role" "$artifact" "$id" "$id" \
+                "$license" "$evidence" "$input_hash" "$payload_hash" "$EMPTY" "$contract_hash" "$EMPTY"
+        done
+    } > "$destination"
+    chmod 0600 "$destination"
+}
+
+make_newc() { # destino nome payload
+    destination=$1; name=$2; payload=$3
+    size=$(wc -c < "$payload" | tr -d ' ')
+    namesize=$((${#name} + 1))
+    : > "$destination"
+    printf '070701%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x' \
+        1 33188 0 0 1 0 "$size" 0 0 0 0 "$namesize" 0 >> "$destination"
+    printf '%s\0' "$name" >> "$destination"
+    pad=$(( (4 - ((110 + namesize) % 4)) % 4 ))
+    [ "$pad" -eq 0 ] || dd if=/dev/zero bs=1 count="$pad" status=none >> "$destination"
+    dd if="$payload" bs=65536 status=none >> "$destination"
+    pad=$(( (4 - (size % 4)) % 4 ))
+    [ "$pad" -eq 0 ] || dd if=/dev/zero bs=1 count="$pad" status=none >> "$destination"
+    trailer=TRAILER!!!; trailer_size=$((${#trailer} + 1))
+    printf '070701%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x' \
+        2 0 0 0 1 0 0 0 0 0 0 "$trailer_size" 0 >> "$destination"
+    printf '%s\0' "$trailer" >> "$destination"
+    pad=$(( (4 - ((110 + trailer_size) % 4)) % 4 ))
+    [ "$pad" -eq 0 ] || dd if=/dev/zero bs=1 count="$pad" status=none >> "$destination"
+    chmod 0600 "$destination"
+}
+
+make_runner "$TMP/a/runner" development
+make_runner "$TMP/b/runner" development
+make_inputs "$TMP/a/inputs" "$TMP/a/runner" development
+make_inputs "$TMP/b/inputs" "$TMP/b/runner" development
+"$HELPER" components "$TMP/a/inputs" "$TMP/a/components"
+"$HELPER" components "$TMP/b/inputs" "$TMP/b/components"
+if cmp -s "$TMP/a/components" "$TMP/b/components"; then
+    ok 'LIVE_COMPONENTS é canônico e determinista entre diretórios'
+else
+    fail 'LIVE_COMPONENTS variou com o diretório'
+fi
+if grep -Fqx 'ENTRY_COUNT=25' "$TMP/a/components" &&
+   grep -Fqx 'RELEASE_ELIGIBLE=no' "$TMP/a/components" &&
+   [ "$(wc -l < "$TMP/a/runner" | tr -d ' ')" -eq 27 ]; then
+    ok 'schema fecha 25 fatos, Proof 27 linhas e Components não se autopromove'
+else
+    fail 'schema/count/elegibilidade Components incorretos'
+fi
+
+# CPIO newc e ELF64 mínimo com o mesmo blob em .init.ramfs.
+make_newc "$TMP/a/initramfs.cpio" 'usr/share/distropica/LIVE_COMPONENTS' "$TMP/a/components"
+cp "$TMP/a/initramfs.cpio" "$TMP/a/decoded.cpio"
+cp "$TMP/a/initramfs.cpio" "$TMP/a/blob"
+chmod 0600 "$TMP/a/decoded.cpio" "$TMP/a/blob"
+cat > "$TMP/a/vmlinux.S" <<EOF
+.section .init.ramfs,"a"
+.global __initramfs_start
+__initramfs_start:
+.incbin "$TMP/a/blob"
+.global __initramfs_size
+.set __initramfs_size, . - __initramfs_start
+.section .text
+.global _start
+_start:
+  ret
+EOF
+cc -nostdlib -static -Wl,--build-id=none -o "$TMP/a/vmlinux" "$TMP/a/vmlinux.S"
+chmod 0600 "$TMP/a/vmlinux"
+cp "$TMP/a/vmlinux" "$TMP/a/efi"
+chmod 0600 "$TMP/a/efi"
+extractor_sha=$ABC
+"$HELPER" cpio-member "$TMP/a/initramfs.cpio" \
+    usr/share/distropica/LIVE_COMPONENTS "$TMP/a/components" >/dev/null
+"$HELPER" elf-initramfs "$TMP/a/vmlinux" "$TMP/a/blob" >/dev/null
+"$HELPER" embed-proof "$TMP/a/efi" "$TMP/a/vmlinux" "$TMP/a/blob" \
+    "$TMP/a/decoded.cpio" "$TMP/a/initramfs.cpio" "$TMP/a/components" \
+    "$extractor_sha" "$TMP/a/embed"
+"$HELPER" lock "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+    "$TMP/a/embed" 'GPL-2.0-only AND MIT' "$ABC" "$TMP/a/lock"
+"$HELPER" verify "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+    "$TMP/a/embed" "$TMP/a/lock"
+ok 'ELF→blob→CPIO→LIVE_COMPONENTS e LIVE_LOCK verificam byte a byte'
+
+cp "$TMP/a/initramfs.cpio" "$TMP/bad/disconnected.cpio"
+printf 1 | dd of="$TMP/bad/disconnected.cpio" bs=1 seek=53 \
+    conv=notrunc status=none
+cp "$TMP/bad/disconnected.cpio" "$TMP/bad/disconnected.decoded"
+chmod 0600 "$TMP/bad/disconnected.cpio" "$TMP/bad/disconnected.decoded"
+must_fail 'embed-proof recusa blob ELF diferente do CPIO com Components' \
+    "$HELPER" embed-proof "$TMP/a/efi" "$TMP/a/vmlinux" "$TMP/a/blob" \
+    "$TMP/bad/disconnected.decoded" "$TMP/bad/disconnected.cpio" \
+    "$TMP/a/components" "$ABC" "$TMP/bad/disconnected.embed"
+cp "$TMP/a/lock" "$TMP/bad/disconnected.lock"
+sed -i "s/^INITRAMFS_BLOB_SHA256=.*/INITRAMFS_BLOB_SHA256=$(printf '%064d' 0 | tr 0 b)/" \
+    "$TMP/bad/disconnected.lock"
+must_fail 'parser LIVE_LOCK recusa hashes blob/CPIO desconectados' \
+    "$HELPER" verify "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+    "$TMP/a/embed" "$TMP/bad/disconnected.lock"
+
+# Parser falha fechado para ausência/extra/licença/materialidade e proof frouxo.
+cp "$TMP/a/inputs" "$TMP/bad/missing"
+sed -i '/^ENTRY=vendor-scrypt|/d' "$TMP/bad/missing"
+must_fail 'ENTRY ausente é recusada' "$HELPER" components "$TMP/bad/missing" "$TMP/bad/o1"
+cp "$TMP/a/inputs" "$TMP/bad/extra"
+printf 'ENTRY=z-extra|live-efi|produced|material|runtime|payload|fixture|fixture:z|fixture:z|MIT|%s|%s|%s|%s|%s|fixture|%s\n' \
+    "$ABC" "$EMPTY" "$EMPTY" "$EMPTY" "$EMPTY" "$EMPTY" >> "$TMP/bad/extra"
+must_fail 'ENTRY extra é recusada' "$HELPER" components "$TMP/bad/extra" "$TMP/bad/o2"
+cp "$TMP/a/inputs" "$TMP/bad/material-license"
+sed -i 's/ENTRY=busybox-static|\([^|]*|\)\{8\}MIT|/ENTRY=busybox-static|\1-|/' "$TMP/bad/material-license" || true
+must_fail 'material com LICENSE=- é recusado' "$HELPER" components "$TMP/bad/material-license" "$TMP/bad/o3"
+cp "$TMP/a/inputs" "$TMP/bad/material-none"
+sed -i '/^ENTRY=busybox-static|/s/|MIT|/|NONE|/' "$TMP/bad/material-none"
+must_fail 'material com LICENSE=NONE é recusado' "$HELPER" components \
+    "$TMP/bad/material-none" "$TMP/bad/o3a"
+cp "$TMP/a/inputs" "$TMP/bad/material-empty-payload"
+sed -i "/^ENTRY=busybox-static|/s/|$ABC|$ABC|$ABC|/|$ABC|$ABC|$EMPTY|/" \
+    "$TMP/bad/material-empty-payload"
+must_fail 'material com payload hash vazio é recusado' "$HELPER" components \
+    "$TMP/bad/material-empty-payload" "$TMP/bad/o3b"
+cp "$TMP/a/inputs" "$TMP/bad/origin-kind"
+sed -i '/^ENTRY=busybox-config|/s/|repo|/|fixture|/' "$TMP/bad/origin-kind"
+must_fail 'origin_kind fora do enum é recusado' "$HELPER" components \
+    "$TMP/bad/origin-kind" "$TMP/bad/o3c"
+cp "$TMP/a/inputs" "$TMP/bad/material-status"
+sed -i '/^ENTRY=busybox-static|/s/|produced|material|/|measured|material|/' \
+    "$TMP/bad/material-status"
+must_fail 'material com status measured é recusado' "$HELPER" components \
+    "$TMP/bad/material-status" "$TMP/bad/o3status"
+cp "$TMP/a/inputs" "$TMP/bad/material-source-dash"
+sed -i '/^ENTRY=busybox-static|/s/|fixture:busybox-static|/|-|/' \
+    "$TMP/bad/material-source-dash"
+must_fail 'material com source_id=- é recusado' "$HELPER" components \
+    "$TMP/bad/material-source-dash" "$TMP/bad/o3source"
+cp "$TMP/a/inputs" "$TMP/bad/leading-zero"
+sed -i 's/^SOURCE_DATE_EPOCH=/SOURCE_DATE_EPOCH=0/' "$TMP/bad/leading-zero"
+must_fail 'decimal com zero à esquerda é recusado' "$HELPER" components \
+    "$TMP/bad/leading-zero" "$TMP/bad/o3d"
+cp "$TMP/a/runner" "$TMP/bad/runner-extra"
+printf 'EXTRA=x\n' >> "$TMP/bad/runner-extra"
+must_fail 'Runner Proof com campo extra é recusado' "$HELPER" lock "$TMP/a/efi" \
+    "$TMP/a/components" "$TMP/bad/runner-extra" "$TMP/a/embed" MIT "$ABC" "$TMP/bad/o4"
+cp "$TMP/a/runner" "$TMP/bad/runner-pin"
+sed -i "s/^RUNNER_SHA256=.*/RUNNER_SHA256=${ABC%?}/" "$TMP/bad/runner-pin"
+must_fail 'Runner Proof com hash não canônico é recusado' "$HELPER" verify-runner \
+    "$TMP/bad/runner-pin"
+make_runner "$TMP/bad/runner-release" release
+make_inputs "$TMP/bad/release-inputs" "$TMP/bad/runner-release" release
+cp "$TMP/bad/release-inputs" "$TMP/bad/release-empty-contract"
+sed -i "s/^BUILD_CONTRACT_SHA256=.*/BUILD_CONTRACT_SHA256=$EMPTY/" \
+    "$TMP/bad/release-empty-contract"
+must_fail 'release recusa BUILD_CONTRACT_SHA256 vazio' "$HELPER" components \
+    "$TMP/bad/release-empty-contract" "$TMP/bad/o3contract"
+cp "$TMP/bad/release-inputs" "$TMP/bad/release-development-prebuilt"
+sed -i '/^ENTRY=busybox-static|/s/|repo|/|development-prebuilt|/' \
+    "$TMP/bad/release-development-prebuilt"
+must_fail 'release recusa origin_kind development-prebuilt' "$HELPER" components \
+    "$TMP/bad/release-development-prebuilt" "$TMP/bad/o3origin"
+"$HELPER" components "$TMP/bad/release-inputs" "$TMP/bad/release-components"
+cp "$TMP/bad/runner-release" "$TMP/bad/runner-forged-yes"
+sed -i "s/^RUNNER_SHA256=.*/RUNNER_SHA256=$(printf '%064d' 0 | tr 0 b)/" \
+    "$TMP/bad/runner-forged-yes"
+must_fail 'editar proof mantendo AUTHENTICATED=yes não promove Components presos' \
+    "$HELPER" lock "$TMP/a/efi" "$TMP/bad/release-components" \
+    "$TMP/bad/runner-forged-yes" "$TMP/a/embed" MIT "$ABC" "$TMP/bad/o4b"
+must_fail 'LICENSE de payload com whitespace externo é recusada' "$HELPER" lock \
+    "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" "$TMP/a/embed" \
+    ' MIT' "$ABC" "$TMP/bad/o4c"
+
+# Symlink/hardlink/ancestral e parent gravável.
+ln -s inputs "$TMP/a/inputs-link"
+must_fail 'symlink de input é recusado' "$HELPER" components "$TMP/a/inputs-link" "$TMP/bad/o5"
+cp "$TMP/a/inputs" "$TMP/bad/hard-source"
+ln "$TMP/bad/hard-source" "$TMP/bad/hard-input"
+must_fail 'hardlink de input é recusado' "$HELPER" components "$TMP/bad/hard-input" "$TMP/bad/o6"
+mkdir "$TMP/bad/real-parent"
+chmod 0700 "$TMP/bad/real-parent"
+cp "$TMP/a/inputs" "$TMP/bad/real-parent/inputs"
+ln -s real-parent "$TMP/bad/alias-parent"
+must_fail 'ancestral symlink é recusado' "$HELPER" components \
+    "$TMP/bad/alias-parent/inputs" "$TMP/bad/o7"
+mkdir "$TMP/bad/public-parent"
+chmod 0775 "$TMP/bad/public-parent"
+must_fail 'parent 0775 é recusado antes de criar output' "$HELPER" components \
+    "$TMP/a/inputs" "$TMP/bad/public-parent/components"
+mkdir "$TMP/bad/early-path"
+printf '#!/bin/sh\nprintf touched > "$LIVE_EARLY_MARKER"\nexit 99\n' > "$TMP/bad/early-path/cc"
+chmod 0700 "$TMP/bad/early-path/cc"
+if LIVE_EARLY_MARKER="$TMP/bad/early-marker" \
+   PATH="$TMP/bad/early-path:$PATH" \
+   "$BUILDER" --mode development \
+       --output "$TMP/bad/public-parent/BOOTX64.EFI" \
+       >"$TMP/bad/early-build.log" 2>&1; then
+    fail 'build-efi development aceitou parent 0775'
+elif [ -e "$TMP/bad/early-marker" ]; then
+    fail 'build-efi chamou compilador antes de recusar parent 0775'
+else
+    ok 'build-efi recusa parent 0775 antes de compilação/download'
+fi
+
+# Tree hash prende modo/nlink/symlink, é independente do caminho e detecta corrida.
+printf x > "$TMP/tree-a/file"; printf x > "$TMP/tree-b/file"
+ln -s 'target:with|delimiters' "$TMP/tree-a/link"
+ln -s 'target:with|delimiters' "$TMP/tree-b/link"
+chmod 0600 "$TMP/tree-a/file" "$TMP/tree-b/file"
+tree_a=$("$HELPER" tree-hash "$TMP/tree-a")
+tree_b=$("$HELPER" tree-hash "$TMP/tree-b")
+[ "$tree_a" = "$tree_b" ] && ok 'tree-hash determinista e independente do path' || fail 'tree-hash variou por path'
+chmod 0400 "$TMP/tree-b/file"
+[ "$tree_a" != "$("$HELPER" tree-hash "$TMP/tree-b")" ] && ok 'tree-hash prende modo' || fail 'tree-hash não prendeu modo'
+chmod 0600 "$TMP/tree-b/file"
+ln "$TMP/tree-b/file" "$TMP/tree-b/hard"
+[ "$tree_a" != "$("$HELPER" tree-hash "$TMP/tree-b")" ] && ok 'tree-hash prende nlink/entrada' || fail 'tree-hash não prendeu hardlink'
+unlink "$TMP/tree-b/hard"
+ln -sfn different "$TMP/tree-b/link"
+[ "$tree_a" != "$("$HELPER" tree-hash "$TMP/tree-b")" ] && ok 'tree-hash prende alvo de symlink' || fail 'tree-hash não prendeu symlink'
+mkfifo "$TMP/tree-b/fifo"
+must_fail 'tree-hash recusa nó especial' "$HELPER" tree-hash "$TMP/tree-b"
+unlink "$TMP/tree-b/fifo"
+dd if=/dev/zero of="$TMP/tree-b/race" bs=1M count=16 status=none
+chmod 0600 "$TMP/tree-b/race"
+(
+    while :; do chmod 0400 "$TMP/tree-b/race" 2>/dev/null || exit; chmod 0600 "$TMP/tree-b/race" 2>/dev/null || exit; done
+) & race_pid=$!
+if "$HELPER" tree-hash "$TMP/tree-b" >"$TMP/bad/race.log" 2>&1; then
+    fail 'tree-hash aceitou mutação concorrente'
+else
+    ok 'tree-hash detecta mutação concorrente pre/post'
+fi
+kill "$race_pid" 2>/dev/null || true
+wait "$race_pid" 2>/dev/null || true
+
+mkdir "$TMP/tree-link-race"
+chmod 0700 "$TMP/tree-link-race"
+dd if=/dev/zero of="$TMP/tree-link-race/aa-pad" bs=1M count=32 status=none
+chmod 0600 "$TMP/tree-link-race/aa-pad"
+ln -s target-a "$TMP/tree-link-race/zz-link"
+(
+    while :; do
+        ln -sfn target-a "$TMP/tree-link-race/zz-link" 2>/dev/null || exit
+        ln -sfn target-b "$TMP/tree-link-race/zz-link" 2>/dev/null || exit
+    done
+) & link_race_pid=$!
+if "$HELPER" tree-hash "$TMP/tree-link-race" >"$TMP/bad/link-race.log" 2>&1; then
+    fail 'tree-hash aceitou troca concorrente do alvo de symlink'
+else
+    ok 'tree-hash fecha corrida do alvo de symlink'
+fi
+kill "$link_race_pid" 2>/dev/null || true
+wait "$link_race_pid" 2>/dev/null || true
+
+# CPIO/ELF adversariais e truncamentos aleatórios leves.
+cp "$TMP/a/initramfs.cpio" "$TMP/bad/cpio-magic"
+printf X | dd of="$TMP/bad/cpio-magic" bs=1 seek=0 conv=notrunc status=none
+must_fail 'CPIO com magic adulterado é recusado' "$HELPER" cpio-member \
+    "$TMP/bad/cpio-magic" usr/share/distropica/LIVE_COMPONENTS "$TMP/a/components"
+cp "$TMP/a/initramfs.cpio" "$TMP/bad/cpio-crc"
+printf 2 | dd of="$TMP/bad/cpio-crc" bs=1 seek=5 conv=notrunc status=none
+must_fail 'CPIO 070702 sem validação CRC é recusado' "$HELPER" cpio-member \
+    "$TMP/bad/cpio-crc" usr/share/distropica/LIVE_COMPONENTS "$TMP/a/components"
+head -c 109 "$TMP/a/initramfs.cpio" > "$TMP/bad/cpio-short"
+must_fail 'CPIO truncado é recusado' "$HELPER" cpio-member \
+    "$TMP/bad/cpio-short" usr/share/distropica/LIVE_COMPONENTS "$TMP/a/components"
+cp "$TMP/a/vmlinux" "$TMP/bad/elf-magic"
+printf X | dd of="$TMP/bad/elf-magic" bs=1 seek=0 conv=notrunc status=none
+must_fail 'ELF com magic adulterado é recusado' "$HELPER" elf-initramfs "$TMP/bad/elf-magic" "$TMP/a/blob"
+cp "$TMP/a/blob" "$TMP/bad/blob-tamper"
+printf X >> "$TMP/bad/blob-tamper"
+must_fail 'blob divergente do intervalo ELF é recusado' "$HELPER" elf-initramfs "$TMP/a/vmlinux" "$TMP/bad/blob-tamper"
+i=0
+while [ "$i" -lt 16 ]; do
+    head -c "$i" /dev/urandom > "$TMP/bad/fuzz-$i"
+    chmod 0600 "$TMP/bad/fuzz-$i"
+    "$HELPER" elf-initramfs "$TMP/bad/fuzz-$i" "$TMP/a/blob" >/dev/null 2>&1 &&
+        fail "ELF fuzz curto $i foi aceito"
+    "$HELPER" cpio-member "$TMP/bad/fuzz-$i" x "$TMP/a/abc" >/dev/null 2>&1 &&
+        fail "CPIO fuzz curto $i foi aceito"
+    i=$((i + 1))
+done
+ok 'fixtures ELF/CPIO truncadas/fuzz leve falham fechadas'
+
+# PATH malicioso não participa de nenhuma operação do helper.
+mkdir "$TMP/bad/path"
+for tool in sha256sum stat readlink find sort ln cp sync; do
+    printf '#!/bin/sh\nexit 99\n' > "$TMP/bad/path/$tool"
+    chmod 0700 "$TMP/bad/path/$tool"
+done
+if PATH="$TMP/bad/path" "$HELPER" sha256 "$TMP/a/abc" | grep -Fqx "$ABC"; then
+    ok 'helper ignora PATH host malicioso'
+else
+    fail 'helper dependeu do PATH host'
+fi
+
+# O shell `live-lock` não contém um segundo parser: só faz exec absoluto e o
+# processo nativo confere o pin dos bytes realmente executados.
+WRAPPER=$REPO/bootstrap/live/live-lock
+helper_pin=$("$HELPER" sha256 "$HELPER")
+if PATH="$TMP/bad/path" "$WRAPPER" --helper "$HELPER" \
+    --helper-sha256 "$helper_pin" sha256 "$TMP/a/abc" | grep -Fqx "$ABC"; then
+    ok 'wrapper mínimo despacha helper absoluto/autopinado sem PATH'
+else
+    fail 'wrapper mínimo não despachou helper pinado'
+fi
+must_fail 'wrapper recusa pin divergente do helper executado' "$WRAPPER" \
+    --helper "$HELPER" --helper-sha256 "$ABC" sha256 "$TMP/a/abc"
+must_fail 'wrapper recusa interface/schema legado' "$WRAPPER" components \
+    "$TMP/a/inputs" "$TMP/bad/wrapper-output"
+if grep -Eq 'LIVE_COMPONENTS_FORMAT=|LIVE_LOCK_FORMAT=|ENTRY_SCHEMA=' "$WRAPPER"; then
+    fail 'wrapper ainda contém schema concorrente'
+else
+    ok 'schema Components/Lock existe somente no helper C'
+fi
+
+# SIGKILL real em cada mutação/durabilidade; retry converge e limpa journal.
+FAILPOINTS='after-journal-mkdir after-journal-create-parent-fsync
+after-owner-file-fsync after-owner-dir-fsync after-request-file-fsync after-request-dir-fsync
+after-stage-efi-file-fsync after-stage-efi-dir-fsync
+after-stage-components-file-fsync after-stage-components-dir-fsync
+after-stage-runner-proof-file-fsync after-stage-runner-proof-dir-fsync
+after-stage-lock-file-fsync after-stage-lock-dir-fsync
+after-ready-file-fsync after-ready-dir-fsync
+after-components-link after-runner-proof-link after-lock-link after-sidecars-parent-fsync
+after-efi-link after-efi-parent-fsync after-committed-file-fsync after-committed-dir-fsync
+after-cleanup-efi-unlink after-cleanup-efi-fsync
+after-cleanup-components-unlink after-cleanup-components-fsync
+after-cleanup-runner-proof-unlink after-cleanup-runner-proof-fsync
+after-cleanup-lock-unlink after-cleanup-lock-fsync
+after-cleanup-ready-unlink after-cleanup-ready-fsync
+after-cleanup-committed-unlink after-cleanup-committed-fsync
+after-cleanup-request-unlink after-cleanup-request-fsync
+after-cleanup-owner-unlink after-cleanup-owner-fsync
+after-journal-rmdir after-journal-parent-fsync'
+for journal_node in OWNER REQUEST EFI COMPONENTS RUNNER_PROOF LOCK READY COMMITTED; do
+    for journal_phase in temp-create temp-mid-write \
+        temp-complete-before-fsync temp-rename; do
+        FAILPOINTS="$FAILPOINTS after-$journal_node-$journal_phase"
+    done
+done
+index=0
+for point in $FAILPOINTS; do
+    directory=$TMP/kill-$index
+    mkdir "$directory"; chmod 0700 "$directory"
+    set +e
+    "$HELPER" publish "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+        "$TMP/a/embed" "$TMP/a/lock" "$directory/BOOTX64.EFI" \
+        --failpoint "$point" >/dev/null 2>&1
+    killed_status=$?
+    set -e
+    if [ "$killed_status" -ne 137 ]; then
+        fail "failpoint $point não terminou por SIGKILL (status $killed_status)"
+    fi
+    if ! "$HELPER" publish "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+        "$TMP/a/embed" "$TMP/a/lock" "$directory/BOOTX64.EFI"; then
+        fail "retry não reconciliou $point"
+    elif [ -e "$directory/.BOOTX64.EFI.live-publish" ]; then
+        fail "retry deixou journal após $point"
+    elif [ "$(stat -c %h "$directory/BOOTX64.EFI")" -ne 1 ] ||
+         [ "$(stat -c %h "$directory/BOOTX64.EFI.live-components")" -ne 1 ] ||
+         [ "$(stat -c %h "$directory/BOOTX64.EFI.live-runner-proof")" -ne 1 ] ||
+         [ "$(stat -c %h "$directory/BOOTX64.EFI.live-lock")" -ne 1 ]; then
+        fail "retry deixou hardlink após $point"
+    fi
+    index=$((index + 1))
+done
+ok 'SIGKILL em cada link/fsync/unlink converge por journal persistente'
+
+# Retry idempotente e REQUEST divergente.
+last=$TMP/kill-0/BOOTX64.EFI
+"$HELPER" publish "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+    "$TMP/a/embed" "$TMP/a/lock" "$last"
+ok 'publicação completa é idempotente sem sobrescrever'
+swap=$TMP/swap
+mkdir "$swap"; chmod 0700 "$swap"
+set +e
+"$HELPER" publish "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+    "$TMP/a/embed" "$TMP/a/lock" "$swap/BOOTX64.EFI" \
+    --failpoint after-ready-dir-fsync >/dev/null 2>&1
+set -e
+mv "$swap/.BOOTX64.EFI.live-publish" "$swap/journal-real"
+ln -s journal-real "$swap/.BOOTX64.EFI.live-publish"
+must_fail 'swap do journal para symlink é recusado' "$HELPER" publish \
+    "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" "$TMP/a/embed" \
+    "$TMP/a/lock" "$swap/BOOTX64.EFI"
+
+# Staging/REQUEST adulterados nunca são adotados no retry.
+stage_swap=$TMP/stage-swap
+mkdir "$stage_swap"; chmod 0700 "$stage_swap"
+set +e
+"$HELPER" publish "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+    "$TMP/a/embed" "$TMP/a/lock" "$stage_swap/BOOTX64.EFI" \
+    --failpoint after-stage-components-dir-fsync >/dev/null 2>&1
+set -e
+mv "$stage_swap/.BOOTX64.EFI.live-publish/COMPONENTS" \
+   "$stage_swap/.BOOTX64.EFI.live-publish/COMPONENTS.real"
+ln -s COMPONENTS.real "$stage_swap/.BOOTX64.EFI.live-publish/COMPONENTS"
+must_fail 'swap de stage por symlink é recusado no retry' "$HELPER" publish \
+    "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" "$TMP/a/embed" \
+    "$TMP/a/lock" "$stage_swap/BOOTX64.EFI"
+
+request_swap=$TMP/request-swap
+mkdir "$request_swap"; chmod 0700 "$request_swap"
+set +e
+"$HELPER" publish "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+    "$TMP/a/embed" "$TMP/a/lock" "$request_swap/BOOTX64.EFI" \
+    --failpoint after-request-dir-fsync >/dev/null 2>&1
+set -e
+printf X | dd of="$request_swap/.BOOTX64.EFI.live-publish/REQUEST" \
+    bs=1 seek=32 conv=notrunc status=none
+must_fail 'REQUEST adulterado é recusado no retry' "$HELPER" publish \
+    "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" "$TMP/a/embed" \
+    "$TMP/a/lock" "$request_swap/BOOTX64.EFI"
+
+foreign_control=$TMP/foreign-control
+mkdir "$foreign_control"; chmod 0700 "$foreign_control"
+set +e
+"$HELPER" publish "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+    "$TMP/a/embed" "$TMP/a/lock" "$foreign_control/BOOTX64.EFI" \
+    --failpoint after-journal-create-parent-fsync >/dev/null 2>&1
+set -e
+printf alien > "$foreign_control/.BOOTX64.EFI.live-publish/ALIEN"
+chmod 0600 "$foreign_control/.BOOTX64.EFI.live-publish/ALIEN"
+must_fail 'controle estrangeiro no journal é recusado antes de publicar' \
+    "$HELPER" publish "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+    "$TMP/a/embed" "$TMP/a/lock" "$foreign_control/BOOTX64.EFI"
+
+partial_control=$TMP/partial-control
+mkdir "$partial_control"; chmod 0700 "$partial_control"
+set +e
+"$HELPER" publish "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+    "$TMP/a/embed" "$TMP/a/lock" "$partial_control/BOOTX64.EFI" \
+    --failpoint after-OWNER-temp-create >/dev/null 2>&1
+set -e
+rm "$partial_control/.BOOTX64.EFI.live-publish/.OWNER.tmp"
+ln -s /dev/null "$partial_control/.BOOTX64.EFI.live-publish/.OWNER.tmp"
+must_fail 'temporário parcial trocado por symlink é recusado' "$HELPER" publish \
+    "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" "$TMP/a/embed" \
+    "$TMP/a/lock" "$partial_control/BOOTX64.EFI"
+
+partial_canonical=$TMP/partial-canonical
+mkdir "$partial_canonical"; chmod 0700 "$partial_canonical"
+set +e
+"$HELPER" publish "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+    "$TMP/a/embed" "$TMP/a/lock" "$partial_canonical/BOOTX64.EFI" \
+    --failpoint after-journal-create-parent-fsync >/dev/null 2>&1
+set -e
+printf partial > "$partial_canonical/.BOOTX64.EFI.live-publish/OWNER"
+chmod 0600 "$partial_canonical/.BOOTX64.EFI.live-publish/OWNER"
+must_fail 'controle canônico parcial/estrangeiro é recusado' "$HELPER" publish \
+    "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" "$TMP/a/embed" \
+    "$TMP/a/lock" "$partial_canonical/BOOTX64.EFI"
+
+# Failpoints próprios da recuperação: journal reaberto, quarteto reconciliado
+# e cauda vazia depois do último unlink persistente.
+recovery_case() { # nome primeiro-ponto ponto-de-retry
+    recovery_name=$1; first_point=$2; retry_point=$3
+    recovery_dir=$TMP/recovery-$recovery_name
+    mkdir "$recovery_dir"; chmod 0700 "$recovery_dir"
+    set +e
+    "$HELPER" publish "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+        "$TMP/a/embed" "$TMP/a/lock" "$recovery_dir/BOOTX64.EFI" \
+        --failpoint "$first_point" >/dev/null 2>&1
+    first_status=$?
+    "$HELPER" publish "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+        "$TMP/a/embed" "$TMP/a/lock" "$recovery_dir/BOOTX64.EFI" \
+        --failpoint "$retry_point" >/dev/null 2>&1
+    retry_status=$?
+    set -e
+    if [ "$first_status" -ne 137 ] || [ "$retry_status" -ne 137 ]; then
+        fail "failpoint de recuperação $recovery_name não deu SIGKILL real"
+        return
+    fi
+    if "$HELPER" publish "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+        "$TMP/a/embed" "$TMP/a/lock" "$recovery_dir/BOOTX64.EFI" &&
+       [ ! -e "$recovery_dir/.BOOTX64.EFI.live-publish" ]; then
+        ok "recuperação persiste $retry_point e converge"
+    else
+        fail "recuperação não convergiu após $retry_point"
+    fi
+}
+recovery_case reopen-parent after-journal-mkdir after-journal-reopen-parent-fsync
+recovery_case reopen-dir after-journal-create-parent-fsync after-journal-reopen-dir-fsync
+recovery_case reconcile after-efi-link after-reconcile-parent-fsync
+recovery_case terminal-rmdir after-cleanup-committed-unlink after-terminal-journal-rmdir
+recovery_case terminal-fsync after-cleanup-committed-unlink after-terminal-journal-parent-fsync
+
+# Renomear o pathname do pai durante uma publicação em curso não muda os fds
+# já autenticados. O replacement recebe um sentinela e não pode ser limpo.
+parent_swap_base=$TMP/parent-swap
+mkdir "$parent_swap_base" "$parent_swap_base/publish"
+chmod 0700 "$parent_swap_base" "$parent_swap_base/publish"
+"$HELPER" publish "$TMP/a/efi" "$TMP/a/components" "$TMP/a/runner" \
+    "$TMP/a/embed" "$TMP/a/lock" "$parent_swap_base/publish/BOOTX64.EFI" \
+    --failpoint stop:after-journal-create-parent-fsync \
+    >"$TMP/bad/parent-swap.log" 2>&1 &
+parent_swap_pid=$!
+parent_stopped=no
+parent_wait=0
+while [ "$parent_wait" -lt 500 ]; do
+    if [ -r "/proc/$parent_swap_pid/status" ] &&
+       [ "$(sed -n 's/^State:[[:space:]]*\([A-Z]\).*/\1/p' "/proc/$parent_swap_pid/status")" = T ]; then
+        parent_stopped=yes
+        break
+    fi
+    kill -0 "$parent_swap_pid" 2>/dev/null || break
+    sleep 0.01
+    parent_wait=$((parent_wait + 1))
+done
+if [ "$parent_stopped" != yes ]; then
+    fail 'pausepoint não parou publicação para parent-swap'
+    kill "$parent_swap_pid" 2>/dev/null || true
+    wait "$parent_swap_pid" 2>/dev/null || true
+else
+    mv "$parent_swap_base/publish" "$parent_swap_base/publish-original"
+    mkdir "$parent_swap_base/publish"; chmod 0700 "$parent_swap_base/publish"
+    printf replacement > "$parent_swap_base/publish/SENTINEL"
+    chmod 0600 "$parent_swap_base/publish/SENTINEL"
+    kill -CONT "$parent_swap_pid"
+    if wait "$parent_swap_pid" &&
+       [ -f "$parent_swap_base/publish-original/BOOTX64.EFI" ] &&
+       [ "$(find "$parent_swap_base/publish" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" -eq 1 ] &&
+       [ "$(cat "$parent_swap_base/publish/SENTINEL")" = replacement ]; then
+        ok 'parent-swap mantém publicação/fsync/cleanup no fd original'
+    else
+        fail 'parent-swap tocou replacement ou abandonou o pai original'
+    fi
+fi
+
+# Launcher release completo, sem build pesado: um runner externo de fixture
+# simula os binds das duas chamadas de bwrap. A primeira mede pins e compila o
+# helper; a segunda executa o build-efi snapshot real até depois de
+# parser+validate_release_inner+dispatcher, prova que o probe não gerou saída
+# e só então entrega um EFI/manifesto mínimos já verificados ao publisher real.
+OUTER=$TMP/outer
+mkdir "$OUTER" "$OUTER/rootfs" "$OUTER/template" "$OUTER/inputs" \
+    "$OUTER/out-1" "$OUTER/out-2" "$OUTER/out-bad" \
+    "$OUTER/malicious-path"
+chmod 0700 "$OUTER" "$OUTER/rootfs" "$OUTER/template" "$OUTER/inputs" \
+    "$OUTER/out-1" "$OUTER/out-2" "$OUTER/out-bad" \
+    "$OUTER/malicious-path"
+OUTER_BUILDER=$OUTER/build-efi
+cp "$BUILDER" "$OUTER_BUILDER"
+chmod 0700 "$OUTER_BUILDER"
+
+for outer_input in linux.tar.xz busybox.tar.bz2 e2fsprogs.tar.xz \
+    ncurses.tar.gz util-linux.tar.xz minipax minitrue zig.tar.xz \
+    source.snapshot license-evidence; do
+    printf '%s\n' "$outer_input" > "$OUTER/inputs/$outer_input"
+    chmod 0600 "$OUTER/inputs/$outer_input"
+done
+
+FAKE_RUNNER=$OUTER/fake-bwrap
+cat > "$FAKE_RUNNER" <<'EOF'
+#!/bin/sh
+set -eu
+: "${FIXTURE_WORK:?}" "${FIXTURE_LOG:?}" "${FIXTURE_CC:?}"
+: "${FIXTURE_CHMOD:?}" "${FIXTURE_MKDIR:?}" "${FIXTURE_CP:?}"
+: "${FIXTURE_SOURCE:?}" "${FIXTURE_HELPER:?}" "${FIXTURE_PROOF:?}"
+: "${FIXTURE_SNAPSHOT:?}" "${FIXTURE_RUNNER:?}" "${FIXTURE_TEMPLATE:?}"
+: "${FIXTURE_BUILDER:?}" "${FIXTURE_WRAPPER:?}" "${FIXTURE_CONFIG:?}"
+: "${FIXTURE_MV:?}" "${FIXTURE_RM:?}" "${FIXTURE_GREP:?}"
+
+get_setenv() {
+    fixture_key=$1
+    shift
+    while [ "$#" -ge 3 ]; do
+        if [ "$1" = --setenv ] && [ "$2" = "$fixture_key" ]; then
+            printf '%s\n' "$3"
+            return 0
+        fi
+        shift
+    done
+    return 1
+}
+
+fixture_phase=1
+[ ! -e "$FIXTURE_LOG.1" ] || fixture_phase=2
+fixture_marker_expected=$(get_setenv LIVE_WORK_MARKER_SHA "$@")
+fixture_request_expected=$(get_setenv LIVE_WORK_REQUEST_SHA "$@")
+if [ "$fixture_phase" -eq 1 ]; then
+    case "${FIXTURE_MARKER_MUTATION:-}" in
+        '') ;;
+        missing) "$FIXTURE_RM" -f "$FIXTURE_WORK/.distropica-live-work" ;;
+        tamper) printf tampered >> "$FIXTURE_WORK/.distropica-live-work" ;;
+        *) exit 1 ;;
+    esac
+    fixture_work_state=pristine
+else
+    fixture_work_state=populated
+fi
+"$FIXTURE_HELPER" work-verify "$FIXTURE_WORK" "$fixture_marker_expected" \
+    "$fixture_request_expected" "$FIXTURE_PROOF_SHA" "$fixture_work_state" \
+    >/dev/null
+{
+    printf 'ENV_PATH=%s\n' "$PATH"
+    for fixture_arg do printf 'ARG=%s\n' "$fixture_arg"; done
+} > "$FIXTURE_LOG.$fixture_phase"
+
+case "$fixture_phase" in
+    1)
+        fixture_proof_expected=$(get_setenv LIVE_PROOF_SHA "$@")
+        fixture_snapshot_expected=$(get_setenv LIVE_SNAPSHOT_SHA "$@")
+        fixture_runner_expected=$(get_setenv LIVE_RUNNER_SHA "$@")
+        [ "$("$FIXTURE_HELPER" sha256 "$FIXTURE_PROOF")" = "$fixture_proof_expected" ]
+        [ "$("$FIXTURE_HELPER" sha256 "$FIXTURE_SNAPSHOT")" = "$fixture_snapshot_expected" ]
+        [ "$("$FIXTURE_HELPER" sha256 "$FIXTURE_RUNNER")" = "$fixture_runner_expected" ]
+        "$FIXTURE_HELPER" verify-runner "$FIXTURE_PROOF"
+        if [ "${FIXTURE_MUTATE_ROOTFS:-no}" = yes ]; then
+            printf mutated > "$FIXTURE_ROOTFS/mutated-after-preflight"
+            "$FIXTURE_CHMOD" 0600 "$FIXTURE_ROOTFS/mutated-after-preflight"
+        fi
+        [ "$("$FIXTURE_HELPER" tree-hash "$FIXTURE_ROOTFS")" = "$FIXTURE_ROOT_SHA" ]
+        "$FIXTURE_MKDIR" -p "$FIXTURE_WORK/home" "$FIXTURE_WORK/tmp" \
+            "$FIXTURE_WORK/inner-output" \
+            "$FIXTURE_WORK/source/bootstrap/live"
+        "$FIXTURE_CP" "$FIXTURE_BUILDER" \
+            "$FIXTURE_WORK/source/bootstrap/live/build-efi"
+        "$FIXTURE_CP" "$FIXTURE_SOURCE" \
+            "$FIXTURE_WORK/source/bootstrap/live/live-lock-helper.c"
+        "$FIXTURE_CP" "$FIXTURE_WRAPPER" \
+            "$FIXTURE_WORK/source/bootstrap/live/live-lock"
+        "$FIXTURE_CP" "$FIXTURE_CONFIG" \
+            "$FIXTURE_WORK/source/bootstrap/live/busybox-1.35.0.config"
+        "$FIXTURE_CHMOD" 0700 \
+            "$FIXTURE_WORK/source/bootstrap/live/build-efi" \
+            "$FIXTURE_WORK/source/bootstrap/live/live-lock"
+        PATH=/usr/bin:/bin "$FIXTURE_CC" -std=c17 -O2 -Wall -Wextra -Werror \
+            -o "$FIXTURE_WORK/bootstrap-helper" "$FIXTURE_SOURCE"
+        "$FIXTURE_CHMOD" 0700 "$FIXTURE_WORK/bootstrap-helper"
+        if [ "${FIXTURE_BAD_REBUILD:-no}" = yes ]; then
+            printf tampered >> "$FIXTURE_WORK/bootstrap-helper"
+        fi
+        [ "$("$FIXTURE_HELPER" sha256 "$FIXTURE_WORK/bootstrap-helper")" = \
+          "$FIXTURE_HELPER_PIN" ]
+        if [ "${FIXTURE_SWAP_WORK:-no}" = yes ]; then
+            fixture_original=$FIXTURE_WORK.swap-original
+            [ ! -e "$fixture_original" ]
+            "$FIXTURE_MV" "$FIXTURE_WORK" "$fixture_original"
+            "$FIXTURE_MKDIR" "$FIXTURE_WORK"
+            "$FIXTURE_CHMOD" 0700 "$FIXTURE_WORK"
+            "$FIXTURE_CP" -a "$fixture_original/." "$FIXTURE_WORK/"
+        fi
+        ;;
+    2)
+        [ "$("$FIXTURE_HELPER" tree-hash "$FIXTURE_ROOTFS")" = "$FIXTURE_ROOT_SHA" ]
+        fixture_dispatch_result=success
+        [ "${FIXTURE_FINAL_COMMAND_FAIL:-no}" != yes ] || \
+            fixture_dispatch_result=failure
+        fixture_inner_output=$(PATH=/usr/bin:/bin \
+            DISTROPICA_LIVE_TEST_DISPATCH_ONLY=1 \
+            DISTROPICA_LIVE_TEST_ROOTFS_VIEW="$FIXTURE_ROOTFS" \
+            DISTROPICA_LIVE_TEST_DISPATCH_RESULT="$fixture_dispatch_result" \
+            "$FIXTURE_WORK/source/bootstrap/live/build-efi" \
+            --mode release --release-inner \
+            --output "$FIXTURE_WORK/inner-output/BOOTX64.EFI" \
+            --work "$FIXTURE_WORK" \
+            --work-request-sha256 "$fixture_request_expected" \
+            --work-marker-sha256 "$fixture_marker_expected" \
+            --linux-tar "$FIXTURE_LINUX" --busybox-tar "$FIXTURE_BUSYBOX" \
+            --e2fsprogs-tar "$FIXTURE_E2FS" \
+            --ncurses-tar "$FIXTURE_NCURSES" \
+            --util-linux-tar "$FIXTURE_UTIL" \
+            --minipax "$FIXTURE_MINIPAX" --minitrue "$FIXTURE_MINITRUE" \
+            --minipax-sha256 "$FIXTURE_MINIPAX_SHA" \
+            --minitrue-sha256 "$FIXTURE_MINITRUE_SHA" \
+            --zig-tar "$FIXTURE_ZIG" \
+            --zig-tar-sha256 "$FIXTURE_ZIG_TAR_SHA" \
+            --zig-sha256 "$FIXTURE_ZIG_SHA" \
+            --musl-tree-sha256 "$FIXTURE_MUSL_SHA" \
+            --builder-lock "$FIXTURE_BUILDER_LOCK" \
+            --builder-lock-sha256 "$FIXTURE_BUILDER_LOCK_SHA" \
+            --builder-id fixture-builder \
+            --runner "$FIXTURE_RUNNER" --runner-sha256 "$FIXTURE_RUNNER_SHA" \
+            --runner-proof "$FIXTURE_PROOF" \
+            --runner-proof-sha256 "$FIXTURE_PROOF_SHA" \
+            --source-snapshot "$FIXTURE_SNAPSHOT" \
+            --source-snapshot-sha256 "$FIXTURE_SNAPSHOT_SHA" \
+            --license-evidence "$FIXTURE_LICENSE" \
+            --license-evidence-sha256 "$FIXTURE_LICENSE_SHA" \
+            --live-lock-helper "$FIXTURE_WORK/bootstrap-helper" \
+            --live-lock-helper-sha256 "$FIXTURE_HELPER_PIN" \
+            --source-date-epoch 1704067200 --jobs 1 --keep-work)
+        printf '%s\n' "$fixture_inner_output" | "$FIXTURE_GREP" -Fqx \
+            'DISTROPICA_LIVE_INNER_DISPATCH_VALIDATED=1'
+        IFS= read -r fixture_trace < \
+            "$FIXTURE_WORK/.distropica-live-inner-dispatch"
+        [ "$fixture_trace" = 'DISTROPICA_LIVE_INNER_DISPATCH_FORMAT=1' ]
+        [ ! -e "$FIXTURE_WORK/inner-output/BOOTX64.EFI" ]
+        [ ! -e "$FIXTURE_WORK/inner-output/BOOTX64.EFI.live-components" ]
+        if [ "${FIXTURE_SKIP_TEMPLATE:-no}" = yes ]; then
+            exit 0
+        fi
+        "$FIXTURE_MKDIR" -p "$FIXTURE_WORK/build"
+        "$FIXTURE_CP" "$FIXTURE_TEMPLATE/BOOTX64.EFI" \
+            "$FIXTURE_WORK/inner-output/BOOTX64.EFI"
+        "$FIXTURE_CP" "$FIXTURE_TEMPLATE/BOOTX64.EFI.live-components" \
+            "$FIXTURE_WORK/inner-output/BOOTX64.EFI.live-components"
+        "$FIXTURE_CP" "$FIXTURE_TEMPLATE/BOOTX64.EFI.live-runner-proof" \
+            "$FIXTURE_WORK/inner-output/BOOTX64.EFI.live-runner-proof"
+        "$FIXTURE_CP" "$FIXTURE_TEMPLATE/BOOTX64.EFI.live-lock" \
+            "$FIXTURE_WORK/inner-output/BOOTX64.EFI.live-lock"
+        "$FIXTURE_CP" "$FIXTURE_TEMPLATE/LIVE_EMBED_PROOF" \
+            "$FIXTURE_WORK/build/LIVE_EMBED_PROOF"
+        ;;
+    *)
+        printf '%s\n' 'fixture runner chamado mais de duas vezes' >&2
+        exit 1
+        ;;
+esac
+EOF
+chmod 0700 "$FAKE_RUNNER"
+
+outer_root_sha=$("$HELPER" tree-hash "$OUTER/rootfs")
+cat > "$OUTER/inputs/builder.lock" <<EOF
+LIVE_BUILDER_FORMAT=1
+ID=fixture-builder
+ROOTFS_TREE_SHA256=$outer_root_sha
+EOF
+chmod 0600 "$OUTER/inputs/builder.lock"
+
+outer_runner_sha=$("$HELPER" sha256 "$FAKE_RUNNER")
+outer_builder_lock_sha=$("$HELPER" sha256 "$OUTER/inputs/builder.lock")
+outer_snapshot_sha=$("$HELPER" sha256 "$OUTER/inputs/source.snapshot")
+outer_license_sha=$("$HELPER" sha256 "$OUTER/inputs/license-evidence")
+outer_minipax_sha=$("$HELPER" sha256 "$OUTER/inputs/minipax")
+outer_minitrue_sha=$("$HELPER" sha256 "$OUTER/inputs/minitrue")
+# O checkout do harness pode viver sob um ancestral 0775; esses hashes apenas
+# montam o proof falso e são cotejados por ferramentas host do próprio teste.
+outer_build_source_sha=$("$HELPER" sha256 "$OUTER_BUILDER")
+outer_lock_source_sha=$(sha256sum "$REPO/bootstrap/live/live-lock" | awk '{print $1}')
+outer_helper_source_sha=$(sha256sum "$SOURCE" | awk '{print $1}')
+outer_config_sha=$(sha256sum "$CONFIG" | awk '{print $1}')
+outer_linux_sha=$("$HELPER" sha256 "$OUTER/inputs/linux.tar.xz")
+outer_busybox_sha=$("$HELPER" sha256 "$OUTER/inputs/busybox.tar.bz2")
+outer_e2fs_sha=$("$HELPER" sha256 "$OUTER/inputs/e2fsprogs.tar.xz")
+outer_ncurses_sha=$("$HELPER" sha256 "$OUTER/inputs/ncurses.tar.gz")
+outer_util_sha=$("$HELPER" sha256 "$OUTER/inputs/util-linux.tar.xz")
+outer_zig_tar_pin=$("$HELPER" sha256 "$OUTER/inputs/zig.tar.xz")
+
+OUTER_PROOF=$OUTER/inputs/runner.proof
+cat > "$OUTER_PROOF" <<EOF
+LIVE_RUNNER_PROOF_FORMAT=1
+VARIANT=live-efi
+BUILD_MODE=release
+AUTHENTICATED=yes
+RUNNER_ID=fixture-bwrap
+RUNNER_PATH=$FAKE_RUNNER
+RUNNER_SHA256=$outer_runner_sha
+BUILDER_ID=fixture-builder
+BUILDER_LOCK_SHA256=$outer_builder_lock_sha
+BUILDER_ROOTFS_TREE_SHA256=$outer_root_sha
+SOURCE_SNAPSHOT_SHA256=$outer_snapshot_sha
+BUILD_EFI_SOURCE_SHA256=$outer_build_source_sha
+LIVE_LOCK_SOURCE_SHA256=$outer_lock_source_sha
+LIVE_LOCK_HELPER_SOURCE_SHA256=$outer_helper_source_sha
+LIVE_LOCK_HELPER_BINARY_SHA256=$helper_pin
+BUSYBOX_CONFIG_SHA256=$outer_config_sha
+LINUX_TAR_SHA256=$outer_linux_sha
+BUSYBOX_TAR_SHA256=$outer_busybox_sha
+E2FSPROGS_TAR_SHA256=$outer_e2fs_sha
+NCURSES_TAR_SHA256=$outer_ncurses_sha
+UTIL_LINUX_TAR_SHA256=$outer_util_sha
+MINIPAX_BINARY_SHA256=$outer_minipax_sha
+MINITRUE_BINARY_SHA256=$outer_minitrue_sha
+ZIG_TAR_SHA256=$outer_zig_tar_pin
+ZIG_BINARY_SHA256=$ABC
+MUSL_TREE_SHA256=$ABC
+SOURCE_DATE_EPOCH=1704067200
+EOF
+chmod 0600 "$OUTER_PROOF"
+"$HELPER" verify-runner "$OUTER_PROOF"
+outer_proof_sha=$("$HELPER" sha256 "$OUTER_PROOF")
+
+run_preflight_fixture() { # proof proof-sha runner output work
+    preflight_proof=$1; preflight_proof_sha=$2; preflight_runner=$3
+    preflight_output=$4; preflight_work=$5
+    "$HELPER" --self-sha256 "$helper_pin" release-preflight \
+        "$preflight_proof" "$preflight_proof_sha" "$preflight_runner" \
+        "$OUTER/inputs/source.snapshot" "$OUTER/rootfs" \
+        "$OUTER/inputs/builder.lock" "$OUTER/inputs/license-evidence" \
+        "$outer_license_sha" "$preflight_output" "$preflight_work" \
+        "$OUTER_BUILDER" "$OUTER/inputs/linux.tar.xz" \
+        "$OUTER/inputs/busybox.tar.bz2" "$OUTER/inputs/e2fsprogs.tar.xz" \
+        "$OUTER/inputs/ncurses.tar.gz" "$OUTER/inputs/util-linux.tar.xz" \
+        "$OUTER/inputs/minipax" "$OUTER/inputs/minitrue" \
+        "$OUTER/inputs/zig.tar.xz" 1704067200
+}
+
+ROOT_RUNNER_PROOF=$OUTER/inputs/root-runner.proof
+cp "$OUTER_PROOF" "$ROOT_RUNNER_PROOF"
+sed -i \
+    -e "s|^RUNNER_PATH=.*|RUNNER_PATH=$ROOT_READONLY_RUNNER|" \
+    -e "s|^RUNNER_SHA256=.*|RUNNER_SHA256=$ROOT_READONLY_RUNNER_SHA|" \
+    "$ROOT_RUNNER_PROOF"
+chmod 0600 "$ROOT_RUNNER_PROOF"
+root_runner_proof_sha=$("$HELPER" sha256 "$ROOT_RUNNER_PROOF")
+mkdir "$OUTER/out-root-runner"
+chmod 0700 "$OUTER/out-root-runner"
+root_runner_preflight=$(run_preflight_fixture "$ROOT_RUNNER_PROOF" \
+        "$root_runner_proof_sha" "$ROOT_READONLY_RUNNER" \
+        "$OUTER/out-root-runner/BOOTX64.EFI" \
+        "$OUTER/work-root-runner")
+root_runner_root=$(printf '%s\n' "$root_runner_preflight" | \
+    sed -n 's/^BUILDER_ROOTFS_TREE_SHA256=//p')
+root_runner_request=$(printf '%s\n' "$root_runner_preflight" | \
+    sed -n 's/^WORK_REQUEST_SHA256=//p')
+root_runner_marker=$(printf '%s\n' "$root_runner_preflight" | \
+    sed -n 's/^WORK_MARKER_SHA256=//p')
+if [ "$root_runner_root" = "$outer_root_sha" ] &&
+   [ "$(stat -c '%a|%u' "$OUTER/work-root-runner")" = \
+     "700|$(id -u)" ] &&
+   [ "$(stat -c '%a|%u|%h' \
+        "$OUTER/work-root-runner/.distropica-live-work")" = \
+     "600|$(id -u)|1" ] &&
+   [ "$("$HELPER" work-verify "$OUTER/work-root-runner" \
+        "$root_runner_marker" "$root_runner_request" \
+        "$root_runner_proof_sha" pristine)" = "$root_runner_marker" ]; then
+    ok 'release-preflight aceita runner root-owned pinado com outputs privados'
+else
+    fail 'release-preflight recusou runner root-owned pinado'
+fi
+if [ "$(wc -l < "$OUTER/work-root-runner/.distropica-live-work" | tr -d ' ')" \
+        -eq 7 ] &&
+   grep -Fqx "WORK_DEVICE=$(stat -c %d "$OUTER/work-root-runner")" \
+        "$OUTER/work-root-runner/.distropica-live-work" &&
+   grep -Fqx "WORK_INODE=$(stat -c %i "$OUTER/work-root-runner")" \
+        "$OUTER/work-root-runner/.distropica-live-work"; then
+    ok 'marker canônico prende proof/request e dev+ino do WORK'
+else
+    fail 'marker do WORK não materializou schema canônico de 7 linhas'
+fi
+must_fail 'work-verify recusa request hash divergente' "$HELPER" work-verify \
+    "$OUTER/work-root-runner" "$root_runner_marker" "$ABC" \
+    "$root_runner_proof_sha" pristine
+chmod 0644 "$OUTER/work-root-runner/.distropica-live-work"
+must_fail 'work-verify recusa modo não canônico do marker' "$HELPER" \
+    work-verify "$OUTER/work-root-runner" "$root_runner_marker" \
+    "$root_runner_request" "$root_runner_proof_sha" pristine
+chmod 0600 "$OUTER/work-root-runner/.distropica-live-work"
+ln "$OUTER/work-root-runner/.distropica-live-work" \
+    "$OUTER/work-root-runner/marker-hardlink"
+must_fail 'work-verify recusa nlink extra do marker' "$HELPER" work-verify \
+    "$OUTER/work-root-runner" "$root_runner_marker" \
+    "$root_runner_request" "$root_runner_proof_sha" populated
+rm "$OUTER/work-root-runner/marker-hardlink"
+
+cp "$ROOT_RUNNER_PROOF" "$OUTER/inputs/root-runner-wrong-hash.proof"
+sed -i "s/^RUNNER_SHA256=.*/RUNNER_SHA256=$ABC/" \
+    "$OUTER/inputs/root-runner-wrong-hash.proof"
+wrong_runner_proof_sha=$("$HELPER" sha256 \
+    "$OUTER/inputs/root-runner-wrong-hash.proof")
+mkdir "$OUTER/out-root-runner-bad"
+chmod 0700 "$OUTER/out-root-runner-bad"
+must_fail 'release-preflight recusa hash divergente do runner root-owned' \
+    run_preflight_fixture "$OUTER/inputs/root-runner-wrong-hash.proof" \
+    "$wrong_runner_proof_sha" "$ROOT_READONLY_RUNNER" \
+    "$OUTER/out-root-runner-bad/BOOTX64.EFI" \
+    "$OUTER/work-root-runner-bad"
+
+mkdir "$OUTER/out-work-under-rootfs"
+chmod 0700 "$OUTER/out-work-under-rootfs"
+must_fail 'release-preflight recusa WORK sob o rootfs medido' \
+    run_preflight_fixture "$ROOT_RUNNER_PROOF" "$root_runner_proof_sha" \
+    "$ROOT_READONLY_RUNNER" \
+    "$OUTER/out-work-under-rootfs/BOOTX64.EFI" \
+    "$OUTER/rootfs/work-under-rootfs"
+
+make_inputs "$OUTER/template/component-inputs" "$OUTER_PROOF" release
+"$HELPER" components "$OUTER/template/component-inputs" \
+    "$OUTER/template/BOOTX64.EFI.live-components"
+make_newc "$OUTER/template/initramfs.cpio" \
+    usr/share/distropica/LIVE_COMPONENTS \
+    "$OUTER/template/BOOTX64.EFI.live-components"
+cp "$OUTER/template/initramfs.cpio" "$OUTER/template/blob"
+cp "$OUTER/template/initramfs.cpio" "$OUTER/template/decoded.cpio"
+chmod 0600 "$OUTER/template/blob" "$OUTER/template/decoded.cpio"
+cat > "$OUTER/template/vmlinux.S" <<EOF
+.section .init.ramfs,"a"
+.global __initramfs_start
+__initramfs_start:
+.incbin "$OUTER/template/blob"
+.global __initramfs_size
+.set __initramfs_size, . - __initramfs_start
+.section .text
+.global _start
+_start:
+  ret
+EOF
+cc -nostdlib -static -Wl,--build-id=none -o "$OUTER/template/vmlinux" \
+    "$OUTER/template/vmlinux.S"
+cp "$OUTER/template/vmlinux" "$OUTER/template/BOOTX64.EFI"
+cp "$OUTER_PROOF" "$OUTER/template/BOOTX64.EFI.live-runner-proof"
+chmod 0600 "$OUTER/template/vmlinux" "$OUTER/template/BOOTX64.EFI" \
+    "$OUTER/template/BOOTX64.EFI.live-runner-proof"
+"$HELPER" embed-proof "$OUTER/template/BOOTX64.EFI" \
+    "$OUTER/template/vmlinux" "$OUTER/template/blob" \
+    "$OUTER/template/decoded.cpio" "$OUTER/template/initramfs.cpio" \
+    "$OUTER/template/BOOTX64.EFI.live-components" "$ABC" \
+    "$OUTER/template/LIVE_EMBED_PROOF"
+"$HELPER" lock "$OUTER/template/BOOTX64.EFI" \
+    "$OUTER/template/BOOTX64.EFI.live-components" \
+    "$OUTER/template/BOOTX64.EFI.live-runner-proof" \
+    "$OUTER/template/LIVE_EMBED_PROOF" 'GPL-2.0-only AND MIT' \
+    "$outer_license_sha" "$OUTER/template/BOOTX64.EFI.live-lock"
+"$HELPER" verify "$OUTER/template/BOOTX64.EFI" \
+    "$OUTER/template/BOOTX64.EFI.live-components" \
+    "$OUTER/template/BOOTX64.EFI.live-runner-proof" \
+    "$OUTER/template/LIVE_EMBED_PROOF" \
+    "$OUTER/template/BOOTX64.EFI.live-lock"
+
+FIXTURE_CC=$(command -v cc)
+FIXTURE_CHMOD=$(command -v chmod)
+FIXTURE_MKDIR=$(command -v mkdir)
+FIXTURE_CP=$(command -v cp)
+FIXTURE_MV=$(command -v mv)
+FIXTURE_RM=$(command -v rm)
+FIXTURE_GREP=$(command -v grep)
+FIXTURE_SOURCE=$SOURCE
+FIXTURE_BUILDER=$OUTER_BUILDER
+FIXTURE_WRAPPER=$REPO/bootstrap/live/live-lock
+FIXTURE_CONFIG=$CONFIG
+FIXTURE_HELPER=$HELPER
+FIXTURE_PROOF=$OUTER_PROOF
+FIXTURE_PROOF_SHA=$outer_proof_sha
+FIXTURE_SNAPSHOT=$OUTER/inputs/source.snapshot
+FIXTURE_SNAPSHOT_SHA=$outer_snapshot_sha
+FIXTURE_RUNNER=$FAKE_RUNNER
+FIXTURE_RUNNER_SHA=$outer_runner_sha
+FIXTURE_TEMPLATE=$OUTER/template
+FIXTURE_HELPER_PIN=$helper_pin
+FIXTURE_ROOTFS=$OUTER/rootfs
+FIXTURE_ROOT_SHA=$outer_root_sha
+FIXTURE_LINUX=$OUTER/inputs/linux.tar.xz
+FIXTURE_BUSYBOX=$OUTER/inputs/busybox.tar.bz2
+FIXTURE_E2FS=$OUTER/inputs/e2fsprogs.tar.xz
+FIXTURE_NCURSES=$OUTER/inputs/ncurses.tar.gz
+FIXTURE_UTIL=$OUTER/inputs/util-linux.tar.xz
+FIXTURE_MINIPAX=$OUTER/inputs/minipax
+FIXTURE_MINITRUE=$OUTER/inputs/minitrue
+FIXTURE_MINIPAX_SHA=$outer_minipax_sha
+FIXTURE_MINITRUE_SHA=$outer_minitrue_sha
+FIXTURE_ZIG=$OUTER/inputs/zig.tar.xz
+FIXTURE_ZIG_TAR_SHA=$outer_zig_tar_pin
+FIXTURE_ZIG_SHA=$ABC
+FIXTURE_MUSL_SHA=$ABC
+FIXTURE_BUILDER_LOCK=$OUTER/inputs/builder.lock
+FIXTURE_BUILDER_LOCK_SHA=$outer_builder_lock_sha
+FIXTURE_LICENSE=$OUTER/inputs/license-evidence
+FIXTURE_LICENSE_SHA=$outer_license_sha
+export FIXTURE_CC FIXTURE_CHMOD FIXTURE_MKDIR FIXTURE_CP FIXTURE_MV \
+    FIXTURE_RM FIXTURE_GREP FIXTURE_SOURCE FIXTURE_BUILDER FIXTURE_WRAPPER \
+    FIXTURE_CONFIG FIXTURE_HELPER FIXTURE_PROOF FIXTURE_PROOF_SHA \
+    FIXTURE_SNAPSHOT FIXTURE_SNAPSHOT_SHA FIXTURE_RUNNER FIXTURE_RUNNER_SHA \
+    FIXTURE_TEMPLATE FIXTURE_HELPER_PIN FIXTURE_ROOTFS FIXTURE_ROOT_SHA \
+    FIXTURE_LINUX FIXTURE_BUSYBOX FIXTURE_E2FS FIXTURE_NCURSES FIXTURE_UTIL \
+    FIXTURE_MINIPAX FIXTURE_MINITRUE FIXTURE_MINIPAX_SHA FIXTURE_MINITRUE_SHA \
+    FIXTURE_ZIG FIXTURE_ZIG_TAR_SHA FIXTURE_ZIG_SHA FIXTURE_MUSL_SHA \
+    FIXTURE_BUILDER_LOCK FIXTURE_BUILDER_LOCK_SHA FIXTURE_LICENSE \
+    FIXTURE_LICENSE_SHA
+
+for hostile_tool in dirname realpath stat id sed cut sha256sum tar awk cc bwrap; do
+    cat > "$OUTER/malicious-path/$hostile_tool" <<'EOF'
+#!/bin/sh
+printf called > "$FIXTURE_HOST_PATH_MARKER"
+exit 99
+EOF
+    chmod 0700 "$OUTER/malicious-path/$hostile_tool"
+done
+FIXTURE_HOST_PATH_MARKER=$OUTER/host-path-used
+export FIXTURE_HOST_PATH_MARKER
+
+invoke_outer() { # runner runner-sha proof-sha output work log-prefix
+    invoke_runner=$1; invoke_runner_sha=$2; invoke_proof_sha=$3
+    invoke_output=$4; FIXTURE_WORK=$5; FIXTURE_LOG=$6
+    invoke_helper=${7:-$HELPER}; invoke_helper_sha=${8:-$helper_pin}
+    export FIXTURE_WORK FIXTURE_LOG
+    PATH="$OUTER/malicious-path" "$OUTER_BUILDER" --mode release \
+        --output "$invoke_output" --work "$FIXTURE_WORK" \
+        --rootfs "$OUTER/rootfs" --runner "$invoke_runner" \
+        --runner-sha256 "$invoke_runner_sha" \
+        --runner-proof "$OUTER_PROOF" --runner-proof-sha256 "$invoke_proof_sha" \
+        --source-snapshot "$OUTER/inputs/source.snapshot" \
+        --source-snapshot-sha256 "$outer_snapshot_sha" \
+        --linux-tar "$OUTER/inputs/linux.tar.xz" \
+        --busybox-tar "$OUTER/inputs/busybox.tar.bz2" \
+        --e2fsprogs-tar "$OUTER/inputs/e2fsprogs.tar.xz" \
+        --ncurses-tar "$OUTER/inputs/ncurses.tar.gz" \
+        --util-linux-tar "$OUTER/inputs/util-linux.tar.xz" \
+        --minipax "$OUTER/inputs/minipax" --minitrue "$OUTER/inputs/minitrue" \
+        --minipax-sha256 "$outer_minipax_sha" \
+        --minitrue-sha256 "$outer_minitrue_sha" \
+        --zig-tar "$OUTER/inputs/zig.tar.xz" \
+        --zig-tar-sha256 "$outer_zig_tar_pin" --zig-sha256 "$ABC" \
+        --musl-tree-sha256 "$ABC" \
+        --builder-lock "$OUTER/inputs/builder.lock" \
+        --builder-lock-sha256 "$outer_builder_lock_sha" \
+        --builder-id fixture-builder \
+        --license-evidence "$OUTER/inputs/license-evidence" \
+        --license-evidence-sha256 "$outer_license_sha" \
+        --live-lock-helper "$invoke_helper" \
+        --live-lock-helper-sha256 "$invoke_helper_sha" \
+        --source-date-epoch 1704067200 --jobs 1
+}
+
+if invoke_outer "$FAKE_RUNNER" "$outer_runner_sha" "$outer_proof_sha" \
+    "$OUTER/out-1/BOOTX64.EFI" "$OUTER/work-1" "$OUTER/log-1" \
+    >"$TMP/bad/outer-1.log" 2>&1 &&
+   invoke_outer "$FAKE_RUNNER" "$outer_runner_sha" "$outer_proof_sha" \
+    "$OUTER/out-2/BOOTX64.EFI" "$OUTER/work-2" "$OUTER/log-2" \
+    >"$TMP/bad/outer-2.log" 2>&1; then
+    ok 'build-efi release outer→inner simulado executa duas vezes'
+else
+    fail 'build-efi release outer→inner simulado falhou'
+fi
+
+if cmp -s "$OUTER/work-1/.distropica-live-inner-dispatch" \
+        "$OUTER/work-2/.distropica-live-inner-dispatch" &&
+   grep -Fqx 'DISTROPICA_LIVE_INNER_DISPATCH_FORMAT=1' \
+        "$OUTER/work-1/.distropica-live-inner-dispatch"; then
+    ok 'release-inner real atravessa parser/work-verify/dispatcher 2x'
+else
+    fail 'probe release-inner real não produziu trace determinista'
+fi
+
+outer_deterministic=yes
+for outer_suffix in '' .live-components .live-runner-proof .live-lock; do
+    cmp -s "$OUTER/out-1/BOOTX64.EFI$outer_suffix" \
+        "$OUTER/out-2/BOOTX64.EFI$outer_suffix" || outer_deterministic=no
+done
+if [ "$outer_deterministic" = yes ] &&
+   grep -Fqx 'RELEASE_ELIGIBLE=yes' "$OUTER/out-1/BOOTX64.EFI.live-lock" &&
+   grep -Fqx 'RELEASE_ELIGIBLE=no' "$OUTER/out-1/BOOTX64.EFI.live-components"; then
+    ok 'launcher preserva bytes deterministas e promoção só no LIVE_LOCK'
+else
+    fail 'launcher variou bytes ou promoveu Components diretamente'
+fi
+
+outer_mounts=yes
+for outer_log in "$OUTER/log-1.1" "$OUTER/log-1.2"; do
+    grep -Fqx 'ENV_PATH=/__distropica_release_no_path__' "$outer_log" || \
+        outer_mounts=no
+    grep -Fqx 'ARG=--clearenv' "$outer_log" || outer_mounts=no
+    grep -Fqx 'ARG=--unshare-net' "$outer_log" || outer_mounts=no
+    grep -Fqx "ARG=$OUTER/rootfs" "$outer_log" || outer_mounts=no
+    grep -Fqx 'ARG=--ro-bind' "$outer_log" || outer_mounts=no
+    if awk -v root="ARG=$OUTER/rootfs" \
+        'previous == "ARG=--bind" && $0 == root { bad=1 } { previous=$0 } END { exit bad }' \
+        "$outer_log"; then :; else outer_mounts=no; fi
+done
+grep -Fqx 'ARG=/work/source/bootstrap/live/build-efi' "$OUTER/log-1.2" || \
+    outer_mounts=no
+grep -Fqx 'ARG=--release-inner' "$OUTER/log-1.2" || outer_mounts=no
+grep -Fqx 'ARG=release-work-exec' "$OUTER/log-1.1" || outer_mounts=no
+grep -Fqx 'ARG=release-work-exec' "$OUTER/log-1.2" || outer_mounts=no
+if grep -Fqx 'ARG=/work/build' "$OUTER/log-1.2"; then outer_mounts=no; fi
+if [ "$outer_mounts" = yes ] && [ ! -e "$FIXTURE_HOST_PATH_MARKER" ]; then
+    ok 'launcher usa rootfs RO, só WORK RW, release-inner e ignora PATH host'
+else
+    fail 'launcher simulado expôs rootfs RW/PATH host ou não reexecutou inner'
+fi
+
+for marker_case in missing tamper; do
+    mkdir "$OUTER/out-marker-$marker_case"
+    chmod 0700 "$OUTER/out-marker-$marker_case"
+    FIXTURE_MARKER_MUTATION=$marker_case
+    export FIXTURE_MARKER_MUTATION
+    if invoke_outer "$FAKE_RUNNER" "$outer_runner_sha" "$outer_proof_sha" \
+        "$OUTER/out-marker-$marker_case/BOOTX64.EFI" \
+        "$OUTER/work-marker-$marker_case" "$OUTER/log-marker-$marker_case" \
+        >"$TMP/bad/outer-marker-$marker_case.log" 2>&1; then
+        fail "release aceitou marker $marker_case antes da fase 1"
+    else
+        ok "release recusa marker $marker_case antes da fase 1"
+    fi
+    unset FIXTURE_MARKER_MUTATION
+done
+
+mkdir "$OUTER/out-work-swap"
+chmod 0700 "$OUTER/out-work-swap"
+FIXTURE_SWAP_WORK=yes
+export FIXTURE_SWAP_WORK
+if invoke_outer "$FAKE_RUNNER" "$outer_runner_sha" "$outer_proof_sha" \
+    "$OUTER/out-work-swap/BOOTX64.EFI" "$OUTER/work-swap" \
+    "$OUTER/log-work-swap" >"$TMP/bad/outer-work-swap.log" 2>&1; then
+    fail 'release aceitou troca do inode de WORK entre fases'
+else
+    ok 'release recusa troca do inode de WORK entre fases'
+fi
+unset FIXTURE_SWAP_WORK
+
+mkdir "$OUTER/out-dispatch-only"
+chmod 0700 "$OUTER/out-dispatch-only"
+FIXTURE_SKIP_TEMPLATE=yes
+export FIXTURE_SKIP_TEMPLATE
+if invoke_outer "$FAKE_RUNNER" "$outer_runner_sha" "$outer_proof_sha" \
+    "$OUTER/out-dispatch-only/BOOTX64.EFI" "$OUTER/work-dispatch-only" \
+    "$OUTER/log-dispatch-only" >"$TMP/bad/outer-dispatch-only.log" 2>&1; then
+    fail 'probe dispatch-only fez outer qualificar release sem outputs'
+elif [ -e "$OUTER/out-dispatch-only/BOOTX64.EFI" ] ||
+     [ -e "$OUTER/out-dispatch-only/BOOTX64.EFI.live-lock" ] ||
+     [ ! -f "$OUTER/work-dispatch-only/.distropica-live-inner-dispatch" ]; then
+    fail 'probe dispatch-only deixou output ou não comprovou dispatcher real'
+else
+    ok 'probe para após validação; outer falha fechado sem EFI/sidecars'
+fi
+unset FIXTURE_SKIP_TEMPLATE
+
+mkdir "$OUTER/out-final-command-fail"
+chmod 0700 "$OUTER/out-final-command-fail"
+FIXTURE_FINAL_COMMAND_FAIL=yes
+export FIXTURE_FINAL_COMMAND_FAIL
+if invoke_outer "$FAKE_RUNNER" "$outer_runner_sha" "$outer_proof_sha" \
+    "$OUTER/out-final-command-fail/BOOTX64.EFI" \
+    "$OUTER/work-final-command-fail" "$OUTER/log-final-command-fail" \
+    >"$TMP/bad/outer-final-command-fail.log" 2>&1; then
+    fail 'outer ignorou status não-zero do comando final do inner'
+elif [ -e "$OUTER/out-final-command-fail/BOOTX64.EFI" ] ||
+     [ -e "$OUTER/out-final-command-fail/BOOTX64.EFI.live-lock" ]; then
+    fail 'comando final não-zero deixou output publicável'
+else
+    ok 'outer propaga comando final não-zero e não publica outputs'
+fi
+unset FIXTURE_FINAL_COMMAND_FAIL
+
+mkdir "$OUTER/out-proof-bad"
+chmod 0700 "$OUTER/out-proof-bad"
+if invoke_outer "$FAKE_RUNNER" "$outer_runner_sha" "$ABC" \
+    "$OUTER/out-proof-bad/BOOTX64.EFI" "$OUTER/work-proof-bad" \
+    "$OUTER/log-proof-bad" >"$TMP/bad/outer-proof.log" 2>&1; then
+    fail 'AUTHENTICATED=yes qualificou proof com expected hash divergente'
+else
+    ok 'expected runner-proof hash externo prevalece sobre AUTHENTICATED=yes'
+fi
+
+mkdir "$OUTER/out-runner-bad"
+chmod 0700 "$OUTER/out-runner-bad"
+if invoke_outer fake-bwrap "$outer_runner_sha" "$outer_proof_sha" \
+    "$OUTER/out-runner-bad/BOOTX64.EFI" "$OUTER/work-runner-bad" \
+    "$OUTER/log-runner-bad" >"$TMP/bad/outer-runner.log" 2>&1; then
+    fail 'launcher release aceitou runner relativo/do PATH host'
+else
+    ok 'launcher release recusa runner relativo/do PATH host'
+fi
+
+mkdir "$OUTER/out-helper-bad"
+chmod 0700 "$OUTER/out-helper-bad"
+if invoke_outer "$FAKE_RUNNER" "$outer_runner_sha" "$outer_proof_sha" \
+    "$OUTER/out-helper-bad/BOOTX64.EFI" "$OUTER/work-helper-bad" \
+    "$OUTER/log-helper-bad" "$HELPER" "$ABC" \
+    >"$TMP/bad/outer-helper.log" 2>&1; then
+    fail 'launcher aceitou pin divergente do helper externo'
+else
+    ok 'launcher recusa mismatch do helper externo antes do bwrap'
+fi
+
+mkdir "$OUTER/out-rebuild-bad"
+chmod 0700 "$OUTER/out-rebuild-bad"
+FIXTURE_BAD_REBUILD=yes
+export FIXTURE_BAD_REBUILD
+if invoke_outer "$FAKE_RUNNER" "$outer_runner_sha" "$outer_proof_sha" \
+    "$OUTER/out-rebuild-bad/BOOTX64.EFI" "$OUTER/work-rebuild-bad" \
+    "$OUTER/log-rebuild-bad" >"$TMP/bad/outer-rebuild.log" 2>&1; then
+    fail 'helper recompilado adulterado passou pela medição externa'
+else
+    ok 'helper externo recusa bytes recompilados divergentes antes do exec'
+fi
+unset FIXTURE_BAD_REBUILD
+
+mkdir "$OUTER/out-root-race"
+chmod 0700 "$OUTER/out-root-race"
+FIXTURE_MUTATE_ROOTFS=yes
+export FIXTURE_MUTATE_ROOTFS
+if invoke_outer "$FAKE_RUNNER" "$outer_runner_sha" "$outer_proof_sha" \
+    "$OUTER/out-root-race/BOOTX64.EFI" "$OUTER/work-root-race" \
+    "$OUTER/log-root-race" >"$TMP/bad/outer-root-race.log" 2>&1; then
+    fail 'rootfs mutado entre preflight e bind passou pela revalidação'
+else
+    ok 'tree-exec externo recusa rootfs mutado entre preflight e sandbox'
+fi
+unset FIXTURE_MUTATE_ROOTFS
+rm -f "$OUTER/rootfs/mutated-after-preflight"
+
+cat > "$OUTER/lying-helper" <<'EOF'
+#!/bin/sh
+# Deliberadamente ignora --self-sha256: isso prova por que a autenticação é
+# responsabilidade anterior do pipeline, não uma propriedade autorreferente.
+printf '%s\n' "$FIXTURE_ROOT_SHA"
+exit 0
+EOF
+chmod 0700 "$OUTER/lying-helper"
+lying_helper_sha=$(sha256sum "$OUTER/lying-helper" | awk '{print $1}')
+if [ "$lying_helper_sha" != "$helper_pin" ]; then
+    ok 'âncora externa rejeita helper mentiroso antes de invocar build-efi'
+else
+    fail 'fixture de helper mentiroso colidiu com pin autorizado'
+fi
+
+# Prebuilt é atribuição exclusiva de development; o launcher release nem
+# aceita a opção legada.
+must_fail 'release recusa BusyBox prebuilt antes do builder' "$BUILDER" \
+    --mode release --busybox "$TMP/a/efi"
+
+# Applets usados pelo init/udhcpc e configuração estática versionada.
+for mapping in \
+    ash:ASH awk:AWK basename:BASENAME blockdev:BLOCKDEV cat:CAT chmod:CHMOD \
+    chpasswd:CHPASSWD cp:CP cryptpw:CRYPTPW cttyhack:CTTYHACK cut:CUT dd:DD \
+    dirname:DIRNAME echo:ECHO findfs:FINDFS grep:GREP ifconfig:IFCONFIG ip:IP \
+    ln:LN mdev:MDEV mkdir:MKDIR mkfs.vfat:MKFS_VFAT mkswap:MKSWAP \
+    mktemp:MKTEMP mount:MOUNT mv:MV partprobe:PARTPROBE printf:PRINTF \
+    readlink:READLINK reboot:REBOOT rm:RM route:ROUTE sed:SED setsid:SETSID \
+    sh:SH_IS_ASH sha256sum:SHA256SUM sleep:SLEEP stat:STAT stty:STTY \
+    switch_root:SWITCH_ROOT sync:SYNC test:TEST tr:TR udhcpc:UDHCPC \
+    umount:UMOUNT wc:WC; do
+    applet=${mapping%%:*}; symbol=${mapping#*:}
+    grep -Fqx "CONFIG_${symbol}=y" "$CONFIG" || fail "BusyBox não fixa $applet"
+done
+grep -Fqx 'CONFIG_STATIC=y' "$CONFIG" &&
+grep -Fqx '# CONFIG_FEATURE_SHARED_BUSYBOX is not set' "$CONFIG" &&
+    ok 'BusyBox 1.35.0 versionado exige estático/applets completos'
+
+# ASan+UBSan são apenas instrumentos host; nunca são qualificados como release.
+if cc -std=c17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -o "$TMP/bin/live-lock-helper-sanitize" "$SOURCE" >/dev/null 2>&1; then
+    SAN=$TMP/bin/live-lock-helper-sanitize
+    ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
+        "$SAN" sha256 "$TMP/a/abc" >/dev/null
+    ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
+        "$SAN" tree-hash "$TMP/tree-a" >/dev/null
+    ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
+        "$SAN" cpio-member "$TMP/a/initramfs.cpio" \
+        usr/share/distropica/LIVE_COMPONENTS "$TMP/a/components" >/dev/null
+    ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
+        "$SAN" elf-initramfs "$TMP/a/vmlinux" "$TMP/a/blob" >/dev/null
+    ok 'ASan+UBSan passam fixtures SHA/tree/CPIO/ELF válidas'
+else
+    ok 'ASan+UBSan indisponíveis no host (gate pulado explicitamente)'
+fi
+
+if [ "$FAILURES" -ne 0 ]; then
+    printf '\n%d falha(s) no lock vivo\n' "$FAILURES" >&2
+    exit 1
+fi
+printf '\nlock vivo estrito: tudo certo\n'

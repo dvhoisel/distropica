@@ -1,16 +1,379 @@
 #!/bin/sh
 # Compõe um bzImage EFI-stub com initramfs vivo incorporado.
+
+# Bootstrap externo do release. Esta seção roda antes de qualquer dirname,
+# realpath, stat, PATH lookup ou leitura de checkout. A raiz inicial é
+# deliberadamente externa: o pipeline autenticou o caminho absoluto do bwrap
+# e os hashes passados. O primeiro processo de ferramentas já vive no builder
+# ro-bind; depois ele compila o helper estático a partir do snapshot pinado.
+live_outer_mode=development
+live_outer_inner=no
+live_expect_mode=no
+for live_arg do
+    case "$live_expect_mode" in
+        yes) live_outer_mode=$live_arg; live_expect_mode=no; continue ;;
+    esac
+    case "$live_arg" in
+        --mode) live_expect_mode=yes ;;
+        --release-inner) live_outer_inner=yes ;;
+    esac
+done
+
+if [ "$live_outer_mode" = release ] && [ "$live_outer_inner" = no ]; then
+    # O prelude usa somente builtins antes da primeira raiz externa, mas ainda
+    # precisa propagar toda falha: publish/verify ausentes jamais podem cair
+    # até a mensagem de sucesso.
+    set -eu
+    live_output= live_work= live_rootfs= live_runner= live_runner_sha=
+    live_proof= live_proof_sha= live_snapshot= live_snapshot_sha=
+    live_linux= live_busybox= live_e2fs= live_ncurses= live_util=
+    live_minipax= live_minitrue= live_minipax_sha= live_minitrue_sha=
+    live_zig= live_zig_tar_sha= live_zig_sha= live_musl_sha=
+    live_builder_lock= live_builder_lock_sha= live_builder_id=
+    live_license= live_license_sha= live_helper= live_helper_sha=
+    live_epoch= live_jobs=1 live_install=
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --mode) shift 2 ;;
+            --output) live_output=${2:?}; shift 2 ;;
+            --work) live_work=${2:?}; shift 2 ;;
+            --rootfs) live_rootfs=${2:?}; shift 2 ;;
+            --runner) live_runner=${2:?}; shift 2 ;;
+            --runner-sha256) live_runner_sha=${2:?}; shift 2 ;;
+            --runner-proof) live_proof=${2:?}; shift 2 ;;
+            --runner-proof-sha256) live_proof_sha=${2:?}; shift 2 ;;
+            --source-snapshot) live_snapshot=${2:?}; shift 2 ;;
+            --source-snapshot-sha256) live_snapshot_sha=${2:?}; shift 2 ;;
+            --linux-tar) live_linux=${2:?}; shift 2 ;;
+            --busybox-tar) live_busybox=${2:?}; shift 2 ;;
+            --e2fsprogs-tar) live_e2fs=${2:?}; shift 2 ;;
+            --ncurses-tar) live_ncurses=${2:?}; shift 2 ;;
+            --util-linux-tar) live_util=${2:?}; shift 2 ;;
+            --minipax) live_minipax=${2:?}; shift 2 ;;
+            --minitrue) live_minitrue=${2:?}; shift 2 ;;
+            --minipax-sha256) live_minipax_sha=${2:?}; shift 2 ;;
+            --minitrue-sha256) live_minitrue_sha=${2:?}; shift 2 ;;
+            --zig-tar) live_zig=${2:?}; shift 2 ;;
+            --zig-tar-sha256) live_zig_tar_sha=${2:?}; shift 2 ;;
+            --zig-sha256) live_zig_sha=${2:?}; shift 2 ;;
+            --musl-tree-sha256) live_musl_sha=${2:?}; shift 2 ;;
+            --builder-lock) live_builder_lock=${2:?}; shift 2 ;;
+            --builder-lock-sha256) live_builder_lock_sha=${2:?}; shift 2 ;;
+            --builder-id) live_builder_id=${2:?}; shift 2 ;;
+            --license-evidence) live_license=${2:?}; shift 2 ;;
+            --license-evidence-sha256) live_license_sha=${2:?}; shift 2 ;;
+            --live-lock-helper) live_helper=${2:?}; shift 2 ;;
+            --live-lock-helper-sha256) live_helper_sha=${2:?}; shift 2 ;;
+            --source-date-epoch) live_epoch=${2:?}; shift 2 ;;
+            --jobs) live_jobs=${2:?}; shift 2 ;;
+            --install-device) live_install=${2:?}; shift 2 ;;
+            --keep-work) shift ;;
+            *) printf 'erro: opção release externa desconhecida: %s\n' "$1" >&2; exit 1 ;;
+        esac
+    done
+    for live_required in "$live_output" "$live_work" "$live_rootfs" \
+        "$live_runner" "$live_runner_sha" "$live_proof" "$live_proof_sha" \
+        "$live_snapshot" "$live_snapshot_sha" "$live_linux" "$live_busybox" \
+        "$live_e2fs" "$live_ncurses" "$live_util" "$live_minipax" \
+        "$live_minitrue" "$live_minipax_sha" "$live_minitrue_sha" \
+        "$live_zig" "$live_zig_tar_sha" "$live_zig_sha" "$live_musl_sha" \
+        "$live_builder_lock" "$live_builder_lock_sha" "$live_builder_id" \
+        "$live_license" "$live_license_sha" "$live_helper" \
+        "$live_helper_sha" "$live_epoch"; do
+        case "$live_required" in '') printf '%s\n' 'erro: release exige todos os insumos/pins explícitos' >&2; exit 1 ;; esac
+    done
+    for live_path in "$live_output" "$live_work" "$live_rootfs" "$live_runner" \
+        "$live_proof" "$live_snapshot" "$live_linux" "$live_busybox" \
+        "$live_e2fs" "$live_ncurses" "$live_util" "$live_minipax" \
+        "$live_minitrue" "$live_zig" "$live_builder_lock" "$live_license" \
+        "$live_helper" "$0"; do
+        case "$live_path" in /*) ;; *) printf 'erro: release exige caminho absoluto: %s\n' "$live_path" >&2; exit 1 ;; esac
+    done
+    case "$live_jobs:$live_epoch" in *[!0-9:]*|:*|*:) printf '%s\n' 'erro: jobs/epoch release não canônicos' >&2; exit 1 ;; esac
+
+    # O shell inicial e o caminho absoluto do runner pertencem à âncora
+    # externa do pipeline. Antes de executar esse runner, porém, não lhe
+    # propagamos PATH, hooks de shell nem knobs do loader do host. Tudo aqui é
+    # assignment/export/unset builtin; nenhuma ferramenta do host foi aberta.
+    IFS=' '
+    PATH=/__distropica_release_no_path__
+    HOME=/__distropica_release_no_home__
+    TMPDIR=/__distropica_release_no_tmp__
+    LC_ALL=C
+    LANG=C
+    TZ=UTC
+    export PATH HOME TMPDIR LC_ALL LANG TZ
+    unset CDPATH ENV BASH_ENV LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG \
+        LD_PROFILE GLIBC_TUNABLES GCONV_PATH LOCPATH NLSPATH MALLOC_CHECK_ \
+        MALLOC_PERTURB_ TAR_OPTIONS GZIP BZIP2 BZIP XZ_DEFAULTS XZ_OPT \
+        CONFIG_SITE MAKEFLAGS MFLAGS CFLAGS CPPFLAGS CXXFLAGS LDFLAGS \
+        RUSTFLAGS CARGO_ENCODED_RUSTFLAGS PKG_CONFIG_PATH PKG_CONFIG_LIBDIR
+
+    # O pipeline já autenticou helper+caminho+pin. A opção --self-sha256 é
+    # somente uma rechecagem pós-exec do inode efetivamente aberto; ela não
+    # transforma um helper adversarial em raiz de confiança. Este processo
+    # nativo mede o rootfs e todos os inputs antes de qualquer ferramenta dele.
+    live_preflight_output=$("$live_helper" --self-sha256 "$live_helper_sha" \
+        release-preflight "$live_proof" "$live_proof_sha" \
+        "$live_runner" "$live_snapshot" "$live_rootfs" \
+        "$live_builder_lock" "$live_license" "$live_license_sha" \
+        "$live_output" "$live_work" "$0" "$live_linux" "$live_busybox" \
+        "$live_e2fs" "$live_ncurses" "$live_util" "$live_minipax" \
+        "$live_minitrue" "$live_zig" "$live_epoch") || {
+        printf '%s\n' 'erro: preflight nativo externo do release falhou' >&2
+        exit 1
+    }
+    live_builder_root_sha= live_work_request_sha= live_work_marker_sha=
+    live_preflight_lines=0
+    while IFS= read -r live_preflight_line; do
+        live_preflight_lines=$((live_preflight_lines + 1))
+        case "$live_preflight_line" in
+            BUILDER_ROOTFS_TREE_SHA256=*)
+                [ -z "$live_builder_root_sha" ] || exit 1
+                live_builder_root_sha=${live_preflight_line#*=} ;;
+            WORK_REQUEST_SHA256=*)
+                [ -z "$live_work_request_sha" ] || exit 1
+                live_work_request_sha=${live_preflight_line#*=} ;;
+            WORK_MARKER_SHA256=*)
+                [ -z "$live_work_marker_sha" ] || exit 1
+                live_work_marker_sha=${live_preflight_line#*=} ;;
+            *) printf '%s\n' 'erro: saída não canônica do preflight' >&2; exit 1 ;;
+        esac
+    done <<EOF
+$live_preflight_output
+EOF
+    [ "$live_preflight_lines" -eq 3 ] || {
+        printf '%s\n' 'erro: preflight não retornou três fatos canônicos' >&2
+        exit 1
+    }
+    for live_preflight_sha in "$live_builder_root_sha" \
+        "$live_work_request_sha" "$live_work_marker_sha"; do
+        case "$live_preflight_sha" in *[!0-9a-f]*|'')
+            printf '%s\n' 'erro: hash não canônico retornado pelo preflight' >&2
+            exit 1 ;;
+        esac
+        [ "${#live_preflight_sha}" -eq 64 ] || {
+            printf '%s\n' 'erro: tamanho de hash inválido no preflight' >&2
+            exit 1
+        }
+    done
+
+    # O helper externo criou e persistiu o WORK irmão do rootfs, com marcador
+    # ligado a esta request/proof. As duas fases montam esse mesmo inode em
+    # /work; a primeira exige inventário pristine, a segunda o revalida.
+    if "$live_runner" \
+        --ro-bind "$live_rootfs" / \
+        --bind "$live_work" /work \
+        --ro-bind "$live_rootfs" /run/live/builder-root \
+        --ro-bind "$live_runner" /run/live/runner \
+        --ro-bind "$live_proof" /run/live/runner-proof \
+        --ro-bind "$live_snapshot" /run/live/source.snapshot \
+        --ro-bind "$live_zig" /run/live/zig.tar.xz \
+        --ro-bind "$live_builder_lock" /run/live/builder.lock \
+        --ro-bind "$live_license" /run/live/license-evidence \
+        --ro-bind "$live_helper" /run/live/preflight-helper \
+        --proc /proc --dev /dev --unshare-pid --unshare-net \
+        --die-with-parent --new-session --clearenv \
+        --setenv PATH /usr/bin:/bin --setenv HOME /work/home \
+        --setenv TMPDIR /work/tmp --setenv LC_ALL C --setenv LANG C \
+        --setenv TZ UTC --setenv SOURCE_DATE_EPOCH "$live_epoch" \
+        --setenv LIVE_PROOF_SHA "$live_proof_sha" \
+        --setenv LIVE_SNAPSHOT_SHA "$live_snapshot_sha" \
+        --setenv LIVE_RUNNER_SHA "$live_runner_sha" \
+        --setenv LIVE_ZIG_TAR_SHA "$live_zig_tar_sha" \
+        --setenv LIVE_ZIG_SHA "$live_zig_sha" \
+        --setenv LIVE_HELPER_BINARY_SHA "$live_helper_sha" \
+        --setenv LIVE_WORK_REQUEST_SHA "$live_work_request_sha" \
+        --setenv LIVE_WORK_MARKER_SHA "$live_work_marker_sha" \
+        /run/live/preflight-helper --self-sha256 "$live_helper_sha" \
+        release-work-exec /run/live/builder-root "$live_builder_root_sha" \
+        /work "$live_work_marker_sha" "$live_work_request_sha" \
+        "$live_proof_sha" pristine \
+        /bin/sh -eu -c '
+            umask 077
+            unset TAR_OPTIONS GZIP BZIP2 BZIP XZ_DEFAULTS XZ_OPT CONFIG_SITE MAKEFLAGS MFLAGS
+            mkdir -p /work/home /work/tmp /work/inner-output
+            printf "%s  %s\n" "$LIVE_PROOF_SHA" /run/live/runner-proof | sha256sum -c - >/dev/null
+            printf "%s  %s\n" "$LIVE_SNAPSHOT_SHA" /run/live/source.snapshot | sha256sum -c - >/dev/null
+            printf "%s  %s\n" "$LIVE_RUNNER_SHA" /run/live/runner | sha256sum -c - >/dev/null
+            printf "%s  %s\n" "$LIVE_ZIG_TAR_SHA" /run/live/zig.tar.xz | sha256sum -c - >/dev/null
+            [ ! -e /work/source ] && [ ! -e /work/bootstrap-zig ] && [ ! -e /work/bootstrap-helper ] || {
+                echo "erro: WORK release não está vazio para bootstrap" >&2; exit 1;
+            }
+            tar -tf /run/live/source.snapshot | awk '\''
+                /^\// || /(^|\/)\.\.($|\/)/ || /[[:cntrl:]]/ { exit 1 }
+                { count++ } END { if (!count) exit 1 }
+            '\''
+            mkdir /work/source /work/bootstrap-zig
+            tar -xf /run/live/source.snapshot -C /work/source --no-same-owner --no-same-permissions
+            tar -xJf /run/live/zig.tar.xz -C /work/bootstrap-zig --strip-components=1 --no-same-owner --no-same-permissions
+            printf "%s  %s\n" "$LIVE_ZIG_SHA" /work/bootstrap-zig/zig | sha256sum -c - >/dev/null
+            proof_field() { awk -F= -v key="$1" '\''$1 == key { print substr($0, length(key)+2) }'\'' /run/live/runner-proof; }
+            printf "%s  %s\n" "$(proof_field BUILD_EFI_SOURCE_SHA256)" /work/source/bootstrap/live/build-efi | sha256sum -c - >/dev/null
+            printf "%s  %s\n" "$(proof_field LIVE_LOCK_SOURCE_SHA256)" /work/source/bootstrap/live/live-lock | sha256sum -c - >/dev/null
+            printf "%s  %s\n" "$(proof_field LIVE_LOCK_HELPER_SOURCE_SHA256)" /work/source/bootstrap/live/live-lock-helper.c | sha256sum -c - >/dev/null
+            printf "%s  %s\n" "$(proof_field BUSYBOX_CONFIG_SHA256)" /work/source/bootstrap/live/busybox-1.35.0.config | sha256sum -c - >/dev/null
+            /work/bootstrap-zig/zig cc -target x86_64-linux-musl -static -Os -std=c17 \
+                -ffile-prefix-map=/work/source=/usr/src/distropica \
+                -fdebug-prefix-map=/work/source=/usr/src/distropica \
+                -fmacro-prefix-map=/work/source=/usr/src/distropica \
+                -o /work/bootstrap-helper /work/source/bootstrap/live/live-lock-helper.c
+            chmod 0700 /work/bootstrap-helper
+            [ "$(/run/live/preflight-helper --self-sha256 "$LIVE_HELPER_BINARY_SHA" \
+                    sha256 /work/bootstrap-helper)" = "$LIVE_HELPER_BINARY_SHA" ] || {
+                echo "erro: helper recompilado diverge do pin externo" >&2; exit 1;
+            }
+            /work/bootstrap-helper --self-sha256 "$LIVE_HELPER_BINARY_SHA" \
+                verify-runner /run/live/runner-proof
+            if readelf -l /work/bootstrap-helper | grep -q INTERP; then
+                echo "erro: helper release não ficou estático" >&2; exit 1
+            fi
+        '; then :; else
+        printf '%s\n' 'erro: bootstrap release dentro do builder falhou' >&2
+        exit 1
+    fi
+
+    "$live_work/bootstrap-helper" --self-sha256 "$live_helper_sha" \
+        work-verify "$live_work" "$live_work_marker_sha" \
+        "$live_work_request_sha" "$live_proof_sha" populated
+    "$live_work/bootstrap-helper" --self-sha256 "$live_helper_sha" \
+        check-output "$live_output"
+
+    # Fase 2: toda a composição reexecuta do snapshot conferido. Somente WORK
+    # é persistente/gravável; inputs e rootfs continuam somente leitura.
+    if "$live_runner" \
+        --ro-bind "$live_rootfs" / --bind "$live_work" /work \
+        --ro-bind "$live_rootfs" /run/live/builder-root \
+        --ro-bind "$live_runner" /run/live/runner \
+        --ro-bind "$live_proof" /run/live/runner-proof \
+        --ro-bind "$live_snapshot" /run/live/source.snapshot \
+        --ro-bind "$live_linux" /run/live/linux.tar.xz \
+        --ro-bind "$live_busybox" /run/live/busybox.tar.bz2 \
+        --ro-bind "$live_e2fs" /run/live/e2fsprogs.tar.xz \
+        --ro-bind "$live_ncurses" /run/live/ncurses.tar.gz \
+        --ro-bind "$live_util" /run/live/util-linux.tar.xz \
+        --ro-bind "$live_minipax" /run/live/minipax \
+        --ro-bind "$live_minitrue" /run/live/minitrue \
+        --ro-bind "$live_zig" /run/live/zig.tar.xz \
+        --ro-bind "$live_builder_lock" /run/live/builder.lock \
+        --ro-bind "$live_license" /run/live/license-evidence \
+        --ro-bind "$live_helper" /run/live/preflight-helper \
+        --proc /proc --dev /dev --unshare-pid --unshare-net \
+        --die-with-parent --new-session --clearenv \
+        --setenv PATH /usr/bin:/bin --setenv HOME /work/home \
+        --setenv TMPDIR /work/tmp --setenv LC_ALL C --setenv LANG C \
+        --setenv TZ UTC --setenv SOURCE_DATE_EPOCH "$live_epoch" \
+        --setenv LIVE_WORK_REQUEST_SHA "$live_work_request_sha" \
+        --setenv LIVE_WORK_MARKER_SHA "$live_work_marker_sha" \
+        /run/live/preflight-helper --self-sha256 "$live_helper_sha" \
+        release-work-exec /run/live/builder-root "$live_builder_root_sha" \
+        /work "$live_work_marker_sha" "$live_work_request_sha" \
+        "$live_proof_sha" populated \
+        /work/source/bootstrap/live/build-efi --mode release --release-inner \
+        --output /work/inner-output/BOOTX64.EFI --work /work \
+        --work-request-sha256 "$live_work_request_sha" \
+        --work-marker-sha256 "$live_work_marker_sha" \
+        --linux-tar /run/live/linux.tar.xz --busybox-tar /run/live/busybox.tar.bz2 \
+        --e2fsprogs-tar /run/live/e2fsprogs.tar.xz \
+        --ncurses-tar /run/live/ncurses.tar.gz \
+        --util-linux-tar /run/live/util-linux.tar.xz \
+        --minipax /run/live/minipax --minitrue /run/live/minitrue \
+        --minipax-sha256 "$live_minipax_sha" --minitrue-sha256 "$live_minitrue_sha" \
+        --zig-tar /run/live/zig.tar.xz --zig-tar-sha256 "$live_zig_tar_sha" \
+        --zig-sha256 "$live_zig_sha" --musl-tree-sha256 "$live_musl_sha" \
+        --builder-lock /run/live/builder.lock \
+        --builder-lock-sha256 "$live_builder_lock_sha" --builder-id "$live_builder_id" \
+        --runner "$live_runner" --runner-sha256 "$live_runner_sha" \
+        --runner-proof /run/live/runner-proof --runner-proof-sha256 "$live_proof_sha" \
+        --source-snapshot /run/live/source.snapshot \
+        --source-snapshot-sha256 "$live_snapshot_sha" \
+        --license-evidence /run/live/license-evidence \
+        --license-evidence-sha256 "$live_license_sha" \
+        --live-lock-helper /work/bootstrap-helper \
+        --live-lock-helper-sha256 "$live_helper_sha" \
+        --source-date-epoch "$live_epoch" --jobs "$live_jobs" \
+        --install-device "$live_install" --keep-work; then :; else
+        printf '%s\n' 'erro: composição release interna falhou' >&2
+        exit 1
+    fi
+
+    "$live_work/bootstrap-helper" --self-sha256 "$live_helper_sha" \
+        work-verify "$live_work" "$live_work_marker_sha" \
+        "$live_work_request_sha" "$live_proof_sha" populated
+    live_expected_efi=$("$live_work/bootstrap-helper" \
+        --self-sha256 "$live_helper_sha" sha256 \
+        "$live_work/inner-output/BOOTX64.EFI") || exit 1
+    live_expected_components=$("$live_work/bootstrap-helper" \
+        --self-sha256 "$live_helper_sha" sha256 \
+        "$live_work/inner-output/BOOTX64.EFI.live-components") || exit 1
+    live_expected_runner=$("$live_work/bootstrap-helper" \
+        --self-sha256 "$live_helper_sha" sha256 \
+        "$live_work/inner-output/BOOTX64.EFI.live-runner-proof") || exit 1
+    live_expected_lock=$("$live_work/bootstrap-helper" \
+        --self-sha256 "$live_helper_sha" sha256 \
+        "$live_work/inner-output/BOOTX64.EFI.live-lock") || exit 1
+    if ! "$live_work/bootstrap-helper" --self-sha256 "$live_helper_sha" publish \
+        "$live_work/inner-output/BOOTX64.EFI" \
+        "$live_work/inner-output/BOOTX64.EFI.live-components" \
+        "$live_work/inner-output/BOOTX64.EFI.live-runner-proof" \
+        "$live_work/build/LIVE_EMBED_PROOF" \
+        "$live_work/inner-output/BOOTX64.EFI.live-lock" "$live_output"; then
+        printf '%s\n' 'erro: publicação final do EFI/sidecars falhou' >&2
+        exit 1
+    fi
+    live_check_published() {
+        live_published_path=$1
+        live_published_expected=$2
+        [ -f "$live_published_path" ] && [ ! -L "$live_published_path" ] || {
+            printf 'erro: output final ausente/não regular: %s\n' \
+                "$live_published_path" >&2
+            exit 1
+        }
+        live_published_actual=$("$live_work/bootstrap-helper" \
+            --self-sha256 "$live_helper_sha" sha256 \
+            "$live_published_path") || exit 1
+        [ "$live_published_actual" = "$live_published_expected" ] || {
+            printf 'erro: hash final divergente: %s\n' "$live_published_path" >&2
+            exit 1
+        }
+    }
+    live_check_published "$live_output" "$live_expected_efi"
+    live_check_published "$live_output.live-components" \
+        "$live_expected_components"
+    live_check_published "$live_output.live-runner-proof" \
+        "$live_expected_runner"
+    live_check_published "$live_output.live-lock" "$live_expected_lock"
+    if ! "$live_work/bootstrap-helper" --self-sha256 "$live_helper_sha" \
+        verify "$live_output" \
+        "$live_output.live-components" "$live_output.live-runner-proof" \
+        "$live_work/build/LIVE_EMBED_PROOF" "$live_output.live-lock"; then
+        printf '%s\n' 'erro: verificação terminal do EFI/sidecars falhou' >&2
+        exit 1
+    fi
+    printf 'BOOTX64.EFI vivo release: %s\n' "$live_output"
+    exit 0
+fi
+
 set -eu
-umask 022
+umask 077
 LC_ALL=C
 export LC_ALL
+unset TAR_OPTIONS GZIP BZIP2 BZIP XZ_DEFAULTS XZ_OPT CONFIG_SITE \
+    MAKEFLAGS MFLAGS CFLAGS CPPFLAGS CXXFLAGS LDFLAGS RUSTFLAGS \
+    CARGO_ENCODED_RUSTFLAGS PKG_CONFIG_PATH PKG_CONFIG_LIBDIR
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
-LINUX_VERSION=7.1.4
-LINUX_SHA256=1c63922a119675d38e3ae0f8f6ee07f15c41a786ab9ed66563749bb8c9a08e2e
+LINUX_VERSION=7.1.8
+LINUX_SHA256=ff01dcb449279d5b4cfccdb01fee639cf5ff1803f1749a77844dd33915422c49
 LINUX_URL=https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${LINUX_VERSION}.tar.xz
-BUSYBOX_SHA256=6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348
-BUSYBOX_URL=https://www.busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox
+BUSYBOX_VERSION=1.35.0
+BUSYBOX_SHA256=faeeb244c35a348a334f4a59e44626ee870fb07b6884d68c10ae8bc19f83a694
+BUSYBOX_URL=https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2
+# Compatibilidade exclusiva do modo development. Release nunca consome este
+# binário: ele é construído do tar oficial acima e da configuração versionada.
+BUSYBOX_PREBUILT_SHA256=6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348
+BUSYBOX_CONFIG=$REPO/bootstrap/live/busybox-${BUSYBOX_VERSION}.config
+BUSYBOX_CONFIG_SHA256=9bbe020ee1e7ad5f0d22d0f736d2ac8738c7e41f164d52f40a19b1b5d34699d8
 E2FSPROGS_VERSION=1.47.4
 E2FSPROGS_URL=https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v${E2FSPROGS_VERSION}/e2fsprogs-${E2FSPROGS_VERSION}.tar.xz
 E2FSPROGS_SHA256=fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b
@@ -24,12 +387,24 @@ NCURSES_SHA256=355b4cbbed880b0381a04c46617b7656e362585d52e9cf84a67e2009b749ff11
 UTIL_LINUX_VERSION=2.42.2
 UTIL_LINUX_URL=https://mirrors.edge.kernel.org/pub/linux/utils/util-linux/v2.42/util-linux-${UTIL_LINUX_VERSION}.tar.xz
 UTIL_LINUX_SHA256=03a05d3adf9602ef128f2da05b84b3205ce60c351e5737c0370f74000679ce8a
+ZIG_VERSION=0.16.0
+ZIG_TAR_SHA256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+EMPTY_SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+LIVE_LOCK_SOURCE=$REPO/bootstrap/live/live-lock
+LIVE_LOCK_HELPER_SOURCE=$REPO/bootstrap/live/live-lock-helper.c
+LIVE_LOCK_TOOL=
 RUST_TARGET=x86_64-unknown-linux-musl
 EPOCH=${SOURCE_DATE_EPOCH:-1704067200}
 JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)}
+MODE=development
+RELEASE_INNER=no
 OUTPUT=
 WORK=
+WORK_WAS_EXPLICIT=no
+WORK_REQUEST_SHA256=
+WORK_MARKER_SHA256=
 ROOTFS=${DISTROPICA_ROOTFS:-}
+ROOTFS_WAS_EXPLICIT=no
 SOURCE_INNER=
 KEEP_WORK=no
 INSTALL_DEVICE=
@@ -37,33 +412,94 @@ REMOVE_WORK=no
 PUBLISH_TMP=
 LINUX_TAR=${DISTROPICA_LINUX_TAR:-}
 BUSYBOX=${DISTROPICA_BUSYBOX:-}
+BUSYBOX_TAR=${DISTROPICA_BUSYBOX_TAR:-}
 MINIPAX_BIN=${MINIPAX:-}
 MINITRUE_BIN=${MINITRUE:-}
 E2FSPROGS_TAR=${DISTROPICA_E2FSPROGS_TAR:-}
 NCURSES_TAR=${DISTROPICA_NCURSES_TAR:-}
 UTIL_LINUX_TAR=${DISTROPICA_UTIL_LINUX_TAR:-}
+MINIPAX_SHA256=
+MINITRUE_SHA256=
+ZIG_TAR=
+ZIG_TAR_EXPECTED=
+ZIG_BIN_SHA256=
+MUSL_TREE_SHA256=
+BUILDER_LOCK=
+BUILDER_LOCK_SHA256=
+BUILDER_ID=
+RELEASE_ZIG=
+RELEASE_MUSL_CC=
+LINUX_TAR_WAS_EXPLICIT=no
+BUSYBOX_TAR_WAS_EXPLICIT=no
+E2FSPROGS_TAR_WAS_EXPLICIT=no
+NCURSES_TAR_WAS_EXPLICIT=no
+UTIL_LINUX_TAR_WAS_EXPLICIT=no
+MINIPAX_WAS_EXPLICIT=no
+MINITRUE_WAS_EXPLICIT=no
+EPOCH_WAS_EXPLICIT=no
+RUNNER_PATH=
+RUNNER_SHA256=
+RUNNER_PROOF=
+RUNNER_PROOF_SHA256=
+SOURCE_SNAPSHOT=
+SOURCE_SNAPSHOT_SHA256=
+LIVE_HELPER_BIN=
+LIVE_HELPER_BIN_SHA256=
+LICENSE_EVIDENCE=
+LICENSE_EVIDENCE_SHA256=
 
 usage() {
     cat <<'EOF'
 uso: bootstrap/live/build-efi --output BOOTX64.EFI [opções]
 
-  --work DIR          workspace novo ou já marcado pelo script (default: temporário)
+  --mode MODO         development (default) ou release
+  --work DIR          development: workspace local; release: caminho novo,
+                      privado e irmão externo do rootfs medido
   --rootfs DIR        compila o kernel DENTRO deste rootfs Distrópica, por bwrap,
-                      em vez de usar flex/bison/pkg-config/libelf do hospedeiro;
-                      exige que --work esteja sob ele
+                      em vez de usar ferramentas do hospedeiro; em release o
+                      rootfs fica RO e o WORK irmão é o único bind RW
   --keep-work         preserva o diretório temporário
-  --linux-tar ARQ     linux-7.1.4.tar.xz já baixado
-  --busybox ARQ       BusyBox x86_64-musl estático já baixado
+  --linux-tar ARQ     linux-7.1.8.tar.xz já baixado
+  --busybox-tar ARQ   tar oficial busybox-1.35.0.tar.bz2
+  --busybox ARQ       prebuilt estático legado (somente development)
   --e2fsprogs-tar ARQ e2fsprogs já baixado (mke2fs/e2fsck estáticos)
   --ncurses-tar ARQ   ncurses já baixado (a interface do cfdisk)
   --util-linux-tar ARQ util-linux já baixado (cfdisk e sfdisk estáticos)
   --minipax ARQ       Minipax x86_64-musl estático já compilado
   --minitrue ARQ      Minitrue x86_64-musl estático já compilado
+  --minipax-sha256 H  pin exato do Minipax (obrigatório em release)
+  --minitrue-sha256 H pin exato do Minitrue (obrigatório em release)
+  --zig-tar ARQ       tar oficial zig-x86_64-linux-0.16.0 (release)
+  --zig-tar-sha256 H  pin do tar Zig; precisa ser o pino desta árvore
+  --zig-sha256 H      pin do binário zig extraído (release)
+  --musl-tree-sha256 H pin da árvore lib/libc/musl do Zig (release)
+  --builder-lock ARQ  LIVE_BUILDER_FORMAT=1 que prende o rootfs produtor
+  --builder-lock-sha256 H pin exato desse lock (release)
+  --builder-id ID     identidade que precisa coincidir com o builder lock
+  --runner ARQ        bwrap absoluto autenticado externamente (release)
+  --runner-sha256 H   pin exato do bwrap
+  --runner-proof ARQ  LIVE_RUNNER_PROOF_FORMAT=1 autenticado
+  --runner-proof-sha256 H pin exato dos bytes do runner proof
+  --source-snapshot ARQ snapshot privado/pinado desta árvore
+  --source-snapshot-sha256 H pin exato do snapshot
+  --license-evidence ARQ inventário/SBOM de licenças locked do payload vivo
+  --license-evidence-sha256 H pin exato dessa evidência
+  --live-lock-helper ARQ helper estático externo/recompilado (release inner)
+  --live-lock-helper-sha256 H pin externo exato desse helper
   --install-device D  autoriza instalação automática nesse disco no boot
   --jobs N            paralelismo do kernel
+  --source-date-epoch N epoch decimal explícito (obrigatório em release)
 
-Sem os arquivos opcionais, baixa tudo com hashes pinados e compila
-Minipax/Minitrue para x86_64-unknown-linux-musl. A saída não é sobrescrita.
+Development pode baixar fontes pinadas e compilar Minipax/Minitrue. Sua saída
+declara RELEASE_ELIGIBLE=no. Release não usa PATH/CC/sysroot implícitos: exige
+todos os tarballs, os dois executores, o Zig/musl e o rootfs produtor medidos.
+A saída e os sidecars .live-components/.live-runner-proof/.live-lock não são
+sobrescritos. Crie o pai de saída como diretório privado antes de invocar, por
+exemplo: install -d -m 0700 target/media-output.
+No release, crie apenas o pai privado comum de ROOTFS e WORK: o leaf de WORK
+deve estar ausente. O outer o cria 0700, persiste um marcador ligado à
+request/proof e monta o mesmo inode em /work nas duas fases; WORK dentro do
+rootfs medido é recusado.
 
 O COMPILADOR C MUSL é insumo obrigatório e não vem deste script: mke2fs,
 e2fsck, ncursesw, cfdisk e sfdisk são compilados estáticos porque o initramfs
@@ -79,38 +515,280 @@ EOF
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        --mode) MODE=${2:?}; shift 2 ;;
+        --release-inner) RELEASE_INNER=yes; shift ;;
         --output) OUTPUT=${2:?}; shift 2 ;;
-        --work) WORK=${2:?}; shift 2 ;;
-        --rootfs) ROOTFS=${2:?}; shift 2 ;;
+        --work) WORK=${2:?}; WORK_WAS_EXPLICIT=yes; shift 2 ;;
+        --work-request-sha256) WORK_REQUEST_SHA256=${2:?}; shift 2 ;;
+        --work-marker-sha256) WORK_MARKER_SHA256=${2:?}; shift 2 ;;
+        --rootfs) ROOTFS=${2:?}; ROOTFS_WAS_EXPLICIT=yes; shift 2 ;;
         --keep-work) KEEP_WORK=yes; shift ;;
-        --linux-tar) LINUX_TAR=${2:?}; shift 2 ;;
+        --linux-tar) LINUX_TAR=${2:?}; LINUX_TAR_WAS_EXPLICIT=yes; shift 2 ;;
+        --busybox-tar) BUSYBOX_TAR=${2:?}; BUSYBOX_TAR_WAS_EXPLICIT=yes; shift 2 ;;
         --busybox) BUSYBOX=${2:?}; shift 2 ;;
-        --e2fsprogs-tar) E2FSPROGS_TAR=${2:?}; shift 2 ;;
-        --ncurses-tar) NCURSES_TAR=${2:?}; shift 2 ;;
-        --util-linux-tar) UTIL_LINUX_TAR=${2:?}; shift 2 ;;
-        --minipax) MINIPAX_BIN=${2:?}; shift 2 ;;
-        --minitrue) MINITRUE_BIN=${2:?}; shift 2 ;;
-        --install-device) INSTALL_DEVICE=${2:?}; shift 2 ;;
+        --e2fsprogs-tar) E2FSPROGS_TAR=${2:?}; E2FSPROGS_TAR_WAS_EXPLICIT=yes; shift 2 ;;
+        --ncurses-tar) NCURSES_TAR=${2:?}; NCURSES_TAR_WAS_EXPLICIT=yes; shift 2 ;;
+        --util-linux-tar) UTIL_LINUX_TAR=${2:?}; UTIL_LINUX_TAR_WAS_EXPLICIT=yes; shift 2 ;;
+        --minipax) MINIPAX_BIN=${2:?}; MINIPAX_WAS_EXPLICIT=yes; shift 2 ;;
+        --minitrue) MINITRUE_BIN=${2:?}; MINITRUE_WAS_EXPLICIT=yes; shift 2 ;;
+        --minipax-sha256) MINIPAX_SHA256=${2:?}; shift 2 ;;
+        --minitrue-sha256) MINITRUE_SHA256=${2:?}; shift 2 ;;
+        --zig-tar) ZIG_TAR=${2:?}; shift 2 ;;
+        --zig-tar-sha256) ZIG_TAR_EXPECTED=${2:?}; shift 2 ;;
+        --zig-sha256) ZIG_BIN_SHA256=${2:?}; shift 2 ;;
+        --musl-tree-sha256) MUSL_TREE_SHA256=${2:?}; shift 2 ;;
+        --builder-lock) BUILDER_LOCK=${2:?}; shift 2 ;;
+        --builder-lock-sha256) BUILDER_LOCK_SHA256=${2:?}; shift 2 ;;
+        --builder-id) BUILDER_ID=${2:?}; shift 2 ;;
+        --runner) RUNNER_PATH=${2:?}; shift 2 ;;
+        --runner-sha256) RUNNER_SHA256=${2:?}; shift 2 ;;
+        --runner-proof) RUNNER_PROOF=${2:?}; shift 2 ;;
+        --runner-proof-sha256) RUNNER_PROOF_SHA256=${2:?}; shift 2 ;;
+        --source-snapshot) SOURCE_SNAPSHOT=${2:?}; shift 2 ;;
+        --source-snapshot-sha256) SOURCE_SNAPSHOT_SHA256=${2:?}; shift 2 ;;
+        --live-lock-helper) LIVE_HELPER_BIN=${2:?}; shift 2 ;;
+        --live-lock-helper-sha256) LIVE_HELPER_BIN_SHA256=${2:?}; shift 2 ;;
+        --license-evidence) LICENSE_EVIDENCE=${2:?}; shift 2 ;;
+        --license-evidence-sha256) LICENSE_EVIDENCE_SHA256=${2:?}; shift 2 ;;
+        --install-device) INSTALL_DEVICE=${2-}; shift 2 ;;
         --jobs) JOBS=${2:?}; shift 2 ;;
+        --source-date-epoch) EPOCH=${2:?}; EPOCH_WAS_EXPLICIT=yes; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "erro: opção desconhecida: $1" >&2; usage >&2; exit 1 ;;
     esac
 done
 
+[ "$MODE" = development ] || [ "$MODE" = release ] || {
+    echo "erro: --mode precisa ser development ou release" >&2; exit 1;
+}
 [ -n "$OUTPUT" ] || { echo "erro: --output é obrigatório" >&2; exit 1; }
 [ ! -e "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || {
     echo "erro: saída já existe: $OUTPUT" >&2; exit 1;
 }
+for live_sidecar in "$OUTPUT.live-components" "$OUTPUT.live-runner-proof" \
+    "$OUTPUT.live-lock"; do
+    [ ! -e "$live_sidecar" ] && [ ! -L "$live_sidecar" ] || {
+        echo "erro: sidecar já existe: $live_sidecar" >&2; exit 1;
+    }
+done
 case "$INSTALL_DEVICE" in
     ""|/dev/*) ;;
     *) echo "erro: --install-device precisa estar sob /dev" >&2; exit 1 ;;
 esac
 case "$JOBS" in *[!0-9]*|"") echo "erro: --jobs inválido" >&2; exit 1 ;; esac
 [ "$JOBS" -ge 1 ] || { echo "erro: --jobs precisa ser pelo menos 1" >&2; exit 1; }
+[ -z "$BUSYBOX" ] || [ -z "$BUSYBOX_TAR" ] || {
+    echo "erro: escolha --busybox-tar ou --busybox, não ambos" >&2; exit 1;
+}
+[ -f "$LIVE_LOCK_SOURCE" ] && [ ! -L "$LIVE_LOCK_SOURCE" ] || {
+    echo "erro: fonte live-lock ausente" >&2; exit 1;
+}
+[ -f "$LIVE_LOCK_HELPER_SOURCE" ] && [ ! -L "$LIVE_LOCK_HELPER_SOURCE" ] || {
+    echo "erro: fonte do helper nativo live-lock ausente" >&2; exit 1;
+}
+[ -f "$BUSYBOX_CONFIG" ] && [ ! -L "$BUSYBOX_CONFIG" ] || {
+    echo "erro: configuração versionada do BusyBox ausente" >&2; exit 1;
+}
+
+is_sha256() {
+    case "$1" in *[!0-9a-f]*|'') return 1 ;; esac
+    [ "${#1}" -eq 64 ]
+}
+
+release_trusted_parent() {
+    input_parent=$(dirname -- "$1")
+    logical_parent=$(realpath -s -- "$input_parent" 2>/dev/null) || return 1
+    physical_parent=$(realpath -e -- "$input_parent" 2>/dev/null) || return 1
+    [ "$logical_parent" = "$physical_parent" ] || return 1
+    [ -d "$physical_parent" ] && [ ! -L "$physical_parent" ] || return 1
+    [ "$(stat -c '%u' -- "$physical_parent")" = "$(id -u)" ] || return 1
+    parent_mode=$(stat -c '%a' -- "$physical_parent") || return 1
+    parent_mode=$(printf '%s\n' "$parent_mode" | sed 's/.*\(...\)$/\1/')
+    parent_group=$(printf '%s' "$parent_mode" | cut -c2)
+    parent_other=$(printf '%s' "$parent_mode" | cut -c3)
+    case "$parent_group$parent_other" in *2*|*3*|*6*|*7*) return 1 ;; esac
+    return 0
+}
+
+# Falha antes de download, extração ou compilação. O helper nativo repetirá a
+# caminhada fd-based no commit; esta guarda precoce existe para não gastar
+# horas produzindo algo que não poderia ser publicado com segurança.
+output_parent_early=$(dirname -- "$OUTPUT")
+[ -d "$output_parent_early" ] && [ ! -L "$output_parent_early" ] || {
+    echo "erro: pai da saída precisa existir previamente" >&2
+    echo "crie um diretório privado, por exemplo: install -d -m 0700 target/media-output" >&2
+    exit 1
+}
+release_trusted_parent "$OUTPUT" || {
+    echo "erro: pai da saída precisa ser real, do euid e sem 0022" >&2
+    exit 1
+}
+
+release_regular() { # caminho hash-esperado rótulo
+    release_path=$1
+    release_expected=$2
+    release_label=$3
+    is_sha256 "$release_expected" || {
+        echo "erro: sha256 esperado inválido para $release_label" >&2; exit 1;
+    }
+    if [ "$MODE" = release ] && [ -n "$LIVE_LOCK_TOOL" ] &&
+       [ "$release_path" != "$LIVE_LOCK_TOOL" ]; then
+        release_actual=$("$LIVE_LOCK_TOOL" \
+            --self-sha256 "$LIVE_HELPER_BIN_SHA256" sha256 "$release_path") || {
+            echo "erro: helper recusou $release_label" >&2; exit 1;
+        }
+        [ "$release_actual" = "$release_expected" ] || {
+            echo "erro: sha256 divergente em $release_label" >&2
+            echo "esperado: $release_expected" >&2
+            echo "obtido:  $release_actual" >&2
+            exit 1
+        }
+        return 0
+    fi
+    release_logical=$(realpath -s -- "$release_path" 2>/dev/null) || {
+        echo "erro: $release_label não tem caminho canônico" >&2; exit 1;
+    }
+    release_physical=$(realpath -e -- "$release_path" 2>/dev/null) || {
+        echo "erro: $release_label ausente" >&2; exit 1;
+    }
+    [ "$release_logical" = "$release_physical" ] || {
+        echo "erro: $release_label atravessa symlink" >&2; exit 1;
+    }
+    [ -f "$release_physical" ] && [ ! -L "$release_physical" ] || {
+        echo "erro: $release_label não é arquivo regular/no-follow" >&2; exit 1;
+    }
+    release_trusted_parent "$release_physical" || {
+        echo "erro: pai de $release_label não é real/privado/do euid" >&2; exit 1;
+    }
+    [ "$(stat -c '%h' -- "$release_physical")" -eq 1 ] || {
+        echo "erro: $release_label tem hardlinks" >&2; exit 1;
+    }
+    [ "$(stat -c '%u' -- "$release_physical")" = "$(id -u)" ] || {
+        echo "erro: $release_label não pertence ao euid" >&2; exit 1;
+    }
+    release_mode=$(stat -c '%a' -- "$release_physical")
+    release_mode=$(printf '%s\n' "$release_mode" | sed 's/.*\(...\)$/\1/')
+    release_group=$(printf '%s' "$release_mode" | cut -c2)
+    release_other=$(printf '%s' "$release_mode" | cut -c3)
+    case "$release_group$release_other" in *2*|*3*|*6*|*7*)
+        echo "erro: $release_label permite escrita a grupo/outros" >&2; exit 1 ;;
+    esac
+    release_before=$(stat -c '%F|%d|%i|%h|%s|%Y|%u|%a' -- "$release_physical")
+    release_actual=$(sha256sum -- "$release_physical" | awk '{print $1}')
+    release_after=$(stat -c '%F|%d|%i|%h|%s|%Y|%u|%a' -- "$release_physical")
+    [ "$release_before" = "$release_after" ] || {
+        echo "erro: $release_label mudou durante a leitura" >&2; exit 1;
+    }
+    [ "$release_actual" = "$release_expected" ] || {
+        echo "erro: sha256 divergente em $release_label" >&2
+        echo "esperado: $release_expected" >&2
+        echo "obtido:  $release_actual" >&2
+        exit 1
+    }
+}
+
+# Release tem fronteira fechada: não existe descoberta pelo PATH nem build de
+# executores Rust durante esta invocação. Os hashes esperados são parâmetros
+# separados dos caminhos e entram, factualmente, no LIVE_COMPONENTS.
+if [ "$MODE" = release ]; then
+    [ "$EPOCH_WAS_EXPLICIT" = yes ] || {
+        echo "erro: release exige --source-date-epoch explícito" >&2; exit 1;
+    }
+    [ "$WORK_WAS_EXPLICIT" = yes ] || {
+        echo "erro: release exige --work explícito, novo e irmão externo do rootfs" >&2; exit 1;
+    }
+    if [ "$RELEASE_INNER" = no ]; then
+        [ "$ROOTFS_WAS_EXPLICIT" = yes ] || {
+            echo "erro: release exige --rootfs explícito" >&2; exit 1;
+        }
+        [ -n "$RUNNER_PATH" ] && [ -n "$RUNNER_SHA256" ] || {
+            echo "erro: release exige --runner/--runner-sha256" >&2; exit 1;
+        }
+    else
+        [ -n "$LIVE_HELPER_BIN" ] && [ -n "$LIVE_HELPER_BIN_SHA256" ] || {
+            echo "erro: release inner exige helper medido+caminho+pin" >&2; exit 1;
+        }
+        [ -n "$WORK_REQUEST_SHA256" ] && [ -n "$WORK_MARKER_SHA256" ] || {
+            echo "erro: release inner exige request+marcador pinados do WORK" >&2
+            exit 1
+        }
+    fi
+    [ -z "$BUSYBOX" ] || {
+        echo "erro: release recusa --busybox prebuilt; forneça --busybox-tar" >&2; exit 1;
+    }
+    if [ -n "${E2FS_CC:-}" ] || [ -n "${CC_x86_64_unknown_linux_musl:-}" ] ||
+       [ -n "${TARGET_CC:-}" ] || [ -n "${CC:-}" ] ||
+       [ -n "${CROSS_COMPILE:-}" ] || [ -n "${ZIG:-}" ]; then
+        echo "erro: release recusa CC/ZIG/sysroot implícito do ambiente" >&2
+        echo "use --zig-tar e os pins --zig-sha256/--musl-tree-sha256" >&2
+        exit 1
+    fi
+    for explicit_marker in LINUX_TAR_WAS_EXPLICIT BUSYBOX_TAR_WAS_EXPLICIT \
+        E2FSPROGS_TAR_WAS_EXPLICIT NCURSES_TAR_WAS_EXPLICIT \
+        UTIL_LINUX_TAR_WAS_EXPLICIT MINIPAX_WAS_EXPLICIT \
+        MINITRUE_WAS_EXPLICIT; do
+        eval "explicit_value=\${$explicit_marker}"
+        [ "$explicit_value" = yes ] || {
+            echo "erro: release exige flag explícita para $explicit_marker" >&2; exit 1;
+        }
+    done
+    for required in LINUX_TAR BUSYBOX_TAR E2FSPROGS_TAR NCURSES_TAR \
+        UTIL_LINUX_TAR MINIPAX_BIN MINITRUE_BIN MINIPAX_SHA256 \
+        MINITRUE_SHA256 ZIG_TAR ZIG_TAR_EXPECTED ZIG_BIN_SHA256 \
+        MUSL_TREE_SHA256 BUILDER_LOCK BUILDER_LOCK_SHA256 BUILDER_ID \
+        RUNNER_PROOF RUNNER_PROOF_SHA256 SOURCE_SNAPSHOT \
+        SOURCE_SNAPSHOT_SHA256 LICENSE_EVIDENCE \
+        LICENSE_EVIDENCE_SHA256; do
+        eval "value=\${$required}"
+        [ -n "$value" ] || { echo "erro: release exige $required explícito" >&2; exit 1; }
+    done
+    for pin in "$MINIPAX_SHA256" "$MINITRUE_SHA256" "$ZIG_TAR_EXPECTED" \
+        "$ZIG_BIN_SHA256" "$MUSL_TREE_SHA256" "$BUILDER_LOCK_SHA256" \
+        "$RUNNER_PROOF_SHA256" "$SOURCE_SNAPSHOT_SHA256" \
+        "$LICENSE_EVIDENCE_SHA256" "$LIVE_HELPER_BIN_SHA256" \
+        "${WORK_REQUEST_SHA256:-$EMPTY_SHA256}" \
+        "${WORK_MARKER_SHA256:-$EMPTY_SHA256}" \
+        "${RUNNER_SHA256:-$EMPTY_SHA256}"; do
+        is_sha256 "$pin" || { echo "erro: pin sha256 inválido no modo release" >&2; exit 1; }
+    done
+fi
+
+MINIPAX_ORIGIN=built-from-crates
+MINITRUE_ORIGIN=built-from-crates
+[ -z "$MINIPAX_BIN" ] || MINIPAX_ORIGIN=provided-static
+[ -z "$MINITRUE_BIN" ] || MINITRUE_ORIGIN=provided-static
+BUSYBOX_ORIGIN=built-from-official-source
+[ -z "$BUSYBOX" ] || BUSYBOX_ORIGIN=development-prebuilt
+
+# Imprime arquivos que têm o cabeçalho de uma chave minisign secreta. Uma
+# chave é, por formato, um texto de poucas centenas de bytes e o cabeçalho é a
+# primeira linha. Ler só essa linha em arquivos pequenos evita transformar uma
+# guarda barata numa releitura de gigabytes de tarballs/binários. `find` não
+# segue symlinks e -xdev impede a auditoria de atravessar um mount acidental.
+find_minisign_secret() { # arvore profundidade-maxima
+    [ -d "$1" ] || return 0
+    find "$1" -xdev -maxdepth "$2" -type f -size -32769c \
+        -exec awk '
+            FNR == 1 {
+                if ($0 ~ /^untrusted comment: minisign (encrypted )?secret key.*$/)
+                    print FILENAME
+                nextfile
+            }
+        ' {} + 2>/dev/null || true
+}
 
 if [ -z "$WORK" ]; then
     WORK=$(mktemp -d "${TMPDIR:-/tmp}/distropica-live.XXXXXXXX")
     [ "$KEEP_WORK" = yes ] || REMOVE_WORK=yes
+elif [ "$MODE" = release ] && [ "$RELEASE_INNER" = yes ]; then
+    # O outer criou este diretório como irmão do rootfs, persistiu seu marker
+    # e o montou no único ponto RW /work. Não adotamos/criamos diretório algum
+    # no inner; a validação nativa completa ocorre em validate_release_inner.
+    [ -d "$WORK" ] && [ ! -L "$WORK" ] || {
+        echo "erro: release inner exige WORK já montado e real" >&2; exit 1;
+    }
+    WORK=$(CDPATH= cd -- "$WORK" && pwd -P)
+    WORK_INNER=$WORK
 else
     work_was_new=no
     if [ ! -e "$WORK" ] && [ ! -L "$WORK" ]; then
@@ -121,6 +799,7 @@ else
         echo "erro: --work precisa ser diretório real: $WORK" >&2; exit 1;
     }
     WORK=$(CDPATH= cd -- "$WORK" && pwd -P)
+    WORK_INNER=$WORK
     WORK_MARKER=$WORK/.distropica-live-work
     if [ "$work_was_new" = yes ]; then
         (set -C; printf '%s\n' 'DISTROPICA_LIVE_WORK_FORMAT=1' > "$WORK_MARKER") || {
@@ -134,6 +813,85 @@ else
     }
 fi
 
+validate_release_inner() {
+    [ "$RELEASE_INNER" = yes ] || {
+        echo "erro: launcher release não reexecutou no builder medido" >&2
+        exit 1
+    }
+    LIVE_LOCK_TOOL=$LIVE_HELPER_BIN
+    [ -x "$LIVE_LOCK_TOOL" ] && [ -f "$LIVE_LOCK_TOOL" ] &&
+        [ ! -L "$LIVE_LOCK_TOOL" ] || {
+        echo "erro: helper nativo medido ausente no release inner" >&2; exit 1;
+    }
+    release_regular "$LIVE_LOCK_TOOL" "$LIVE_HELPER_BIN_SHA256" \
+        'helper nativo recompilado'
+    "$LIVE_LOCK_TOOL" --self-sha256 "$LIVE_HELPER_BIN_SHA256" \
+        work-verify "$WORK" "$WORK_MARKER_SHA256" \
+        "$WORK_REQUEST_SHA256" "$RUNNER_PROOF_SHA256" populated
+    "$LIVE_LOCK_TOOL" --self-sha256 "$LIVE_HELPER_BIN_SHA256" \
+        verify-runner "$RUNNER_PROOF"
+
+    release_regular "$RUNNER_PROOF" "$RUNNER_PROOF_SHA256" 'runner proof'
+    release_regular "$SOURCE_SNAPSHOT" "$SOURCE_SNAPSHOT_SHA256" 'source snapshot'
+    release_regular "$BUILDER_LOCK" "$BUILDER_LOCK_SHA256" 'builder lock'
+    [ "$(sed -n '1p' "$BUILDER_LOCK")" = 'LIVE_BUILDER_FORMAT=1' ] || {
+        echo "erro: builder lock não tem LIVE_BUILDER_FORMAT=1" >&2; exit 1;
+    }
+    builder_lock_id=$(sed -n '2s/^ID=//p' "$BUILDER_LOCK")
+    BUILDER_ROOTFS_SHA256=$(sed -n '3s/^ROOTFS_TREE_SHA256=//p' "$BUILDER_LOCK")
+    [ "$(wc -l < "$BUILDER_LOCK" | tr -d ' ')" -eq 3 ] || {
+        echo "erro: builder lock tem campo ausente/extra" >&2; exit 1;
+    }
+    case "$BUILDER_ID" in *[!A-Za-z0-9._:+-]*|'')
+        echo "erro: --builder-id não é identidade canônica" >&2; exit 1 ;;
+    esac
+    [ "$builder_lock_id" = "$BUILDER_ID" ] || {
+        echo "erro: identidade do builder lock diverge de --builder-id" >&2; exit 1;
+    }
+    is_sha256 "$BUILDER_ROOTFS_SHA256" || {
+        echo "erro: ROOTFS_TREE_SHA256 inválido no builder lock" >&2; exit 1;
+    }
+    release_builder_view=/run/live/builder-root
+    case "${DISTROPICA_LIVE_TEST_DISPATCH_ONLY:-}" in
+        '')
+            [ -z "${DISTROPICA_LIVE_TEST_ROOTFS_VIEW:-}" ] || {
+                echo "erro: rootfs view de teste sem probe dispatch-only" >&2; exit 1;
+            } ;;
+        1)
+            [ -n "${DISTROPICA_LIVE_TEST_ROOTFS_VIEW:-}" ] || {
+                echo "erro: probe dispatch-only exige rootfs view explícita" >&2; exit 1;
+            }
+            release_builder_view=$DISTROPICA_LIVE_TEST_ROOTFS_VIEW ;;
+        *) echo "erro: probe dispatch-only inválido" >&2; exit 1 ;;
+    esac
+    [ -d "$release_builder_view" ] && [ ! -L "$release_builder_view" ] || {
+        echo "erro: release inner sem visão medida do builder" >&2; exit 1;
+    }
+    measured_builder=$("$LIVE_LOCK_TOOL" --self-sha256 \
+        "$LIVE_HELPER_BIN_SHA256" tree-hash "$release_builder_view")
+    [ "$measured_builder" = "$BUILDER_ROOTFS_SHA256" ] || {
+        echo "erro: rootfs produtor diverge do builder lock" >&2
+        echo "esperado: $BUILDER_ROOTFS_SHA256" >&2
+        echo "obtido:  $measured_builder" >&2
+        exit 1
+    }
+}
+
+BUILDER_ROOTFS_SHA256=
+if [ "$MODE" = release ]; then
+    validate_release_inner
+else
+    LIVE_LOCK_TOOL=$WORK/live-lock-helper-development
+    cc_path=$(command -v cc 2>/dev/null || true)
+    [ -n "$cc_path" ] || {
+        echo "erro: development exige compilador C para o helper live-lock" >&2
+        exit 1
+    }
+    "$cc_path" -std=c17 -O2 -Wall -Wextra -Werror \
+        -o "$LIVE_LOCK_TOOL" "$LIVE_LOCK_HELPER_SOURCE"
+    chmod 0700 "$LIVE_LOCK_TOOL"
+fi
+
 # Kernel construído DENTRO do rootfs Distrópica.
 #
 # O kernel exige flex, bison, pkg-config e libelf. Pegá-los do hospedeiro
@@ -142,9 +900,9 @@ fi
 # kernel com as próprias ferramentas: é o que a receita newspeak/linux faz.
 # Aqui é o mesmo, para o kernel VIVO.
 #
-# O `--work` precisa estar sob o rootfs porque o bwrap monta o rootfs como /:
-# um caminho de fora simplesmente não existe lá dentro. Guardamos a forma
-# interna para passar ao make.
+# Em development legado, um segundo bwrap precisa enxergar o WORK sob o
+# rootfs. Release já foi reexecutado com o WORK irmão montado separadamente em
+# /work e não entra neste ramo.
 if [ -n "$ROOTFS" ]; then
     command -v bwrap >/dev/null 2>&1 || {
         echo "erro: --rootfs exige bwrap" >&2; exit 1;
@@ -152,11 +910,58 @@ if [ -n "$ROOTFS" ]; then
     [ -d "$ROOTFS" ] && [ ! -L "$ROOTFS" ] || {
         echo "erro: --rootfs precisa ser diretório real: $ROOTFS" >&2; exit 1;
     }
+    if [ "$MODE" = release ]; then
+        rootfs_logical=$(realpath -s -- "$ROOTFS" 2>/dev/null || true)
+        rootfs_physical=$(realpath -e -- "$ROOTFS" 2>/dev/null || true)
+        [ -n "$rootfs_logical" ] && [ "$rootfs_logical" = "$rootfs_physical" ] &&
+            release_trusted_parent "$ROOTFS/.distropica-probe" || {
+            echo "erro: --rootfs release atravessa symlink ou não é privado/do euid" >&2
+            exit 1
+        }
+    fi
     ROOTFS=$(CDPATH= cd -- "$ROOTFS" && pwd -P)
+
+    # A chave que assina o canal nao e insumo do sistema instalado nem do
+    # kernel vivo. Duas copias deixadas por invocacoes manuais ja apareceram
+    # neste rootfs; a ISO daquela vez nao as levou por uma propriedade
+    # incidental da composicao. A propriedade agora e guarda: recusa qualquer
+    # arquivo que tenha a linha de cabecalho de uma chave secreta minisign.
+    #
+    # NAO se usa `grep -R` aqui. O rootfs de build medido tem 6 GiB, inclusive
+    # 1,3 GiB de uma arvore temporaria do GCC; reler tudo acrescentava minutos
+    # a cada EFI. Pior: `grep -R` segue links simbolicos e poderia sair da
+    # arvore auditada. As chaves entram no rootfs apenas para o comando de
+    # assinatura rodado no bwrap, portanto a guarda cobre os lugares de estado
+    # e staging em que elas podem legitimamente ter sido deixadas. Limites de
+    # profundidade excluem as arvores de compilacao, nao os arquivos no topo
+    # de tmp/var/tmp — exatamente onde as duas copias reais foram encontradas.
+    # Abaixo, uma segunda guarda percorre o initramfs INTEIRO depois de pronto:
+    # o que efetivamente embarca nunca depende desta reducao de escopo.
+    #
+    # O casamento da linha inteira nao confunde o texto embutido no proprio
+    # binario do minitrue com um arquivo de chave real.
+    SECRET_KEY_FILE=$({
+        find_minisign_secret "$ROOTFS" 1
+        find_minisign_secret "$ROOTFS/etc" 16
+        find_minisign_secret "$ROOTFS/root" 8
+        find_minisign_secret "$ROOTFS/home" 8
+        find_minisign_secret "$ROOTFS/tmp" 2
+        find_minisign_secret "$ROOTFS/var/tmp" 2
+        find_minisign_secret "$ROOTFS/var/lib" 6
+        find_minisign_secret "$ROOTFS/var/cache" 2
+        find_minisign_secret "$ROOTFS/usr/local" 6
+    })
+    if [ -n "$SECRET_KEY_FILE" ]; then
+        echo "erro: chave minisign secreta encontrada dentro do rootfs" >&2
+        echo "  caminho: $(printf '%s\n' "$SECRET_KEY_FILE" | sed -n '1p')" >&2
+        echo "remova-a antes de compor a midia; a chave publica e o unico" >&2
+        echo "material de canal que pode chegar ao sistema instalado" >&2
+        exit 1
+    fi
     case "$WORK" in
         "$ROOTFS"/?*) ;;
         *)
-            echo "erro: com --rootfs, o --work precisa estar dentro dele" >&2
+            echo "erro: em development com --rootfs, o --work precisa estar dentro dele" >&2
             echo "  rootfs: $ROOTFS" >&2
             echo "  work:  $WORK" >&2
             exit 1
@@ -172,16 +977,63 @@ fi
 # resolve dependência transitiva sozinho. É o mesmo tratamento que a receita
 # newspeak/linux já aplica pelo mesmo motivo. No hospedeiro isso é inócuo,
 # porque /usr/lib já está no caminho padrão do ld de lá.
+release_run() {
+    [ "$MODE" = release ] && [ "$RELEASE_INNER" = yes ] || {
+        echo "erro: release_run fora do builder release interno" >&2; exit 1;
+    }
+    # O processo inteiro já foi reexecutado pelo launcher em rootfs ro-bind,
+    # PATH fixo, rede isolada e somente /work gravável.
+    "$@"
+}
+
+# Probe focal: atravessa exatamente validate_release_inner e o dispatcher
+# acima, executa apenas /bin/true e para sem criar/copiar/publicar EFI ou
+# sidecars. O launcher real usa --clearenv e nunca injeta estas variáveis.
+# Mesmo numa invocação direta, o probe não qualifica saída alguma.
+if [ "$MODE" = release ] &&
+   [ "${DISTROPICA_LIVE_TEST_DISPATCH_ONLY:-}" = 1 ]; then
+    for probe_output in "$OUTPUT" "$OUTPUT.live-components" \
+        "$OUTPUT.live-runner-proof" "$OUTPUT.live-lock"; do
+        [ ! -e "$probe_output" ] && [ ! -L "$probe_output" ] || {
+            echo "erro: probe dispatch encontrou output" >&2; exit 1;
+        }
+    done
+    case "${DISTROPICA_LIVE_TEST_DISPATCH_RESULT:-success}" in
+        success) release_run /bin/true ;;
+        failure) release_run /bin/false ;;
+        *) echo "erro: resultado do probe inválido" >&2; exit 1 ;;
+    esac
+    probe_trace=$WORK/.distropica-live-inner-dispatch
+    [ ! -e "$probe_trace" ] && [ ! -L "$probe_trace" ] || {
+        echo "erro: trace do probe já existe" >&2; exit 1;
+    }
+    (set -C; umask 077; {
+        printf '%s\n' 'DISTROPICA_LIVE_INNER_DISPATCH_FORMAT=1'
+        printf 'RUNNER_PROOF_SHA256=%s\n' "$RUNNER_PROOF_SHA256"
+    } > "$probe_trace") || {
+        echo "erro: não criei trace do probe" >&2; exit 1;
+    }
+    chmod 0600 "$probe_trace"
+    printf '%s\n' 'DISTROPICA_LIVE_INNER_DISPATCH_VALIDATED=1'
+    exit 0
+fi
+
 kmake() {
     if [ -n "$ROOTFS" ]; then
-        bwrap --bind "$ROOTFS" / --proc /proc --dev /dev \
-            --unshare-pid --die-with-parent --clearenv \
-            --setenv PATH /usr/bin:/bin \
-            --setenv HOME /tmp \
-            --setenv LC_ALL C --setenv LANG C --setenv TZ UTC \
-            --setenv SOURCE_DATE_EPOCH "$EPOCH" \
-            make -C "$SOURCE_INNER" \
-            HOSTLDFLAGS="-Wl,-rpath-link,/usr/lib" "$@"
+        if [ "$MODE" = release ]; then
+            release_run make -C "$SOURCE_INNER" \
+                HOSTLDFLAGS="-Wl,-rpath-link,/usr/lib" "$@"
+        else
+            bwrap --ro-bind "$ROOTFS" / --bind "$WORK" "$WORK_INNER" \
+                --proc /proc --dev /dev \
+                --unshare-pid --die-with-parent --clearenv \
+                --setenv PATH /usr/bin:/bin \
+                --setenv HOME /tmp \
+                --setenv LC_ALL C --setenv LANG C --setenv TZ UTC \
+                --setenv SOURCE_DATE_EPOCH "$EPOCH" \
+                make -C "$SOURCE_INNER" \
+                HOSTLDFLAGS="-Wl,-rpath-link,/usr/lib" "$@"
+        fi
     else
         make -C "$SOURCE" "$@"
     fi
@@ -254,22 +1106,41 @@ if [ -z "$LINUX_TAR" ]; then
     LINUX_TAR=$WORK/linux-${LINUX_VERSION}.tar.xz
     [ -f "$LINUX_TAR" ] || fetch "$LINUX_URL" "$LINUX_TAR"
 fi
-check_hash "$LINUX_SHA256" "$LINUX_TAR"
-
-if [ -z "$BUSYBOX" ]; then
-    BUSYBOX=$WORK/busybox
-    [ -f "$BUSYBOX" ] || fetch "$BUSYBOX_URL" "$BUSYBOX"
-    chmod 755 "$BUSYBOX"
+if [ "$MODE" = release ]; then
+    release_regular "$LINUX_TAR" "$LINUX_SHA256" 'tar Linux'
+else
+    check_hash "$LINUX_SHA256" "$LINUX_TAR"
 fi
-check_hash "$BUSYBOX_SHA256" "$BUSYBOX"
-require_static "$BUSYBOX"
+
+if [ -z "$BUSYBOX" ] && [ -z "$BUSYBOX_TAR" ]; then
+    BUSYBOX_TAR=$WORK/busybox-${BUSYBOX_VERSION}.tar.bz2
+    [ -f "$BUSYBOX_TAR" ] || fetch "$BUSYBOX_URL" "$BUSYBOX_TAR"
+fi
+if [ -n "$BUSYBOX_TAR" ]; then
+    if [ "$MODE" = release ]; then
+        release_regular "$BUSYBOX_TAR" "$BUSYBOX_SHA256" 'tar BusyBox'
+        release_regular "$BUSYBOX_CONFIG" "$BUSYBOX_CONFIG_SHA256" \
+            'configuração BusyBox'
+    else
+        check_hash "$BUSYBOX_SHA256" "$BUSYBOX_TAR"
+        check_hash "$BUSYBOX_CONFIG_SHA256" "$BUSYBOX_CONFIG"
+    fi
+else
+    [ "$MODE" = development ] || {
+        echo "erro: BusyBox prebuilt é proibido em release" >&2; exit 1;
+    }
+    check_hash "$BUSYBOX_PREBUILT_SHA256" "$BUSYBOX"
+    require_static "$BUSYBOX"
+fi
 
 build_rust_binary() {
     package=$1
     manifest=$REPO/$package/Cargo.toml
     destination=$WORK/cargo-$package
+    cargo_feature_flags=
+    [ "$package" != minitrue ] || cargo_feature_flags=--no-default-features
     CARGO_TARGET_DIR=$destination cargo build --locked --release \
-        --target "$RUST_TARGET" --manifest-path "$manifest"
+        --target "$RUST_TARGET" $cargo_feature_flags --manifest-path "$manifest"
     echo "$destination/$RUST_TARGET/release/$package"
 }
 
@@ -327,6 +1198,14 @@ EOF
 # `clang` pelado NÃO entra: é glibc disfarçado, e é exatamente o que o probe
 # acima existe para barrar.
 select_e2fs_cc() {
+    if [ "$MODE" = release ]; then
+        [ -n "$RELEASE_MUSL_CC" ] && [ -x "$RELEASE_MUSL_CC" ] || {
+            echo "erro: toolchain Zig/musl de release não foi materializada" >&2
+            exit 1
+        }
+        echo "$RELEASE_MUSL_CC"
+        return 0
+    fi
     if [ -n "${E2FS_CC:-}" ]; then
         # shellcheck disable=SC2086
         require_musl_cc $E2FS_CC || {
@@ -359,6 +1238,114 @@ EOF
     exit 1
 }
 
+validate_tar_members() { # tar opção-de-listagem
+    archive=$1
+    list_flag=$2
+    tar "$list_flag" "$archive" | awk '
+        /^\// { exit 1 }
+        /(^|\/)\.\.($|\/)/ { exit 1 }
+        /[[:cntrl:]]/ { exit 1 }
+        { count++ }
+        END { if (count == 0) exit 1 }
+    ' || { echo "erro: tar vazio ou com caminho inseguro: $archive" >&2; exit 1; }
+}
+
+if [ "$MODE" = release ]; then
+    [ "$ZIG_TAR_EXPECTED" = "$ZIG_TAR_SHA256" ] || {
+        echo "erro: release exige o tar Zig $ZIG_VERSION pinado por esta árvore" >&2
+        exit 1
+    }
+    release_regular "$ZIG_TAR" "$ZIG_TAR_EXPECTED" 'tar Zig'
+    validate_tar_members "$ZIG_TAR" -tJf
+    zig_root=$WORK/zig-${ZIG_VERSION}-release
+    rm -rf -- "$zig_root"
+    mkdir -p "$zig_root"
+    tar -xJf "$ZIG_TAR" -C "$zig_root" --strip-components=1
+    RELEASE_ZIG=$zig_root/zig
+    release_regular "$RELEASE_ZIG" "$ZIG_BIN_SHA256" 'binário Zig'
+    zig_musl_tree=$zig_root/lib/libc/musl
+    [ -d "$zig_musl_tree" ] && [ ! -L "$zig_musl_tree" ] || {
+        echo "erro: sysroot musl ausente no tar Zig" >&2; exit 1;
+    }
+    measured_musl=$("$LIVE_LOCK_TOOL" tree-hash "$zig_musl_tree")
+    [ "$measured_musl" = "$MUSL_TREE_SHA256" ] || {
+        echo "erro: árvore musl do Zig diverge do pin" >&2
+        echo "esperado: $MUSL_TREE_SHA256" >&2
+        echo "obtido:  $measured_musl" >&2
+        exit 1
+    }
+    RELEASE_MUSL_CC=$WORK/zig-musl-release-cc
+    cat > "$RELEASE_MUSL_CC" <<'EOF'
+#!/bin/sh
+wrapper_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+exec "$wrapper_dir/zig-0.16.0-release/zig" cc \
+    -target x86_64-linux-musl "$@"
+EOF
+    chmod 0755 "$RELEASE_MUSL_CC"
+    RELEASE_MUSL_CC_INNER=${RELEASE_MUSL_CC#"$ROOTFS"}
+    require_musl_cc "$RELEASE_MUSL_CC" || {
+        echo "erro: Zig pinado não produziu C musl estático" >&2; exit 1;
+    }
+    release_run "$RELEASE_MUSL_CC_INNER" -static \
+        -o "$WORK_INNER/musl-probe/probe-release" \
+        "$WORK_INNER/musl-probe/probe.c" >/dev/null 2>&1 || {
+        echo "erro: Zig/musl falhou dentro do builder pinado" >&2; exit 1;
+    }
+    require_static "$WORK/musl-probe/probe-release"
+fi
+
+SELECTED_MUSL_CC=$(select_e2fs_cc)
+
+REQUIRED_BUSYBOX_APPLETS='ash awk basename blockdev cat chmod chpasswd cp cryptpw cttyhack cut dd dirname echo findfs grep ifconfig ip ln mdev mkdir mkfs.vfat mkswap mktemp mount mv partprobe printf readlink reboot rm route sed setsid sh sha256sum sleep stat stty switch_root sync test tr udhcpc umount wc'
+
+build_static_busybox() {
+    busybox_src=$WORK/busybox-${BUSYBOX_VERSION}
+    rm -rf -- "$busybox_src"
+    mkdir -p "$busybox_src"
+    validate_tar_members "$BUSYBOX_TAR" -tjf
+    tar -xjf "$BUSYBOX_TAR" -C "$busybox_src" --strip-components=1
+    cp "$BUSYBOX_CONFIG" "$busybox_src/.config"
+    busybox_cc=$SELECTED_MUSL_CC
+    echo "BusyBox estático: compilando fonte oficial com $busybox_cc" >&2
+    # KCONFIG_NOTIMESTAMP mantém a configuração efetiva byte-idêntica à
+    # versão controlada; oldconfig recusa deriva de símbolo/default.
+    if [ "$MODE" = release ]; then
+        busybox_inner=${busybox_src#"$ROOTFS"}
+        release_run make -C "$busybox_inner" KCONFIG_NOTIMESTAMP=1 \
+            oldconfig </dev/null >/dev/null || {
+            echo "erro: oldconfig do BusyBox falhou no builder pinado" >&2; exit 1;
+        }
+        check_hash "$BUSYBOX_CONFIG_SHA256" "$busybox_src/.config"
+        release_run make -C "$busybox_inner" KCONFIG_NOTIMESTAMP=1 \
+            -j"$JOBS" CC="$RELEASE_MUSL_CC_INNER" \
+            EXTRA_CFLAGS="-ffile-prefix-map=$busybox_inner=/usr/src/busybox -fdebug-prefix-map=$busybox_inner=/usr/src/busybox -fmacro-prefix-map=$busybox_inner=/usr/src/busybox" \
+            >/dev/null || {
+            echo "erro: build BusyBox falhou no builder pinado" >&2; exit 1;
+        }
+    else
+        (
+            cd "$busybox_src"
+            KCONFIG_NOTIMESTAMP=1 make oldconfig </dev/null >/dev/null
+            check_hash "$BUSYBOX_CONFIG_SHA256" .config
+            KCONFIG_NOTIMESTAMP=1 make -j"$JOBS" CC="$busybox_cc" \
+                EXTRA_CFLAGS="-ffile-prefix-map=$busybox_src=/usr/src/busybox -fdebug-prefix-map=$busybox_src=/usr/src/busybox -fmacro-prefix-map=$busybox_src=/usr/src/busybox" >/dev/null
+        ) || { echo "erro: não compilei o BusyBox estático" >&2; exit 1; }
+    fi
+    echo "$busybox_src/busybox"
+}
+
+if [ -n "$BUSYBOX_TAR" ]; then
+    BUSYBOX=$(build_static_busybox)
+    require_static "$BUSYBOX"
+fi
+busybox_applets=$($BUSYBOX --list)
+for required_applet in $REQUIRED_BUSYBOX_APPLETS; do
+    printf '%s\n' "$busybox_applets" | grep -Fqx "$required_applet" || {
+        echo "erro: BusyBox 1.35.0 não contém applet obrigatório: $required_applet" >&2
+        exit 1
+    }
+done
+
 command -v readelf >/dev/null 2>&1 || { echo "erro: readelf ausente" >&2; exit 1; }
 if [ -z "$MINIPAX_BIN" ]; then MINIPAX_BIN=$(build_rust_binary minipax); fi
 if [ -z "$MINITRUE_BIN" ]; then
@@ -367,6 +1354,13 @@ if [ -z "$MINITRUE_BIN" ]; then
 fi
 require_static "$MINIPAX_BIN"
 require_static "$MINITRUE_BIN"
+if [ "$MODE" = release ]; then
+    release_regular "$MINIPAX_BIN" "$MINIPAX_SHA256" 'binário Minipax'
+    release_regular "$MINITRUE_BIN" "$MINITRUE_SHA256" 'binário Minitrue'
+else
+    MINIPAX_SHA256=$(sha256sum "$MINIPAX_BIN" | awk '{print $1}')
+    MINITRUE_SHA256=$(sha256sum "$MINITRUE_BIN" | awk '{print $1}')
+fi
 
 # mke2fs estático. O initramfs não tem glibc — busybox, minipax e minitrue são
 # todos estáticos —, então um mkfs.ext4 dinâmico não rodaria ali. Compilado
@@ -379,36 +1373,50 @@ require_static "$MINITRUE_BIN"
 build_static_mke2fs() {
     E2FSPROGS_TAR=${E2FSPROGS_TAR:-$WORK/e2fsprogs-${E2FSPROGS_VERSION}.tar.xz}
     [ -f "$E2FSPROGS_TAR" ] || fetch "$E2FSPROGS_URL" "$E2FSPROGS_TAR"
-    check_hash "$E2FSPROGS_SHA256" "$E2FSPROGS_TAR"
+    if [ "$MODE" = release ]; then
+        release_regular "$E2FSPROGS_TAR" "$E2FSPROGS_SHA256" 'tar e2fsprogs'
+    else
+        check_hash "$E2FSPROGS_SHA256" "$E2FSPROGS_TAR"
+    fi
+    validate_tar_members "$E2FSPROGS_TAR" -tJf
     e2fs_src=$WORK/e2fsprogs-${E2FSPROGS_VERSION}
     rm -rf -- "$e2fs_src"
     mkdir -p "$e2fs_src"
     tar -xJf "$E2FSPROGS_TAR" -C "$e2fs_src" --strip-components=1
-    e2fs_cc=$(select_e2fs_cc)
+    e2fs_cc=$SELECTED_MUSL_CC
     echo "mke2fs estático: compilando com $e2fs_cc" >&2
-    (
-        cd "$e2fs_src"
-        # Quem torna o binário estático é o LDFLAGS=-static, e só ele. Uma
-        # versão anterior desta linha passava também --disable-shared e
-        # --enable-static, que o configure do e2fsprogs NÃO tem: o autoconf
-        # avisava "unrecognized options" e seguia. Saíram porque flag que não
-        # existe é pior que flag ausente — ela faz o script afirmar uma
-        # decisão que nunca tomou, e é a mesma armadilha que já custou duas
-        # receitas nesta árvore.
-        # -s (strip no link): sem ele o mke2fs e o e2fsck vão com símbolos de
-        # depuração e somam 9 dos 16 MB do initramfs — medido. Isso incha o
-        # BOOTX64.EFI de ~11 para ~19 MB, e o preço aparece em três lugares:
-        # tempo de carga pelo firmware (que chegou a estourar o timeout de
-        # boot do aceite), RAM ocupada no boot, e espaço na ESP de 64 MiB. Os
-        # binários Rust já saem stripped pelo perfil de release do Cargo.
-        CC="$e2fs_cc" LDFLAGS="-static -s" ./configure \
-            --disable-nls \
-            --disable-uuidd \
-            --disable-fsck \
-            --disable-defrag \
-            --disable-testio-debug >/dev/null
-        make -j"$JOBS" >/dev/null
-    ) || { echo "erro: não compilei o mke2fs estático" >&2; exit 1; }
+    # Quem torna o binário estático é o LDFLAGS=-static, e só ele. Uma
+    # versão anterior desta linha passava também --disable-shared e
+    # --enable-static, que o configure do e2fsprogs NÃO tem: o autoconf
+    # avisava "unrecognized options" e seguia. Saíram porque flag que não
+    # existe é pior que flag ausente — ela faz o script afirmar uma
+    # decisão que nunca tomou, e é a mesma armadilha que já custou duas
+    # receitas nesta árvore.
+    # -s (strip no link): sem ele o mke2fs e o e2fsck vão com símbolos de
+    # depuração e somam 9 dos 16 MB do initramfs — medido.
+    if [ "$MODE" = release ]; then
+        e2fs_inner=${e2fs_src#"$ROOTFS"}
+        release_run sh -c '
+            cd "$1"
+            CC="$2" CFLAGS="-Os -ffile-prefix-map=$1=/usr/src/e2fsprogs -fdebug-prefix-map=$1=/usr/src/e2fsprogs -fmacro-prefix-map=$1=/usr/src/e2fsprogs" LDFLAGS="-static -s" ./configure \
+                --disable-nls --disable-uuidd --disable-fsck \
+                --disable-defrag --disable-testio-debug >/dev/null
+        ' sh "$e2fs_inner" "$RELEASE_MUSL_CC_INNER" &&
+            release_run make -C "$e2fs_inner" -j"$JOBS" >/dev/null || {
+            echo "erro: não compilei e2fsprogs no builder pinado" >&2; exit 1;
+        }
+    else
+        (
+            cd "$e2fs_src"
+            CC="$e2fs_cc" CFLAGS="-Os -ffile-prefix-map=$e2fs_src=/usr/src/e2fsprogs -fdebug-prefix-map=$e2fs_src=/usr/src/e2fsprogs -fmacro-prefix-map=$e2fs_src=/usr/src/e2fsprogs" LDFLAGS="-static -s" ./configure \
+                --disable-nls \
+                --disable-uuidd \
+                --disable-fsck \
+                --disable-defrag \
+                --disable-testio-debug >/dev/null
+            make -j"$JOBS" >/dev/null
+        ) || { echo "erro: não compilei o mke2fs estático" >&2; exit 1; }
+    fi
     echo "$e2fs_src"
 }
 
@@ -426,28 +1434,54 @@ require_static "$E2FS_SRC/e2fsck/e2fsck"
 build_static_ncursesw() {
     NCURSES_TAR=${NCURSES_TAR:-$WORK/ncurses-${NCURSES_VERSION}.tar.gz}
     [ -f "$NCURSES_TAR" ] || fetch "$NCURSES_URL" "$NCURSES_TAR"
-    check_hash "$NCURSES_SHA256" "$NCURSES_TAR"
+    if [ "$MODE" = release ]; then
+        release_regular "$NCURSES_TAR" "$NCURSES_SHA256" 'tar ncurses'
+    else
+        check_hash "$NCURSES_SHA256" "$NCURSES_TAR"
+    fi
+    validate_tar_members "$NCURSES_TAR" -tzf
     nc_src=$WORK/ncurses-${NCURSES_VERSION}
-    nc_prefix=$WORK/ncursesw-prefix
-    rm -rf -- "$nc_src" "$nc_prefix"
-    mkdir -p "$nc_src" "$nc_prefix"
+    nc_stage=$WORK/ncursesw-stage
+    nc_prefix=$nc_stage/usr
+    rm -rf -- "$nc_src" "$nc_stage"
+    mkdir -p "$nc_src" "$nc_stage"
     tar -xzf "$NCURSES_TAR" -C "$nc_src" --strip-components=1
-    nc_cc=$(select_e2fs_cc)
+    nc_cc=$SELECTED_MUSL_CC
     echo "ncursesw estático: compilando com $nc_cc" >&2
-    (
-        cd "$nc_src"
-        CC="$nc_cc" CFLAGS="-Os" ./configure \
-            --host=x86_64-linux-musl \
-            --prefix="$nc_prefix" \
-            --without-shared --with-normal --enable-widec \
-            --without-cxx --without-cxx-binding --without-ada \
-            --without-manpages --without-progs --without-tests \
-            --without-debug --disable-db-install --enable-termcap \
-            --with-fallbacks=linux,vt100,vt220,xterm,xterm-256color,screen,ansi \
-            >/dev/null
-        make -j"$JOBS" >/dev/null
-        make install >/dev/null
-    ) || { echo "erro: não compilei a ncursesw estática" >&2; exit 1; }
+    if [ "$MODE" = release ]; then
+        nc_inner=${nc_src#"$ROOTFS"}
+        nc_stage_inner=${nc_stage#"$ROOTFS"}
+        release_run sh -c '
+            cd "$1"
+            CC="$2" CFLAGS="-Os -ffile-prefix-map=$1=/usr/src/ncurses -fdebug-prefix-map=$1=/usr/src/ncurses -fmacro-prefix-map=$1=/usr/src/ncurses" ./configure \
+                --host=x86_64-linux-musl --prefix=/usr \
+                --without-shared --with-normal --enable-widec \
+                --without-cxx --without-cxx-binding --without-ada \
+                --without-manpages --without-progs --without-tests \
+                --without-debug --disable-db-install --enable-termcap \
+                --with-fallbacks=linux,vt100,vt220,xterm,xterm-256color,screen,ansi \
+                >/dev/null
+        ' sh "$nc_inner" "$RELEASE_MUSL_CC_INNER" &&
+            release_run make -C "$nc_inner" -j"$JOBS" >/dev/null &&
+            release_run make -C "$nc_inner" DESTDIR="$nc_stage_inner" install >/dev/null || {
+            echo "erro: não compilei ncursesw no builder pinado" >&2; exit 1;
+        }
+    else
+        (
+            cd "$nc_src"
+            CC="$nc_cc" CFLAGS="-Os -ffile-prefix-map=$nc_src=/usr/src/ncurses -fdebug-prefix-map=$nc_src=/usr/src/ncurses -fmacro-prefix-map=$nc_src=/usr/src/ncurses" ./configure \
+                --host=x86_64-linux-musl \
+                --prefix=/usr \
+                --without-shared --with-normal --enable-widec \
+                --without-cxx --without-cxx-binding --without-ada \
+                --without-manpages --without-progs --without-tests \
+                --without-debug --disable-db-install --enable-termcap \
+                --with-fallbacks=linux,vt100,vt220,xterm,xterm-256color,screen,ansi \
+                >/dev/null
+            make -j"$JOBS" >/dev/null
+            make DESTDIR="$nc_stage" install >/dev/null
+        ) || { echo "erro: não compilei a ncursesw estática" >&2; exit 1; }
+    fi
     # O -ltinfo que o configure do util-linux insiste em pedir resolve AQUI.
     # Ver o comentário em build_static_cfdisk sobre por que isto não é gambiarra.
     ln -sf libncursesw.a "$nc_prefix/lib/libtinfo.a"
@@ -469,56 +1503,84 @@ build_static_cfdisk() {
     ncw_prefix=$(build_static_ncursesw)
     UTIL_LINUX_TAR=${UTIL_LINUX_TAR:-$WORK/util-linux-${UTIL_LINUX_VERSION}.tar.xz}
     [ -f "$UTIL_LINUX_TAR" ] || fetch "$UTIL_LINUX_URL" "$UTIL_LINUX_TAR"
-    check_hash "$UTIL_LINUX_SHA256" "$UTIL_LINUX_TAR"
+    if [ "$MODE" = release ]; then
+        release_regular "$UTIL_LINUX_TAR" "$UTIL_LINUX_SHA256" 'tar util-linux'
+    else
+        check_hash "$UTIL_LINUX_SHA256" "$UTIL_LINUX_TAR"
+    fi
+    validate_tar_members "$UTIL_LINUX_TAR" -tJf
     ul_src=$WORK/util-linux-${UTIL_LINUX_VERSION}
     rm -rf -- "$ul_src"
     mkdir -p "$ul_src"
     tar -xJf "$UTIL_LINUX_TAR" -C "$ul_src" --strip-components=1
-    ul_cc=$(select_e2fs_cc)
+    ul_cc=$SELECTED_MUSL_CC
     echo "cfdisk estático: compilando com $ul_cc" >&2
-    (
-        cd "$ul_src"
-        # --enable-fdisks, NO PLURAL. O `--enable-cfdisk` que a intuição sugere
-        # não existe, e o autoconf o aceita com um "unrecognized options" no
-        # meio de trezentas linhas — a mesma armadilha que o comentário do
-        # mke2fs acima descreve, e na qual se cai de novo se não se CONFERIR a
-        # saída. Por isso a conferência logo abaixo é parte do build, e não
-        # zelo: um configure que ignora uma opção produz um make que não
-        # produz nada e devolve zero.
-        #
-        # --disable-all-programs desliga também as BIBLIOTECAS, então libfdisk,
-        # libsmartcols, libblkid e libuuid voltam explicitamente. Sem elas o
-        # configure para com "libfdisk is needed to build fdisk".
-        CC="$ul_cc" \
-        CFLAGS="-Os -I$ncw_prefix/include -I$ncw_prefix/include/ncursesw" \
-        LDFLAGS="-static -s -L$ncw_prefix/lib" \
-        NCURSESW_CFLAGS="-I$ncw_prefix/include/ncursesw" \
-        NCURSESW_LIBS="-L$ncw_prefix/lib -lncursesw" \
-        ./configure \
-            --host=x86_64-linux-musl \
-            --disable-shared --enable-static \
-            --disable-all-programs --enable-fdisks \
-            --enable-libfdisk --enable-libsmartcols \
-            --enable-libblkid --enable-libuuid \
-            --disable-nls --without-systemd --without-udev \
-            --without-python --without-readline \
-            --without-tinfo --with-ncursesw \
-            > "$WORK/util-linux-configure.log" 2>&1
-        # O configure NÃO honra o NCURSES_LIBS que se passa: ele o recalcula do
-        # `ncursesw6-config` DO HOSPEDEIRO, e de lá vem um `-ltinfo` que não
-        # existe no nosso prefixo musl. O link do libtinfo.a para a
-        # libncursesw.a, feito em build_static_ncursesw, resolve — e resolve
-        # honestamente, porque nesta compilação (--with-normal, sem
-        # --with-termlib) as funções de terminfo ESTÃO dentro da libncursesw.
-        nao_reconhecidas=$(grep -c 'unrecognized options' \
-            "$WORK/util-linux-configure.log" || true)
+    # --enable-fdisks, NO PLURAL. O `--enable-cfdisk` que a intuição sugere
+    # não existe, e o autoconf o aceita com um "unrecognized options" no
+    # meio de trezentas linhas. --disable-all-programs desliga também as
+    # bibliotecas, que por isso voltam explicitamente.
+    if [ "$MODE" = release ]; then
+        ul_inner=${ul_src#"$ROOTFS"}
+        ncw_inner=${ncw_prefix#"$ROOTFS"}
+        ul_log_inner=$WORK_INNER/util-linux-configure.log
+        release_run sh -c '
+            cd "$1"
+            CC="$2" \
+            CFLAGS="-Os -I$3/include -I$3/include/ncursesw -ffile-prefix-map=$1=/usr/src/util-linux -fdebug-prefix-map=$1=/usr/src/util-linux -fmacro-prefix-map=$1=/usr/src/util-linux" \
+            LDFLAGS="-static -s -L$3/lib" \
+            NCURSESW_CFLAGS="-I$3/include/ncursesw" \
+            NCURSESW_LIBS="-L$3/lib -lncursesw" \
+            ./configure \
+                --host=x86_64-linux-musl \
+                --disable-shared --enable-static \
+                --disable-all-programs --enable-fdisks \
+                --enable-libfdisk --enable-libsmartcols \
+                --enable-libblkid --enable-libuuid \
+                --disable-nls --without-systemd --without-udev \
+                --without-python --without-readline \
+                --without-tinfo --with-ncursesw >"$4" 2>&1
+        ' sh "$ul_inner" "$RELEASE_MUSL_CC_INNER" "$ncw_inner" \
+            "$ul_log_inner" || {
+            echo "erro: configure util-linux falhou no builder pinado" >&2; exit 1;
+        }
+        nao_reconhecidas=$(release_run grep -c 'unrecognized options' \
+            "$ul_log_inner" || true)
         if [ "${nao_reconhecidas:-0}" -ne 0 ]; then
             echo "erro: o configure do util-linux ignorou opções:" >&2
-            grep 'unrecognized options' "$WORK/util-linux-configure.log" >&2
+            release_run grep 'unrecognized options' "$ul_log_inner" >&2
             exit 1
         fi
-        make -j"$JOBS" >/dev/null
-    ) || { echo "erro: não compilei o cfdisk estático" >&2; exit 1; }
+        release_run make -C "$ul_inner" -j"$JOBS" >/dev/null || {
+            echo "erro: não compilei util-linux no builder pinado" >&2; exit 1;
+        }
+    else
+        (
+            cd "$ul_src"
+            CC="$ul_cc" \
+            CFLAGS="-Os -I$ncw_prefix/include -I$ncw_prefix/include/ncursesw -ffile-prefix-map=$ul_src=/usr/src/util-linux -fdebug-prefix-map=$ul_src=/usr/src/util-linux -fmacro-prefix-map=$ul_src=/usr/src/util-linux" \
+            LDFLAGS="-static -s -L$ncw_prefix/lib" \
+            NCURSESW_CFLAGS="-I$ncw_prefix/include/ncursesw" \
+            NCURSESW_LIBS="-L$ncw_prefix/lib -lncursesw" \
+            ./configure \
+                --host=x86_64-linux-musl \
+                --disable-shared --enable-static \
+                --disable-all-programs --enable-fdisks \
+                --enable-libfdisk --enable-libsmartcols \
+                --enable-libblkid --enable-libuuid \
+                --disable-nls --without-systemd --without-udev \
+                --without-python --without-readline \
+                --without-tinfo --with-ncursesw \
+                > "$WORK/util-linux-configure.log" 2>&1
+            nao_reconhecidas=$(grep -c 'unrecognized options' \
+                "$WORK/util-linux-configure.log" || true)
+            if [ "${nao_reconhecidas:-0}" -ne 0 ]; then
+                echo "erro: o configure do util-linux ignorou opções:" >&2
+                grep 'unrecognized options' "$WORK/util-linux-configure.log" >&2
+                exit 1
+            fi
+            make -j"$JOBS" >/dev/null
+        ) || { echo "erro: não compilei o cfdisk estático" >&2; exit 1; }
+    fi
     echo "$ul_src"
 }
 
@@ -553,12 +1615,15 @@ cp "$REPO/newspeak/base/files/udhcpc.script" \
 cp "$REPO/LICENSE" \
     "$INITROOT/usr/share/licenses/distropica/GPL-3.0-or-later.txt"
 cp "$REPO/NOTICE" "$INITROOT/usr/share/licenses/distropica/NOTICE"
+cp "$REPO/LICENSING.md" \
+    "$INITROOT/usr/share/licenses/distropica/LICENSING.md"
 chmod 755 "$INITROOT/init" "$INITROOT/bin/busybox" \
     "$INITROOT/bin/minipax" "$INITROOT/bin/minitrue" \
     "$INITROOT/bin/mke2fs" "$INITROOT/bin/e2fsck" \
     "$INITROOT/usr/share/udhcpc/default.script"
 chmod 644 "$INITROOT/usr/share/licenses/distropica/GPL-3.0-or-later.txt"
 chmod 644 "$INITROOT/usr/share/licenses/distropica/NOTICE"
+chmod 644 "$INITROOT/usr/share/licenses/distropica/LICENSING.md"
 chmod 644 "$INITROOT/etc/mke2fs.conf"
 # Antes do laço de applets: ele só cria link para nome ainda inexistente, então
 # estes vencem os mkfs.ext2/mke2fs/e2fsck do busybox.
@@ -575,6 +1640,16 @@ printf 'root:x:0:0:root:/root:/bin/sh\n' > "$INITROOT/etc/passwd"
 printf 'root:x:0:\n' > "$INITROOT/etc/group"
 printf 'nameserver 1.1.1.1\n' > "$INITROOT/etc/resolv.conf"
 
+# Esta é a garantia sobre o ARTEFATO, não só sobre a higiene do rootfs que
+# forneceu o compilador: todos os arquivos que entrarão no initramfs já estão
+# materializados, e a árvore é pequena o bastante para ser percorrida inteira.
+INIT_SECRET_KEY=$(find_minisign_secret "$INITROOT" 32)
+if [ -n "$INIT_SECRET_KEY" ]; then
+    echo "erro: chave minisign secreta entrou no initramfs" >&2
+    echo "  caminho: $(printf '%s\n' "$INIT_SECRET_KEY" | sed -n '1p')" >&2
+    exit 1
+fi
+
 # Na mídia interativa, tty0 precisa continuar sendo /dev/console para que os
 # prompts apareçam no monitor. O artefato automatizado inverte a prioridade:
 # assim toda a prova do instalador chega ao log serial do QEMU.
@@ -588,14 +1663,8 @@ SOURCE=$WORK/linux-source
 if [ -n "$ROOTFS" ]; then SOURCE_INNER=$WORK_INNER/linux-source; fi
 rm -rf -- "$SOURCE"
 mkdir -p "$SOURCE"
+validate_tar_members "$LINUX_TAR" -tJf
 tar -xJf "$LINUX_TAR" -C "$SOURCE" --strip-components=1
-cp -a "$INITROOT" "$SOURCE/distropica-initramfs"
-printf '%s\n' \
-    'nod /dev/console 0600 0 0 c 5 1' \
-    'nod /dev/null 0666 0 0 c 1 3' \
-    > "$SOURCE/distropica-devices.list"
-find "$SOURCE/distropica-initramfs" -exec touch -h -d "@$EPOCH" {} +
-touch -d "@$EPOCH" "$SOURCE/distropica-devices.list"
 
 # Estas ferramentas o kernel exige de quem o constrói. Com --rootfs quem
 # constrói é a Distrópica, e a conferência é lá dentro: exigi-las do
@@ -626,8 +1695,12 @@ CONFIG=$SOURCE/scripts/config
 set_config() {
     "$CONFIG" --file "$SOURCE/.config" "$@"
 }
-set_config --enable MODULES
-set_config --disable MODULE_SIG
+# O EFI vivo nao distribui um unico .ko: todos os drivers desta imagem sao
+# guardados como built-in abaixo. Desligar o carregador de modulos fecha essa
+# fronteira em vez de manter uma API inutil que aceitaria bytes externos depois
+# do switch_root. A reconciliacao e a guarda posteriores provam que nenhum dos
+# drivers obrigatorios caiu com MODULES=n.
+set_config --disable MODULES
 set_config --disable DEBUG_INFO_BTF
 set_config --disable LOCALVERSION_AUTO
 set_config --set-str LOCALVERSION "-distropica-live"
@@ -648,8 +1721,8 @@ done
 # para ELE: módulo não carregado não ocupa memória em máquina que não tem
 # aquele rádio. Só que quem boota o sistema instalado é ESTE kernel, e ele não
 # instala módulo em lugar nenhum — o initramfs não leva nenhum, e o EFI é um
-# bzImage só. Os módulos que existem no disco estão em /lib/modules/7.1.4, do
-# pacote linux, e o kernel em execução é 7.1.4-distropica-live: o modprobe
+# bzImage só. Os módulos que existem no disco estão em /lib/modules/7.1.8, do
+# pacote linux, e o kernel em execução é 7.1.8-distropica-live: o modprobe
 # procura pela versão em execução e não acha nada.
 #
 # O resultado medido era o pior tipo de meia-verdade: a pilha 802.11 presente
@@ -687,10 +1760,11 @@ done
 #   SND_INTEL8X0    AC'97, que é o default de VM antiga e do VirtualBox
 #   SND_ENS1371     a Ensoniq que o VirtualBox oferece como SoundBlaster 16
 #
-# Os codecs importam tanto quanto a controladora: a HDA sem codec enumera a
-# placa e não produz som, que é indistinguível de driver ausente para quem
-# está do outro lado. GENERIC cobre o que a VM emula; REALTEK cobre a maioria
-# das máquinas reais; HDMI cobre saída por monitor.
+# Os codecs importam tanto quanto a controladora. GENERIC cobre o que a VM
+# emula; REALTEK cobre a maioria das máquinas reais; HDMI cobre monitor. Mas
+# Analog Devices, IDT/Sigmatel, VIA, Conexant, Senarytech, Creative, C-Media e
+# Cirrus têm drivers próprios para os quirks de pinos e amplificadores. Sem
+# eles a placa pode aparecer em /proc/asound e continuar sem saída analógica.
 # O 7.1 reorganizou o HDA para sound/hda/, e os nomes abaixo foram LIDOS do
 # Kconfig de lá. Esta lista já esteve errada DUAS VEZES, em direções opostas, e
 # vale registrar as duas porque o modo de errar é o mesmo:
@@ -706,9 +1780,9 @@ done
 #      kernel saiu com UM codec: sound/hda/codecs/generic.o. Som em VM, nada de
 #      ajuste em máquina real — e nenhuma mensagem em lugar nenhum.
 #
-# Por isso os dois guarda-chuvas entram aqui E na lista de guardas lá embaixo.
-# Cada um "will enable all ... codec drivers as default", nas palavras do
-# próprio Kconfig, o que dispensa enumerar modelo por modelo.
+# Por isso os guarda-chuvas entram aqui E na lista de guardas lá embaixo. Os
+# codecs que o Kconfig declara como `config`, e não `menuconfig`, entram
+# explicitamente: ligar REALTEK nunca ligaria CONEXANT por consequência.
 #
 # SND_HDA_GENERIC continua sendo o que importa para máquina virtual: é o
 # analisador de fallback, que dirige codec sem driver específico, e é ele que
@@ -723,7 +1797,10 @@ done
 # 'menuconfig', que foi a armadilha que já custou os codecs HDA duas vezes.
 for symbol in SOUND SND SND_PCM SND_TIMER SND_HRTIMER \
     SND_HDA SND_HDA_INTEL SND_HDA_GENERIC \
-    SND_HDA_CODEC_REALTEK SND_HDA_CODEC_HDMI \
+    SND_HDA_CODEC_REALTEK SND_HDA_CODEC_HDMI SND_HDA_CODEC_CIRRUS \
+    SND_HDA_CODEC_CS8409 SND_HDA_CODEC_ANALOG SND_HDA_CODEC_SIGMATEL \
+    SND_HDA_CODEC_VIA SND_HDA_CODEC_CONEXANT SND_HDA_CODEC_SENARYTECH \
+    SND_HDA_CODEC_CA0110 SND_HDA_CODEC_CMEDIA SND_HDA_CODEC_CM9825 \
     SND_INTEL8X0 SND_ENS1371 SND_USB_AUDIO SND_VIRTIO; do
     set_config --enable "$symbol"
 done
@@ -767,8 +1844,21 @@ set_config --set-str SYSTEM_TRUSTED_KEYS ""
 set_config --set-str SYSTEM_REVOCATION_KEYS ""
 set_config --set-str INITRAMFS_SOURCE \
     "distropica-initramfs distropica-devices.list"
-set_config --set-val INITRAMFS_ROOT_UID "$(id -u)"
-set_config --set-val INITRAMFS_ROOT_GID "$(id -g)"
+# A ausência de compressão é parte do contrato de prova: o intervalo
+# `.init.ramfs` do ELF pode ser comparado diretamente ao newc que contém
+# LIVE_COMPONENTS, sem delegar a associação a um descompressor externo.
+set_config --enable INITRAMFS_COMPRESSION_NONE
+for symbol in INITRAMFS_COMPRESSION_GZIP INITRAMFS_COMPRESSION_BZIP2 \
+    INITRAMFS_COMPRESSION_LZMA INITRAMFS_COMPRESSION_XZ \
+    INITRAMFS_COMPRESSION_LZO INITRAMFS_COMPRESSION_LZ4 \
+    INITRAMFS_COMPRESSION_ZSTD; do
+    set_config --disable "$symbol"
+done
+# -1 é a convenção do kernel para mapear o uid/gid do produtor para root no
+# arquivo gerado. Ao contrário de `id -u`, deixa .config e CPIO idênticos sob
+# builders que executem com IDs diferentes.
+set_config --set-val INITRAMFS_ROOT_UID -1
+set_config --set-val INITRAMFS_ROOT_GID -1
 set_config --enable CMDLINE_BOOL
 set_config --set-str CMDLINE "$CMDLINE"
 for symbol in EFI EFI_STUB BLK_DEV_INITRD DEVTMPFS DEVTMPFS_MOUNT TMPFS \
@@ -786,7 +1876,7 @@ done
 # bloco de rede acima: quem boota o sistema INSTALADO é este kernel, o
 # instalador exporta este EFI para a ESP, e por isso ligar os knobs lá não
 # muda nada enquanto a divergência existir. Foi medido: um sistema instalado
-# reporta 'Linux version 7.1.4-distropica-live'.
+# reporta 'Linux version 7.1.8-distropica-live'.
 #
 # O simpledrm sozinho já entrega /dev/dri/card0 a partir do framebuffer que a
 # firmware EFI deixa pronto, e é com ele que o weston sobe hoje — mas ele NÃO
@@ -802,17 +1892,20 @@ kmake olddefconfig
 grep -q '^CONFIG_CMDLINE_BOOL=y$' "$SOURCE/.config" || {
     echo "erro: kernel descartou CONFIG_CMDLINE_BOOL=y" >&2; exit 1;
 }
-grep -q '^CONFIG_MODULES=y$' "$SOURCE/.config" || {
-    echo "erro: kernel descartou CONFIG_MODULES=y" >&2; exit 1;
+grep -q '^# CONFIG_MODULES is not set$' "$SOURCE/.config" || {
+    echo "erro: kernel vivo nao fixou CONFIG_MODULES=n" >&2; exit 1;
 }
 grep -q '^CONFIG_LOCALVERSION="-distropica-live"$' "$SOURCE/.config" || {
     echo "erro: kernel descartou o release isolado da mídia" >&2; exit 1;
 }
-grep -q "^CONFIG_INITRAMFS_ROOT_UID=$(id -u)$" "$SOURCE/.config" || {
+grep -q '^CONFIG_INITRAMFS_ROOT_UID=-1$' "$SOURCE/.config" || {
     echo "erro: UID do initramfs não foi normalizado para root" >&2; exit 1;
 }
-grep -q "^CONFIG_INITRAMFS_ROOT_GID=$(id -g)$" "$SOURCE/.config" || {
+grep -q '^CONFIG_INITRAMFS_ROOT_GID=-1$' "$SOURCE/.config" || {
     echo "erro: GID do initramfs não foi normalizado para root" >&2; exit 1;
+}
+grep -q '^CONFIG_INITRAMFS_COMPRESSION_NONE=y$' "$SOURCE/.config" || {
+    echo "erro: kernel não fixou initramfs newc sem compressão" >&2; exit 1;
 }
 grep -Fqx "CONFIG_CMDLINE=\"$CMDLINE\"" "$SOURCE/.config" || {
     echo "erro: kernel descartou a cmdline viva" >&2; exit 1;
@@ -829,8 +1922,12 @@ for symbol in EFI EFI_STUB BLK_DEV_INITRD VIRTIO_BLK VIRTIO_NET BLK_DEV_SR \
     BLK_DEV_NVME USB_XHCI_HCD USB_XHCI_PCI USB_STORAGE USB_HID HID_GENERIC \
     E1000E R8169 \
     DRM_VMWGFX DRM_VBOXVIDEO DRM_BOCHS DRM_VIRTIO_GPU \
-    SOUND SND SND_PCM SND_HDA_INTEL SND_HDA_GENERIC SND_INTEL8X0 \
+    SOUND SND SND_PCM SND_HDA SND_HDA_INTEL SND_HDA_GENERIC SND_INTEL8X0 \
     SND_ENS1371 SND_USB_AUDIO SND_HDA_CODEC_REALTEK SND_HDA_CODEC_HDMI \
+    SND_HDA_CODEC_CIRRUS SND_HDA_CODEC_CS8409 SND_HDA_CODEC_ANALOG \
+    SND_HDA_CODEC_SIGMATEL SND_HDA_CODEC_VIA SND_HDA_CODEC_CONEXANT \
+    SND_HDA_CODEC_SENARYTECH SND_HDA_CODEC_CA0110 SND_HDA_CODEC_CMEDIA \
+    SND_HDA_CODEC_CM9825 \
     SND_VIRTIO \
     IWLWIFI IWLMVM ATH9K ATH10K RTW88 RTW89 RTL8XXXU FW_LOADER \
     CRYPTO_USER_API_SKCIPHER CRYPTO_CBC CRYPTO_ECB CRYPTO_DES \
@@ -841,7 +1938,399 @@ for symbol in EFI EFI_STUB BLK_DEV_INITRD VIRTIO_BLK VIRTIO_NET BLK_DEV_SR \
     }
 done
 
-BUILD_TIMESTAMP=$(date -u -d "@$EPOCH" '+%a %b %e %T UTC %Y')
+# Raiz factual dos componentes, gerada somente depois do olddefconfig. O
+# próprio bzImage não pode aparecer aqui: ele contém este manifesto e criaria
+# um ciclo. Linux fica preso pelo tar oficial + .config efetiva + contrato; o
+# LIVE_LOCK sem ciclo prende o hash do bzImage final.
+sha_join() {
+    sha256sum | awk '{print $1}'
+}
+sha_path() {
+    sha256sum -- "$1" | awk '{print $1}'
+}
+
+EMPTY_SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+BUILD_CONTRACT_SHA256=$({
+    sha_path "$REPO/bootstrap/live/build-efi"
+    sha_path "$LIVE_LOCK_SOURCE"
+    sha_path "$LIVE_LOCK_HELPER_SOURCE"
+    sha_path "$LIVE_LOCK_TOOL"
+    sha_path "$BUSYBOX_CONFIG"
+    printf '%s\n' \
+        'LIVE_COMPONENTS_FORMAT=1' 'LIVE_LOCK_FORMAT=1' \
+        'linux-payload=source+effective-config;efi-payload=live-lock' \
+        'busybox=official-source+versioned-config+static-musl'
+} | sha_join)
+
+BUSYBOX_BINARY_SHA256=$(sha_path "$BUSYBOX")
+E2FS_PAYLOAD_SHA256=$({
+    sha_path "$E2FS_SRC/misc/mke2fs"
+    sha_path "$E2FS_SRC/e2fsck/e2fsck"
+    sha_path "$E2FS_SRC/misc/mke2fs.conf"
+} | sha_join)
+E2FS_CONFIG_SHA256=$({
+    sha_path "$E2FS_SRC/misc/mke2fs.conf"
+    printf '%s\n' '--disable-nls --disable-uuidd --disable-fsck --disable-defrag --disable-testio-debug' 'LDFLAGS=-static -s'
+} | sha_join)
+NCURSES_CONFIG_SHA256=$(printf '%s\n' \
+    '--without-shared --with-normal --enable-widec --without-cxx --without-cxx-binding --without-ada --without-manpages --without-progs --without-tests --without-debug --disable-db-install --enable-termcap' \
+    '--with-fallbacks=linux,vt100,vt220,xterm,xterm-256color,screen,ansi' | sha_join)
+UTIL_LINUX_PAYLOAD_SHA256=$({
+    sha_path "$UTIL_LINUX_SRC/cfdisk"
+    sha_path "$UTIL_LINUX_SRC/sfdisk"
+} | sha_join)
+UTIL_LINUX_CONFIG_SHA256=$(printf '%s\n' \
+    '--disable-shared --enable-static --disable-all-programs --enable-fdisks' \
+    '--enable-libfdisk --enable-libsmartcols --enable-libblkid --enable-libuuid' \
+    '--disable-nls --without-systemd --without-udev --without-python --without-readline --without-tinfo --with-ncursesw' \
+    'CFLAGS=-Os;LDFLAGS=-static -s' | sha_join)
+LINUX_CONFIG_SHA256=$(sha_path "$SOURCE/.config")
+SCRIPTS_SHA256=$({
+    sha_path "$REPO/bootstrap/live/init"
+    sha_path "$REPO/newspeak/base/files/udhcpc.script"
+} | sha_join)
+
+# O checkout pode ser compartilhado por grupo (este workspace é 0775). O
+# parser de identidade não o trata como pai trusted: cria snapshots privados,
+# com modos normalizados, e mede somente esses snapshots. Em release os
+# executores são prebuilt/pinados; estes trees são provenance identity-only.
+SOURCE_IDENTITY_STAGE=$WORK/live-source-identities
+rm -rf -- "$SOURCE_IDENTITY_STAGE"
+mkdir -m 0700 "$SOURCE_IDENTITY_STAGE"
+for source_identity in minipax-src minitrue-src vendor-scrypt; do
+    mkdir -m 0700 "$SOURCE_IDENTITY_STAGE/$source_identity"
+done
+cp -a "$REPO/minipax/src/." "$SOURCE_IDENTITY_STAGE/minipax-src/"
+cp -a "$REPO/minitrue/src/." "$SOURCE_IDENTITY_STAGE/minitrue-src/"
+cp -a "$REPO/minitrue/vendor-scrypt/." "$SOURCE_IDENTITY_STAGE/vendor-scrypt/"
+find "$SOURCE_IDENTITY_STAGE" -type d -exec chmod 0700 {} +
+find "$SOURCE_IDENTITY_STAGE" -type f -exec chmod 0600 {} +
+MINIPAX_SRC_TREE_SHA256=$("$LIVE_LOCK_TOOL" tree-hash \
+    "$SOURCE_IDENTITY_STAGE/minipax-src")
+MINITRUE_SRC_TREE_SHA256=$("$LIVE_LOCK_TOOL" tree-hash \
+    "$SOURCE_IDENTITY_STAGE/minitrue-src")
+VENDOR_SCRYPT_SHA256=$("$LIVE_LOCK_TOOL" tree-hash \
+    "$SOURCE_IDENTITY_STAGE/vendor-scrypt")
+CARGO_LOCKS_SHA256=$({
+    sha_path "$REPO/minipax/Cargo.lock"
+    sha_path "$REPO/minitrue/Cargo.lock"
+} | sha_join)
+MINIPAX_CRATES_SHA256=$({
+    sha_path "$REPO/minipax/Cargo.toml"
+    sha_path "$REPO/minipax/Cargo.lock"
+    printf '%s\n' "$MINIPAX_SRC_TREE_SHA256"
+} | sha_join)
+MINITRUE_CRATES_SHA256=$({
+    sha_path "$REPO/minitrue/Cargo.toml"
+    sha_path "$REPO/minitrue/Cargo.lock"
+    printf '%s\n' "$MINITRUE_SRC_TREE_SHA256" "$VENDOR_SCRYPT_SHA256"
+} | sha_join)
+
+# A identidade observada de development é útil para diagnóstico, mas nunca é
+# promovida a release. Release usa exclusivamente os pinos já validados.
+if [ "$MODE" = release ]; then
+    BUILDER_IDENTITY_HASH=$BUILDER_LOCK_SHA256
+    BUILDER_PAYLOAD_HASH=$BUILDER_ROOTFS_SHA256
+    BUILDER_TOOLCHAIN_ID=builder-$BUILDER_ID
+    MUSL_INPUT_SHA256=$ZIG_TAR_EXPECTED
+    MUSL_PAYLOAD_SHA256=$MUSL_TREE_SHA256
+    MUSL_CONFIG_SHA256=$MUSL_TREE_SHA256
+    MUSL_TOOLCHAIN_HASH=$({
+        printf '%s\n' "$ZIG_TAR_EXPECTED" "$ZIG_BIN_SHA256" "$MUSL_TREE_SHA256"
+    } | sha_join)
+    MUSL_TOOLCHAIN_ID=zig-${ZIG_VERSION}-x86_64-linux-musl
+    ZIG_INPUT_SHA256=$ZIG_TAR_EXPECTED
+    ZIG_PAYLOAD_SHA256=$ZIG_BIN_SHA256
+    ZIG_VARIANT=official-release-tar
+else
+    cc_first=$(printf '%s\n' "$SELECTED_MUSL_CC" | awk '{print $1}')
+    cc_path=$(command -v "$cc_first" 2>/dev/null || true)
+    cc_file_hash=$EMPTY_SHA256
+    [ -z "$cc_path" ] || cc_file_hash=$(sha_path "$cc_path")
+    cc_driver_id=$(basename -- "$cc_first")
+    musl_probe_contract=$(printf '%s\n' \
+        'compile:-static:x86_64-linux-musl' \
+        'reject-preprocessor:__GLIBC__' 'reject-elf-program-header:INTERP' | sha_join)
+    MUSL_TOOLCHAIN_HASH=$({
+        printf '%s\n' "$cc_driver_id" "$cc_file_hash" "$musl_probe_contract"
+    } | sha_join)
+    BUILDER_IDENTITY_HASH=$({
+        for build_command in make gcc flex bison pkg-config bc perl; do
+            build_path=$(command -v "$build_command" 2>/dev/null || true)
+            if [ -n "$build_path" ] && [ -f "$build_path" ]; then
+                printf '%s|' "$build_command"
+                sha_path "$build_path"
+            else
+                printf '%s|%s\n' "$build_command" "$EMPTY_SHA256"
+            fi
+        done
+    } | sha_join)
+    BUILDER_TOOLCHAIN_ID=development-observed-builder
+    BUILDER_PAYLOAD_HASH=$BUILDER_IDENTITY_HASH
+    MUSL_INPUT_SHA256=$cc_file_hash
+    MUSL_PAYLOAD_SHA256=$cc_file_hash
+    MUSL_CONFIG_SHA256=$musl_probe_contract
+    MUSL_TOOLCHAIN_ID=development-observed-musl
+    ZIG_INPUT_SHA256=$EMPTY_SHA256
+    ZIG_PAYLOAD_SHA256=$EMPTY_SHA256
+    ZIG_VARIANT=not-pinned-development
+fi
+
+MINIPAX_INPUT_SHA256=$MINIPAX_CRATES_SHA256
+MINITRUE_INPUT_SHA256=$MINITRUE_CRATES_SHA256
+[ "$MINIPAX_ORIGIN" = built-from-crates ] || MINIPAX_INPUT_SHA256=$MINIPAX_SHA256
+[ "$MINITRUE_ORIGIN" = built-from-crates ] || MINITRUE_INPUT_SHA256=$MINITRUE_SHA256
+
+if [ "$MINIPAX_ORIGIN" = built-from-crates ] ||
+   [ "$MINITRUE_ORIGIN" = built-from-crates ]; then
+    cargo_path=$(command -v cargo 2>/dev/null || true)
+    rustc_path=$(command -v rustc 2>/dev/null || true)
+    cargo_hash=$EMPTY_SHA256
+    rustc_hash=$EMPTY_SHA256
+    [ -z "$cargo_path" ] || cargo_hash=$(sha_path "$cargo_path")
+    [ -z "$rustc_path" ] || rustc_hash=$(sha_path "$rustc_path")
+    RUST_TOOLCHAIN_HASH=$({
+        printf '%s\n' "$cargo_hash" "$rustc_hash"
+        cargo --version 2>/dev/null || true
+        rustc --version --verbose 2>/dev/null || true
+    } | sha_join)
+    RUST_TOOLCHAIN_ID=development-observed-rust-musl
+else
+    RUST_TOOLCHAIN_HASH=$BUILDER_IDENTITY_HASH
+    RUST_TOOLCHAIN_ID=prebuilt-pinned-by-builder
+fi
+
+# Mede a árvore que realmente entrará no initramfs ANTES de acrescentar o
+# próprio manifesto. Esta raiz cobre scripts, overlay, licenças, configurações
+# e todos os payloads; o registro individual mantém a explicação por variante.
+OVERLAY_SHA256=$("$LIVE_LOCK_TOOL" tree-hash "$INITROOT")
+busybox_source_class=material
+busybox_source_input=$BUSYBOX_SHA256
+busybox_source_variant=official-tar-${BUSYBOX_VERSION}
+if [ "$BUSYBOX_ORIGIN" = development-prebuilt ]; then
+    busybox_source_class=identity-only
+    busybox_source_input=$EMPTY_SHA256
+    busybox_source_variant=not-consumed-development
+fi
+minipax_crates_class=material
+minitrue_crates_class=material
+vendor_class=material
+cargo_class=material
+[ "$MINIPAX_ORIGIN" = built-from-crates ] || minipax_crates_class=identity-only
+if [ "$MINITRUE_ORIGIN" != built-from-crates ]; then
+    minitrue_crates_class=identity-only
+    vendor_class=identity-only
+fi
+if [ "$MINIPAX_ORIGIN" != built-from-crates ] &&
+   [ "$MINITRUE_ORIGIN" != built-from-crates ]; then
+    cargo_class=identity-only
+fi
+
+HELPER_SOURCE_SHA256=$(sha_path "$LIVE_LOCK_HELPER_SOURCE")
+HELPER_BINARY_SHA256=$(sha_path "$LIVE_LOCK_TOOL")
+LIVE_LOCK_SOURCE_SHA256=$(sha_path "$LIVE_LOCK_SOURCE")
+NCURSES_PAYLOAD_SHA256=$(sha_path "$nc_prefix/lib/libncursesw.a")
+MUSL_RUNTIME_PAYLOAD_SHA256=$({
+    printf '%s\n' "$BUSYBOX_BINARY_SHA256" "$E2FS_PAYLOAD_SHA256" \
+        "$MINIPAX_SHA256" "$MINITRUE_SHA256" "$UTIL_LINUX_PAYLOAD_SHA256"
+} | sha_join)
+
+# Overlay autoral sem sobrepor scripts nem binários, que têm fatos próprios.
+OVERLAY_STAGE=$WORK/live-overlay-material
+rm -rf -- "$OVERLAY_STAGE"
+mkdir -m 0700 -p "$OVERLAY_STAGE/etc" "$OVERLAY_STAGE/licenses"
+cp "$INITROOT/etc/passwd" "$INITROOT/etc/group" "$INITROOT/etc/resolv.conf" \
+    "$OVERLAY_STAGE/etc/"
+cp "$REPO/LICENSE" "$REPO/NOTICE" "$REPO/LICENSING.md" \
+    "$OVERLAY_STAGE/licenses/"
+find "$OVERLAY_STAGE" -type d -exec chmod 0700 {} +
+find "$OVERLAY_STAGE" -type f -exec chmod 0600 {} +
+OVERLAY_SHA256=$("$LIVE_LOCK_TOOL" tree-hash "$OVERLAY_STAGE")
+
+# Uma release exige o inventário/SBOM locked explicitamente; o mesmo hash
+# autentica a evidência literal de cada contribuinte material. Development
+# usa apenas uma evidência diagnóstica própria e nunca é promovido.
+if [ "$MODE" = release ]; then
+    release_regular "$LICENSE_EVIDENCE" "$LICENSE_EVIDENCE_SHA256" \
+        'evidência de licenças live'
+    MATERIAL_LICENSE_EVIDENCE_SHA256=$LICENSE_EVIDENCE_SHA256
+else
+    LICENSE_EVIDENCE=$WORK/development-license-evidence
+    {
+        printf '%s\n' 'LIVE_LICENSE_EVIDENCE_FORMAT=development-only'
+        sha_path "$REPO/LICENSE"
+        sha_path "$REPO/LICENSING.md"
+        sha_path "$REPO/minipax/Cargo.lock"
+        sha_path "$REPO/minitrue/Cargo.lock"
+    } > "$LICENSE_EVIDENCE"
+    chmod 0600 "$LICENSE_EVIDENCE"
+    MATERIAL_LICENSE_EVIDENCE_SHA256=$(sha_path "$LICENSE_EVIDENCE")
+fi
+
+# O proof externo é obrigatório em release. `AUTHENTICATED=yes` é somente um
+# fato tipado, não uma autoautenticação: a âncora é o hash exato desses bytes
+# recebido do pipeline e conferido antes da primeira reexecução. Development
+# emite bytes canônicos, mas declara explicitamente AUTHENTICATED=no.
+if [ "$MODE" = release ]; then
+    "$LIVE_LOCK_TOOL" verify-runner "$RUNNER_PROOF"
+    for expected_line in \
+        "BUILD_MODE=release" "AUTHENTICATED=yes" \
+        "RUNNER_PATH=$RUNNER_PATH" \
+        "RUNNER_SHA256=$RUNNER_SHA256" \
+        "BUILDER_ID=$BUILDER_ID" \
+        "BUILDER_LOCK_SHA256=$BUILDER_LOCK_SHA256" \
+        "BUILDER_ROOTFS_TREE_SHA256=$BUILDER_ROOTFS_SHA256" \
+        "SOURCE_SNAPSHOT_SHA256=$SOURCE_SNAPSHOT_SHA256" \
+        "BUILD_EFI_SOURCE_SHA256=$(sha_path "$REPO/bootstrap/live/build-efi")" \
+        "LIVE_LOCK_SOURCE_SHA256=$LIVE_LOCK_SOURCE_SHA256" \
+        "LIVE_LOCK_HELPER_SOURCE_SHA256=$HELPER_SOURCE_SHA256" \
+        "LIVE_LOCK_HELPER_BINARY_SHA256=$HELPER_BINARY_SHA256" \
+        "BUSYBOX_CONFIG_SHA256=$BUSYBOX_CONFIG_SHA256" \
+        "LINUX_TAR_SHA256=$LINUX_SHA256" \
+        "BUSYBOX_TAR_SHA256=$BUSYBOX_SHA256" \
+        "E2FSPROGS_TAR_SHA256=$E2FSPROGS_SHA256" \
+        "NCURSES_TAR_SHA256=$NCURSES_SHA256" \
+        "UTIL_LINUX_TAR_SHA256=$UTIL_LINUX_SHA256" \
+        "MINIPAX_BINARY_SHA256=$MINIPAX_SHA256" \
+        "MINITRUE_BINARY_SHA256=$MINITRUE_SHA256" \
+        "ZIG_TAR_SHA256=$ZIG_TAR_EXPECTED" \
+        "ZIG_BINARY_SHA256=$ZIG_BIN_SHA256" \
+        "MUSL_TREE_SHA256=$MUSL_TREE_SHA256" \
+        "SOURCE_DATE_EPOCH=$EPOCH"; do
+        grep -Fqx "$expected_line" "$RUNNER_PROOF" || {
+            echo "erro: runner proof diverge de $expected_line" >&2; exit 1;
+        }
+    done
+else
+    RUNNER_PROOF=$WORK/LIVE_RUNNER_PROOF
+    cat > "$RUNNER_PROOF" <<EOF
+LIVE_RUNNER_PROOF_FORMAT=1
+VARIANT=live-efi
+BUILD_MODE=development
+AUTHENTICATED=no
+RUNNER_ID=development-host
+RUNNER_PATH=development-host
+RUNNER_SHA256=$EMPTY_SHA256
+BUILDER_ID=development-host
+BUILDER_LOCK_SHA256=$EMPTY_SHA256
+BUILDER_ROOTFS_TREE_SHA256=$EMPTY_SHA256
+SOURCE_SNAPSHOT_SHA256=$EMPTY_SHA256
+BUILD_EFI_SOURCE_SHA256=$(sha_path "$REPO/bootstrap/live/build-efi")
+LIVE_LOCK_SOURCE_SHA256=$LIVE_LOCK_SOURCE_SHA256
+LIVE_LOCK_HELPER_SOURCE_SHA256=$HELPER_SOURCE_SHA256
+LIVE_LOCK_HELPER_BINARY_SHA256=$HELPER_BINARY_SHA256
+BUSYBOX_CONFIG_SHA256=$BUSYBOX_CONFIG_SHA256
+LINUX_TAR_SHA256=$LINUX_SHA256
+BUSYBOX_TAR_SHA256=$BUSYBOX_SHA256
+E2FSPROGS_TAR_SHA256=$E2FSPROGS_SHA256
+NCURSES_TAR_SHA256=$NCURSES_SHA256
+UTIL_LINUX_TAR_SHA256=$UTIL_LINUX_SHA256
+MINIPAX_BINARY_SHA256=$MINIPAX_SHA256
+MINITRUE_BINARY_SHA256=$MINITRUE_SHA256
+ZIG_TAR_SHA256=$ZIG_INPUT_SHA256
+ZIG_BINARY_SHA256=$ZIG_PAYLOAD_SHA256
+MUSL_TREE_SHA256=$MUSL_PAYLOAD_SHA256
+SOURCE_DATE_EPOCH=$EPOCH
+EOF
+    chmod 0600 "$RUNNER_PROOF"
+    "$LIVE_LOCK_TOOL" verify-runner "$RUNNER_PROOF"
+fi
+RUNNER_PROOF_SHA256=$(sha_path "$RUNNER_PROOF")
+
+MINIPAX_LICENSE='GPL-3.0-or-later AND MIT AND Apache-2.0 AND (Apache-2.0 WITH LLVM-exception) AND Unicode-3.0 AND Unlicense AND LGPL-2.1-or-later'
+MINITRUE_LICENSE='GPL-3.0-or-later AND MIT AND Apache-2.0 AND (Apache-2.0 WITH LLVM-exception) AND 0BSD AND BSD-1-Clause AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND CDLA-Permissive-2.0 AND ISC AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND Unicode-3.0 AND Unlicense AND Zlib'
+UTIL_LINUX_LICENSE='GPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-3-Clause AND X11-distribute-modifications-variant AND MIT'
+EFI_PAYLOAD_LICENSE="GPL-2.0-only AND GPL-3.0-or-later AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-1-Clause AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND CDLA-Permissive-2.0 AND ISC AND MIT AND Apache-2.0 AND (Apache-2.0 WITH LLVM-exception) AND 0BSD AND Unicode-3.0 AND Unlicense AND Zlib AND X11-distribute-modifications-variant AND GPL-2.0-or-later"
+
+busybox_source_status=consumed
+[ "$BUSYBOX_ORIGIN" != development-prebuilt ] || busybox_source_status=not-consumed
+minipax_crates_status=consumed
+minitrue_crates_status=consumed
+vendor_status=consumed
+[ "$MINIPAX_ORIGIN" = built-from-crates ] || minipax_crates_status=not-consumed
+if [ "$MINITRUE_ORIGIN" != built-from-crates ]; then
+    minitrue_crates_status=not-consumed
+    vendor_status=not-consumed
+fi
+
+COMPONENT_INPUTS=$WORK/live-components.inputs
+cat > "$COMPONENT_INPUTS" <<EOF
+LIVE_COMPONENT_INPUTS_FORMAT=1
+VARIANT=live-efi
+BUILD_MODE=$MODE
+RELEASE_INPUTS_COMPLETE=$([ "$MODE" = release ] && echo yes || echo no)
+SOURCE_DATE_EPOCH=$EPOCH
+RUNNER_PROOF_SHA256=$RUNNER_PROOF_SHA256
+BUILD_CONTRACT_SHA256=$BUILD_CONTRACT_SHA256
+ENTRY_COUNT=25
+ENTRY_SCHEMA=id|variant|status|materiality|role|artifact_kind|origin_kind|source_id|provenance|license|license_evidence_sha256|input_sha256|payload_sha256|config_sha256|contract_sha256|toolchain_id|toolchain_sha256
+ENTRY=busybox-config|live-efi|consumed|identity-only|identity-only|config|repo|repo:bootstrap/live/busybox-1.35.0.config|config:busybox-1.35.0|-|$EMPTY_SHA256|$BUSYBOX_CONFIG_SHA256|$BUSYBOX_CONFIG_SHA256|$BUSYBOX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=busybox-source|live-efi|$busybox_source_status|identity-only|identity-only|source|official-tar|official:busybox-1.35.0|sha256:$BUSYBOX_SHA256|-|$EMPTY_SHA256|$BUSYBOX_SHA256|$BUSYBOX_SHA256|$BUSYBOX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=busybox-static|live-efi|produced|material|runtime|payload|$BUSYBOX_ORIGIN|initramfs:/bin/busybox|built:$BUSYBOX_ORIGIN|GPL-2.0-only AND MIT|$MATERIAL_LICENSE_EVIDENCE_SHA256|$BUSYBOX_SHA256|$BUSYBOX_BINARY_SHA256|$BUSYBOX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=cargo-locks|live-efi|measured|identity-only|identity-only|provenance|repo|repo:minipax+minitrue/Cargo.lock|locked:cargo|-|$EMPTY_SHA256|$CARGO_LOCKS_SHA256|$CARGO_LOCKS_SHA256|$CARGO_LOCKS_SHA256|$BUILD_CONTRACT_SHA256|$RUST_TOOLCHAIN_ID|$RUST_TOOLCHAIN_HASH
+ENTRY=e2fsprogs-source|live-efi|consumed|identity-only|identity-only|source|official-tar|official:e2fsprogs-1.47.4|sha256:$E2FSPROGS_SHA256|-|$EMPTY_SHA256|$E2FSPROGS_SHA256|$E2FSPROGS_SHA256|$E2FS_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=e2fsprogs-static|live-efi|produced|material|runtime|payload|built-from-source|initramfs:mke2fs+e2fsck+mke2fs.conf|source:e2fsprogs-1.47.4|GPL-2.0-only AND LGPL-2.0-only AND BSD-3-Clause AND MIT|$MATERIAL_LICENSE_EVIDENCE_SHA256|$E2FSPROGS_SHA256|$E2FS_PAYLOAD_SHA256|$E2FS_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=linux-config|live-efi|consumed|identity-only|identity-only|config|generated|kernel:.config|olddefconfig:live-efi|-|$EMPTY_SHA256|$LINUX_CONFIG_SHA256|$LINUX_CONFIG_SHA256|$LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
+ENTRY=linux-source|live-efi|consumed|identity-only|identity-only|source|official-tar|official:linux-7.1.8|sha256:$LINUX_SHA256|-|$EMPTY_SHA256|$LINUX_SHA256|$LINUX_SHA256|$LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
+ENTRY=live-lock-helper-source|live-efi|consumed|identity-only|identity-only|source|repo|repo:bootstrap/live/live-lock-helper.c|source:runner-proof|-|$EMPTY_SHA256|$HELPER_SOURCE_SHA256|$HELPER_SOURCE_SHA256|$HELPER_SOURCE_SHA256|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
+ENTRY=live-lock-helper-static|live-efi|produced|identity-only|identity-only|tool|built-from-source|builder:live-lock-helper|source:$HELPER_SOURCE_SHA256|-|$EMPTY_SHA256|$HELPER_SOURCE_SHA256|$HELPER_BINARY_SHA256|$HELPER_SOURCE_SHA256|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
+ENTRY=minipax-crates|live-efi|$minipax_crates_status|identity-only|identity-only|provenance|repo|repo:minipax|locked:$MINIPAX_CRATES_SHA256|-|$EMPTY_SHA256|$MINIPAX_CRATES_SHA256|$MINIPAX_CRATES_SHA256|$(sha_path "$REPO/minipax/Cargo.toml")|$BUILD_CONTRACT_SHA256|$RUST_TOOLCHAIN_ID|$RUST_TOOLCHAIN_HASH
+ENTRY=minipax-static|live-efi|produced|material|runtime|payload|$MINIPAX_ORIGIN|initramfs:/bin/minipax|binary:$MINIPAX_SHA256|$MINIPAX_LICENSE AND MIT|$MATERIAL_LICENSE_EVIDENCE_SHA256|$MINIPAX_INPUT_SHA256|$MINIPAX_SHA256|$(sha_path "$REPO/minipax/Cargo.toml")|$BUILD_CONTRACT_SHA256|$RUST_TOOLCHAIN_ID|$RUST_TOOLCHAIN_HASH
+ENTRY=minitrue-crates|live-efi|$minitrue_crates_status|identity-only|identity-only|provenance|repo|repo:minitrue|locked:$MINITRUE_CRATES_SHA256|-|$EMPTY_SHA256|$MINITRUE_CRATES_SHA256|$MINITRUE_CRATES_SHA256|$(sha_path "$REPO/minitrue/Cargo.toml")|$BUILD_CONTRACT_SHA256|$RUST_TOOLCHAIN_ID|$RUST_TOOLCHAIN_HASH
+ENTRY=minitrue-static|live-efi|produced|material|runtime|payload|$MINITRUE_ORIGIN|initramfs:/bin/minitrue|binary:$MINITRUE_SHA256|$MINITRUE_LICENSE AND MIT|$MATERIAL_LICENSE_EVIDENCE_SHA256|$MINITRUE_INPUT_SHA256|$MINITRUE_SHA256|$(sha_path "$REPO/minitrue/Cargo.toml")|$BUILD_CONTRACT_SHA256|$RUST_TOOLCHAIN_ID|$RUST_TOOLCHAIN_HASH
+ENTRY=ncurses-source|live-efi|consumed|identity-only|identity-only|source|official-tar|official:ncurses-6.6|sha256:$NCURSES_SHA256|-|$EMPTY_SHA256|$NCURSES_SHA256|$NCURSES_SHA256|$NCURSES_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=ncurses-static|live-efi|produced|material|runtime|linked-input|built-from-source|linked:libncursesw.a|archive:$NCURSES_PAYLOAD_SHA256|X11-distribute-modifications-variant|$MATERIAL_LICENSE_EVIDENCE_SHA256|$NCURSES_SHA256|$NCURSES_PAYLOAD_SHA256|$NCURSES_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=overlay-files|live-efi|produced|material|runtime|overlay|repo|initramfs:overlay-own|tree:$OVERLAY_SHA256|GPL-3.0-or-later|$MATERIAL_LICENSE_EVIDENCE_SHA256|$OVERLAY_SHA256|$OVERLAY_SHA256|$OVERLAY_SHA256|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
+ENTRY=runtime-musl-static|live-efi|produced|material|runtime|linked-input|toolchain|linked:musl-runtime|binaries:$MUSL_RUNTIME_PAYLOAD_SHA256|MIT|$MATERIAL_LICENSE_EVIDENCE_SHA256|$MUSL_INPUT_SHA256|$MUSL_RUNTIME_PAYLOAD_SHA256|$MUSL_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=scripts-live|live-efi|consumed|material|runtime|script|repo|initramfs:init+udhcpc.script|tree:$SCRIPTS_SHA256|GPL-3.0-or-later|$MATERIAL_LICENSE_EVIDENCE_SHA256|$SCRIPTS_SHA256|$SCRIPTS_SHA256|$SCRIPTS_SHA256|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
+ENTRY=toolchain-builder|live-efi|measured|identity-only|identity-only|tool|builder-rootfs|builder:$BUILDER_TOOLCHAIN_ID|lock:$BUILDER_IDENTITY_HASH|-|$EMPTY_SHA256|$BUILDER_IDENTITY_HASH|$BUILDER_PAYLOAD_HASH|$BUILDER_IDENTITY_HASH|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
+ENTRY=toolchain-musl|live-efi|measured|identity-only|identity-only|tool|toolchain|toolchain:$MUSL_TOOLCHAIN_ID|tree:$MUSL_TOOLCHAIN_HASH|-|$EMPTY_SHA256|$MUSL_INPUT_SHA256|$MUSL_PAYLOAD_SHA256|$MUSL_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=toolchain-zig|live-efi|measured|identity-only|identity-only|tool|official-tar|toolchain:zig-0.16.0|binary:$ZIG_PAYLOAD_SHA256|-|$EMPTY_SHA256|$ZIG_INPUT_SHA256|$ZIG_PAYLOAD_SHA256|$MUSL_PAYLOAD_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=util-linux-source|live-efi|consumed|identity-only|identity-only|source|official-tar|official:util-linux-2.42.2|sha256:$UTIL_LINUX_SHA256|-|$EMPTY_SHA256|$UTIL_LINUX_SHA256|$UTIL_LINUX_SHA256|$UTIL_LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=util-linux-static|live-efi|produced|material|runtime|payload|built-from-source|initramfs:cfdisk+sfdisk|source:util-linux-2.42.2|$UTIL_LINUX_LICENSE|$MATERIAL_LICENSE_EVIDENCE_SHA256|$UTIL_LINUX_SHA256|$UTIL_LINUX_PAYLOAD_SHA256|$UTIL_LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=vendor-scrypt|live-efi|$vendor_status|identity-only|identity-only|provenance|repo|repo:minitrue/vendor-scrypt|locked:$VENDOR_SCRYPT_SHA256|-|$EMPTY_SHA256|$VENDOR_SCRYPT_SHA256|$VENDOR_SCRYPT_SHA256|$(sha_path "$REPO/minitrue/vendor-scrypt/Cargo.toml")|$BUILD_CONTRACT_SHA256|$RUST_TOOLCHAIN_ID|$RUST_TOOLCHAIN_HASH
+EOF
+LIVE_COMPONENTS=$WORK/LIVE_COMPONENTS
+"$LIVE_LOCK_TOOL" components "$COMPONENT_INPUTS" "$LIVE_COMPONENTS"
+mkdir -p "$INITROOT/usr/share/distropica"
+cp "$LIVE_COMPONENTS" "$INITROOT/usr/share/distropica/LIVE_COMPONENTS"
+chmod 0644 "$INITROOT/usr/share/distropica/LIVE_COMPONENTS"
+
+# A cópia exata que o kernel incorporará só é materializada depois do
+# manifesto. O mtime inteiro do CPIO volta ao epoch como antes.
+cp -a "$INITROOT" "$SOURCE/distropica-initramfs"
+printf '%s\n' \
+    'nod /dev/console 0600 0 0 c 5 1' \
+    'nod /dev/null 0666 0 0 c 1 3' \
+    > "$SOURCE/distropica-devices.list"
+find "$SOURCE/distropica-initramfs" -exec touch -h -d "@$EPOCH" {} +
+touch -d "@$EPOCH" "$SOURCE/distropica-devices.list"
+
+# O kernel passa este texto a usr/gen_initramfs.sh, que o reconverte com
+# `date -d` para fixar o mtime do CPIO. Dentro do rootfs, date e o BusyBox: ele
+# aceita a forma ISO abaixo, mas nao a forma longa "Mon Jan ... UTC ...". Se a
+# conversao falha, o script upstream a silencia e gen_init_cpio usa time(NULL),
+# fazendo o bzImage variar a cada composicao.
+BUILD_TIMESTAMP=$(date -u -d "@$EPOCH" '+%Y-%m-%d %H:%M:%S')
+if [ -n "$ROOTFS" ]; then
+    PARSED_BUILD_EPOCH=$(bwrap --ro-bind "$ROOTFS" / \
+        --bind "$WORK" "$WORK_INNER" --proc /proc --dev /dev \
+        --unshare-pid --die-with-parent --clearenv \
+        --setenv PATH /usr/bin:/bin --setenv LC_ALL C --setenv TZ UTC \
+        date -d "$BUILD_TIMESTAMP" +%s 2>/dev/null) || {
+        echo "erro: date do rootfs nao parseia KBUILD_BUILD_TIMESTAMP" >&2
+        exit 1
+    }
+else
+    PARSED_BUILD_EPOCH=$(TZ=UTC date -d "$BUILD_TIMESTAMP" +%s 2>/dev/null) || {
+        echo "erro: date do builder nao parseia KBUILD_BUILD_TIMESTAMP" >&2
+        exit 1
+    }
+fi
+[ "$PARSED_BUILD_EPOCH" = "$EPOCH" ] || {
+    echo "erro: KBUILD_BUILD_TIMESTAMP nao volta ao SOURCE_DATE_EPOCH" >&2
+    exit 1
+}
 # O -fdebug-prefix-map precisa usar o caminho que o COMPILADOR enxerga: com
 # --rootfs ele compila dentro do bwrap e vê o caminho interno, não o do
 # hospedeiro. Mapear o caminho errado deixaria o de verdade embutido no
@@ -854,31 +2343,61 @@ kmake -j"$JOBS" \
     KBUILD_BUILD_TIMESTAMP="$BUILD_TIMESTAMP" \
     KBUILD_BUILD_USER=distropica KBUILD_BUILD_HOST=builder \
     KBUILD_BUILD_VERSION=1 \
-    KCFLAGS="-fdebug-prefix-map=$MAP_SOURCE=/usr/src/linux" \
-    HOSTCFLAGS="-fdebug-prefix-map=$MAP_SOURCE=/usr/src/linux" bzImage
+    KCFLAGS="-ffile-prefix-map=$MAP_SOURCE=/usr/src/linux -fdebug-prefix-map=$MAP_SOURCE=/usr/src/linux -fmacro-prefix-map=$MAP_SOURCE=/usr/src/linux" \
+    HOSTCFLAGS="-ffile-prefix-map=$MAP_SOURCE=/usr/src/linux -fdebug-prefix-map=$MAP_SOURCE=/usr/src/linux -fmacro-prefix-map=$MAP_SOURCE=/usr/src/linux" bzImage
 
 BUILT=$SOURCE/arch/x86/boot/bzImage
 file "$BUILT" | grep -q 'Linux kernel x86 boot executable' || {
     echo "erro: saída do kernel inválida" >&2; exit 1;
 }
+
+# Prova factual do embedding, sem confiar em associação por nome: o extrator
+# vem da mesma source snapshot pinada; o helper localiza os símbolos ELF,
+# compara o intervalo PT_LOAD com o blob newc e exige que o membro do CPIO seja
+# byte-idêntico ao LIVE_COMPONENTS externo.
+VMLINUX=$WORK/vmlinux-with-initramfs
+"$SOURCE/scripts/extract-vmlinux" "$BUILT" > "$VMLINUX"
+chmod 0600 "$VMLINUX"
+INITRAMFS_BLOB=$SOURCE/usr/initramfs_inc_data
+INITRAMFS_CPIO=$SOURCE/usr/initramfs_data.cpio
+[ -f "$INITRAMFS_BLOB" ] && [ -f "$INITRAMFS_CPIO" ] || {
+    echo "erro: kernel não materializou blob/cpio do initramfs" >&2; exit 1;
+}
+"$LIVE_LOCK_TOOL" compare "$INITRAMFS_BLOB" "$INITRAMFS_CPIO"
+EXTRACTOR_SHA256=$(sha_path "$SOURCE/scripts/extract-vmlinux")
+EMBED_PROOF=$WORK/LIVE_EMBED_PROOF
+"$LIVE_LOCK_TOOL" embed-proof "$BUILT" "$VMLINUX" "$INITRAMFS_BLOB" \
+    "$INITRAMFS_BLOB" "$INITRAMFS_CPIO" "$LIVE_COMPONENTS" \
+    "$EXTRACTOR_SHA256" "$EMBED_PROOF"
+LIVE_LOCK=$WORK/LIVE_LOCK
+"$LIVE_LOCK_TOOL" lock "$BUILT" "$LIVE_COMPONENTS" "$RUNNER_PROOF" \
+    "$EMBED_PROOF" "$EFI_PAYLOAD_LICENSE" \
+    "$MATERIAL_LICENSE_EVIDENCE_SHA256" "$LIVE_LOCK"
+
 output_parent=$(dirname -- "$OUTPUT")
 output_name=$(basename -- "$OUTPUT")
 case "$output_name" in ""|.|..) echo "erro: nome de saída inválido" >&2; exit 1 ;; esac
-mkdir -p "$output_parent"
+if [ "$MODE" = release ]; then
+    [ -d "$output_parent" ] && [ ! -L "$output_parent" ] || {
+        echo "erro: release exige pai da saída previamente existente" >&2; exit 1;
+    }
+    release_trusted_parent "$OUTPUT" || {
+        echo "erro: pai da saída release não é real/privado/do euid" >&2; exit 1;
+    }
+fi
 output_parent=$(CDPATH= cd -- "$output_parent" && pwd -P)
 OUTPUT=$output_parent/$output_name
 [ ! -e "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || {
     echo "erro: saída apareceu durante o build: $OUTPUT" >&2; exit 1;
 }
-PUBLISH_TMP=$(mktemp "$output_parent/.${output_name}.tmp.XXXXXXXX")
-cp "$BUILT" "$PUBLISH_TMP"
-chmod 644 "$PUBLISH_TMP"
-if ! ln "$PUBLISH_TMP" "$OUTPUT"; then
-    echo "erro: saída apareceu durante a publicação: $OUTPUT" >&2
-    exit 1
-fi
-rm -f -- "$PUBLISH_TMP"
-PUBLISH_TMP=
+"$LIVE_LOCK_TOOL" publish "$BUILT" "$LIVE_COMPONENTS" "$RUNNER_PROOF" \
+    "$EMBED_PROOF" "$LIVE_LOCK" "$OUTPUT"
+"$LIVE_LOCK_TOOL" verify "$OUTPUT" "$OUTPUT.live-components" \
+    "$OUTPUT.live-runner-proof" "$EMBED_PROOF" "$OUTPUT.live-lock"
 echo "BOOTX64.EFI vivo: $OUTPUT"
+echo "modo do EFI vivo: $MODE"
+[ "$MODE" = release ] || echo 'aviso: saída development; não é artefato de release'
 sha256sum "$OUTPUT"
+sha256sum "$OUTPUT.live-components" "$OUTPUT.live-runner-proof" \
+    "$OUTPUT.live-lock"
 if [ "$KEEP_WORK" = yes ]; then echo "work preservado: $WORK"; fi

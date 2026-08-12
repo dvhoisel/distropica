@@ -1,0 +1,277 @@
+#!/bin/sh
+# Trava os defeitos silenciosos do audio: escolha/mixer do PCM e grupo ausente
+# na primeira passagem do mdev. Usa o awk que vai de fato para o drop-in.
+set -eu
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+RECEITA=$REPO/newspeak/alsa-utils/recipe
+BASE=$REPO/newspeak/base/recipe
+TMP=${TMPDIR:-/tmp}/distropica-teste-audio.$$
+trap 'rm -rf "$TMP"' EXIT
+mkdir -p "$TMP"
+
+# Extrai os scripts produzidos pelos heredocs e confere a sintaxe deles.
+awk '/<<'"'"'ALSASTART'"'"'/{dentro=1;next} dentro && /^ALSASTART$/{exit} dentro' \
+    "$RECEITA" > "$TMP/rcS-alsa"
+awk '/<<'"'"'ALSASTOP'"'"'/{dentro=1;next} dentro && /^ALSASTOP$/{exit} dentro' \
+    "$RECEITA" > "$TMP/rcK-alsa"
+awk '/<<'"'"'RCS'"'"'/{dentro=1;next} dentro && /^RCS$/{exit} dentro' \
+    "$BASE" > "$TMP/rcS-base"
+awk '/<<'"'"'RCK'"'"'/{dentro=1;next} dentro && /^RCK$/{exit} dentro' \
+    "$BASE" > "$TMP/rcK-base"
+sh -n "$TMP/rcS-alsa" "$TMP/rcK-alsa" "$TMP/rcS-base" "$TMP/rcK-base"
+
+# A selecao fica entre marcadores para este teste executar o MESMO programa,
+# nao uma reimplementacao que poderia passar enquanto o boot quebra.
+sed -n '/DISTROPICA-ALSA-SELECT-BEGIN/,/DISTROPICA-ALSA-SELECT-END/p' \
+    "$TMP/rcS-alsa" | sed '1d;$d' > "$TMP/seleciona.awk"
+[ -s "$TMP/seleciona.awk" ] || {
+    echo 'FALHOU: nao extrai o seletor ALSA do drop-in' >&2; exit 1;
+}
+
+seleciona() {
+    if command -v busybox >/dev/null 2>&1; then
+        busybox awk -F: -f "$TMP/seleciona.awk" \
+            tipo=cards "$1" tipo=pcm "$2"
+    else
+        awk -F: -f "$TMP/seleciona.awk" \
+            tipo=cards "$1" tipo=pcm "$2"
+    fi
+}
+
+# Topologia das fotos: a GPU AMD/ATI aparece primeiro e so oferece HDMI; o
+# HDA ATI SB vem depois com o codec analogico no device zero.
+cat > "$TMP/cards-foto" <<'EOF'
+ 0 [Generic        ]: HDA-Intel - ATI R6xx HDMI
+                      ATI R6xx HDMI at 0xfeb44000 irq 70
+ 1 [SB             ]: HDA-Intel - HDA ATI SB
+                      HDA ATI SB at 0xfeb40000 irq 16
+EOF
+cat > "$TMP/pcm-foto" <<'EOF'
+00-03: HDMI 0 : HDMI 0 : playback 1
+00-07: HDMI 1 : HDMI 1 : playback 1
+01-00: ALC897 Analog : ALC897 Analog : playback 1 : capture 1
+02-00: USB Audio : USB Audio : capture 1
+EOF
+[ "$(seleciona "$TMP/cards-foto" "$TMP/pcm-foto")" = '1 0 analogica' ] || {
+    echo 'FALHOU: topologia das fotos nao escolheu card 1/device 0' >&2; exit 1;
+}
+
+# Analog explicito vence uma saida neutra que apareca primeiro.
+: > "$TMP/cards-vazio"
+cat > "$TMP/pcm-analog" <<'EOF'
+00-00: USB Audio : USB Audio : playback 1
+01-00: ALC897 Analog : ALC897 Analog : playback 1 : capture 1
+EOF
+[ "$(seleciona "$TMP/cards-vazio" "$TMP/pcm-analog")" = '1 0 analogica' ] || {
+    echo 'FALHOU: Analog explicito nao venceu a saida neutra' >&2; exit 1;
+}
+
+# Cada nome digital conhecido perde para uma saida neutra posterior. Isso
+# trava inclusive S/PDIF, que era o unico controle visivel na foto da card0 e
+# que a heuristica antiga classificava incorretamente como nao-HDMI.
+for nome_digital in HDMI DisplayPort 'Display Audio' 'S/PDIF' SPDIF IEC958 Digital DP; do
+    cat > "$TMP/pcm-digital" <<EOF
+00-00: $nome_digital : $nome_digital : playback 1
+01-00: USB Audio : USB Audio : playback 1
+EOF
+    [ "$(seleciona "$TMP/cards-vazio" "$TMP/pcm-digital")" = '1 0 neutra' ] || {
+        echo "FALHOU: $nome_digital venceu uma saida neutra" >&2; exit 1;
+    }
+done
+unset nome_digital
+
+# Quando o PCM tem nome generico, /proc/asound/cards e apenas o sinal auxiliar
+# que rebaixa a controladora de display; os numeros ainda saem do arquivo pcm.
+cat > "$TMP/cards-auxiliar" <<'EOF'
+ 0 [Generic        ]: HDA-Intel - HD-Audio Generic
+                      ATI R6xx HDMI at 0xfeb44000 irq 70
+ 1 [SB             ]: HDA-Intel - HDA ATI SB
+                      HDA ATI SB at 0xfeb40000 irq 16
+EOF
+cat > "$TMP/pcm-generico" <<'EOF'
+00-03: Generic : Generic : playback 1
+01-00: Generic : Generic : playback 1
+EOF
+[ "$(seleciona "$TMP/cards-auxiliar" "$TMP/pcm-generico")" = '1 0 neutra' ] || {
+    echo 'FALHOU: descricao da card nao rebaixou o PCM HDMI generico' >&2; exit 1;
+}
+
+cat > "$TMP/pcm-hdmi" <<'EOF'
+02-03: HDMI 0 : HDMI 0 : playback 1
+02-07: HDMI 1 : HDMI 1 : playback 1
+EOF
+[ "$(seleciona "$TMP/cards-vazio" "$TMP/pcm-hdmi")" = '2 3 digital' ] || {
+    echo 'FALHOU: fallback HDMI nao escolheu o primeiro playback' >&2; exit 1;
+}
+
+cat > "$TMP/pcm-capture" <<'EOF'
+00-00: ALC897 Analog : ALC897 Analog : capture 1
+EOF
+[ -z "$(seleciona "$TMP/cards-vazio" "$TMP/pcm-capture")" ] || {
+    echo 'FALHOU: uma via somente de captura virou saida' >&2; exit 1;
+}
+
+# Executa o drop-in extraido inteiro contra uma maquina falsa. Os ganchos de
+# caminho existem apenas para este teste; no boot real seus defaults sao
+# /proc/asound, /etc, /var/lib/alsa e os binarios instalados pelo pacote.
+mkdir -p "$TMP/maquina/proc-asound" "$TMP/maquina/etc" \
+    "$TMP/maquina/estado" "$TMP/maquina/bin"
+cp "$TMP/cards-foto" "$TMP/maquina/proc-asound/cards"
+cp "$TMP/pcm-foto" "$TMP/maquina/proc-asound/pcm"
+
+cat > "$TMP/maquina/bin/busybox" <<'EOF'
+#!/bin/sh
+set -eu
+comando=$1
+shift
+case "$comando" in
+    awk|grep|mkdir|mv)
+        if command -v busybox >/dev/null 2>&1; then
+            exec busybox "$comando" "$@"
+        fi
+        exec "$comando" "$@"
+        ;;
+    *) echo "busybox falso: applet inesperado: $comando" >&2; exit 97 ;;
+esac
+EOF
+cat > "$TMP/maquina/bin/amixer" <<'EOF'
+#!/bin/sh
+printf 'amixer' >> "$ALSA_TEST_LOG"
+for argumento do printf ' %s' "$argumento" >> "$ALSA_TEST_LOG"; done
+printf '\n' >> "$ALSA_TEST_LOG"
+EOF
+cat > "$TMP/maquina/bin/alsactl" <<'EOF'
+#!/bin/sh
+printf 'alsactl' >> "$ALSA_TEST_LOG"
+for argumento do printf ' %s' "$argumento" >> "$ALSA_TEST_LOG"; done
+printf '\n' >> "$ALSA_TEST_LOG"
+if [ "${1:-}" = -P ] && [ "${2:-}" = restore ] && [ "$#" -eq 3 ]; then
+    grep -qx "card $3" "$DISTROPICA_ALSA_STATE_DIR/asound.state"
+    exit $?
+fi
+[ "${1:-}" = store ] || exit 96
+EOF
+chmod 0755 "$TMP/maquina/bin/busybox" "$TMP/maquina/bin/amixer" \
+    "$TMP/maquina/bin/alsactl"
+
+executa_dropin() {
+    DISTROPICA_ALSA_PROC_DIR=$TMP/maquina/proc-asound \
+    DISTROPICA_ALSA_ETC_DIR=$TMP/maquina/etc \
+    DISTROPICA_ALSA_STATE_DIR=$TMP/maquina/estado \
+    DISTROPICA_ALSA_BUSYBOX=$TMP/maquina/bin/busybox \
+    DISTROPICA_ALSA_AMIXER=$TMP/maquina/bin/amixer \
+    DISTROPICA_ALSA_ALSACTL=$TMP/maquina/bin/alsactl \
+    ALSA_TEST_LOG=$TMP/maquina/chamadas \
+        sh "$TMP/rcS-alsa" > "$TMP/maquina/stdout" 2> "$TMP/maquina/stderr"
+}
+
+# Um state que so conhece C0 nao pode fazer o restore global sair zero e pular
+# o desmute da C1. O restore precisa ser -P/especifico, falhar e cair no amixer.
+printf '%s\n' 'card 0' > "$TMP/maquina/estado/asound.state"
+: > "$TMP/maquina/chamadas"
+executa_dropin
+grep -qx '# DISTROPICA-AUTO-ALSA' "$TMP/maquina/etc/asound.conf"
+grep -qx 'defaults.pcm.card 1' "$TMP/maquina/etc/asound.conf"
+grep -qx 'defaults.pcm.device 0' "$TMP/maquina/etc/asound.conf"
+grep -qx 'defaults.ctl.card 1' "$TMP/maquina/etc/asound.conf"
+grep -qx 'alsactl -P restore 1' "$TMP/maquina/chamadas" || {
+    echo 'FALHOU: restore nao foi pedantic/especifico para card 1' >&2; exit 1;
+}
+[ "$(grep -c '^amixer -q -c 1 ' "$TMP/maquina/chamadas")" -eq 5 ] || {
+    echo 'FALHOU: fallback nao desmutou os cinco controles na card 1' >&2; exit 1;
+}
+grep -qx 'alsactl store' "$TMP/maquina/chamadas" || {
+    echo 'FALHOU: fallback nao persistiu o novo estado' >&2; exit 1;
+}
+
+# Configuracao sem o marcador pertence ao administrador. Mesmo com a selecao
+# automatica ativa, ela nao pode ser substituida; state valido da C1 tambem
+# deve evitar que o boot imponha novamente os volumes.
+cat > "$TMP/maquina/etc/asound.conf" <<'EOF'
+# administrado manualmente
+defaults.pcm.card 7
+defaults.ctl.card 7
+EOF
+cp "$TMP/maquina/etc/asound.conf" "$TMP/maquina/asound.conf.esperado"
+printf '%s\n' 'card 1' > "$TMP/maquina/estado/asound.state"
+: > "$TMP/maquina/chamadas"
+executa_dropin
+cmp "$TMP/maquina/asound.conf.esperado" "$TMP/maquina/etc/asound.conf" || {
+    echo 'FALHOU: asound.conf administrado foi sobrescrito' >&2; exit 1;
+}
+grep -qx 'alsactl -P restore 1' "$TMP/maquina/chamadas"
+if grep -q '^amixer ' "$TMP/maquina/chamadas"; then
+    echo 'FALHOU: restore valido ainda impos volume via amixer' >&2; exit 1
+fi
+
+# Se HDMI for tudo que existe, o fallback continua escolhendo o primeiro PCM,
+# mas precisa abrir a card correta e ligar a chave digital. IEC958 e S/PDIF
+# recebem apenas `unmute`: controles digitais booleanos nao tem volume.
+cat > "$TMP/cards-hdmi" <<'EOF'
+ 2 [Generic        ]: HDA-Intel - ATI R6xx HDMI
+                      ATI R6xx HDMI at 0xfeb44000 irq 70
+EOF
+cp "$TMP/cards-hdmi" "$TMP/maquina/proc-asound/cards"
+cp "$TMP/pcm-hdmi" "$TMP/maquina/proc-asound/pcm"
+cat > "$TMP/maquina/etc/asound.conf" <<'EOF'
+# DISTROPICA-AUTO-ALSA
+defaults.pcm.card 1
+defaults.pcm.device 0
+defaults.ctl.card 1
+EOF
+printf '%s\n' 'card 0' > "$TMP/maquina/estado/asound.state"
+: > "$TMP/maquina/chamadas"
+executa_dropin
+grep -qx 'defaults.pcm.card 2' "$TMP/maquina/etc/asound.conf"
+grep -qx 'defaults.pcm.device 3' "$TMP/maquina/etc/asound.conf"
+grep -qx 'defaults.ctl.card 2' "$TMP/maquina/etc/asound.conf"
+grep -qx 'alsactl -P restore 2' "$TMP/maquina/chamadas"
+[ "$(grep -c '^amixer -q -c 2 ' "$TMP/maquina/chamadas")" -eq 7 ] || {
+    echo 'FALHOU: fallback HDMI nao mirou os sete controles na card 2' >&2; exit 1;
+}
+grep -qx 'amixer -q -c 2 sset IEC958 unmute' "$TMP/maquina/chamadas" || {
+    echo 'FALHOU: fallback HDMI nao desmutou IEC958 sem volume' >&2; exit 1;
+}
+grep -qx 'amixer -q -c 2 sset S/PDIF unmute' "$TMP/maquina/chamadas" || {
+    echo 'FALHOU: fallback HDMI nao desmutou S/PDIF sem volume' >&2; exit 1;
+}
+if grep '^amixer ' "$TMP/maquina/chamadas" | grep -vq '^amixer -q -c 2 '; then
+    echo 'FALHOU: fallback HDMI tocou uma card diferente da selecionada' >&2; exit 1
+fi
+grep -qx 'alsactl store' "$TMP/maquina/chamadas"
+
+# rcS precisa criar/resolver `audio` ANTES de chamar mdev -s. Comparar linhas
+# trava a ordem, nao apenas a presenca das duas frases na receita.
+linha_grupo=$(grep -n "grep -q '\^audio:'" "$TMP/rcS-base" | cut -d: -f1)
+linha_mdev=$(grep -n '\$BB mdev -s' "$TMP/rcS-base" | cut -d: -f1)
+[ -n "$linha_grupo" ] && [ -n "$linha_mdev" ] && \
+    [ "$linha_grupo" -lt "$linha_mdev" ] || {
+        echo 'FALHOU: grupo audio nao e resolvido antes do mdev' >&2; exit 1;
+    }
+grep -q '^controlC\[0-9\]\*  *root:audio 0660 =snd/$' "$BASE" || {
+    echo 'FALHOU: controlC nao pertence ao grupo audio' >&2; exit 1;
+}
+grep -q -- '-P restore "$alsa_placa"' "$TMP/rcS-alsa"
+grep -q 'alsactl store' "$TMP/rcK-alsa"
+
+linha_rcK_dropin=$(grep -n 'rcK.d/\*.sh' "$TMP/rcK-base" | cut -d: -f1)
+linha_rcK_sync=$(grep -n '/bin/busybox sync' "$TMP/rcK-base" | cut -d: -f1)
+[ "$linha_rcK_dropin" -lt "$linha_rcK_sync" ] || {
+    echo 'FALHOU: rcK salva estado depois do sync/unmount' >&2; exit 1;
+}
+
+# As duas configurações de kernel não podem voltar a divergir: o EFI é quem
+# boota hoje; a receita linux será quem boota quando essa dívida acabar.
+for kernel in "$REPO/bootstrap/live/build-efi" "$REPO/newspeak/linux/recipe"; do
+    for simbolo in SND_HDA SND_HDA_GENERIC SND_HDA_CODEC_REALTEK \
+        SND_HDA_CODEC_HDMI SND_HDA_CODEC_CIRRUS SND_HDA_CODEC_ANALOG \
+        SND_HDA_CODEC_SIGMATEL SND_HDA_CODEC_VIA \
+        SND_HDA_CODEC_CONEXANT; do
+        grep -q "$simbolo" "$kernel" || {
+            echo "FALHOU: $simbolo ausente de $kernel" >&2; exit 1;
+        }
+    done
+done
+
+echo 'audio/boot: selecao, persistencia e primeira passagem do mdev passam'

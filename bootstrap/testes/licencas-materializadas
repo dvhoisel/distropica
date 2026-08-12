@@ -1,0 +1,46 @@
+#!/bin/sh
+# Gate focal da SPEC-0011 §8: os textos próprios não podem divergir entre o
+# repositório, o pacote base e o initramfs. O inventário de terceiros só será
+# integrado ao lock/mídia depois que PLAN_LOCK_FORMAT=1 o vincular à seleção.
+set -eu
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+falhas=0
+
+confere_copia() {
+    origem=$1
+    copia=$2
+    rotulo=$3
+    if cmp -s "$origem" "$copia"; then
+        printf '  ok      %s\n' "$rotulo"
+    else
+        printf '  FALHOU  %s divergiu\n' "$rotulo"
+        falhas=$((falhas + 1))
+    fi
+}
+
+confere_copia "$REPO/LICENSE" \
+    "$REPO/newspeak/base/files/GPL-3.0-or-later.txt" 'GPL da base'
+confere_copia "$REPO/NOTICE" \
+    "$REPO/newspeak/base/files/NOTICE" 'NOTICE da base'
+confere_copia "$REPO/LICENSING.md" \
+    "$REPO/newspeak/base/files/LICENSING.md" 'escopo da base'
+
+for caminho in GPL-3.0-or-later.txt NOTICE LICENSING.md; do
+    if grep -q "/usr/share/licenses/distropica/$caminho" \
+        "$REPO/newspeak/base/recipe" &&
+       grep -q "usr/share/licenses/distropica/$caminho" \
+        "$REPO/bootstrap/live/build-efi"; then
+        printf '  ok      base e EFI materializam %s\n' "$caminho"
+    else
+        printf '  FALHOU  base/EFI não materializam %s\n' "$caminho"
+        falhas=$((falhas + 1))
+    fi
+done
+
+if [ "$falhas" -eq 0 ]; then
+    echo 'licenças/materialização: todos os casos passam'
+    exit 0
+fi
+printf 'licenças/materialização: %d caso(s) falharam\n' "$falhas"
+exit 1

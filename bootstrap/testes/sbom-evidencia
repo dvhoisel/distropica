@@ -1,0 +1,227 @@
+#!/bin/sh
+# Casos reais que já deixaram componentes distribuídos sem evidência no SBOM:
+# capitalização de License/Copyright, tar gzip confundido com setor de boot,
+# licença só no cabeçalho da fonte e fonte correspondente textual.
+set -eu
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+TMP=${TMPDIR:-/tmp}/distropica-teste-sbom.$$
+trap 'rm -rf "$TMP"' EXIT
+mkdir -p "$TMP/bin" "$TMP/bundle/upstream" "$TMP/src"
+
+faz_tar() { # hash caminho conteúdo [executavel]
+    hash=$1
+    caminho=$2
+    conteudo=$3
+    raiz=$TMP/src/$hash
+    mkdir -p "$raiz/$(dirname -- "$caminho")"
+    printf '%s\n' "$conteudo" > "$raiz/$caminho"
+    [ "${4:-}" != executavel ] || chmod 0755 "$raiz/$caminho"
+    tar -czf "$TMP/bundle/upstream/$hash" -C "$raiz" "$caminho"
+}
+
+faz_tar cap 'libcap/License' \
+    'SPDX-License-Identifier: BSD-3-Clause OR GPL-2.0-only'
+faz_tar xml 'libxml2/Copyright' \
+    'Permission is hereby granted, free of charge, to any person obtaining a copy.'
+faz_tar drm 'libdrm/Android.bp' \
+    'Permission is hereby granted, free of charge, to any person obtaining a copy.'
+faz_tar rg 'ripgrep/LICENSE-MIT' \
+    'The MIT License (MIT)'
+faz_tar modo 'modo-executavel/LICENSE' \
+    'Permission is hereby granted, free of charge.' executavel
+faz_tar manifesto 'MANIFEST.sha256' \
+    'Permission is hereby granted, free of charge.'
+
+# A fronteira do preview cai no primeiro byte de 'é'; tab, backslash e byte 01
+# também pertencem à linha. O INDICE final precisa continuar ASCII canônico.
+raiz=$TMP/src/preview
+mkdir -p "$raiz/preview"
+prefixo=$(printf '%071s' '' | tr ' ' A)
+printf '%sé\t\\\001Z\n' "$prefixo" > "$raiz/preview/LICENSE"
+tar -czf "$TMP/bundle/upstream/preview" -C "$raiz" preview/LICENSE
+
+# Nome iniciado por '-' vem do artefato. Sem --verbatim-files-from, o GNU tar
+# o interpreta como opcao ao reler a lista com -T e a evidencia some.
+raiz=$TMP/src/traco
+mkdir -p "$raiz/original"
+printf '%s\n' 'Permission is hereby granted, free of charge.' \
+    > "$raiz/original/License"
+tar -czf "$TMP/bundle/upstream/traco" -C "$raiz" \
+    --transform='s|^original|-componente|' original/License
+
+# LICENSE pode ser link para fora do tar. O extrator deve ignorar o link e
+# conservar o COPYING regular, nunca copiar /etc/passwd do hospedeiro.
+raiz=$TMP/src/link
+mkdir -p "$raiz/componente"
+printf '%s\n' 'Permission is hereby granted, free of charge.' \
+    > "$raiz/componente/COPYING"
+ln -s /etc/passwd "$raiz/componente/LICENSE"
+tar -czf "$TMP/bundle/upstream/link" -C "$raiz" .
+
+printf '%s\n' \
+    'This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.' \
+    > "$TMP/bundle/upstream/certdata"
+
+# Reproduz o diagnóstico errado que o `file` deu ao tarball MUSL do ripgrep.
+# O extrator deve sondar o conteúdo com tar, e não confiar nesse rótulo.
+cat > "$TMP/bin/file" <<'EOF'
+#!/bin/sh
+ultimo=
+for argumento do ultimo=$argumento; done
+if grep -q 'Mozilla Public License' "$ultimo" 2>/dev/null; then
+    echo 'ASCII text'
+else
+    echo 'DOS/MBR boot sector'
+fi
+EOF
+chmod +x "$TMP/bin/file"
+
+cat > "$TMP/bundle/INVENTARIO" <<'EOF'
+# pacote	versao	mundo	licenca	sha256	origem	arquivo	tipo
+libcap	1	B	BSD-3-Clause	cap	https://example.invalid/cap	upstream/cap	upstream
+libxml2	1	B	MIT	xml	https://example.invalid/xml	upstream/xml	upstream
+libdrm	1	B	MIT	drm	https://example.invalid/drm	upstream/drm	upstream
+ripgrep	1	A	MIT	rg	https://example.invalid/rg	upstream/rg	upstream
+nome-com-traco	1	B	MIT	traco	https://example.invalid/traco	upstream/traco	upstream
+licenca-link	1	B	MIT	link	https://example.invalid/link	upstream/link	upstream
+ca-certificates	1	B	MPL-2.0	certdata	https://example.invalid/certdata	upstream/certdata	fonte-correspondente
+modo-executavel	1	B	MIT	modo	https://example.invalid/modo	upstream/modo	upstream
+manifesto-aninhado	1	B	MIT	manifesto	https://example.invalid/manifesto	upstream/manifesto	upstream
+preview-hostil	1	B	MIT	preview	https://example.invalid/preview	upstream/preview	upstream
+EOF
+
+PATH="$TMP/bin:$PATH" "$REPO/bootstrap/sbom" --bundle "$TMP/bundle" \
+    > "$TMP/saida" 2>&1
+
+falhas=0
+for pacote in libcap libxml2 libdrm ripgrep nome-com-traco licenca-link \
+    ca-certificates modo-executavel manifesto-aninhado preview-hostil; do
+    if grep -q "^$pacote	" "$TMP/bundle/licencas/INDICE"; then
+        printf '  ok      %s\n' "$pacote"
+    else
+        printf '  FALHOU  %s sem evidência\n' "$pacote"
+        falhas=$((falhas + 1))
+    fi
+done
+
+if find "$TMP/bundle/licencas" -type l | grep -q .; then
+    echo '  FALHOU  SBOM materializou link simbolico do artefato'
+    falhas=$((falhas + 1))
+fi
+
+if grep -q 'SEM EVIDÊNCIA' "$TMP/saida"; then
+    echo '  FALHOU  o relatório ainda acusa pacote sem evidência'
+    falhas=$((falhas + 1))
+fi
+
+# O gate estrito não termina no diretório de diagnóstico: produz um tar
+# canônico, fechado pelo manifesto e pelo SHA externo. Duas execuções sobre a
+# mesma seleção precisam dar os mesmos bytes, independentemente dos mtimes do
+# workspace temporário.
+rm -rf "$TMP/bundle/licencas"
+TAR_OPTIONS='--blocking-factor=1 --exclude=MANIFEST.sha256 --transform=s,^INDICE$,ALTERADO,' \
+PATH="$TMP/bin:$PATH" "$REPO/bootstrap/sbom" --bundle "$TMP/bundle" --strict \
+    > "$TMP/strict-valido-a" 2>&1
+if [ ! -f "$TMP/bundle/licenses.tar" ] ||
+   [ ! -f "$TMP/bundle/licenses.tar.sha256" ]; then
+    echo '  FALHOU  --strict não produziu licenses.tar e seu SHA'
+    falhas=$((falhas + 1))
+else
+    (cd "$TMP/bundle" && sha256sum -c licenses.tar.sha256 >/dev/null)
+    mkdir "$TMP/extraido"
+    tar -xf "$TMP/bundle/licenses.tar" -C "$TMP/extraido"
+    (cd "$TMP/extraido" && sha256sum -c MANIFEST.sha256 >/dev/null)
+    if ! grep -q '  manifesto-aninhado/MANIFEST.sha256$' \
+        "$TMP/extraido/MANIFEST.sha256"; then
+        echo '  FALHOU  MANIFEST raiz não cobriu homônimo aninhado'
+        falhas=$((falhas + 1))
+    else
+        echo '  ok      MANIFEST raiz cobre homônimo aninhado'
+    fi
+    tamanho_tar=$(stat -c %s "$TMP/bundle/licenses.tar")
+    if [ $((tamanho_tar % 10240)) -ne 0 ]; then
+        echo "  FALHOU  GNU tar saiu sem blocking-factor 20: $tamanho_tar"
+        falhas=$((falhas + 1))
+    else
+        echo '  ok      TAR_OPTIONS hostil não alterou blocking-factor 20'
+    fi
+    if LC_ALL=C tr -d '\11\12\40-\176' < "$TMP/extraido/INDICE" | grep -q . ||
+       ! awk -F '\t' '
+           NR == 1 { if ($0 != "# pacote\tcomponente\tsha256\tprimeira-linha") bad=1; next }
+           NF != 4 || $2 !~ /^hex:[0-9a-f]+$/ || $4 !~ /^hex:[0-9a-f]*$/ { bad=1 }
+           END { exit bad }
+       ' "$TMP/extraido/INDICE"; then
+        echo '  FALHOU  INDICE contém não ASCII ou campo fora da gramática hex'
+        falhas=$((falhas + 1))
+    else
+        echo '  ok      preview multibyte/controles permaneceu em ASCII hex'
+    fi
+    modo_evidencia=$(find "$TMP/extraido/modo-executavel" -type f -printf '%m\n')
+    if [ "$modo_evidencia" != 644 ]; then
+        echo "  FALHOU  regular executável upstream saiu com modo $modo_evidencia"
+        falhas=$((falhas + 1))
+    else
+        echo '  ok      regular executável upstream foi normalizado para 0644'
+    fi
+    for controle in INDICE PACOTES LEIA-ME MANIFEST.sha256 \
+        distropica/GPL-3.0-or-later.txt distropica/NOTICE \
+        distropica/LICENSING.md; do
+        if [ ! -f "$TMP/extraido/$controle" ]; then
+            echo "  FALHOU  licenses.tar não contém $controle"
+            falhas=$((falhas + 1))
+        fi
+    done
+    cp "$TMP/bundle/licenses.tar" "$TMP/licenses-a.tar"
+    rm -rf "$TMP/bundle/licencas" "$TMP/bundle/licenses.tar" \
+        "$TMP/bundle/licenses.tar.sha256"
+    PATH="$TMP/bin:$PATH" "$REPO/bootstrap/sbom" --bundle "$TMP/bundle" --strict \
+        > "$TMP/strict-valido-b" 2>&1
+    if cmp -s "$TMP/licenses-a.tar" "$TMP/bundle/licenses.tar"; then
+        echo '  ok      licenses.tar estrito é byte-idêntico em duas execuções'
+    else
+        echo '  FALHOU  licenses.tar estrito não é reprodutível'
+        falhas=$((falhas + 1))
+    fi
+fi
+
+# O modo de desenvolvimento continua produzindo o relatório incompleto; o
+# mesmo caso, com --strict, precisa virar falha de processo para servir de gate
+# de publicação.
+for modo in permissivo estrito; do
+    bundle=$TMP/bundle-$modo
+    mkdir -p "$bundle/upstream"
+    printf '%s\n' 'binário opaco sem metadado' > "$bundle/upstream/opaque"
+    cat > "$bundle/INVENTARIO" <<'EOF'
+# pacote	versao	mundo	licenca	sha256	origem	arquivo	tipo
+sem-evidencia	1	A	MIT	opaque	https://example.invalid/opaque	upstream/opaque	upstream
+EOF
+done
+
+if PATH="$TMP/bin:$PATH" "$REPO/bootstrap/sbom" \
+    --bundle "$TMP/bundle-permissivo" > "$TMP/permissivo" 2>&1 &&
+   grep -q 'SEM EVIDÊNCIA' "$TMP/permissivo"; then
+    echo '  ok      modo não estrito conserva relatório de desenvolvimento'
+else
+    echo '  FALHOU  modo não estrito recusou ou ocultou pacote sem evidência'
+    falhas=$((falhas + 1))
+fi
+
+if PATH="$TMP/bin:$PATH" "$REPO/bootstrap/sbom" \
+    --bundle "$TMP/bundle-estrito" --strict > "$TMP/estrito" 2>&1; then
+    echo '  FALHOU  --strict aceitou pacote sem evidência'
+    falhas=$((falhas + 1))
+elif grep -q 'SEM EVIDÊNCIA' "$TMP/estrito" &&
+     grep -q -- '--strict recusou' "$TMP/estrito"; then
+    echo '  ok      --strict recusa pacote sem evidência'
+else
+    echo '  FALHOU  --strict falhou sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+
+if [ "$falhas" -eq 0 ]; then
+    echo 'sbom/evidência: todos os casos passam'
+    exit 0
+fi
+printf 'sbom/evidência: %d caso(s) falharam\n' "$falhas"
+exit 1

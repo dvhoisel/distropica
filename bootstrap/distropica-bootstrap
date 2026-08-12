@@ -80,9 +80,11 @@ configure_musl_cc() {
 build_rust_binary() {
     package=$1
     destination=$BUILD_TARGET/$package
+    cargo_feature_flags=
+    [ "$package" != minitrue ] || cargo_feature_flags=--no-default-features
     CARGO_TARGET_DIR="$destination" \
         cargo build --locked --release --quiet --target "$RUST_TARGET" \
-        --manifest-path "$REPO/$package/Cargo.toml"
+        $cargo_feature_flags --manifest-path "$REPO/$package/Cargo.toml"
     binary=$destination/$RUST_TARGET/release/$package
     chmod 755 "$binary"
     printf '%s\n' "$binary"
