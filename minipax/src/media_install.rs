@@ -57,6 +57,7 @@ const LOCK_FIELDS: &[&str] = &[
     "NEWSPEAK_SHA256",
     "CACHE_SHA256",
     "CHANNEL_BOOTSTRAP_SHA256",
+    "PLAN_LOCK_SHA256",
 ];
 
 pub struct MediaInstallOptions {
@@ -300,8 +301,8 @@ fn load_media(source: &Path) -> Result<MediaSnapshot> {
         bail!("profile.lock não confere com PROFILE_LOCK_SHA256 de media.meta");
     }
     let lock_fields = parse_fields(&lock, "profile.lock", LOCK_FIELDS)?;
-    if lock_fields["PROFILE_LOCK_FORMAT"] != "3" {
-        bail!("PROFILE_LOCK_FORMAT desconhecido; esta versão aceita apenas 3");
+    if lock_fields["PROFILE_LOCK_FORMAT"] != "4" {
+        bail!("PROFILE_LOCK_FORMAT desconhecido; esta versão aceita apenas 4");
     }
     validate_class(&lock_fields["PROFILE_CLASS"], "PROFILE_CLASS do lock")?;
     for field in [
@@ -322,6 +323,7 @@ fn load_media(source: &Path) -> Result<MediaSnapshot> {
         "OFFICIAL_MINITRUE_SHA256",
         "CACHE_SHA256",
         "CHANNEL_BOOTSTRAP_SHA256",
+        "PLAN_LOCK_SHA256",
     ] {
         if lock_fields[field] != "-" && !is_hash(&lock_fields[field]) {
             bail!("profile.lock contém SHA-256 inválido em {field}");

@@ -7,8 +7,12 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
-pub const PROFILE_LOCK_FORMAT: &str = "3";
+pub const PROFILE_LOCK_FORMAT: &str = "4";
 const MAX_PROFILE_FILE: u64 = 1024 * 1024;
+/// O PLAN_LOCK cresce com a closure: 175 receitas produzem NODE/EDGE/ARTIFACT
+/// e as tabelas de ABI. O teto é folgado para a árvore atual e ainda impede que
+/// um arquivo arbitrário entre no perfil como se fosse um plano.
+const MAX_PLAN_LOCK_FILE: u64 = 8 * 1024 * 1024;
 const MAX_NEWSPEAK_ORIGIN_FILE: u64 = 16 * 1024;
 
 #[derive(Default)]
@@ -48,6 +52,10 @@ pub struct ResolvedProfile {
     /// índice assinado usado como semente. É deliberadamente separado do
     /// cache offline: `--cache` não pode mais fazê-lo desaparecer da mídia.
     pub channel_bootstrap_path: Option<PathBuf>,
+    /// A resolução que o Minitrue congelou para esta mídia
+    /// (`minitrue plan --media`). O perfil a PRENDE; quem a produz e a valida
+    /// semanticamente é o Minitrue.
+    pub plan_lock_path: Option<PathBuf>,
     pub customized: bool,
 }
 
@@ -188,6 +196,96 @@ fn read_small_regular(path: &Path, what: &str) -> Result<Vec<u8>> {
         bail!("{what} excede {MAX_PROFILE_FILE} bytes: {}", path.display());
     }
     fs::read(path).with_context(|| format!("não li {what} {}", path.display()))
+}
+
+/// Confere que este PLAN_LOCK é a resolução DESTE perfil.
+///
+/// O `profile.lock` prendia os worlds — que são as RAÍZES — e nunca a
+/// resolução. Duas resoluções diferentes dos mesmos worlds (outra seleção de
+/// canal, outro resultado de ABI) produziam exatamente o mesmo lock de perfil,
+/// então ele não identificava o que seria de fato instalado.
+///
+/// A AUTORIDADE SEMÂNTICA DO FORMATO É DO MINITRUE, que valida NODE, EDGE,
+/// ARTIFACT, ABI e a proveniência inteira. Aqui se confere apenas o VÍNCULO:
+/// que o plano é de mídia, estrito, desta arquitetura, e que suas raízes são
+/// exatamente estes worlds. Prender só o hash não bastaria — um plano de outro
+/// perfil prenderia igual, e o lock voltaria a não dizer nada sobre o que será
+/// instalado.
+fn validate_plan_lock(
+    bytes: &[u8],
+    arch: &str,
+    target_world: &str,
+    cache_world: &str,
+) -> Result<()> {
+    let text = std::str::from_utf8(bytes).context("plan.lock não é UTF-8")?;
+    if text.contains('\r') {
+        bail!("plan.lock contém CR não canônico");
+    }
+    if !text.ends_with('\n') {
+        bail!("plan.lock não termina em nova linha");
+    }
+    let mut cabecalho = BTreeMap::new();
+    let mut raizes = BTreeSet::new();
+    for line in text.lines() {
+        if let Some(campos) = line.strip_prefix("ROOT\t") {
+            let (papel, nome) = campos
+                .split_once('\t')
+                .ok_or_else(|| anyhow::anyhow!("plan.lock tem ROOT sem papel e pacote"))?;
+            if !matches!(papel, "install" | "availability") {
+                bail!("plan.lock tem ROOT com papel desconhecido: {papel:?}");
+            }
+            // Nomes de pacote válidos não sofrem escape na serialização do
+            // Minitrue, então comparar cru é suficiente: um nome escapado
+            // simplesmente não casa com nenhum world e a conferência recusa.
+            if !raizes.insert((papel.to_string(), nome.to_string())) {
+                bail!("plan.lock repete a raiz {nome}");
+            }
+            continue;
+        }
+        if line.contains('\t') {
+            continue;
+        }
+        if let Some((chave, valor)) = line.split_once('=') {
+            cabecalho.insert(chave.to_string(), valor.to_string());
+        }
+    }
+    let exigido = |chave: &str, esperado: &str| -> Result<()> {
+        match cabecalho.get(chave) {
+            Some(valor) if valor == esperado => Ok(()),
+            Some(valor) => bail!("plan.lock tem {chave}={valor}; o perfil exige {esperado}"),
+            None => bail!("plan.lock não declara {chave}"),
+        }
+    };
+    exigido("PLAN_LOCK_FORMAT", "1")?;
+    exigido("ARCH", arch)?;
+    // Um plano de rectify ou de sync descreve a convergência de uma máquina, e
+    // não a composição de uma mídia; em ABI development ele aceitaria pendência
+    // e deixaria de descrever o que o alvo vai encontrar.
+    exigido("PURPOSE", "media")?;
+    exigido("ABI_POLICY", "strict")?;
+
+    let mut esperadas = BTreeSet::new();
+    for (world, papel) in [(target_world, "install"), (cache_world, "availability")] {
+        for nome in world.lines().filter(|line| !line.is_empty()) {
+            esperadas.insert((papel.to_string(), nome.to_string()));
+        }
+    }
+    if raizes != esperadas {
+        let faltando: Vec<String> = esperadas
+            .difference(&raizes)
+            .map(|(papel, nome)| format!("{nome}({papel})"))
+            .collect();
+        let sobrando: Vec<String> = raizes
+            .difference(&esperadas)
+            .map(|(papel, nome)| format!("{nome}({papel})"))
+            .collect();
+        bail!(
+            "plan.lock não resolve os worlds deste perfil; faltando: [{}]; sobrando: [{}]",
+            faltando.join(" "),
+            sobrando.join(" ")
+        );
+    }
+    Ok(())
 }
 
 fn safe_atom(value: &str, what: &str) -> Result<()> {
@@ -379,6 +477,10 @@ impl ResolvedProfile {
             .join("channel-bootstrap")
             .is_dir()
             .then(|| directory.join("channel-bootstrap"));
+        let plan_lock_path = directory
+            .join("plan.lock")
+            .is_file()
+            .then(|| directory.join("plan.lock"));
         crate::ensure_real_file(&target_world_path, "target.world")?;
         crate::ensure_real_file(&live_world_path, "live.world")?;
         crate::ensure_real_dir(&newspeak_path, "árvore newspeak")?;
@@ -390,6 +492,9 @@ impl ResolvedProfile {
         }
         if let Some(path) = &channel_bootstrap_path {
             crate::ensure_real_dir(path, "channel-bootstrap")?;
+        }
+        if let Some(path) = &plan_lock_path {
+            crate::ensure_real_file(path, "plan.lock")?;
         }
         Ok(Self {
             directory,
@@ -409,6 +514,7 @@ impl ResolvedProfile {
             newspeak_path,
             cache_path,
             channel_bootstrap_path,
+            plan_lock_path,
             customized,
         })
     }
@@ -494,8 +600,28 @@ impl ResolvedProfile {
             .as_deref()
             .map(sha256)
             .unwrap_or_else(|| "-".into());
+        // A validação acontece ANTES de o hash entrar no lock: prender um plano
+        // que não resolve estes worlds seria pior que não prender nenhum,
+        // porque daria a aparência de vínculo.
+        let plan_lock_hash = match &self.plan_lock_path {
+            Some(path) => {
+                crate::ensure_real_file(path, "plan.lock")?;
+                let metadata = fs::metadata(path)?;
+                if metadata.len() > MAX_PLAN_LOCK_FILE {
+                    bail!(
+                        "plan.lock excede {MAX_PLAN_LOCK_FILE} bytes: {}",
+                        path.display()
+                    );
+                }
+                let bytes = fs::read(path)
+                    .with_context(|| format!("não li plan.lock {}", path.display()))?;
+                validate_plan_lock(&bytes, &self.arch, &target_world, &cache_world)?;
+                sha256(&bytes)
+            }
+            None => "-".into(),
+        };
         let content = format!(
-            "PROFILE_CONTENT_FORMAT=3\nPROFILE_NAME={}\nARCH={}\nSOURCE_DATE_EPOCH={}\nMEDIA_SIZE_MIB={}\nINSTALL_READY={}\nTARGET_WORLD_SHA256={target_world_hash}\nLIVE_WORLD_SHA256={live_world_hash}\nCACHE_WORLD_SHA256={cache_world_hash}\nOVERLAY_SHA256={overlay_hash}\nNEWSPEAK_SHA256={newspeak_hash}\nCACHE_SHA256={cache_hash}\nCHANNEL_BOOTSTRAP_SHA256={channel_bootstrap_hash}\n",
+            "PROFILE_CONTENT_FORMAT=4\nPROFILE_NAME={}\nARCH={}\nSOURCE_DATE_EPOCH={}\nMEDIA_SIZE_MIB={}\nINSTALL_READY={}\nTARGET_WORLD_SHA256={target_world_hash}\nLIVE_WORLD_SHA256={live_world_hash}\nCACHE_WORLD_SHA256={cache_world_hash}\nOVERLAY_SHA256={overlay_hash}\nNEWSPEAK_SHA256={newspeak_hash}\nCACHE_SHA256={cache_hash}\nCHANNEL_BOOTSTRAP_SHA256={channel_bootstrap_hash}\nPLAN_LOCK_SHA256={plan_lock_hash}\n",
             self.name,
             self.arch,
             self.epoch,
@@ -514,7 +640,7 @@ impl ResolvedProfile {
         }
         .to_string();
         let lock = format!(
-            "PROFILE_LOCK_FORMAT={PROFILE_LOCK_FORMAT}\nPROFILE_NAME={}\nPROFILE_CLASS={}\nPROFILE_CONTENT_SHA256={}\nOFFICIAL_CONTENT_SHA256={}\nARCH={}\nSOURCE_DATE_EPOCH={}\nMEDIA_SIZE_MIB={}\nINSTALL_READY={}\nOFFICIAL_BOOT_EFI_SHA256={}\nOFFICIAL_MINITRUE_SHA256={}\nTARGET_WORLD_SHA256={}\nLIVE_WORLD_SHA256={}\nCACHE_WORLD_SHA256={}\nOVERLAY_SHA256={}\nNEWSPEAK_SHA256={}\nCACHE_SHA256={}\nCHANNEL_BOOTSTRAP_SHA256={}\n",
+            "PROFILE_LOCK_FORMAT={PROFILE_LOCK_FORMAT}\nPROFILE_NAME={}\nPROFILE_CLASS={}\nPROFILE_CONTENT_SHA256={}\nOFFICIAL_CONTENT_SHA256={}\nARCH={}\nSOURCE_DATE_EPOCH={}\nMEDIA_SIZE_MIB={}\nINSTALL_READY={}\nOFFICIAL_BOOT_EFI_SHA256={}\nOFFICIAL_MINITRUE_SHA256={}\nTARGET_WORLD_SHA256={}\nLIVE_WORLD_SHA256={}\nCACHE_WORLD_SHA256={}\nOVERLAY_SHA256={}\nNEWSPEAK_SHA256={}\nCACHE_SHA256={}\nCHANNEL_BOOTSTRAP_SHA256={}\nPLAN_LOCK_SHA256={}\n",
             self.name,
             class,
             content_hash,
@@ -532,6 +658,7 @@ impl ResolvedProfile {
             newspeak_hash,
             cache_hash,
             channel_bootstrap_hash,
+            plan_lock_hash,
         );
         let lock_hash = sha256(lock.as_bytes());
         Ok(ProfileArtifacts {
@@ -672,6 +799,136 @@ mod tests {
         )
         .unwrap();
         assert_eq!(profile.artifacts().unwrap().class, "custom");
+    }
+
+    /// Um PLAN_LOCK plausível para a fixture: `target.world` tem `a` e `z`.
+    /// Só os campos que o perfil confere precisam ser fiéis; o resto do formato
+    /// é competência do Minitrue.
+    fn plano_de_midia(cabecalho: &[(&str, &str)], raizes: &[(&str, &str)]) -> Vec<u8> {
+        let mut texto = String::new();
+        for (chave, valor) in cabecalho {
+            texto.push_str(&format!("{chave}={valor}\n"));
+        }
+        for (papel, nome) in raizes {
+            texto.push_str(&format!("ROOT\t{papel}\t{nome}\n"));
+        }
+        texto.push_str("NODE\ta\t1\tsource\tB\tkeep\tfonte\n");
+        texto.into_bytes()
+    }
+
+    fn cabecalho_de_midia() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("PLAN_LOCK_FORMAT", "1"),
+            ("TREE_SHA256", "00"),
+            ("ARCH", "x86_64"),
+            ("PURPOSE", "media"),
+            ("BINARY_POLICY", "binary-only"),
+            ("ABI_POLICY", "strict"),
+            ("ROOT_COUNT", "2"),
+        ]
+    }
+
+    #[test]
+    fn plano_resolvido_entra_no_lock_e_o_perfil_sem_plano_nao_mente() {
+        let temp = fixture();
+        let load = || {
+            ResolvedProfile::load(
+                temp.path(),
+                ProfileOverrides {
+                    newspeak: Some(temp.path().join("newspeak")),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        // Sem plano o campo existe e diz "-": ausência declarada, não campo
+        // faltando que um leitor antigo interpretaria como qualquer coisa.
+        let sem_plano = load();
+        assert!(sem_plano.plan_lock_path.is_none());
+        assert!(sem_plano.lock().unwrap().contains("PLAN_LOCK_SHA256=-\n"));
+
+        let plano = plano_de_midia(&cabecalho_de_midia(), &[("install", "a"), ("install", "z")]);
+        fs::write(temp.path().join("plan.lock"), &plano).unwrap();
+        let com_plano = load().lock().unwrap();
+        assert!(com_plano.contains(&format!("PLAN_LOCK_SHA256={}\n", sha256(&plano))));
+        assert!(com_plano.contains("PROFILE_LOCK_FORMAT=4\n"));
+
+        // Resolver de novo e obter outro plano precisa mudar o lock do perfil:
+        // é exatamente a diferença que o lock antigo não enxergava.
+        let outro = plano_de_midia(&cabecalho_de_midia(), &[("install", "a"), ("install", "z")]);
+        let mut outro = outro;
+        outro.extend_from_slice(b"NODE\tz\t2\tsource\tB\tkeep\tfonte\n");
+        fs::write(temp.path().join("plan.lock"), &outro).unwrap();
+        assert_ne!(com_plano, load().lock().unwrap());
+    }
+
+    #[test]
+    fn plano_de_outro_perfil_ou_de_outro_proposito_nao_prende() {
+        let temp = fixture();
+        fs::write(temp.path().join("cache.world"), "zig\n").unwrap();
+        let load = || {
+            ResolvedProfile::load(
+                temp.path(),
+                ProfileOverrides {
+                    newspeak: Some(temp.path().join("newspeak")),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let escreve = |bytes: &[u8]| fs::write(temp.path().join("plan.lock"), bytes).unwrap();
+
+        // Raízes certas, papéis certos: target instala, cache disponibiliza.
+        escreve(&plano_de_midia(
+            &cabecalho_de_midia(),
+            &[("install", "a"), ("install", "z"), ("availability", "zig")],
+        ));
+        assert!(load().artifacts().is_ok());
+
+        // Faltando uma raiz do target.world.
+        escreve(&plano_de_midia(
+            &cabecalho_de_midia(),
+            &[("install", "a"), ("availability", "zig")],
+        ));
+        assert!(load().artifacts().is_err());
+
+        // Raiz estrangeira que este perfil não pediu.
+        escreve(&plano_de_midia(
+            &cabecalho_de_midia(),
+            &[
+                ("install", "a"),
+                ("install", "z"),
+                ("install", "gimp"),
+                ("availability", "zig"),
+            ],
+        ));
+        assert!(load().artifacts().is_err());
+
+        // Papel trocado: instalar o que era só para estar disponível muda o que
+        // a mídia entrega, e o conjunto de nomes sozinho não acusaria.
+        escreve(&plano_de_midia(
+            &cabecalho_de_midia(),
+            &[("install", "a"), ("install", "z"), ("install", "zig")],
+        ));
+        assert!(load().artifacts().is_err());
+
+        let certas = [("install", "a"), ("install", "z"), ("availability", "zig")];
+        for (chave, valor) in [
+            ("PURPOSE", "rectify"),
+            ("ABI_POLICY", "development"),
+            ("ARCH", "aarch64"),
+            ("PLAN_LOCK_FORMAT", "2"),
+        ] {
+            let cabecalho: Vec<(&str, &str)> = cabecalho_de_midia()
+                .into_iter()
+                .map(|(k, v)| if k == chave { (k, valor) } else { (k, v) })
+                .collect();
+            escreve(&plano_de_midia(&cabecalho, &certas));
+            assert!(
+                load().artifacts().is_err(),
+                "{chave}={valor} não podia ser aceito"
+            );
+        }
     }
 
     #[test]

@@ -10,10 +10,22 @@ Nenhuma delas é oficial.
 quais receitas precisam ter, no cache offline, todos os artefatos e as
 assinaturas que estiverem pinadas. A árvore Newspeak, o overlay, os três worlds,
 o cache e o bootstrap do canal entram no `profile.lock` por hashes separados.
-O lock e sua identidade de conteúdo usam os formatos `PROFILE_LOCK_FORMAT=3`
-e `PROFILE_CONTENT_FORMAT=3`; `CACHE_WORLD_SHA256` autentica a forma
+O lock e sua identidade de conteúdo usam os formatos `PROFILE_LOCK_FORMAT=4`
+e `PROFILE_CONTENT_FORMAT=4`; `CACHE_WORLD_SHA256` autentica a forma
 normalizada de `cache.world` e `CHANNEL_BOOTSTRAP_SHA256` prende endpoint,
 chave pública e seed assinada.
+
+O arquivo opcional `plan.lock` é a RESOLUÇÃO desta mídia, produzida por
+`minitrue plan --media --world target.world --cache-world cache.world`, e entra
+no lock por `PLAN_LOCK_SHA256`. Os worlds são as raízes; o plano é o que sai
+delas. Sem ele, duas resoluções diferentes dos mesmos worlds — outra seleção de
+canal, outro resultado de ABI — produziriam locks de perfil idênticos, e o lock
+não identificaria o que seria de fato instalado. Ao prender, o Minipax confere o
+vínculo: `PURPOSE=media`, ABI estrita, a mesma arquitetura, e raízes que são
+exatamente estes worlds com os papéis certos (`target` instala, `cache` apenas
+disponibiliza). A validação semântica do formato continua sendo do Minitrue.
+Quando o arquivo não existe, o campo é `-`: ausência declarada, não campo
+omitido.
 
 O canal oficial publicado em `https://distropica.com.br/canal/oficial/` tem
 seu bootstrap versionado em `channel-bootstrap/`, com
