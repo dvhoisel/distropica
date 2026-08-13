@@ -1,0 +1,27 @@
+NAME=libgcrypt
+VERSION=1.12.2
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libgpg-error"
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox"
+ABOUT="A biblioteca de criptografia do GnuPG. Está aqui porque o WebKitGTK a exige em REQUIRED, não por escolha de gosto: o find_package(LibGcrypt 1.7.0 REQUIRED) do OptionsGTK.cmake para o build inteiro sem ela. O WebKit a usa para hash e para as primitivas que sustentam a Web Crypto API e o armazenamento local cifrado. Convive com o OpenSSL da árvore sem conflito — são consumidores diferentes, e nenhuma das duas substitui a outra aqui. Sem doc e sem os testes de dado grande, que gastam minutos sem provar nada que a árvore consuma."
+LICENSE=LGPL-2.1-or-later
+SRC="https://gnupg.org/ftp/gcrypt/libgcrypt/libgcrypt-$VERSION.tar.bz2"
+SHA256="7ce33c2492221a0436f96a8500215e9f3e3dcb5fd26a757cd415e7a843babd5e"
+
+build() {
+    tar -xjf "$DL" --strip-components=1
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-static \
+        --disable-doc \
+        --with-libgpg-error-prefix=/usr
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -e "$STAGE/usr/lib/libgcrypt.so" ] || {
+        echo "libgcrypt: a biblioteca compartilhada não foi produzida" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

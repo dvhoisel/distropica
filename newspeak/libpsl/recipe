@@ -1,0 +1,28 @@
+NAME=libpsl
+VERSION=0.23.2
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox python-glibc"
+ABOUT="A Lista de Sufixos Públicos, compilada. Responde a uma pergunta que decide segurança de sessão: 'co.uk' é um domínio ou um sufixo sob o qual qualquer um registra? Sem ela, um site em 'a.co.uk' pode gravar cookie para '.co.uk' e ler a sessão de 'b.co.uk'. A libsoup3 a usa para recusar exatamente isso, e o Epiphany depende da libsoup3. A lista vem EMBUTIDA na fonte pinada e é compilada para dentro da biblioteca: nada é buscado na rede em tempo de execução, o que é a SPEC-0001 P6 aplicada a um dado que envelhece — e envelhecer é o preço aceito aqui, porque a alternativa é a rede decidir o que é verdade. Sem IDN: a conversão de nome internacionalizado exigiria libidn2 e libunistring, e a libsoup normaliza o host antes de perguntar."
+LICENSE=MIT
+SRC="https://github.com/rockdaboot/libpsl/releases/download/$VERSION/libpsl-$VERSION.tar.gz"
+SHA256="f2ea0e59bffb36597a872f6ef89893ffa4c30196c87eff7aeb2c47e4e8c98133"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-static \
+        --disable-gtk-doc \
+        --disable-nls \
+        --disable-man
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -e "$STAGE/usr/lib/libpsl.so" ] || {
+        echo "libpsl: a biblioteca compartilhada não foi produzida" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

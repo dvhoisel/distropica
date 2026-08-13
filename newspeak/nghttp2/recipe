@@ -1,0 +1,35 @@
+NAME=nghttp2
+VERSION=1.70.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox"
+ABOUT="A implementação de HTTP/2 que a libsoup3 usa, e por ela o navegador inteiro: sem isto o Epiphany falaria só HTTP/1.1 com uma web que há anos negocia h2 no ALPN. Entra apenas a BIBLIOTECA — --enable-lib-only —, sem o servidor nghttpd, sem o cliente nghttp, sem o proxy nghttpx e sem as ferramentas de HPACK; nada disso pertence a uma distro de desktop, e o conjunto arrastaria libev, c-ares e um compilador de C++ com Boost. Sem exemplos."
+LICENSE=MIT
+SRC="https://github.com/nghttp2/nghttp2/releases/download/v$VERSION/nghttp2-$VERSION.tar.xz"
+SHA256="e05cb1388eaca3830aded4ccf20044b6e1ac1a61411dcca11b0437c4285c8bc2"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-static \
+        --enable-lib-only \
+        --disable-examples \
+        --disable-hpack-tools
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -e "$STAGE/usr/lib/libnghttp2.so" ] || {
+        echo "nghttp2: a biblioteca compartilhada não foi produzida" >&2
+        exit 1
+    }
+    # --enable-lib-only é a decisão desta receita; se um dia ela cair, os
+    # binários de servidor e proxy entram no payload sem ninguém notar.
+    if [ -d "$STAGE/usr/bin" ] && [ -n "$(ls -A "$STAGE/usr/bin" 2>/dev/null)" ]; then
+        echo "nghttp2: --enable-lib-only não valeu; sobraram binários:" >&2
+        ls "$STAGE/usr/bin" >&2
+        exit 1
+    fi
+    find "$STAGE" -type d -empty -delete
+}

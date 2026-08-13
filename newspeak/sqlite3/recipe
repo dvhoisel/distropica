@@ -1,0 +1,32 @@
+NAME=sqlite3
+VERSION=3.53.4
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc zlib readline ncurses"
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox"
+ABOUT="O banco embutido. Não é opcional em lugar nenhum desta empreitada: o WebKitGTK o exige em REQUIRED e o usa para o armazenamento estruturado da Web (IndexedDB, Web SQL, cache de rede), e o Epiphany o exige por conta própria para histórico, favoritos e a base de bloqueio de conteúdo. FTS5 e a coluna gerada entram porque o WebKit os usa; a extensão de carregamento dinâmico fica DESLIGADA, porque um navegador que possa carregar .so arbitrário de dentro de uma consulta SQL é superfície de ataque sem contrapartida numa distro sem gerenciador de pacotes."
+LICENSE=blessing
+SRC="https://www.sqlite.org/2026/sqlite-autoconf-3530400.tar.gz"
+SHA256="0e9483900e92cd5de8fd48d16bf9200145a61f7fd5be542a5ac81d8a9516eb9c"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    export CPPFLAGS="-DSQLITE_ENABLE_FTS5=1 -DSQLITE_ENABLE_COLUMN_METADATA=1 -DSQLITE_ENABLE_UNLOCK_NOTIFY=1 -DSQLITE_SECURE_DELETE=1"
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-static \
+        --disable-load-extension
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -e "$STAGE/usr/lib/libsqlite3.so" ] || {
+        echo "sqlite3: a biblioteca compartilhada não foi produzida" >&2
+        exit 1
+    }
+    [ -e "$STAGE/usr/lib/pkgconfig/sqlite3.pc" ] || {
+        echo "sqlite3: sqlite3.pc não foi produzido — o WebKit não vai achá-lo" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

@@ -1,0 +1,28 @@
+NAME=libtasn1
+VERSION=4.21.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox"
+ABOUT="Codificação ASN.1/DER. É a gramática em que certificados X.509 são escritos, e o WebKitGTK a exige em REQUIRED — o find_package(Tasn1 REQUIRED) — para ler os certificados que o TLS entrega. Biblioteca pequena e sem dependência nenhuma além da libc. Sem doc, sem gtk-doc e sem os testes de valgrind."
+LICENSE=LGPL-2.1-or-later
+SRC="https://ftp.gnu.org/gnu/libtasn1/libtasn1-$VERSION.tar.gz"
+SHA256="1d8a444a223cc5464240777346e125de51d8e6abf0b8bac742ac84609167dc87"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-static \
+        --disable-doc \
+        --disable-gtk-doc \
+        --disable-valgrind-tests
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -e "$STAGE/usr/lib/libtasn1.so" ] || {
+        echo "libtasn1: a biblioteca compartilhada não foi produzida" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

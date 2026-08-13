@@ -1,0 +1,33 @@
+NAME=nettle
+VERSION=4.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc mathlibs-glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox m4"
+ABOUT="Biblioteca de primitivas criptográficas de baixo nível, e a companheira dela de chave pública, a hogweed, que sai do mesmo build e é quem exige o GMP. O Epiphany pede as duas por nome no meson — dependency('nettle') e dependency('hogweed') —, e as usa para as impressões digitais de certificado que a interface mostra ao usuário. É a terceira biblioteca de criptografia da árvore, ao lado do OpenSSL e da libgcrypt, e isso não é redundância a corrigir: são exigências de consumidores diferentes, cada uma em REQUIRED no seu, e trocar uma pela outra significaria manter patch de upstream para sempre. Sem documentação, que exige texinfo."
+LICENSE=LGPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/nettle/nettle-$VERSION.tar.gz"
+SHA256="3addbc00da01846b232fb3bc453538ea5468da43033f21bb345cb1e9073f5094"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-static \
+        --disable-documentation
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    # A hogweed é metade do motivo desta receita existir: é ela que o Epiphany
+    # pede para chave pública, e ela só sai se o GMP tiver sido encontrado.
+    # Sem esta guarda o build "passa" entregando meia biblioteca.
+    for lib in libnettle.so libhogweed.so; do
+        [ -e "$STAGE/usr/lib/$lib" ] || {
+            echo "nettle: $lib não foi produzida (GMP não encontrado?)" >&2
+            ls "$STAGE/usr/lib" >&2
+            exit 1
+        }
+    done
+    find "$STAGE" -type d -empty -delete
+}

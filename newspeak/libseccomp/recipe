@@ -1,0 +1,26 @@
+NAME=libseccomp
+VERSION=2.6.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox gperf"
+ABOUT="A interface de alto nível para o filtro de chamadas de sistema do kernel. É metade do confinamento do WebKit: o processo que renderiza HTML de origem desconhecida roda dentro de um bubblewrap cujo conjunto de syscalls permitidas é montado com esta biblioteca. A outra metade é o próprio bubblewrap. Desligar o sandbox compilaria — o ENABLE_BUBBLEWRAP_SANDBOX aceita OFF —, mas regrediria segurança em relação ao que o Firefox já entregava nesta árvore, e um navegador sem confinamento de conteúdo remoto não é uma escolha defensável. Sem as ligações de Python."
+LICENSE=LGPL-2.1-only
+SRC="https://github.com/seccomp/libseccomp/releases/download/v$VERSION/libseccomp-$VERSION.tar.gz"
+SHA256="501f66c667225d53791b97e1d7cf85ab764c297d04881f60f38f451c4b0ee1be"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-static \
+        --disable-python
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -e "$STAGE/usr/lib/libseccomp.so" ] || {
+        echo "libseccomp: a biblioteca compartilhada não foi produzida" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}
