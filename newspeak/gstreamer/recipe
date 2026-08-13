@@ -1,0 +1,45 @@
+NAME=gstreamer
+VERSION=1.28.6
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc bison flex"
+ABOUT="O núcleo do GStreamer, e SÓ o núcleo. Está aqui por uma razão medida e não por escolha: o meson do Epiphany faz dependency('gstreamer-1.0') sem nenhum 'required:', então é dependência dura do navegador — mesmo com o vídeo do WebKit desligado, que é como esta árvore o constrói. Nenhum gst-plugins-base, good, bad ou ugly entra: sem eles não há decodificador nenhum, e portanto não há <video> nem <audio>. Isso é POSIÇÃO e não acidente — um navegador que não toca mídia é o que esta distro quer ser, e o preço, que é o YouTube não funcionar, está dito aqui em vez de ser descoberto pelo usuário. O ptp-helper fica de fora: é um binário setuid para sincronização de relógio em rede, e setuid é a última coisa que uma árvore como esta acrescenta sem necessidade. Sem introspection, sem exemplos, sem testes e sem benchmarks."
+LICENSE=LGPL-2.1-or-later
+SRC="https://gstreamer.freedesktop.org/src/gstreamer/gstreamer-$VERSION.tar.xz"
+SHA256="62b6b9f0ad3147a6dd6420ac64a91180b14e990695bddd353b96041611d052ca"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dptp-helper=disabled \
+        -Dintrospection=disabled \
+        -Dexamples=disabled \
+        -Dtests=disabled \
+        -Dbenchmarks=disabled \
+        -Dtools=disabled \
+        -Dnls=disabled \
+        -Ddoc=disabled \
+        -Dlibunwind=disabled \
+        -Dlibdw=disabled \
+        -Dcoretracers=disabled \
+        -Dbash-completion=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/libgstreamer-1.0.so" ] || {
+        echo "gstreamer: a biblioteca compartilhada não foi produzida" >&2
+        exit 1
+    }
+    # Nenhum binário setuid pode sair daqui. O ptp-helper é o único candidato, e
+    # está desligado; a guarda existe para o dia em que a opção mudar de nome.
+    if find "$STAGE" -type f -perm -4000 | grep -q .; then
+        echo "gstreamer: binário setuid no payload:" >&2
+        find "$STAGE" -type f -perm -4000 >&2
+        exit 1
+    fi
+    find "$STAGE" -type d -empty -delete
+}

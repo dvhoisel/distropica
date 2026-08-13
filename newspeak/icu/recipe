@@ -1,0 +1,37 @@
+NAME=icu
+VERSION=78.3
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libstdcxx"
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox python-glibc"
+ABOUT="Unicode de verdade: quebra de linha e de palavra em todas as escritas, colação, normalização, conversão de codificação, formatação de data e número por locale, e os dados que sustentam tudo isso. O WebKitGTK a exige em REQUIRED, versão 70 ou maior, com os três componentes data, i18n e uc — sem ela nem começa a configurar. É o maior pacote de DADOS da árvore: cerca de 30 MB de tabelas compiladas, que não dá para cortar sem quebrar o navegador em escritas que ninguém aqui testa. Traz também a HARFBUZZ como consequência: o WebKit pede find_package(HarfBuzz COMPONENTS ICU), e o harfbuzz desta árvore está com -Dicu=disabled, então ele terá de ser reconstruído com o módulo harfbuzz-icu — o que muda o fingerprint dele e, por tabela, de pango, cairo, gtk3, gtk4 e GIMP. O build sai do subdiretório source/, que é como o upstream empacota. Sem samples, sem testes e sem 'layoutex', a camada de layout obsoleta que o próprio ICU marca como legada."
+LICENSE=Unicode-3.0
+SRC="https://github.com/unicode-org/icu/releases/download/release-$VERSION/icu4c-$VERSION-sources.tgz"
+SHA256="3a2e7a47604ba702f345878308e6fefeca612ee895cf4a5f222e7955fabfe0c0"
+
+build() {
+    # O tarball abre em icu/, e o build de verdade mora em icu/source.
+    tar -xzf "$DL" --strip-components=1
+    cd source
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-static \
+        --disable-samples \
+        --disable-tests \
+        --disable-layoutex
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    # Os três componentes que o WebKit pede por nome. Conferir só um deixaria
+    # passar um build em que os DADOS não saíram, que é o modo de falha caro:
+    # o navegador compila e depois erra silenciosamente em texto não-latino.
+    for lib in libicuuc.so libicui18n.so libicudata.so; do
+        [ -e "$STAGE/usr/lib/$lib" ] || {
+            echo "icu: $lib não foi produzida" >&2
+            ls "$STAGE/usr/lib" >&2
+            exit 1
+        }
+    done
+    find "$STAGE" -type d -empty -delete
+}

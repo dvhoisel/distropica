@@ -1,0 +1,44 @@
+NAME=libsoup
+VERSION=3.6.6
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib glib-networking sqlite3 libpsl nghttp2 brotli libxml2"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc"
+ABOUT="A pilha HTTP do GNOME, e o único caminho pelo qual o Epiphany fala com a rede. É a API 3.0 — a variante que o WebKitGTK 6.0 exige em REQUIRED, e a única que não arrasta a geração anterior. Faz HTTP/1.1 e HTTP/2 (pelo nghttp2), decodifica gzip e brotli, guarda cookies em SQLite e recusa cookie de sufixo público pela libpsl. O TLS não é dela: quem cifra é o glib-networking, que esta árvore já constrói sobre o OpenSSL, e é por isso que ele está em DEPS mesmo sem aparecer no pkg-config. Sem GSSAPI e sem NTLM, que são autenticação de domínio corporativo e trariam Kerberos e o helper externo do Samba; sem introspection, sem vapi, sem doc e sem testes."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/libsoup/3.6/libsoup-$VERSION.tar.xz"
+SHA256="51ed0ae06f9d5a40f401ff459e2e5f652f9a510b7730e1359ee66d14d4872740"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dgssapi=disabled \
+        -Dntlm=disabled \
+        -Dbrotli=enabled \
+        -Dtls_check=false \
+        -Dintrospection=disabled \
+        -Dvapi=disabled \
+        -Ddocs=disabled \
+        -Ddoc_tests=false \
+        -Dtests=false \
+        -Dautobahn=disabled \
+        -Dinstalled_tests=false \
+        -Dsysprof=disabled \
+        -Dpkcs11_tests=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/libsoup-3.0.so" ] || {
+        echo "libsoup: a biblioteca compartilhada não foi produzida" >&2
+        exit 1
+    }
+    # -Dtls_check=false só desliga a CONFERÊNCIA em tempo de build de que há um
+    # backend TLS instalado; quem o fornece é o glib-networking, em tempo de
+    # execução. A checagem foi desligada porque ela roda um programa de teste, e
+    # a view de build não é o sistema final — mas a dependência continua real, e
+    # está declarada em DEPS. Sem ela o navegador abre http:// e falha em https.
+    find "$STAGE" -type d -empty -delete
+}

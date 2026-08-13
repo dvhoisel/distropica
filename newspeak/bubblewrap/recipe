@@ -1,0 +1,39 @@
+NAME=bubblewrap
+VERSION=0.11.2
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libcap"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox"
+ABOUT="A ferramenta de confinamento sem privilégio. É o mesmo programa que o próprio minitrue usa para fechar a view de build, e agora entra também como runtime: o WebKitGTK executa cada processo de renderização dentro de um bwrap, com o sistema de arquivos reduzido ao necessário e o conjunto de chamadas de sistema filtrado pela libseccomp. Sem isso, o processo que interpreta HTML de origem desconhecida teria a mesma visão do sistema que o usuário. O -Dselinux fica DESLIGADO e não em 'auto', que é o padrão do upstream: em auto o binário mudaria conforme a raiz de build tivesse ou não a libselinux, que é a não-hermeticidade que já mordeu esta árvore no Python. NÃO é instalado setuid: o kernel desta árvore tem CONFIG_USER_NS, e com namespaces de usuário o bwrap dispensa privilégio — que é justamente o que torna o modelo defensável."
+LICENSE=LGPL-2.0-or-later
+SRC="https://github.com/containers/bubblewrap/releases/download/v$VERSION/bubblewrap-$VERSION.tar.xz"
+SHA256="69abc30005d2186baf7737feacd8da35633b93cf5af38838ecff17c5f8e924f6"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dman=disabled \
+        -Dtests=false \
+        -Dselinux=disabled \
+        -Dsupport_setuid=false \
+        -Dbash_completion=disabled \
+        -Dzsh_completion=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -x "$STAGE/usr/bin/bwrap" ] || {
+        echo "bubblewrap: o binário bwrap não foi produzido" >&2
+        exit 1
+    }
+    # Setuid aqui seria o oposto do propósito: o confinamento vale porque NÃO
+    # exige privilégio. Se um dia o upstream voltar a instalar setuid por
+    # padrão, esta guarda para o build em vez de embarcar o bit.
+    if find "$STAGE" -type f -perm -4000 | grep -q .; then
+        echo "bubblewrap: o bwrap saiu setuid; esta árvore usa CONFIG_USER_NS" >&2
+        exit 1
+    fi
+    find "$STAGE" -type d -empty -delete
+}

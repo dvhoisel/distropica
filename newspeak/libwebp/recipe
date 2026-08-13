@@ -1,0 +1,30 @@
+NAME=libwebp
+VERSION=1.6.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libjpeg-turbo libpng"
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox"
+ABOUT="O codec WebP. O WebKitGTK o exige em REQUIRED com o componente demux — find_package(WebP REQUIRED COMPONENTS demux) —, e não é firula: WebP é hoje o formato em que boa parte da web serve imagem, e sem ele páginas inteiras aparecem quebradas. O demux é a parte que lê o contêiner, necessária para WebP animado. Sem as ferramentas de linha de comando (cwebp, dwebp, gif2webp): quem converte imagem aqui é o GIMP."
+LICENSE=BSD-3-Clause
+SRC="https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-$VERSION.tar.gz"
+SHA256="e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-static \
+        --enable-libwebpdemux \
+        --enable-libwebpmux
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    for lib in libwebp.so libwebpdemux.so; do
+        [ -e "$STAGE/usr/lib/$lib" ] || {
+            echo "libwebp: $lib não foi produzida" >&2
+            exit 1
+        }
+    done
+    find "$STAGE" -type d -empty -delete
+}
