@@ -3,7 +3,17 @@ VERSION=2.48
 KIND=source
 TOOLCHAIN=native
 DEPS=""
-BUILD_DEPS="meson ninja pkgconf python-glibc"
+# perl: o meson desta fonte faz find_program('xml2lst.pl') e gera rules/base.lst
+# e rules/evdev.lst com ele; o script declara '#!/usr/bin/env perl', então sem
+# perl na view o ninja para com "env: can't execute 'perl'". Não é opcional e
+# não depende de opção — os .lst são alvos incondicionais do build. Conferido no
+# meson.build da fonte pinada, e a varredura do resto da árvore atrás do mesmo
+# defeito não achou outro caso: das 39 receitas que trazem .pl no tarball, todas
+# as demais os têm como ferramenta de mantenedor ou de teste, e as duas que
+# procuram perl no configure (tcpdump e locales) o fazem de forma opcional — a
+# tcpdump inclusive imprime "Didn't find perl" e segue, de modo que declarar
+# perl LÁ mudaria o payload dela sem necessidade.
+BUILD_DEPS="meson ninja pkgconf python-glibc perl"
 ABOUT="Os DADOS de teclado. Não é biblioteca nem programa: é a descrição, em texto, de o que cada tecla física significa em cada layout do mundo — 'br', 'us', 'de' — mais os modelos de teclado, as variantes e as regras que combinam os três. A libxkbcommon é o código que interpreta esses arquivos, e ela não os carrega junto: procura-os em tempo de execução no caminho fixado no build dela. Sem eles, a libxkbcommon compila, linka, e falha na primeira tentativa de montar um mapa. Entrou porque foi exatamente isso que aconteceu: o weston subiu inteiro — leu a configuração, abriu a placa, obteve o assento, achou teclado e mouse pelo udev — e morreu com 'failed to compile global XKB keymap / tried rules evdev, model pc105, layout br'. Uma tela preta por falta de arquivo de texto. É dependência de RUNTIME e invisível para a auditoria, que lê ELF e shebang: nenhum binário aponta para estes arquivos, o caminho é uma string dentro da libxkbcommon. Por isso está declarada em DEPS de lá mesmo sabendo que a auditoria vai anotá-la como não observada — a anotação é o preço de declarar uma verdade que a análise estática não alcança, e o silêncio seria pior. Conferência: o Alpine distribui o archive .tar.gz do GitLab e este é o .tar.xz do x.org; baixei os dois, extraí e comparei as árvores com diff -r — idênticas — o que corrobora este arquivo pelo hash que o Alpine publica."
 LICENSE=MIT
 SRC="https://www.x.org/releases/individual/data/xkeyboard-config/xkeyboard-config-$VERSION.tar.xz"
