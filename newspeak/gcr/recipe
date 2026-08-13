@@ -1,0 +1,38 @@
+NAME=gcr
+VERSION=4.4.0.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib libgcrypt libtasn1 p11-kit gtk4"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc"
+ABOUT="A biblioteca de criptografia da interface do GNOME, em duas metades que o Epiphany pede por nome no meson: gck-2, que é a camada GObject sobre PKCS#11, e gcr-4, que é o que desenha certificado e chave na tela — o cadeado da barra de endereço e o diálogo que mostra a cadeia de confiança quando você clica nele. A variante 4 é a de GTK4, a mesma geração do resto desta troca. Sem o ssh-agent, que é um daemon de chave SSH sem relação nenhuma com navegar; sem introspection, sem vapi, sem gtk-doc e sem systemd."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/gcr/4.4/gcr-$VERSION.tar.xz"
+SHA256="0c3c341e49f9f4f2532a4884509804190a0c2663e6120360bb298c5d174a8098"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dgtk4=true \
+        -Dcrypto=libgcrypt \
+        -Dssh_agent=false \
+        -Dintrospection=false \
+        -Dvapi=false \
+        -Dgtk_doc=false \
+        -Dsystemd=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    # São as DUAS que o Epiphany pede: gck-2 e gcr-4. Conferir uma só deixaria
+    # passar um build em que a metade da interface não saiu.
+    for pc in gck-2.pc gcr-4.pc; do
+        [ -e "$STAGE/usr/lib/pkgconfig/$pc" ] || {
+            echo "gcr: $pc não foi produzido" >&2
+            ls "$STAGE/usr/lib/pkgconfig" 2>/dev/null >&2
+            exit 1
+        }
+    done
+    find "$STAGE" -type d -empty -delete
+}

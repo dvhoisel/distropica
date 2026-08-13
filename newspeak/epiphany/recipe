@@ -1,0 +1,57 @@
+NAME=epiphany
+VERSION=49.7
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib gtk4 libadwaita webkitgtk libsoup libsecret gcr json-glib libarchive libportal libxml2 sqlite3 nettle iso-codes gsettings-desktop-schemas gstreamer cairo pango gdk-pixbuf"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc gettext"
+ABOUT="O NAVEGADOR. GNOME Web, o cliente canonico da API webkitgtk-6.0 e o unico navegador maduro cuja interface e GTK4 nativa — todo o resto ou e GTK3, ou e Qt, ou linka X11 duro. Substitui o Firefox nesta arvore, e a troca e de UM pacote por um: medido, tirar o Firefox da closure da base remove exatamente ele mesmo, porque tudo que ele puxava e compartilhado com a pilha grafica. O que muda de verdade e a natureza do que fica: C e C++ auditaveis por NEEDED, em vez de um binario upstream opaco. Traz sincronizacao com conta Firefox (favoritos, senhas e historico), bloqueio de conteudo embutido pelos content blockers do WebKit, e nada de WebExtensions — nao ha uBlock aqui, o filtro nativo cobre parte. SEM VIDEO, herdado do WebKit construido sem decodificador nenhum: e posicao declarada, nao surpresa. O gstreamer aparece em DEPS mesmo assim porque o meson deste pacote faz dependency('gstreamer-1.0') sem 'required:' — e dependencia dura do proprio navegador, independente do motor. Sem granite (integracao com elementary OS), sem testes e sem man-pages, que exigiriam rst2man."
+LICENSE=GPL-3.0-or-later
+SRC="https://download.gnome.org/sources/epiphany/49/epiphany-$VERSION.tar.xz"
+SHA256="3c590c6fe6d9269412a042aa479c91c3229163e2da85a94a5d24644b2ab9e3b4"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Ddeveloper_mode=false \
+        -Dtech_preview=false \
+        -Dunit_tests=disabled \
+        -Dgranite=disabled \
+        -Dman-pages=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    [ -x "$STAGE/usr/bin/epiphany" ] || {
+        echo "epiphany: o binario nao foi produzido" >&2
+        exit 1
+    }
+    # O .desktop e o que faz o navegador aparecer no menu do labwc; sem ele o
+    # unico jeito de abrir seria pela linha de comando.
+    [ -e "$STAGE/usr/share/applications/org.gnome.Epiphany.desktop" ] || {
+        echo "epiphany: o arquivo .desktop nao foi instalado" >&2
+        ls "$STAGE/usr/share/applications" 2>/dev/null >&2
+        exit 1
+    }
+    # Os esquemas do GSettings sao dependencia invisivel para a auditoria: nenhum
+    # ELF aponta para eles, e sem eles o navegador aborta ao ler a primeira
+    # preferencia. O gschemas.compiled em si e recompilado no boot pelo drop-in
+    # do pacote 'desktop', entao a copia parcial daqui sai.
+    [ -e "$STAGE/usr/share/glib-2.0/schemas/org.gnome.Epiphany.gschema.xml" ] || {
+        echo "epiphany: o esquema do GSettings nao foi instalado" >&2
+        exit 1
+    }
+    rm -f "$STAGE/usr/share/glib-2.0/schemas/gschemas.compiled"
+    # A promessa que a receita do WebKit sustenta, conferida do lado de ca: se
+    # X11 voltar por qualquer caminho, e aqui que aparece.
+    for lib in libX11 libxcb; do
+        if readelf -d "$STAGE/usr/bin/epiphany" | grep -q "$lib"; then
+            echo "epiphany: ligou $lib — X11 entrou pela porta do navegador" >&2
+            readelf -d "$STAGE/usr/bin/epiphany" | grep NEEDED >&2
+            exit 1
+        fi
+    done
+    find "$STAGE" -type d -empty -delete
+}

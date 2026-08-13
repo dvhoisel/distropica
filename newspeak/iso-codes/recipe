@@ -1,0 +1,25 @@
+NAME=iso-codes
+VERSION=4.20.1
+KIND=source
+TOOLCHAIN=none
+DEPS="glibc"
+BUILD_DEPS="make busybox gettext python-glibc"
+ABOUT="As listas ISO em JSON: países (3166), idiomas (639), moedas (4217) e scripts (15924). Puro DADO, sem uma linha de código — por isso TOOLCHAIN=none. O Epiphany o exige por nome e o usa para nomear idiomas na tela de preferências e para o seletor de codificação de página. Sem as traduções, que são a maior parte do tarball e que esta árvore não usa: o sistema roda em C."
+LICENSE=LGPL-2.1-or-later
+SRC="https://salsa.debian.org/iso-codes-team/iso-codes/-/archive/v$VERSION/iso-codes-v$VERSION.tar.gz"
+SHA256="2d7d9f6084ab9ce6c534ce71a3dd5144b6e474f3c97616459a88f73f44a64bff"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    ./configure --prefix=/usr
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -e "$STAGE/usr/share/iso-codes/json/iso_639-2.json" ] || {
+        echo "iso-codes: as listas JSON não foram instaladas" >&2
+        ls "$STAGE/usr/share/iso-codes" 2>/dev/null >&2
+        exit 1
+    }
+    # As traduções são a maior parte do payload e o sistema roda em C.
+    rm -rf "$STAGE/usr/share/locale"
+    find "$STAGE" -type d -empty -delete
+}

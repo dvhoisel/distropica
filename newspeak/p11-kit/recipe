@@ -1,0 +1,35 @@
+NAME=p11-kit
+VERSION=0.26.5
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libtasn1 libffi"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc"
+ABOUT="O carregador de módulos PKCS#11 e o módulo de confiança que expõe a loja de certificados do sistema por essa interface. Entra porque o gcr o exige, e o gcr é exigido pelo Epiphany — é a base sobre a qual o navegador lê e mostra certificado. O módulo de confiança aponta para a mesma âncora que o resto da árvore usa, o ca-certificates, em vez de manter uma segunda cópia de CAs. Sem systemd (a opção instalaria unidades de socket), sem gtk-doc, sem man e sem testes."
+LICENSE=BSD-3-Clause
+SRC="https://github.com/p11-glue/p11-kit/releases/download/$VERSION/p11-kit-$VERSION.tar.xz"
+SHA256="f2cc09111e44bf3fea58f023180b33acea90aa82d042d6fbb623fbc5ba033bb7"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dtrust_paths=/etc/ssl/certs/ca-certificates.crt \
+        -Dsystemd=disabled \
+        -Dbash_completion=disabled \
+        -Dzsh_completion=disabled \
+        -Dgtk_doc=false \
+        -Dman=false \
+        -Dnls=false \
+        -Dtest=false \
+        -Dpost_install_test=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/libp11-kit.so" ] || {
+        echo "p11-kit: a biblioteca compartilhada não foi produzida" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

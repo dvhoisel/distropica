@@ -1,0 +1,30 @@
+NAME=ruby
+VERSION=3.4.10
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc zlib openssl"
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox bison"
+ABOUT="Interpretador Ruby, e existe aqui por um motivo único: o JavaScriptCore do WebKit gera o interpretador de bytecode dele com o offlineasm, que é escrito em Ruby. O CMake do WebKit faz find_package(Ruby 2.5), e sem ele o build do JSC não sai do lugar. É FERRAMENTA DE BUILD e nada mais — não é declarado em DEPS de ninguém, não vai para o alvo, e nenhum programa do sistema instalado o invoca. Compilado sem as extensões que só serviriam a um Ruby de uso geral, e sem os documentos, que são a maior parte do tempo de build."
+LICENSE=Ruby
+SRC="https://cache.ruby-lang.org/pub/ruby/3.4/ruby-$VERSION.tar.xz"
+SHA256="6f32ad662baafc228d12030dbcd284f83b034dd4337b300dc84ac74d11a1eb68"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-install-doc \
+        --disable-install-rdoc \
+        --disable-install-capi \
+        --without-gmp \
+        --enable-shared
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -x "$STAGE/usr/bin/ruby" ] || {
+        echo "ruby: o interpretador não foi produzido" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

@@ -1,0 +1,33 @@
+NAME=libadwaita
+VERSION=1.9.3
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib gtk4 pango cairo fontconfig"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc sassc gettext"
+ABOUT="Os widgets e o estilo do GNOME sobre GTK4. O Epiphany exige >= 1.8.alpha e é escrito inteiro contra ela: a barra de cabeçalho, os painéis deslizantes, as listas de preferências e o comportamento adaptativo da janela são widgets desta biblioteca, não do GTK. É o que faz o navegador parecer um aplicativo e não uma tela de teste. O sassc entra como BUILD_DEP porque o estilo é compilado de .scss para CSS durante o build e não vai para o alvo. Sem introspection, sem vapi, sem documentação, sem exemplos e sem testes."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/libadwaita/1.9/libadwaita-$VERSION.tar.xz"
+SHA256="fc59b37028fe0126308e7b805d2f6e4e80227080a1797715e5e6286b8111e723"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dintrospection=disabled \
+        -Dvapi=false \
+        -Ddocumentation=false \
+        -Dgtk_doc=false \
+        -Dexamples=false \
+        -Dtests=false \
+        -Dprofiling=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/libadwaita-1.so" ] || {
+        echo "libadwaita: a biblioteca compartilhada não foi produzida" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

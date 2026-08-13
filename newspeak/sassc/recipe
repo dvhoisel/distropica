@@ -1,0 +1,22 @@
+NAME=sassc
+VERSION=3.6.2
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libstdcxx libsass"
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox"
+ABOUT="A linha de comando do libsass. É BUILD_DEP da libadwaita e de mais nada: o meson dela procura o programa 'sassc' para compilar o estilo de .scss para CSS. Não faz parte do sistema instalado, e é por isso que está declarado só como dependência de build lá."
+LICENSE=MIT
+SRC="https://github.com/sass/sassc/archive/refs/tags/$VERSION.tar.gz"
+SHA256="608dc9002b45a91d11ed59e352469ecc05e4f58fc1259fc9a9f5b8f0f8348a03"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    make -j"$JOBS" PREFIX=/usr
+    make install PREFIX=/usr DESTDIR="$STAGE"
+    [ -x "$STAGE/usr/bin/sassc" ] || {
+        echo "sassc: o binário não foi produzido" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

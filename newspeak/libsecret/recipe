@@ -1,0 +1,35 @@
+NAME=libsecret
+VERSION=0.21.7
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib libgcrypt"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc"
+ABOUT="A biblioteca de segredos do GNOME, que é onde o Epiphany guarda as senhas que o usuário manda o navegador lembrar. Normalmente ela conversa com um daemon de chaveiro pelo D-Bus; esta árvore NÃO tem chaveiro, e não vai ter — um daemon a mais para guardar senha de site não se justifica aqui. Sem o serviço, a libsecret usa o backend de ARQUIVO, que cifra a coleção com uma chave derivada de senha e não exige processo nenhum no ar. É a escolha honesta para uma distro sem sessão gráfica completa: menos peça, e a senha continua cifrada em disco. Sem TPM2, sem PAM, sem introspection, sem vapi, sem gtk-doc e sem man."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/libsecret/0.21/libsecret-$VERSION.tar.xz"
+SHA256="6b452e4750590a2b5617adc40026f28d2f4903de15f1250e1d1c40bfd68ed55e"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dcrypto=libgcrypt \
+        -Dtpm2=false \
+        -Dpam=false \
+        -Dintrospection=false \
+        -Dvapi=false \
+        -Dgtk_doc=false \
+        -Dmanpage=false \
+        -Dbash_completion=disabled \
+        -Ddebugging=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/libsecret-1.so" ] || {
+        echo "libsecret: a biblioteca compartilhada não foi produzida" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

@@ -1,0 +1,24 @@
+NAME=libsass
+VERSION=3.6.6
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libstdcxx"
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox"
+ABOUT="O compilador de Sass em C++. Existe nesta árvore por uma razão só e indireta: a libadwaita compila o estilo dela de .scss para CSS em tempo de build, e para isso chama o sassc, que é uma casca fina sobre esta biblioteca. Não vai para o alvo — é ferramenta de build, e some do sistema instalado junto com o sassc. O upstream declara o projeto em manutenção, e isso é aceitável para o papel: gerar CSS a partir de um .scss que não muda."
+LICENSE=MIT
+SRC="https://github.com/sass/libsass/archive/refs/tags/$VERSION.tar.gz"
+SHA256="11f0bb3709a4f20285507419d7618f3877a425c0131ea8df40fe6196129df15d"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    # O tarball da tag não traz ./configure gerado; o Makefile próprio do
+    # upstream constrói a biblioteca sem autotools.
+    make -j"$JOBS" PREFIX=/usr
+    make install PREFIX=/usr DESTDIR="$STAGE"
+    [ -e "$STAGE/usr/lib/libsass.so" ] || {
+        echo "libsass: a biblioteca compartilhada não foi produzida" >&2
+        ls "$STAGE/usr/lib" 2>/dev/null >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

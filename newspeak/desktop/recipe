@@ -2,12 +2,12 @@ NAME=desktop
 VERSION=0.1
 KIND=source
 TOOLCHAIN=none
-DEPS="weston seatd eudev dbus firefox dejavu-fonts adwaita-icon-theme hicolor-icon-theme gtk3 mesa locales busybox alsa-utils miniluv"
-ABOUT="A COLA. Tudo o que faz a pilha gráfica virar uma tela em vez de um monte de bibliotecas instaladas: quem sobe o compositor, onde ele acha a configuração, e o que aparece na barra. Receita de montagem, sem SRC — só gera arquivos legíveis. Três peças. (1) /usr/bin/distropica-desktop, o lançador: cria o XDG_RUNTIME_DIR, que o protocolo Wayland exige e sem o qual o weston sai com 'XDG_RUNTIME_DIR not set' e nada mais; sobe o seatd se ninguém o subiu; e exec no weston. (2) quatro drop-ins em /etc/rc.d/rcS.d, que é como um pacote acrescenta trabalho de inicialização sem ser dono do /etc/inittab, que é do base: 01-machine-id.sh, 02-gschemas.sh, 05-udevd.sh e 10-seatd.sh, nesta ordem. O 02-gschemas.sh é o menos evidente e o que custou mais caro: ele compila a base de esquemas do GSettings, e sem ela o backend Wayland do GTK abandona a própria inicialização antes de chegar ao update_xft_settings, que é o único lugar que define a resolução da tela — ela fica em -1, todo tamanho de fonte em pontos passa a ser negativo, e o Firefox abre sem UMA LETRA no próprio chrome enquanto a página ao lado renderiza normalmente. O udevd NÃO é redundante com o mdev, e essa foi a causa da primeira tela preta: o mdev cria os NÓS de dispositivo, mas quem enumera dispositivo de entrada é a libinput, e ela pergunta à libudev — cujo udev_enumerate_scan_devices filtra tudo que não tem entrada na base em /run/udev. Sem udevd, a lista volta vazia com /dev/input/event0 legível ali na frente, e o weston morre com 'no input devices on entering Weston'. (3) /etc/xdg/weston/weston.ini, a configuração do compositor, com o painel e os dois lançadores. O renderizador é o PIXMAN e não o GL, e essa é a decisão que merece explicação: o renderizador GL exige EGL sobre GBM, o que numa árvore com Mesa softpipe significa rasterizar por software e ainda assim depender do gbm achar um driver para a placa — em bochs-drm, virtio ou qualquer máquina sem driver 3D, isso é uma superfície de falha grande em troca de nada, porque o softpipe já é software. O pixman compõe direto no buffer dumb do KMS, sem EGL, sem GBM, e funciona onde o KMS funciona. A Mesa continua instalada e útil: é dela que o GTK e o Firefox tiram GL quando pedem. O terminal é o weston-terminal, único emulador desta árvore."
+DEPS="labwc seatd eudev dbus epiphany dejavu-fonts adwaita-icon-theme hicolor-icon-theme mesa locales busybox alsa-utils miniluv"
+ABOUT="A COLA. Tudo o que faz a pilha grafica virar uma tela em vez de um monte de bibliotecas instaladas: quem sobe o compositor, onde ele acha a configuracao, e o que o botao direito oferece. Receita de montagem, sem SRC — so gera arquivos legiveis. Tres pecas. (1) /usr/bin/distropica-desktop, o lancador: cria o XDG_RUNTIME_DIR, que o protocolo Wayland exige e sem o qual o compositor sai com uma linha de erro e nada mais; sobe o seatd se ninguem o subiu; e exec no labwc dentro de um barramento de sessao. (2) quatro drop-ins em /etc/rc.d/rcS.d, que e como um pacote acrescenta trabalho de inicializacao sem ser dono do /etc/inittab, que e do base: 01-machine-id.sh, 02-gschemas.sh, 05-udevd.sh e 10-seatd.sh, nesta ordem. O 02-gschemas.sh e o menos evidente e o que custou mais caro: ele compila a base de esquemas do GSettings, e sem ela o backend Wayland do GTK abandona a propria inicializacao antes de chegar ao update_xft_settings, que e o unico lugar que define a resolucao da tela — ela fica em -1, todo tamanho de fonte em pontos passa a ser negativo, e o navegador abre sem UMA LETRA no proprio chrome enquanto a pagina ao lado renderiza normalmente. O udevd NAO e redundante com o mdev, e essa foi a causa da primeira tela preta: o mdev cria os NOS de dispositivo, mas quem enumera dispositivo de entrada e a libinput, e ela pergunta a libudev — cujo udev_enumerate_scan_devices filtra tudo que nao tem entrada na base em /run/udev. (3) a configuracao do labwc em /etc/xdg/labwc: rc.xml, menu.xml, themerc, environment e autostart. O COMPOSITOR MUDOU, e com ele o modelo: o weston tinha painel, relogio e lancadores, e UM modificador global para todos os atalhos — mover o Alt+Tab movia tudo junto, e o Alt+K matava a aplicacao em foco sem confirmacao. O labwc nao tem painel nem relogio, e em troca cada atalho e declarado um a um no rc.xml, o tema e um themerc compativel com Openbox 3.6, e o menu do botao direito substitui os lancadores. O renderizador continua sendo por SOFTWARE: o wlroots foi construido com -Drenderers=[] e compoe no buffer dumb do KMS, sem EGL e sem GBM, pelo mesmo motivo de antes — numa arvore com Mesa softpipe o GL nao acelera nada e ainda depende de o gbm achar driver. NAO HA EMULADOR DE TERMINAL nesta sessao: o unico da arvore era o weston-terminal, que saiu junto com o weston."
 LICENSE="GPL-3.0-or-later"
 
 build() {
-    install -d "$STAGE/usr/bin" "$STAGE/etc/rc.d/rcS.d" "$STAGE/etc/xdg/weston"
+    install -d "$STAGE/usr/bin" "$STAGE/etc/rc.d/rcS.d" "$STAGE/etc/xdg/labwc"
 
     cat > "$STAGE/usr/bin/distropica-desktop" <<'LAUNCHER'
 #!/bin/sh
@@ -16,9 +16,9 @@ build() {
 set -eu
 
 # O Wayland EXIGE XDG_RUNTIME_DIR: é onde o socket do compositor é criado.
-# Sem ele o weston recusa a subir com uma linha só de erro. Não há systemd
+# Sem ele o labwc recusa a subir com uma linha só de erro. Não há systemd
 # aqui para criá-lo, então é este script quem cria. Modo 0700 é requisito do
-# protocolo, não zelo: o weston avisa e segue se for mais permissivo, mas
+# protocolo, não zelo: o compositor avisa e segue se for mais permissivo, mas
 # qualquer cliente pode então falar com o compositor.
 : "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
 export XDG_RUNTIME_DIR
@@ -45,12 +45,6 @@ fi
 : "${LANG:=pt_BR.UTF-8}"
 export LANG
 
-# --log e o que torna a proxima falha diagnosticavel. Sem ele o weston escreve
-# em stderr, que na tty1 significa: a mensagem aparece por um instante, o
-# compositor toma a tela, morre, e nao sobra nada. Diagnosticar a primeira
-# falha desta pilha exigiu injetar um script na imagem do disco e ler o ext4
-# com debugfs; com o log em arquivo, basta abrir /var/log/weston.log.
-#
 # O BARRAMENTO DE SESSAO ENVOLVE A SESSAO INTEIRA, e sem ele metade dos
 # aplicativos graficos nao abre — literalmente nao abre, sem mensagem.
 #
@@ -63,17 +57,22 @@ export LANG
 #
 # O sintoma medido em QEMU foi exatamente esse: iwd no ar, politica D-Bus
 # correta, o icone do painel destacando ao receber o clique — e nada acontecer.
-# O Firefox nao sofria disso e por isso a falta passou despercebida: ele nao
-# usa GApplication.
+# O Firefox, que era o navegador desta arvore, nao sofria disso e por isso a
+# falta passou despercebida: ele nao usava GApplication. O Epiphany usa.
 #
 # dbus-run-session sobe um barramento, exporta DBUS_SESSION_BUS_ADDRESS e roda
-# o comando; quando o weston sai, o barramento morre junto. Como os lancadores
-# do painel sao filhos do weston, todos herdam o endereco.
+# o comando; quando o compositor sai, o barramento morre junto. Como tudo o que
+# o menu raiz lanca e filho do labwc, todos herdam o endereco.
+# O labwc nao tem opcao de arquivo de log: ele escreve em stderr. Redirecionar
+# aqui e o equivalente ao --log do weston, e vale pelo mesmo motivo — na tty1,
+# stderr aparece por um instante, o compositor toma a tela, morre, e nao sobra
+# nada. Diagnosticar a primeira falha desta pilha exigiu injetar um script na
+# imagem do disco e ler o ext4 com debugfs.
 [ -x /usr/bin/dbus-run-session ] || {
     echo "distropica: dbus-run-session ausente; aplicativos GTK nao abrirao" >&2
-    exec weston --log=/var/log/weston.log "$@"
+    exec labwc "$@" >>/var/log/labwc.log 2>&1
 }
-exec dbus-run-session -- weston --log=/var/log/weston.log "$@"
+exec dbus-run-session -- labwc "$@" >>/var/log/labwc.log 2>&1
 LAUNCHER
     chmod 0755 "$STAGE/usr/bin/distropica-desktop"
 
@@ -131,8 +130,10 @@ MACHINEID
 # O sintoma engana porque e ASSIMETRICO, e foi por isso que custou tanto: os
 # icones do chrome aparecem (sao SVG em px), o conteudo da pagina aparece (px
 # das prefs do Firefox), os campos de formulario aparecem, e ate o relogio do
-# painel do weston aparece — o weston nao usa GTK. So o texto do navegador
-# some: aba sem titulo, barra de endereco vazia enquanto se digita nela.
+# painel do weston aparecia — ele nao usava GTK. So o texto do navegador
+# some: aba sem titulo, barra de endereco vazia enquanto se digita nela. Com o
+# labwc nao ha painel, e a barra de titulo dele tambem nao usa GTK: o sintoma
+# continua sendo exatamente este.
 #
 # NAO e preciso o esquema org.gnome.desktop.interface, que esta arvore nao
 # tem: o get_dpi_from_gsettings() devolve 96.0 * 1.0 quando ele falta. Basta a
@@ -184,15 +185,17 @@ GSCHEMAS
 # "inicializados", isto e, que nao tem entrada nessa base. Sem udevd, a lista
 # volta vazia mesmo com /dev/input/event0 ali, legivel, na frente.
 #
-# O sintoma, medido e nao suposto: o weston sobe, encontra a placa, carrega o
-# renderizador, e morre com
+# O sintoma, medido e nao suposto na epoca do weston: o compositor sobe,
+# encontra a placa, carrega o renderizador, e morre com
 #   "no input devices on entering Weston" -> "failed to create input devices"
 #   -> "fatal: failed to create compositor backend"
-# e a tela fica preta. Nada falha no boot, nada falha no build.
+# e a tela fica preta. Nada falha no boot, nada falha no build. O labwc morre
+# do mesmo jeito e pelo mesmo motivo: quem enumera entrada e a libinput, e ela
+# pergunta a libudev nos dois casos.
 #
 # O 'settle' e obrigatorio: o trigger e assincrono, e sem esperar a fila o
-# weston pode subir antes de os dispositivos estarem na base — a mesma falha,
-# de forma intermitente, que e pior.
+# o compositor pode subir antes de os dispositivos estarem na base — a mesma
+# falha, de forma intermitente, que e pior.
 if [ -x /usr/bin/udevd ] && [ ! -d /run/udev/data ]; then
     /usr/bin/udevd --daemon >/dev/null 2>&1
     /usr/bin/udevadm trigger --action=add >/dev/null 2>&1
@@ -285,164 +288,168 @@ gtk-xft-rgba = none
 GTKINI
     chmod 0644 "$STAGE/etc/gtk-3.0/settings.ini"
 
-    cat > "$STAGE/etc/xdg/weston/weston.ini" <<'WESTONINI'
-# weston.ini — configuração do compositor. Ver o ABOUT da receita 'desktop'
-# para o porquê de cada escolha.
+    # --- configuracao do labwc ---------------------------------------------
+    # O upstream NAO instala configuracao: ele deixa gabaritos em
+    # /usr/share/doc/labwc. Quem escreve /etc/xdg e esta receita, do mesmo jeito
+    # que escrevia o weston.ini — o compositor entrega o programa, a cola
+    # entrega a politica. O usuario sobrepoe em ~/.config/labwc, que e o mesmo
+    # padrao XDG de antes.
+    cat > "$STAGE/etc/xdg/labwc/rc.xml" <<'RCXML'
+<?xml version="1.0"?>
+<!--
+  rc.xml - configuracao do labwc. Ver o ABOUT da receita 'desktop'.
 
-[core]
-# Pixman e não GL: compõe direto no buffer do KMS, sem EGL e sem GBM. Numa
-# árvore com Mesa softpipe o GL não aceleraria nada e acrescentaria a
-# possibilidade de o gbm não achar driver para a placa.
-renderer=pixman
-idle-time=0
-xwayland=false
+  A DIFERENCA CENTRAL PARA O WESTON esta aqui: la havia UM modificador global
+  para todos os atalhos, e escolher Alt para o Alt+Tab levava junto o Alt+K, que
+  matava a aplicacao em foco sem confirmacao e sem a aplicacao nunca ver a
+  tecla. Aqui cada atalho e declarado, um a um, e nada e capturado alem do que
+  esta escrito neste arquivo.
+-->
+<labwc_config>
+  <core>
+    <gap>0</gap>
+    <adaptiveSync>no</adaptiveSync>
+  </core>
 
-[shell]
-# Sem papel de parede em arquivo: o decodificador de imagem do weston
-# precisaria de libjpeg, que esta árvore não tem (o libjpeg-turbo 3.x só
-# constrói com cmake). Cor sólida resolve e não mente sobre o motivo.
-background-color=0xff1a1a1a
-panel-position=top
-locking=false
-animation=zoom
+  <theme>
+    <name></name>
+    <cornerRadius>0</cornerRadius>
+    <font place="ActiveWindow">
+      <name>DejaVu Sans</name>
+      <size>11</size>
+    </font>
+  </theme>
 
-# O MODIFICADOR DOS ATALHOS, e ele é ALT porque Alt+Tab é memória muscular.
-# O default do weston é 'super' (shared/config-parser.c, linha do
-# binding-modifier), e com ele o trocador de janelas fica em Super+Tab — que
-# ninguém tenta.
+  <keyboard>
+    <!-- Alt+Tab e memoria muscular, e aqui ele custa apenas ele mesmo. -->
+    <keybind key="A-Tab">
+      <action name="NextWindow"/>
+    </keybind>
+    <keybind key="A-S-Tab">
+      <action name="PreviousWindow"/>
+    </keybind>
+    <keybind key="A-F4">
+      <action name="Close"/>
+    </keybind>
+    <keybind key="A-space">
+      <action name="ShowMenu" menu="client-menu"/>
+    </keybind>
+    <keybind key="W-Return">
+      <action name="Execute" command="epiphany"/>
+    </keybind>
+    <keybind key="W-n">
+      <action name="Execute" command="miniluv"/>
+    </keybind>
+    <!-- Recarrega a configuracao viva. O weston exigia reiniciar a sessao. -->
+    <keybind key="W-r">
+      <action name="Reconfigure"/>
+    </keybind>
+    <keybind key="A-F5">
+      <action name="ToggleMaximize"/>
+    </keybind>
+    <!--
+      NAO HA atalho de Kill aqui, e a ausencia e deliberada: era o Alt+K do
+      weston, que o compositor capturava e a aplicacao nunca via. Fechar janela
+      e A-F4, que a aplicacao PODE tratar.
+    -->
+  </keyboard>
+
+  <mouse>
+    <context name="Root">
+      <mousebind button="Right" action="Press">
+        <action name="ShowMenu" menu="root-menu"/>
+      </mousebind>
+    </context>
+  </mouse>
+
+  <libinput>
+    <device category="touchpad">
+      <naturalScroll>no</naturalScroll>
+      <tap>yes</tap>
+    </device>
+  </libinput>
+</labwc_config>
+RCXML
+    chmod 0644 "$STAGE/etc/xdg/labwc/rc.xml"
+
+    cat > "$STAGE/etc/xdg/labwc/menu.xml" <<'MENUXML'
+<?xml version="1.0"?>
+<!--
+  menu.xml - o menu do botao direito, que SUBSTITUI o painel do weston.
+  Os lancadores que estavam la viraram entradas aqui, sem custar pacote novo e
+  sem depender de PNG de 32 pixels em caminho literal.
+-->
+<openbox_menu>
+  <menu id="root-menu" label="Distropica">
+    <item label="Navegador">
+      <action name="Execute" command="epiphany"/>
+    </item>
+    <item label="Rede">
+      <action name="Execute" command="miniluv"/>
+    </item>
+    <separator/>
+    <item label="Recarregar configuracao">
+      <action name="Reconfigure"/>
+    </item>
+    <item label="Encerrar sessao">
+      <action name="Exit"/>
+    </item>
+  </menu>
+</openbox_menu>
+MENUXML
+    chmod 0644 "$STAGE/etc/xdg/labwc/menu.xml"
+
+    cat > "$STAGE/etc/xdg/labwc/environment" <<'ENVIRONMENT'
+# environment - lido pelo labwc antes de subir.
 #
-# Isto é uma ESCOLHA COM PREÇO, e o preço está escrito aqui porque não dá para
-# pagá-lo pela metade: o weston tem UM modificador global para TODOS os
-# atalhos, não um por atalho. O parser aceita exatamente super, alt, ctrl,
-# shift ou none — não há combinação. Então mover o Tab move tudo junto.
+# O LAYOUT DE TECLADO vive aqui e nao no rc.xml: o labwc configura o XKB pelas
+# variaveis de ambiente do xkbcommon. O 'br' e o mesmo que o weston.ini pedia,
+# e os dados vem do xkeyboard-config — sem ele a montagem do mapa falha e o
+# compositor morre antes de desenhar.
+XKB_DEFAULT_LAYOUT=br
+ENVIRONMENT
+    chmod 0644 "$STAGE/etc/xdg/labwc/environment"
+
+    cat > "$STAGE/etc/xdg/labwc/autostart" <<'AUTOSTART'
+# autostart - executado pelo labwc ao subir.
 #
-# O que se ganha, e é convencional no Linux:
-#   Alt+Tab           troca de janela
-#   Alt+arrastar      move a janela
-#   Alt+botão-direito redimensiona
-#   Alt+Shift+F       tela cheia
+# Vazio de proposito. O weston subia painel e relogio como clientes proprios;
+# aqui nao ha nem um nem outro, e acrescentar um daemon so para ter relogio
+# seria trocar 'no bling' por bling com outro nome. Fica como ponto de extensao
+# para quem quiser: o arquivo existe e e do usuario sobrepor em ~/.config/labwc.
+AUTOSTART
+    chmod 0644 "$STAGE/etc/xdg/labwc/autostart"
+
+    cat > "$STAGE/etc/xdg/labwc/themerc" <<'THEMERC'
+# themerc - tema no formato Openbox 3.6, que o labwc le nativamente.
 #
-# O QUE SE PERDE, e é o motivo de este comentário existir:
-#   Alt+K             MATA a aplicação focada, sem confirmação
-#
-# Esse é o force_kill_binding do desktop-shell/shell.c, que emite kill_signal
-# para o cliente em foco. E o weston CAPTURA a combinação: a aplicação nunca
-# recebe o Alt+K, então nem um navegador que quisesse tratá-lo poderia. Em
-# aplicação com menu, Alt+letra é mnemônico — a tecla existe e agora tem outro
-# dono. Registrado, e não escondido: quem trocar isto de volta para 'super'
-# recupera o Alt inteiro para as aplicações e perde o Alt+Tab.
-binding-modifier=alt
+# Cores sobrias e nenhuma decoracao supérflua. O fundo e o mesmo cinza que o
+# weston.ini usava em background-color, para que a troca de compositor nao
+# mude a cara da coisa sem motivo.
+window.active.title.bg.color: #2a2a2a
+window.inactive.title.bg.color: #1a1a1a
+window.active.label.text.color: #e0e0e0
+window.inactive.label.text.color: #808080
+window.active.border.color: #3a3a3a
+window.inactive.border.color: #2a2a2a
+border.width: 1
+padding.height: 4
+menu.items.bg.color: #1a1a1a
+menu.items.text.color: #e0e0e0
+menu.items.active.bg.color: #3a5a8a
+menu.items.active.text.color: #ffffff
+THEMERC
+    chmod 0644 "$STAGE/etc/xdg/labwc/themerc"
 
-# O painel do weston lê CAMINHO LITERAL de arquivo PNG; ele não sabe procurar
-# num tema de ícones nem renderizar SVG. Por isso os dois caminhos abaixo são
-# absolutos e foram conferidos contra o que os pacotes realmente instalam — o
-# do Firefox vem do próprio /opt, e o do terminal vem do subdiretório 'legacy'
-# do Adwaita, que é onde os PNG rasterizados sobreviveram quando o tema migrou
-# para SVG simbólico.
-#
-# COMENTÁRIO AQUI É '#', NUNCA ';'. O parser do weston (shared/config-parser.c)
-# só reconhece '#'; uma linha com ';' não é ignorada, é MALFORMADA — e o weston
-# então descarta o ARQUIVO INTEIRO e sobe com "Starting with no config file".
-# Isso já aconteceu: o compositor subiu com o renderizador GL em vez do pixman,
-# sem painel e sem lançadores, e a única pista era uma linha de aviso perdida
-# no meio do log.
-#
-# TRINTA E DOIS PIXELS, e não quarenta e oito. O painel do weston tem altura
-# FIXA de 32 — 'height = 32;' literal no clients/desktop-shell.c, sem opção
-# no weston.ini que mude isso — e o panel_launcher_redraw_handler CENTRALIZA
-# o ícone na alocação do lançador:
-#     allocation.x += allocation.width / 2 - largura_do_icone / 2;
-# Com ícone de 48 numa alocação de 32 isso dá x -= 8, o que joga o primeiro
-# lançador para fora da borda esquerda da superfície e o CORTA. O segundo não
-# aparenta defeito porque o transbordo dele cai sobre o vizinho em vez de cair
-# fora — ou seja, o sintoma visível é só do primeiro ícone, e a causa é dos
-# dois.
-
-[launcher]
-icon=/opt/firefox/current/browser/chrome/icons/default/default32.png
-path=/usr/bin/firefox
-
-[launcher]
-icon=/usr/share/icons/Adwaita/32x32/legacy/utilities-terminal.png
-path=/usr/bin/weston-terminal
-
-# Rede: cabo e Wi-Fi. O miniluv conversa com o connmand pelo D-Bus; sem
-# lancador ele ficaria instalado e inalcancavel, que e o mesmo que nao existir
-# para quem so tem a tela.
-#
-# SUBSTITUIU O IWGTK, e nao e questao de gosto: o iwgtk comanda o iwd
-# diretamente e o connman tambem o comanda: dois donos do mesmo radio, com o
-# desfecho dependendo de quem falou por ultimo. Com o connman no mundo, quem
-# fala com o iwd e so ele, e o miniluv fala com o connman.
-#
-# O icone vem do Adwaita e o caminho e literal: o painel do weston nao
-# renderiza SVG nem procura em tema de icones. Conferido que este arquivo
-# existe em 32x32/places — nao em legacy/, onde estavam os anteriores.
-[launcher]
-icon=/usr/share/icons/Adwaita/32x32/places/network-workgroup.png
-path=/usr/bin/miniluv
-
-[keyboard]
-keymap_layout=br
-
-[libinput]
-enable-tap=true
-WESTONINI
-    chmod 0644 "$STAGE/etc/xdg/weston/weston.ini"
-
-    # Os ícones do painel são conferidos AQUI, contra a árvore instalada, e
-    # não contra o STAGE: eles pertencem a outros pacotes (firefox e
-    # adwaita-icon-theme, ambos em DEPS). A primeira versão desta receita
-    # apontava para /usr/share/icons/hicolor/24x24/apps/firefox.png e
-    # .../utilities-terminal.png — NENHUM dos dois existe nesta árvore. O
-    # weston teria desenhado dois quadrados vazios e ninguém saberia por quê.
-    # A falha é cosmética, e por isso a guarda avisa em vez de abortar: um
-    # lançador sem ícone continua clicável, e derrubar o build do modo gráfico
-    # por um PNG seria desproporcional.
-    #
-    # E a guarda confere a DIMENSÃO, não só a existência, porque o defeito que
-    # de fato apareceu não foi um ícone faltando: foram dois PNG de 48 num
-    # painel de 32, e o primeiro lançador saiu cortado na tela. Existir não
-    # era o bastante. Largura e altura ficam nos bytes 16..23 do PNG, em
-    # big-endian; lidos com `od` byte a byte porque na árvore de build não há
-    # ferramenta de imagem alguma, e porque `od -tu4` usaria a ordem de bytes
-    # do hospedeiro e leria o número trocado.
-    for icone in /opt/firefox/current/browser/chrome/icons/default/default32.png \
-                 /usr/share/icons/Adwaita/32x32/legacy/utilities-terminal.png; do
-        [ -e "$icone" ] || {
-            echo "desktop: aviso — ícone ausente: $icone" >&2
-            continue
-        }
-        set -- $(od -An -tu1 -j16 -N8 "$icone" 2>/dev/null)
-        [ "$#" -eq 8 ] || {
-            echo "desktop: aviso — não li o cabeçalho de $icone" >&2
-            continue
-        }
-        icone_largura=$(($1 * 16777216 + $2 * 65536 + $3 * 256 + $4))
-        icone_altura=$(($5 * 16777216 + $6 * 65536 + $7 * 256 + $8))
-        [ "$icone_largura" = 32 ] && [ "$icone_altura" = 32 ] || {
-            echo "desktop: aviso — $icone é ${icone_largura}x${icone_altura};" \
-                 "o painel do weston tem 32 e corta o que passar disso" >&2
-        }
-    done
-    unset icone icone_largura icone_altura
-
-    # CADA LANCADOR DO PAINEL PRECISA DO SEU DAEMON DE PE, e esta guarda existe
+    # --- guardas -----------------------------------------------------------
+    # CADA ENTRADA DO MENU PRECISA DO SEU DAEMON DE PE, e esta guarda existe
     # porque a falta dela deixou a 0.10 sair com um botao de Wi-Fi que nao fazia
-    # NADA ao ser clicado.
+    # NADA ao ser clicado. O painel virou menu, o defeito continuaria igual.
     #
-    # O diagnostico que nao foi feito na epoca leva dez segundos: o iwgtk e um
-    # cliente D-Bus do iwd; o iwd registra net.connman.iwd no barramento do
-    # SISTEMA; e nenhum dos seis drop-ins de init da midia subia o dbus-daemon
-    # ou o iwd. Os dois binarios viajavam instalados e mortos. Tudo o mais tinha
-    # sido conferido — que o iwgtk compilou, que ligava nas bibliotecas certas,
-    # que o icone tinha 32px — e nada disso diz se o programa ABRE.
-    #
-    # A conferencia e contra a arvore instalada, como a dos icones, porque os
-    # drop-ins pertencem aos pacotes dbus e iwd. E ABORTA em vez de avisar: a
-    # diferenca para o caso do icone e que ali o lancador continua clicavel e
-    # so fica feio, enquanto aqui ele nao faz coisa alguma — publicar isso e
-    # publicar uma funcionalidade que nao existe.
+    # A conferencia e contra a arvore instalada, e nao contra o STAGE, porque os
+    # drop-ins pertencem aos pacotes dbus e connman. E ABORTA em vez de avisar:
+    # publicar uma entrada de menu que nao faz nada e publicar funcionalidade
+    # que nao existe.
     for exigencia in \
         "miniluv:/etc/rc.d/rcS.d/06-dbus.sh:sem barramento D-Bus do sistema o miniluv nao acha o connman" \
         "miniluv:/etc/rc.d/rcS.d/09-connman.sh:sem o daemon connman o miniluv abre e nao lista rede nenhuma"; do
@@ -450,83 +457,67 @@ WESTONINI
         resto=${exigencia#*:}
         arquivo=${resto%%:*}
         motivo=${resto#*:}
-        grep -q "path=/usr/bin/$lancador" "$STAGE/etc/xdg/weston/weston.ini" || continue
+        grep -q "command=\"$lancador\"" "$STAGE/etc/xdg/labwc/menu.xml" || continue
         [ -e "$arquivo" ] || {
-            echo "desktop: o painel oferece $lancador, mas falta $arquivo —" >&2
+            echo "desktop: o menu oferece $lancador, mas falta $arquivo —" >&2
             echo "         $motivo" >&2
             exit 1
         }
     done
     unset exigencia lancador resto arquivo motivo
 
-    # O texto do chrome do Firefox depende da base de esquemas do GSettings —
+    # Todo comando do menu e do rc.xml tem de EXISTIR na arvore instalada. Era
+    # o que faltava quando os icones do painel apontavam para PNG inexistente:
+    # o arquivo dizia uma coisa e o sistema tinha outra, e ninguem sabia por que.
+    for comando in $(grep -oE 'command="[a-z0-9-]+"' \
+                       "$STAGE/etc/xdg/labwc/menu.xml" \
+                       "$STAGE/etc/xdg/labwc/rc.xml" \
+                     | sed 's/.*command="//; s/"//' | sort -u); do
+        [ -x "/usr/bin/$comando" ] || {
+            echo "desktop: o menu chama '$comando', que nao esta em /usr/bin" >&2
+            exit 1
+        }
+    done
+    unset comando
+
+    # O texto do chrome do navegador depende da base de esquemas do GSettings —
     # e de nada dentro do settings.ini. Guarda, e nao comentario.
     [ -e "$STAGE/etc/rc.d/rcS.d/02-gschemas.sh" ] || {
         echo "desktop: falta o drop-in dos esquemas do GSettings; sem ele a" \
-             "resolucao da tela fica em -1 e o chrome do Firefox fica sem texto" >&2
+             "resolucao da tela fica em -1 e o chrome do navegador fica sem texto" >&2
         exit 1
     }
     # E a guarda contra o conserto ERRADO, que ja foi tentado e mediu-se que
-    # nao funciona: gtk-xft-dpi neste arquivo e inerte, porque o GTK so o
-    # propaga para a resolucao da tela quando vem do XSETTINGS ou de um
-    # g_object_set. Quem o acrescentar vai achar que consertou alguma coisa.
+    # nao funciona: gtk-xft-dpi no settings.ini e inerte.
     ! grep -q "^gtk-xft-dpi" "$STAGE/etc/gtk-3.0/settings.ini" || {
         echo "desktop: gtk-xft-dpi no settings.ini e inerte; quem define a" \
              "resolucao e o 02-gschemas.sh (ver o comentario do settings.ini)" >&2
         exit 1
     }
-    # A fonte nomeada no settings.ini tem de EXISTIR. Um nome errado aqui
-    # devolve o mesmo sintoma que a ausencia do arquivo: chrome sem texto.
+    # A fonte nomeada tem de EXISTIR. Um nome errado devolve o mesmo sintoma
+    # que a ausencia do arquivo: chrome sem texto.
     fc_familia=$(grep -oE 'gtk-font-name = [^0-9]+' "$STAGE/etc/gtk-3.0/settings.ini" | sed 's/gtk-font-name = //; s/ *$//')
     find /usr/share/fonts -iname "*$(echo "$fc_familia" | tr -d ' ')*" 2>/dev/null | grep -q . || {
         echo "desktop: a fonte '$fc_familia' do settings.ini nao esta instalada" >&2
         exit 1
     }
+    # A MESMA fonte e nomeada no rc.xml para o titulo de janela, e pelo mesmo
+    # motivo: o labwc desenha o titulo com pango, e um nome que o fontconfig
+    # nao resolve devolve barra de titulo em branco.
+    grep -q "<name>$fc_familia</name>" "$STAGE/etc/xdg/labwc/rc.xml" || {
+        echo "desktop: o rc.xml nao nomeia a fonte '$fc_familia' do settings.ini" >&2
+        exit 1
+    }
+    unset fc_familia
 
     [ -x "$STAGE/usr/bin/distropica-desktop" ] || {
         echo "desktop: o lançador não foi instalado" >&2
         exit 1
     }
-    # O weston.ini sem a seção [core] faria o compositor subir com o
-    # renderizador GL por default, que é justamente o que esta receita evita.
-    grep -q "^renderer=pixman" "$STAGE/etc/xdg/weston/weston.ini" || {
-        echo "desktop: weston.ini sem renderer=pixman" >&2
-        exit 1
-    }
-    # O binding-modifier não é validado pelo weston: o parser compara o texto
-    # com super/alt/ctrl/shift/none numa cadeia de else-if e, se NENHUM casar,
-    # simplesmente mantém o default — que é 'super'. Um 'Alt' com maiúscula ou
-    # um 'meta' não dão erro, não dão aviso: o atalho só não é o que o arquivo
-    # diz que é. A guarda não fixa QUAL modificador (isso é escolha revisável),
-    # fixa que ele seja um dos que o parser conhece.
-    # Captura QUALQUER coisa depois do '=', e não só minúsculas: um
-    # 'binding-modifier=Alt' é exatamente o erro a pegar, e um padrão [a-z]+
-    # não casaria com ele — a guarda leria vazio e deixaria passar. Foi o que
-    # a primeira versão desta linha fazia.
-    #
-    # E APARA os espaços em volta, porque o weston apara: o config-parser dele
-    # avança sobre isspace() depois do '=' e recorta o rabo antes de comparar.
-    # Uma guarda mais estrita que o parser recusaria configuração válida, que é
-    # tão ruim quanto deixar passar a inválida.
-    modificador=$(grep -oE '^binding-modifier=.*' \
-        "$STAGE/etc/xdg/weston/weston.ini" | cut -d= -f2- \
-        | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' || true)
-    if [ -n "$modificador" ]; then
-        case "$modificador" in
-            super|alt|ctrl|shift|none) ;;
-            *)
-                echo "desktop: binding-modifier='$modificador' não é um dos que o" \
-                     "weston conhece; ele cairia em 'super' sem avisar" >&2
-                exit 1
-                ;;
-        esac
-    fi
-    unset modificador
-    # O parser do weston trata linha iniciada por ';' como MALFORMADA e
-    # descarta o arquivo inteiro, subindo com "Starting with no config file".
-    # Um comentário no estilo errado apaga toda a configuração em silêncio.
-    ! grep -q "^[[:space:]]*;" "$STAGE/etc/xdg/weston/weston.ini" || {
-        echo "desktop: weston.ini tem comentário com ';'; use '#'" >&2
+    # O layout de teclado nao esta no rc.xml e sim no environment; se sumir, a
+    # montagem do mapa XKB falha e o compositor morre antes de desenhar.
+    grep -q "^XKB_DEFAULT_LAYOUT=" "$STAGE/etc/xdg/labwc/environment" || {
+        echo "desktop: environment sem XKB_DEFAULT_LAYOUT" >&2
         exit 1
     }
     [ -e "$STAGE/etc/rc.d/rcS.d/01-machine-id.sh" ] || {

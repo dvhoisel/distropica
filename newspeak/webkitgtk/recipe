@@ -1,0 +1,76 @@
+NAME=webkitgtk
+VERSION=2.52.5
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libstdcxx glib gtk4 cairo pango harfbuzz icu libsoup libxml2 libxslt sqlite3 libjpeg-turbo libpng libwebp lcms2 libgcrypt libtasn1 libepoxy zlib at-spi2-core fontconfig freetype wayland libseccomp bubblewrap xdg-dbus-proxy libsecret libdrm"
+BUILD_DEPS="make gcc-pass2 binutils-glibc cmake ninja pkgconf busybox python-glibc ruby gperf gettext perl wayland-protocols"
+ABOUT="O MOTOR DE NAVEGACAO, e o maior build desta arvore — C++ na escala de horas. E a variante GTK4 da API, webkitgtk-6.0, que o Epiphany exige e que e o unico caminho para um navegador maduro sem X11 duro na interface. SEM LLVM, e isso nao e detalhe: o JIT do JavaScriptCore usa o backend B3 proprio desde 2016, entao nada de clang nem de libLLVM — a mesma recusa escrita na receita da Mesa continua de pe. Renderiza por SOFTWARE: desde a 2.46 o WebKit rasteriza com Skia e tem caminho de CPU real, que e o que casa com o pixman e a Mesa softpipe daqui. SEM VIDEO E SEM AUDIO, por decisao declarada: ENABLE_VIDEO, ENABLE_WEB_AUDIO, ENABLE_WEB_CODECS e ENABLE_SPEECH_SYNTHESIS desligados, o que pelo GStreamerDependencies.cmake desliga USE_GSTREAMER inteiro e mantem a arvore sem um unico decodificador de midia. O preco e o YouTube nao tocar, e esta escrito aqui em vez de virar surpresa. O CONFINAMENTO fica LIGADO: cada processo que interpreta HTML de origem desconhecida roda dentro de um bubblewrap com syscalls filtradas pela libseccomp e o D-Bus atras do xdg-dbus-proxy; desligar compilaria e regrediria seguranca em relacao ao que o Firefox ja entregava. Sem XWayland e sem alvo X11 — o ENABLE_X11_TARGET exigiria um GTK com backend X11 e traria as bibliotecas cliente de volta pela porta do navegador. Sem introspection, sem documentacao, sem journald, sem MiniBrowser e sem corretor ortografico, que exigiria enchant e dicionarios."
+LICENSE=LGPL-2.1-or-later
+SRC="https://webkitgtk.org/releases/webkitgtk-$VERSION.tar.xz"
+SHA256="8a531a9abd2215936e8a8a914c077b586c0228b31d652f205286a8ec90f3364b"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    cmake -S . -B build -G Ninja \
+        -DPORT=GTK \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DCMAKE_INSTALL_LIBDIR=lib \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DUSE_GTK4=ON \
+        -DENABLE_WAYLAND_TARGET=ON \
+        -DENABLE_X11_TARGET=OFF \
+        -DENABLE_VIDEO=OFF \
+        -DENABLE_WEB_AUDIO=OFF \
+        -DENABLE_WEB_CODECS=OFF \
+        -DENABLE_SPEECH_SYNTHESIS=OFF \
+        -DENABLE_WEB_RTC=OFF \
+        -DUSE_GSTREAMER=OFF \
+        -DENABLE_BUBBLEWRAP_SANDBOX=ON \
+        -DUSE_LIBSECRET=ON \
+        -DENABLE_INTROSPECTION=OFF \
+        -DENABLE_DOCUMENTATION=OFF \
+        -DENABLE_JOURNALD_LOG=OFF \
+        -DENABLE_MINIBROWSER=OFF \
+        -DENABLE_SPELLCHECK=OFF \
+        -DUSE_WOFF2=OFF \
+        -DUSE_AVIF=OFF \
+        -DUSE_JPEGXL=OFF \
+        -DUSE_SYSTEMD=OFF
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    # E a API 6.0 que o Epiphany exige, e ela vem de USE_GTK4=ON. Se um dia a
+    # opcao mudar de nome, o build entregaria a 4.1 (GTK3) sem reclamar e o
+    # Epiphany e que falharia, horas depois, procurando um .pc que nao existe.
+    for pc in webkitgtk-6.0.pc webkitgtk-web-process-extension-6.0.pc; do
+        [ -e "$STAGE/usr/lib/pkgconfig/$pc" ] || {
+            echo "webkitgtk: $pc nao foi produzido — a API 6.0 nao saiu" >&2
+            ls "$STAGE/usr/lib/pkgconfig" 2>/dev/null >&2
+            exit 1
+        }
+    done
+    # As duas promessas centrais desta receita, conferidas no ELF e nao na linha
+    # de comando: nada de GStreamer (nao ha decodificador nenhum na arvore) e
+    # nada de X11 (o alvo e Wayland puro).
+    SO=$(ls "$STAGE"/usr/lib/libwebkitgtk-6.0.so* 2>/dev/null | head -1)
+    [ -n "$SO" ] || {
+        echo "webkitgtk: libwebkitgtk-6.0.so nao foi produzida" >&2
+        exit 1
+    }
+    for lib in libgstreamer libX11 libxcb; do
+        if readelf -d "$SO" | grep -q "$lib"; then
+            echo "webkitgtk: o motor ligou $lib, contrariando as opcoes" >&2
+            readelf -d "$SO" | grep NEEDED >&2
+            exit 1
+        fi
+    done
+    # O confinamento e o outro compromisso: sem os processos auxiliares no
+    # lugar, o navegador nao sobe.
+    [ -d "$STAGE/usr/libexec/webkitgtk-6.0" ] || {
+        echo "webkitgtk: os processos auxiliares nao foram instalados" >&2
+        find "$STAGE/usr/libexec" -maxdepth 2 2>/dev/null >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}
