@@ -2221,6 +2221,25 @@ fn build_claim_covers<'a>(claims: &'a [BuildClaim], path: &str) -> Option<&'a st
 /// diretório do usr-merge. `std::canonicalize(root.join(...))` não serve para
 /// um alvo absoluto: ele o resolveria contra o host, não contra `root`.
 fn resolve_build_virtual(ctx: &Ctx, virtual_path: &str) -> Result<String> {
+    resolve_build_virtual_opt(ctx, virtual_path)?
+        .ok_or_else(|| anyhow::anyhow!("{virtual_path}: symlink não resolve dentro do rootfs"))
+}
+
+/// Igual ao `resolve_build_virtual`, mas devolve `None` quando o caminho não
+/// resolve por PENDURAR — algum componente da travessia não existe.
+///
+/// A distinção existe porque um symlink pendurado é legítimo em pelo menos um
+/// caso real: o fontconfig instala 23 links em
+/// `/usr/share/factory/etc/fonts/conf.d/` cujo caminho relativo foi calculado
+/// para onde eles VÃO ser copiados. De `/etc/fonts/conf.d` o `../../../usr/…`
+/// resolve certo; de onde ficam guardados, não. São gabaritos de `/etc`, e
+/// pendurar ali é o comportamento correto deles.
+///
+/// Quem precisa do caminho de verdade (o shell do runner, o interpretador de um
+/// shebang) continua usando o `resolve_build_virtual`, que recusa. Quem só quer
+/// saber se há executável a expor usa esta forma: link que não aponta para
+/// lugar nenhum não é executável, e isso não é erro.
+fn resolve_build_virtual_opt(ctx: &Ctx, virtual_path: &str) -> Result<Option<String>> {
     let normalized = canonical_virtual_path(&ctx.root, virtual_path)?;
     let mut pending: Vec<String> = normalized
         .split('/')
@@ -2240,7 +2259,19 @@ fn resolve_build_virtual(ctx: &Ctx, virtual_path: &str) -> Result<String> {
             _ => {}
         }
         let candidate = format!("/{}/{component}", resolved.join("/")).replace("//", "/");
-        let metadata = fs::symlink_metadata(rooted_path(&ctx.root, &candidate)?)?;
+        // O contexto aqui não é enfeite: era exatamente esta linha que chegava
+        // ao usuário como "No such file or directory (os error 2)", sem
+        // caminho, sem componente e sem pacote, e parava o rebuild sem dizer
+        // onde. Agora ou o caminho pendura (e quem chamou decide), ou o erro
+        // diz qual travessia falhou.
+        let metadata = match fs::symlink_metadata(rooted_path(&ctx.root, &candidate)?) {
+            Ok(metadata) => metadata,
+            Err(erro) if erro.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(erro) => {
+                return Err(anyhow::Error::new(erro)
+                    .context(format!("{virtual_path}: ao atravessar {candidate}")))
+            }
+        };
         if !metadata.file_type().is_symlink() {
             resolved.push(component);
             continue;
@@ -2249,7 +2280,8 @@ fn resolve_build_virtual(ctx: &Ctx, virtual_path: &str) -> Result<String> {
         if hops > 64 {
             bail!("ciclo de symlinks ao resolver {virtual_path}");
         }
-        let target = fs::read_link(rooted_path(&ctx.root, &candidate)?)?;
+        let target = fs::read_link(rooted_path(&ctx.root, &candidate)?)
+            .with_context(|| format!("{virtual_path}: ao ler o symlink {candidate}"))?;
         let target = target
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("symlink não UTF-8 em {candidate}"))?;
@@ -2262,7 +2294,7 @@ fn resolve_build_virtual(ctx: &Ctx, virtual_path: &str) -> Result<String> {
     }
     let result = format!("/{}", resolved.join("/"));
     rooted_path(&ctx.root, &result)?;
-    Ok(result)
+    Ok(Some(result))
 }
 
 fn canonical_build_directory(ctx: &Ctx, virtual_path: &str) -> Result<Option<String>> {
@@ -2665,27 +2697,16 @@ impl BuildView {
 }
 
 fn executable_mode(ctx: &Ctx, virtual_path: &str) -> Result<Option<u32>> {
-    let resolved = resolve_build_virtual(ctx, virtual_path)?;
-    let host = rooted_path(&ctx.root, &resolved)?;
-    // Symlink PENDURADO não é executável, e não é erro. O caso real é o gabarito
-    // de /etc: o fontconfig instala 23 links em
-    // /usr/share/factory/etc/fonts/conf.d/ cujo caminho relativo foi calculado
-    // para onde eles VÃO ser copiados — de /etc/fonts/conf.d o `../../../usr/…`
-    // resolve certo, de onde ficam guardados não resolve. Seguir o link para
-    // decidir se há executável a expor está certo; estourar quando ele não
-    // resolve, não.
-    //
-    // O contexto no erro é deliberado: sem ele isto chegava ao usuário como
-    // "No such file or directory (os error 2)", sem caminho nem pacote, e o
-    // build parava sem dizer o que faltava.
-    let metadata = match fs::symlink_metadata(&host) {
-        Ok(metadata) => metadata,
-        Err(erro) if erro.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(erro) => {
-            return Err(anyhow::Error::new(erro)
-                .context(format!("{virtual_path}: modo de {}", host.display())))
-        }
+    // Symlink PENDURADO não é executável, e não é erro — os 23 gabaritos de
+    // /etc que o fontconfig guarda em /usr/share/factory/ são o caso real, e a
+    // travessia deles é que estourava. Seguir o link para decidir se há
+    // executável a expor está certo; estourar quando ele não resolve, não.
+    let Some(resolved) = resolve_build_virtual_opt(ctx, virtual_path)? else {
+        return Ok(None);
     };
+    let host = rooted_path(&ctx.root, &resolved)?;
+    let metadata = fs::symlink_metadata(&host)
+        .with_context(|| format!("{virtual_path}: modo de {}", host.display()))?;
     if !metadata.file_type().is_file() {
         return Ok(None);
     }
@@ -2769,10 +2790,13 @@ fn collect_claim_executables(
             bail!("{owner}: árvore da view excede 50000 entradas");
         }
         let host = rooted_path(&ctx.root, &path)?;
-        let metadata = fs::symlink_metadata(&host)?;
+        let metadata = fs::symlink_metadata(&host)
+            .with_context(|| format!("{owner}: claim {path} da view"))?;
         if tree && metadata.file_type().is_dir() {
             let mut children = Vec::new();
-            for entry in fs::read_dir(&host)? {
+            for entry in
+                fs::read_dir(&host).with_context(|| format!("{owner}: árvore {path} da view"))?
+            {
                 let entry = entry?;
                 let name = entry
                     .file_name()
@@ -10816,6 +10840,54 @@ mod tests {
             symlink(target, root.join(alias.trim_start_matches('/'))).unwrap();
         }
         (root, ctx)
+    }
+
+    #[test]
+    fn symlink_pendurado_nao_e_executavel_e_o_erro_diz_o_caminho() {
+        let (root, ctx) = view_test_context("pendurado");
+        // O caso real: o fontconfig guarda 23 gabaritos de /etc em
+        // /usr/share/factory/etc/fonts/conf.d/, e o caminho relativo deles foi
+        // calculado para o destino — de /etc/fonts/conf.d resolve, de onde
+        // ficam guardados pendura. Isso parou dois rebuilds inteiros no cairo
+        // com "No such file or directory (os error 2)", sem caminho nem pacote.
+        let factory = root.join("usr/share/factory/etc/fonts/conf.d");
+        fs::create_dir_all(&factory).unwrap();
+        symlink(
+            "../../../usr/share/fontconfig/conf.avail/45-latin.conf",
+            factory.join("45-latin.conf"),
+        )
+        .unwrap();
+        assert_eq!(
+            executable_mode(&ctx, "/usr/share/factory/etc/fonts/conf.d/45-latin.conf").unwrap(),
+            None,
+            "link que não aponta para lugar nenhum não é executável"
+        );
+
+        // Quem PRECISA do caminho de verdade continua recusando — e agora diz
+        // qual travessia falhou, em vez de devolver o erro cru do io.
+        let erro = resolve_build_virtual(&ctx, "/usr/share/factory/etc/fonts/conf.d/45-latin.conf")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            erro.contains("/usr/share/factory/etc/fonts/conf.d/45-latin.conf"),
+            "o erro precisa nomear o caminho, e trouxe {erro:?}"
+        );
+
+        // O link que resolve segue resolvendo, e o modo continua sendo lido no
+        // ALVO — é isso que a tolerância acima não podia afrouxar.
+        fs::write(root.join("usr/bin/ferramenta"), b"#!/bin/sh\n").unwrap();
+        fs::set_permissions(
+            root.join("usr/bin/ferramenta"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        symlink("ferramenta", root.join("usr/bin/alias")).unwrap();
+        assert_eq!(
+            executable_mode(&ctx, "/usr/bin/alias").unwrap(),
+            Some(0o100755)
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

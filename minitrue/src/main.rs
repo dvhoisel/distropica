@@ -284,7 +284,19 @@ fn main() {
         Ok(()) => {}
         Err(e) => {
             let code = e.downcast_ref::<Fail>().map(|f| f.code).unwrap_or(1);
-            eprintln!("minitrue: {e}");
+            // `{e}` imprime só a mensagem mais externa, e jogava fora todo o
+            // `.context()` do caminho. Um `?` cru sobre io::Error virava
+            // "No such file or directory (os error 2)" — sem caminho, sem
+            // pacote, sem etapa. Duas paradas de rebuild foram diagnosticadas
+            // por bisseção de diretório porque esta linha calava a evidência
+            // que o código já tinha produzido. `{e:#}` encadeia os contextos;
+            // com RUST_BACKTRACE, `{e:?}` ainda traz o backtrace que o anyhow
+            // captura na conversão.
+            if std::env::var_os("RUST_BACKTRACE").is_some() {
+                eprintln!("minitrue: {e:?}");
+            } else {
+                eprintln!("minitrue: {e:#}");
+            }
             std::process::exit(code);
         }
     }
