@@ -1,0 +1,40 @@
+NAME=fcft
+VERSION=3.3.3
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc fontconfig freetype pixman"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox tllist"
+ABOUT="Carrega fonte pelo fontconfig e rasteriza glifo com o freetype, entregando o resultado em superfície pixman. É a camada de texto do foot, e existe separada dele porque o mesmo autor a usa em mais de um programa. As três opções que decidem o tamanho desta receita ficam DESLIGADAS, e cada uma por um motivo. O 'svg-backend' vem de fábrica em 'nanosvg', que é uma cópia EMBUTIDA de um decodificador SVG dentro da fonte — código de terceiro invisível para o audit, que é exatamente o que esta árvore recusa; sem ele não há emoji colorido, e emoji colorido num terminal é o tipo de coisa que se troca de bom grado por uma closure auditável. O 'run-shaping' e o 'grapheme-shaping' exigiriam o libutf8proc, que não está aqui; sem eles o terminal desenha grafema a grafema, que é o que um terminal de célula fixa faz de qualquer forma. Sem docs, que exigiriam scdoc."
+LICENSE=MIT
+SRC="https://codeberg.org/dnkl/fcft/releases/download/$VERSION/fcft-$VERSION.tar.gz"
+SHA256="bb298772d625e7d917373d541456f34f1957a9e22b16f17f64158b2c3816563c"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dsvg-backend=none \
+        -Dsystem-nanosvg=disabled \
+        -Ddocs=disabled \
+        -Dgrapheme-shaping=disabled \
+        -Drun-shaping=disabled \
+        -Dtest-text-shaping=false \
+        -Dexamples=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/libfcft.so" ] || {
+        echo "fcft: a biblioteca compartilhada não foi produzida" >&2
+        exit 1
+    }
+    # A promessa da receita, conferida no ELF: nada de librsvg, nem pela opção
+    # de sistema nem por engano — se o SVG voltar, volta com código embutido ou
+    # com uma dependência Rust, e nenhum dos dois é aceitável em silêncio.
+    if readelf -d "$STAGE/usr/lib/libfcft.so" | grep -q librsvg; then
+        echo "fcft: ligou librsvg; o backend SVG deveria estar desligado" >&2
+        exit 1
+    fi
+    find "$STAGE" -type d -empty -delete
+}

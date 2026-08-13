@@ -2,8 +2,8 @@ NAME=desktop
 VERSION=0.1
 KIND=source
 TOOLCHAIN=none
-DEPS="labwc seatd eudev dbus epiphany dejavu-fonts adwaita-icon-theme hicolor-icon-theme mesa locales busybox alsa-utils miniluv"
-ABOUT="A COLA. Tudo o que faz a pilha grafica virar uma tela em vez de um monte de bibliotecas instaladas: quem sobe o compositor, onde ele acha a configuracao, e o que o botao direito oferece. Receita de montagem, sem SRC — so gera arquivos legiveis. Tres pecas. (1) /usr/bin/distropica-desktop, o lancador: cria o XDG_RUNTIME_DIR, que o protocolo Wayland exige e sem o qual o compositor sai com uma linha de erro e nada mais; sobe o seatd se ninguem o subiu; e exec no labwc dentro de um barramento de sessao. (2) quatro drop-ins em /etc/rc.d/rcS.d, que e como um pacote acrescenta trabalho de inicializacao sem ser dono do /etc/inittab, que e do base: 01-machine-id.sh, 02-gschemas.sh, 05-udevd.sh e 10-seatd.sh, nesta ordem. O 02-gschemas.sh e o menos evidente e o que custou mais caro: ele compila a base de esquemas do GSettings, e sem ela o backend Wayland do GTK abandona a propria inicializacao antes de chegar ao update_xft_settings, que e o unico lugar que define a resolucao da tela — ela fica em -1, todo tamanho de fonte em pontos passa a ser negativo, e o navegador abre sem UMA LETRA no proprio chrome enquanto a pagina ao lado renderiza normalmente. O udevd NAO e redundante com o mdev, e essa foi a causa da primeira tela preta: o mdev cria os NOS de dispositivo, mas quem enumera dispositivo de entrada e a libinput, e ela pergunta a libudev — cujo udev_enumerate_scan_devices filtra tudo que nao tem entrada na base em /run/udev. (3) a configuracao do labwc em /etc/xdg/labwc: rc.xml, menu.xml, themerc, environment e autostart. O COMPOSITOR MUDOU, e com ele o modelo: o weston tinha painel, relogio e lancadores, e UM modificador global para todos os atalhos — mover o Alt+Tab movia tudo junto, e o Alt+K matava a aplicacao em foco sem confirmacao. O labwc nao tem painel nem relogio, e em troca cada atalho e declarado um a um no rc.xml, o tema e um themerc compativel com Openbox 3.6, e o menu do botao direito substitui os lancadores. O renderizador continua sendo por SOFTWARE: o wlroots foi construido com -Drenderers=[] e compoe no buffer dumb do KMS, sem EGL e sem GBM, pelo mesmo motivo de antes — numa arvore com Mesa softpipe o GL nao acelera nada e ainda depende de o gbm achar driver. NAO HA EMULADOR DE TERMINAL nesta sessao: o unico da arvore era o weston-terminal, que saiu junto com o weston."
+DEPS="labwc seatd eudev dbus epiphany foot dejavu-fonts adwaita-icon-theme hicolor-icon-theme mesa locales busybox alsa-utils miniluv"
+ABOUT="A COLA. Tudo o que faz a pilha grafica virar uma tela em vez de um monte de bibliotecas instaladas: quem sobe o compositor, onde ele acha a configuracao, e o que o botao direito oferece. Receita de montagem, sem SRC — so gera arquivos legiveis. Tres pecas. (1) /usr/bin/distropica-desktop, o lancador: cria o XDG_RUNTIME_DIR, que o protocolo Wayland exige e sem o qual o compositor sai com uma linha de erro e nada mais; sobe o seatd se ninguem o subiu; e exec no labwc dentro de um barramento de sessao. (2) quatro drop-ins em /etc/rc.d/rcS.d, que e como um pacote acrescenta trabalho de inicializacao sem ser dono do /etc/inittab, que e do base: 01-machine-id.sh, 02-gschemas.sh, 05-udevd.sh e 10-seatd.sh, nesta ordem. O 02-gschemas.sh e o menos evidente e o que custou mais caro: ele compila a base de esquemas do GSettings, e sem ela o backend Wayland do GTK abandona a propria inicializacao antes de chegar ao update_xft_settings, que e o unico lugar que define a resolucao da tela — ela fica em -1, todo tamanho de fonte em pontos passa a ser negativo, e o navegador abre sem UMA LETRA no proprio chrome enquanto a pagina ao lado renderiza normalmente. O udevd NAO e redundante com o mdev, e essa foi a causa da primeira tela preta: o mdev cria os NOS de dispositivo, mas quem enumera dispositivo de entrada e a libinput, e ela pergunta a libudev — cujo udev_enumerate_scan_devices filtra tudo que nao tem entrada na base em /run/udev. (3) a configuracao do labwc em /etc/xdg/labwc: rc.xml, menu.xml, themerc, environment e autostart. O COMPOSITOR MUDOU, e com ele o modelo: o weston tinha painel, relogio e lancadores, e UM modificador global para todos os atalhos — mover o Alt+Tab movia tudo junto, e o Alt+K matava a aplicacao em foco sem confirmacao. O labwc nao tem painel nem relogio, e em troca cada atalho e declarado um a um no rc.xml, o tema e um themerc compativel com Openbox 3.6, e o menu do botao direito substitui os lancadores. O renderizador continua sendo por SOFTWARE: o wlroots foi construido com -Drenderers=[] e compoe no buffer dumb do KMS, sem EGL e sem GBM, pelo mesmo motivo de antes — numa arvore com Mesa softpipe o GL nao acelera nada e ainda depende de o gbm achar driver. O TERMINAL e o foot, e ele entrou junto com esta troca: o unico emulador anterior era o weston-terminal, que saiu com o weston, e uma sessao grafica sem forma de rodar um comando nao e uma sessao. O foot e cliente Wayland nativo sem toolkit — nao usa GTK nem Qt —, e custa tres receitas pequenas de C."
 LICENSE="GPL-3.0-or-later"
 
 build() {
@@ -337,6 +337,9 @@ GTKINI
     <keybind key="W-Return">
       <action name="Execute" command="epiphany"/>
     </keybind>
+    <keybind key="W-t">
+      <action name="Execute" command="foot"/>
+    </keybind>
     <keybind key="W-n">
       <action name="Execute" command="miniluv"/>
     </keybind>
@@ -383,6 +386,9 @@ RCXML
   <menu id="root-menu" label="Distropica">
     <item label="Navegador">
       <action name="Execute" command="epiphany"/>
+    </item>
+    <item label="Terminal">
+      <action name="Execute" command="foot"/>
     </item>
     <item label="Rede">
       <action name="Execute" command="miniluv"/>

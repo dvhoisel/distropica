@@ -1,0 +1,22 @@
+NAME=tllist
+VERSION=1.1.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="meson ninja pkgconf busybox"
+ABOUT="Uma lista ligada em C, inteira dentro de um cabeçalho. Não tem código compilado, não tem biblioteca, não vai para o alvo como objeto: instala um .h e um .pc, e existe porque o fcft e o foot a exigem por pkg-config em tempo de build. Sete mil bytes de tarball, e o menor pacote desta árvore por larga margem. O upstream assina os tarballs de release com OpenPGP; aqui o pino é o SHA256 do arquivo assinado, porque adotar a assinatura exigiria fixar o certificado do autor, que é decisão de confiança e não de empacotamento."
+LICENSE=MIT
+SRC="https://codeberg.org/dnkl/tllist/releases/download/$VERSION/tllist-$VERSION.tar.gz"
+SHA256="a1f0ce0dc4fcb4ce59c37202a1d914c853a8bd2d7c5d57d623b15a8dd9778767"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/pkgconfig/tllist.pc" ] || {
+        echo "tllist: tllist.pc não foi produzido — o fcft e o foot o procuram por pkg-config" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

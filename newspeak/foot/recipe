@@ -1,0 +1,59 @@
+NAME=foot
+VERSION=1.27.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc fcft fontconfig pixman libxkbcommon wayland ncurses"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox tllist wayland-protocols ncurses"
+ABOUT="O EMULADOR DE TERMINAL. Devolve à sessão gráfica o que saiu junto com o weston: o weston-terminal era o único desta árvore, e sem substituto o modo gráfico teria navegador e rede e nenhuma forma de rodar um comando sem voltar para a tty. É cliente Wayland nativo, escrito em C, sem toolkit — não usa GTK nem Qt, desenha direto em superfície pixman com os glifos que o fcft rasteriza. A closure inteira dele são três receitas pequenas, e nenhuma linha de C++. O 'utmp-backend' é a opção que mais importa aqui e vem de fábrica em 'auto', que no Linux escolhe o libutempter — biblioteca que esta árvore não tem, e que faria o build variar conforme o que estivesse instalado na raiz. Fica em 'none': sem registro em utmp, o 'who' não lista a sessão do terminal, e essa é a troca. Sem IME, que serve a métodos de entrada de escritas asiáticas e traz complexidade de protocolo sem usuário aqui; sem clusterização de grafema, coerente com o fcft construído sem shaping; sem docs, que exigiriam scdoc. O terminfo É construído e instalado, e isso não é opcional: sem ele TERM=foot não resolve e programas de tela inteira desenham lixo."
+LICENSE=MIT
+SRC="https://codeberg.org/dnkl/foot/releases/download/$VERSION/foot-$VERSION.tar.gz"
+SHA256="d1e1d04cd7a3a1615b4d8dbf9645b9a35cdc3f36fba4e1c0fd252ad0bd6651c8"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Ddocs=disabled \
+        -Dthemes=false \
+        -Dime=false \
+        -Dgrapheme-clustering=disabled \
+        -Dtests=false \
+        -Dterminfo=enabled \
+        -Dutmp-backend=none \
+        -Dsystemd-units-dir=
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    [ -x "$STAGE/usr/bin/foot" ] || {
+        echo "foot: o binário não foi produzido" >&2
+        exit 1
+    }
+    # Sem o terminfo, TERM=foot não resolve e vim, less e qualquer programa de
+    # tela inteira desenham lixo. É a falha que o usuário encontra primeiro e a
+    # que menos parece com um problema de empacotamento.
+    ls "$STAGE"/usr/share/terminfo/f/foot* >/dev/null 2>&1 || {
+        echo "foot: o terminfo não foi instalado" >&2
+        find "$STAGE/usr/share/terminfo" -maxdepth 2 2>/dev/null >&2
+        exit 1
+    }
+    # Nenhum toolkit. É a razão de o foot custar três receitas em vez de trinta,
+    # e se um dia ele passar a ligar GTK ou Qt a conta muda inteira.
+    for lib in libgtk libQt libX11 libxcb; do
+        if readelf -d "$STAGE/usr/bin/foot" | grep -q "$lib"; then
+            echo "foot: ligou $lib — um toolkit entrou pela porta do terminal" >&2
+            readelf -d "$STAGE/usr/bin/foot" | grep NEEDED >&2
+            exit 1
+        fi
+    done
+    # O utmp-backend=none tem de valer: em 'auto' o meson escolheria
+    # libutempter no Linux e o binário passaria a exigir uma biblioteca que
+    # esta árvore não tem.
+    if readelf -d "$STAGE/usr/bin/foot" | grep -q utempter; then
+        echo "foot: ligou libutempter; utmp-backend deveria estar em none" >&2
+        exit 1
+    fi
+    find "$STAGE" -type d -empty -delete
+}
