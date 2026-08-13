@@ -9,7 +9,11 @@ DEPS="glibc alsa-lib ncurses bash busybox"
 # correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
 # está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
 # vir antes dele e dispensa a declaração.
-BUILD_DEPS="gcc-pass2 binutils-glibc make gettext gawk"
+# pkgconf: o `./configure` desta fonte aborta sem pkg-config —
+# `as_fn_error ... "pkg-config not found"`, não um aviso. Conferido no
+# script da própria fonte pinada. Referenciar pkg-config não é o mesmo que
+# exigi-lo: seis receitas da closure o mencionam e construíram sem ele.
+BUILD_DEPS="gcc-pass2 binutils-glibc make gettext gawk pkgconf"
 ABOUT="As ferramentas de linha de comando da ALSA, e elas existem aqui por uma razão específica: SEM MIXER NÃO HÁ SOM. A alsa-lib sozinha abre o dispositivo e escreve amostras nele, mas a maioria das placas — e o VirtualBox entre elas — sobe com o canal Master MUTADO, e não há nada no sistema que o desmute. O sintoma é o pior desta árvore: nada falha, o navegador diz que está tocando, o /proc/asound lista a placa, e não sai áudio. Quem desmuta é o amixer; quem persiste o estado entre boots é o alsactl. Por isso este pacote é dependência do 'desktop' e não um extra. O alsactl também é o que torna o volume uma coisa que se ajusta uma vez: ele salva em /var/lib/alsa/asound.state no desligamento e restaura no boot, e esse arquivo é ESTADO DE MÁQUINA — gerado no primeiro uso, nunca no payload, mesmo motivo do machine-id e do hwdb.bin. Sem alsamixer curses (--disable-alsamixer seria uma opção), porque o ncurses já está na árvore por causa do Vim e o custo é um binário; um mixer visual é a diferença entre 'ajuste o volume' e 'leia a documentação do amixer'. Sem alsaconf: é um script interativo para escolher módulo ISA de placa de som dos anos noventa, e esta árvore compila tudo builtin. Sem bat/nhlt e sem as ferramentas de topologia, que servem a firmware de DSP que não embarcamos."
 LICENSE="GPL-2.0-or-later"
 SRC="https://www.alsa-project.org/files/pub/utils/alsa-utils-$VERSION.tar.bz2"
