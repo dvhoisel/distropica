@@ -8,7 +8,14 @@ DEPS=""
 # /usr/bin/awk embora. A falta só aparece quando o gawk já foi construído no
 # mesmo plano, então a quebra é sensível à ordem. Conferido no próprio
 # configure da fonte pinada, não suposto.
-BUILD_DEPS="make pkgconf util-macros busybox gawk"
+# gcc-pass2 e binutils-glibc: o xtrans é biblioteca SÓ DE CABEÇALHOS e não
+# compila nada, mas o `./configure` sonda o compilador assim mesmo e aborta
+# com "C compiler cannot create executables" quando não há um na view.
+# Não ter compilador é legítimo para pacote de dados — adwaita-icon-theme,
+# hicolor-icon-theme, xorgproto e xcb-proto constroem sem ele, e o xcb-proto
+# até roda ./configure. O que separa é o configure sondar o cc, e o deste
+# sonda.
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf util-macros busybox gawk"
 ABOUT="A camada de transporte do X11, distribuída como CÓDIGO-FONTE em cabeçalhos e não como biblioteca. O libX11 a compila para dentro de si; por isso não há .so nenhum aqui e por isso ela é BUILD_DEPS de lá e DEPS de ninguém. É o que decide se a conexão vai por socket UNIX, TCP ou memória compartilhada — irrelevante nesta distro, onde nunca haverá servidor X para conectar, mas o libX11 não compila sem ela."
 LICENSE=MIT
 SRC="https://www.x.org/releases/individual/lib/xtrans-$VERSION.tar.xz"
