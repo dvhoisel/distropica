@@ -93,14 +93,19 @@ build() {
     # bit de execução, não o arquivo nem a linha, para não divergir dos bytes do
     # upstream. Sem isto a auditoria recusa o payload, e com razão: um
     # executável declara o interpretador que exige.
-    find "$STAGE/usr/lib" -type f -name '*.py' -perm -u+x \
-        -exec head -1 {} \; -print 2>/dev/null |
-        awk '/^#!.*\/env python$/ { getline caminho; print caminho }' |
-        while IFS= read -r resquicio; do
-            [ -n "$resquicio" ] || continue
-            chmod a-x "$resquicio"
-            echo "  bit de execução removido de ${resquicio#"$STAGE"}"
+    # Sem `awk`: o pipeline anterior usava um, e a view desta receita pode não
+    # ter awk nenhum — o busybox está lá, mas já cedeu /usr/bin/awk ao gawk. O
+    # awk falhava, o `while read` recebia vazio e saía com 0, então o conserto
+    # não acontecia EM SILÊNCIO. `case` do shell resolve sem ferramenta externa.
+    find "$STAGE/usr/lib" -type f -name '*.py' -perm -u+x -exec sh -c '
+        for arquivo do
+            case $(head -1 "$arquivo") in
+                "#!"*"/env python")
+                    chmod a-x "$arquivo"
+                    echo "  bit de execução removido de $arquivo" ;;
+            esac
         done
+    ' _ {} +
 
     find "$STAGE" -type d -empty -delete
 }
