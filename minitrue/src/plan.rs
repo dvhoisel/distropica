@@ -6491,6 +6491,56 @@ fn validate_package_artifact_correlation(
     } else if minisign_keys > 0 {
         bail!("{package}: SIGKEY minisign sem assinatura que ela julgue");
     }
+    // SIGSUMS também não entra na bijeção, e por um motivo próprio: um único
+    // manifesto assinado cobre TODOS os SRC da receita — o fetch confere o
+    // basename de cada artefato contra ele —, e a única chave declarada é a que
+    // julga esse manifesto. Ela sai emitida como `SIGKEY[1]`, onde o índice não
+    // aponta para SRC nenhum: é só o slot canônico da chave. A bijeção a via
+    // como chave órfã e recusava o plano.
+    //
+    // Era assimetria emissor/validador da pior espécie: o próprio `minitrue
+    // plan` produzia um PLAN_LOCK que o `verify_canonical` dele mesmo
+    // rejeitava. E não era caso de nicho — só o kernel usa SIGSUMS, mas o
+    // linux-headers entrou nas DEPS da glibc, então a closure inteira do Mundo
+    // B passava por ele: `plan zlib` já falhava. O `rectify` escapava por
+    // acidente, porque não reanalisa o lock que emite.
+    //
+    // A conferência que substitui a bijeção é a mesma em espírito: manifesto e
+    // chave existem em par, a assinatura destacada é opcional e única, e nada
+    // disso convive com assinatura indexada nem com waiver — o SignaturePlan
+    // da receita é uma variante só. Minisign já foi recusado acima, porque
+    // àquela altura a chave do manifesto ainda contava em `normal_keys`.
+    let checksum_manifests = facts
+        .iter()
+        .filter(|(kind, identifier)| {
+            kind == "checksums" && identifier.starts_with("recipe:SIGSUMS=")
+        })
+        .count();
+    if checksum_manifests > 0 {
+        if checksum_manifests != 1 {
+            bail!("{package}: SIGSUMS exige exatamente um manifesto");
+        }
+        if facts
+            .iter()
+            .filter(|(kind, identifier)| {
+                kind == "signature" && identifier.starts_with("recipe:SIGSUMS_SIG=")
+            })
+            .count()
+            > 1
+        {
+            bail!("{package}: SIGSUMS declara mais de uma assinatura destacada");
+        }
+        if !waivers.is_empty() {
+            bail!("{package}: SIGSUMS não convive com waiver de assinatura");
+        }
+        if !normal_signatures.is_empty() {
+            bail!("{package}: SIGSUMS não convive com assinatura indexada OpenPGP");
+        }
+        if normal_keys.len() != 1 || !normal_keys.contains(&1) {
+            bail!("{package}: SIGSUMS exige exatamente a SIGKEY[1] que julga o manifesto");
+        }
+        normal_keys.clear();
+    }
     if normal_signatures != normal_keys {
         bail!("{package}: SIG[n] e SIGKEY[n] não são bijetivos");
     }
@@ -8904,8 +8954,29 @@ mod tests {
             .collect()
     }
 
+    fn no_de_fonte() -> VerifiedNode {
+        VerifiedNode {
+            kind: "source".into(),
+            world: "B".into(),
+            action: "source".into(),
+            origin: "source".into(),
+            ..no_de_vendor()
+        }
+    }
+
     const SRC_1: (&str, &str) = ("vendor-input", "recipe:SRC[1]=https://e.invalid/a.tar");
     const SRC_2: (&str, &str) = ("vendor-input", "recipe:SRC[2]=https://e.invalid/b.tar");
+    const FONTE_1: (&str, &str) = ("source-input", "recipe:SRC[1]=https://e.invalid/a.tar.xz");
+    const FONTE_2: (&str, &str) = ("source-input", "recipe:SRC[2]=https://e.invalid/b.tar.xz");
+    const SIGSUMS: (&str, &str) = (
+        "checksums",
+        "recipe:SIGSUMS=https://e.invalid/sha256sums.asc;EPOCH=10",
+    );
+    const SIGSUMS_SIG: (&str, &str) = (
+        "signature",
+        "recipe:SIGSUMS_SIG=https://e.invalid/sha256sums.txt.asc;EPOCH=10",
+    );
+    const SIGKEY_1: (&str, &str) = ("signature-key", "recipe:SIGKEY[1]=files/k.asc;FP=AA");
     const MINISIG_1: (&str, &str) = (
         "signature",
         "recipe:SIG_MINISIGN[1]=https://e.invalid/a.sig",
@@ -9017,6 +9088,94 @@ mod tests {
                 ("signature-key", "recipe:SIGKEY[1]=files/k.asc;FP=AA"),
             ],
             "minisign misturado com OpenPGP indexado",
+        );
+    }
+
+    #[test]
+    fn sigsums_e_um_manifesto_para_todos_os_src() {
+        let no = no_de_fonte();
+        // O caso do kernel: um sha256sums.asc clearsigned cobre o tarball, e a
+        // SIGKEY[1] julga o manifesto — não um SRC. A bijeção SIG[n]/SIGKEY[n]
+        // lia isso como chave órfã, e o `plan` recusava o próprio PLAN_LOCK que
+        // acabara de emitir. Como o linux-headers está nas DEPS da glibc, a
+        // recusa alcançava o Mundo B inteiro.
+        validate_package_artifact_correlation("linux", &no, &fatos(&[FONTE_1, SIGSUMS, SIGKEY_1]))
+            .unwrap();
+        // Um manifesto só, cobrindo as duas fontes: é assim que o fetch confere
+        // (basename por artefato contra o mesmo manifesto), e a bijeção jamais
+        // aceitaria.
+        validate_package_artifact_correlation(
+            "linux",
+            &no,
+            &fatos(&[FONTE_1, FONTE_2, SIGSUMS, SIGKEY_1]),
+        )
+        .unwrap();
+        // Manifesto destacado é a outra forma suportada, e é única.
+        validate_package_artifact_correlation(
+            "linux",
+            &no,
+            &fatos(&[FONTE_1, SIGSUMS, SIGSUMS_SIG, SIGKEY_1]),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn sigsums_sem_correlacao_e_recusado() {
+        let no = no_de_fonte();
+        let recusa = |pares: &[(&str, &str)], porque: &str| {
+            assert!(
+                validate_package_artifact_correlation("linux", &no, &fatos(pares)).is_err(),
+                "{porque}"
+            );
+        };
+        recusa(
+            &[FONTE_1, SIGSUMS],
+            "manifesto sem chave não tem quem o julgue",
+        );
+        recusa(
+            &[
+                FONTE_1,
+                SIGSUMS,
+                SIGKEY_1,
+                ("signature-key", "recipe:SIGKEY[2]=files/k.asc;FP=BB"),
+            ],
+            "segunda chave não julga manifesto nenhum",
+        );
+        recusa(
+            &[
+                FONTE_1,
+                SIGSUMS,
+                SIGKEY_1,
+                (
+                    "signature",
+                    "recipe:SIG[1]=https://e.invalid/a.asc;EPOCH=10",
+                ),
+            ],
+            "SIGSUMS misturado com assinatura indexada",
+        );
+        recusa(
+            &[FONTE_1, SIGSUMS, SIGKEY_1, MINIKEY, MINISIG_1],
+            "SIGSUMS misturado com minisign",
+        );
+        recusa(
+            &[
+                FONTE_1,
+                SIGSUMS,
+                SIGSUMS_SIG,
+                SIGKEY_1,
+                (
+                    "signature",
+                    "recipe:SIGSUMS_SIG=https://e.invalid/outro.asc;EPOCH=10",
+                ),
+            ],
+            "duas assinaturas destacadas para um manifesto",
+        );
+        // A chave continua obrigatória mesmo quando o manifesto não existe: um
+        // SIGKEY[1] sozinho é a chave órfã que a bijeção sempre recusou, e
+        // afrouxá-la para o SIGSUMS não podia abrir essa porta.
+        recusa(
+            &[FONTE_1, SIGKEY_1],
+            "chave indexada sem nada que ela julgue",
         );
     }
 
