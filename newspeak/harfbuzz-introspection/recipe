@@ -1,5 +1,5 @@
 NAME=harfbuzz-introspection
-VERSION=14.3.0
+VERSION=14.3.1
 KIND=source
 TOOLCHAIN=native
 DEPS="harfbuzz glib-introspection gobject-introspection"
@@ -7,7 +7,7 @@ BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools
 ABOUT="Overlay de canal com o GIR e o typelib do HarfBuzz. Recompila a mesma fonte e configuração da receita-base, mas constrói somente HarfBuzz-0.0 e publica apenas seus dois arquivos de introspecção; bibliotecas, headers e pkg-config continuam pertencendo exclusivamente a harfbuzz."
 LICENSE=MIT
 SRC="https://github.com/harfbuzz/harfbuzz/releases/download/$VERSION/harfbuzz-$VERSION.tar.xz"
-SHA256="16070d77cfc4ba1f1e7327e83bf9b3f55898081cabdb94e56a33e04fc8874eae"
+SHA256="9dae9538aae2ffdf70cec31f2c27bf68e2aaeeae3112688467697d5faf6194f7"
 
 build() {
     tar -xJf "$DL" --strip-components=1

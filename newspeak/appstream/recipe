@@ -1,5 +1,5 @@
 NAME=appstream
-VERSION=1.1.5
+VERSION=1.1.6
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc glib curl libxml2 libfyaml libxmlb"
@@ -7,7 +7,7 @@ BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf gettext gperf glib curl
 ABOUT="Biblioteca AppStream que o GIMP 3 usa para validar e ler metadados de componentes e extensões. A API C fica completa; composição, ferramentas, GIR, systemd, Qt, stemmer, zstd, SVG e documentação são recursos independentes e ficam desligados."
 LICENSE=LGPL-2.1-or-later
 SRC="https://www.freedesktop.org/software/appstream/releases/AppStream-$VERSION.tar.xz"
-SHA256=fc57337e250b0d27e75ac4216cc69a76d03c54011a5da5c7a2c57711a3d0cdf9
+SHA256=e298929f39729e84a70f6be6941f3e7f3fc2ee3c83cb3ea1b1b5b280a8fe3a24
 
 build() {
     # O tarball oficial traz o prefixo literal ./AppStream-<versão>/.

@@ -1,13 +1,13 @@
 NAME=harfbuzz
-VERSION=14.3.0
+VERSION=14.3.1
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc gcc-pass2 glib freetype zlib"
+DEPS="glibc gcc-pass2 glib freetype zlib icu"
 BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf"
-ABOUT="Motor de moldagem de texto: recebe uma sequência de caracteres e uma fonte e devolve quais glifos desenhar, onde e com que ligaduras. É o que transforma 'fi' em um glifo só e o que faz o árabe e o devanágari serem escritos corretamente em vez de letra a letra. O Pango o exige, e por isso o GTK também. Escrito em C++, daí o gcc-pass2 em DEPS — quem é dono da libstdc++ nesta árvore é ele. Sem ICU, sem graphite2 e sem cairo: o primeiro traria uma base Unicode gigante que o glib já cobre para o nosso uso, o segundo é um motor de moldagem alternativo que ninguém aqui pede, e o terceiro só serve ao hb-view, que é utilitário de depuração e está desligado junto. Sem essas três, o harfbuzz usa o glib como provedor de propriedades Unicode."
+ABOUT="Motor de moldagem de texto: recebe uma sequência de caracteres e uma fonte e devolve quais glifos desenhar, onde e com que ligaduras. É o que transforma 'fi' em um glifo só e o que faz o árabe e o devanágari serem escritos corretamente em vez de letra a letra. O Pango o exige, e por isso o GTK também. Escrito em C++, daí o gcc-pass2 em DEPS — quem é dono da libstdc++ nesta árvore é ele. COM ICU, e isto MUDOU: até a 0.12 o ICU estava desligado porque o glib cobria as propriedades Unicode que esta árvore usava, e uma base de 30 MB de tabelas não se justificava. O WebKitGTK obriga — o find_package(HarfBuzz REQUIRED COMPONENTS ICU) do OptionsGTK.cmake procura o módulo harfbuzz-icu, e sem ele o motor do navegador não configura. Como o ICU entrou na árvore por causa do WebKit de qualquer forma, ligá-lo aqui não acrescenta pacote: acrescenta a libharfbuzz-icu e move o FINGERPRINT deste pacote, e por transitividade o de pango, cairo, gtk4 e GIMP. Sem graphite2 e sem cairo: o primeiro é um motor de moldagem alternativo que ninguém aqui pede, e o segundo só serve ao hb-view, que é utilitário de depuração e está desligado junto."
 LICENSE=MIT
 SRC="https://github.com/harfbuzz/harfbuzz/releases/download/$VERSION/harfbuzz-$VERSION.tar.xz"
-SHA256="16070d77cfc4ba1f1e7327e83bf9b3f55898081cabdb94e56a33e04fc8874eae"
+SHA256="9dae9538aae2ffdf70cec31f2c27bf68e2aaeeae3112688467697d5faf6194f7"
 
 build() {
     tar -xJf "$DL" --strip-components=1
@@ -22,7 +22,7 @@ build() {
         -Dcairo=disabled \
         -Dchafa=disabled \
         -Dpng=disabled \
-        -Dicu=disabled \
+        -Dicu=enabled \
         -Dgraphite2=disabled \
         -Dtests=disabled \
         -Ddocs=disabled \

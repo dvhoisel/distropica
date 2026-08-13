@@ -1,5 +1,5 @@
 NAME=ca-certificates
-VERSION=2026-07-16
+VERSION=2026-08-13
 KIND=source
 TOOLCHAIN=none
 DEPS="openssl"
@@ -7,7 +7,7 @@ BUILD_DEPS=busybox
 ABOUT="A loja de certificados raiz, e ela NÃO é um acréscimo: é o conserto de um defeito medido. O /etc/ssl desta árvore não tinha bundle nenhum, e o openssl foi configurado com --openssldir=/etc/ssl esperando encontrar um. Sem loja, toda verificação de TLS do sistema instalado falha — o comando openssl s_client, o curl, o git, e qualquer cliente que se acrescente depois. NÃO o wget do BusyBox, e essa correção importa porque a primeira versão deste texto o citava: o busybox desta árvore é estático, não referencia libcrypto nenhuma e não contém uma única ocorrência de /etc/ssl; o applet ssl_client dele fala TLS com implementação própria e não consulta loja de raízes — conferido com readelf e strings no binário instalado. Por que o defeito não apareceu antes: o minitrue carrega as próprias raízes DENTRO do binário (webpki-roots, no Cargo.lock), então o gerenciador de pacotes funciona e só o resto do sistema é que não tem TLS verificável. Essa assimetria o escondeu. O payload é o bundle que a Mozilla mantém no NSS, publicado pelo projeto curl em formato PEM — a mesma origem que praticamente toda distro usa, pinada por sha256 como qualquer outro artefato desta árvore. É DADO e não programa: não há o que compilar. O openssl em DEPS não é para linkar nada: é porque o /etc/ssl é dele, e sem ele instalado este pacote depositaria arquivo em diretório de ninguém. O ARQUIVO É UM SÓ e mora em /etc/ssl/cert.pem — ver o build() para por que não existe aqui o /etc/ssl/certs/ca-certificates.crt que a maioria das distros usa."
 LICENSE="MPL-2.0"
 SRC="https://curl.se/ca/cacert.pem"
-SHA256="3ff344e30b9b1ed2971044eabb438a08f2e2245ddb5f8ab1a3ad8b63ab4eaf91"
+SHA256="f66dff1bdf8f96060b8177976f8b7d9254bc89bc4db933d769f7384d28480bc9"
 
 build() {
     # UM arquivo, em /etc/ssl/cert.pem, e essa escolha merece a explicação

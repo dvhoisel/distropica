@@ -1,5 +1,5 @@
 NAME=go
-VERSION=1.26.5
+VERSION=1.26.6
 KIND=binary
 # Expressão do AGREGADO, e não do Go sozinho: o install_pkg extrai o tarball
 # INTEIRO em /opt, então tudo o que a Google embarca é payload desta distro.
@@ -20,7 +20,7 @@ KIND=binary
 # outra coisa com GOEXPERIMENT=boringcrypto, que esta distro não usa.
 LICENSE="BSD-3-Clause AND Apache-2.0 AND MIT"
 SRC="https://dl.google.com/go/go$VERSION.linux-amd64.tar.gz"
-SHA256=5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
+SHA256=708effb774be8237570d0add163225abbdfaf4fca28b2611df167beba4feef89
 # A LISTA SAIU DA AUDITORIA, e não de palpite sobre o que um compilador usa.
 #
 #   gcc-pass2  dependência de RUNTIME que a auditoria não enxerga: os binários
