@@ -20,6 +20,24 @@ build() {
     # __pycache__ guarda o caminho absoluto e o mtime do .py dentro do .pyc:
     # deixá-lo entrar tornaria o artefato dependente de onde foi construído.
     find "$STAGE$sitedir/mesonbuild" -type d -name __pycache__ -exec rm -rf {} +
+    # `mesonbuild/scripts/python_info.py` vem com modo 755 e
+    # '#!/usr/bin/env python' — comando que esta árvore não instala; ela tem
+    # python3.14, e a PEP 394 deixa o nome nu a cargo da distro. O arquivo é
+    # MÓDULO: o meson o executa passando o interpretador que ele mesmo
+    # escolheu, nunca pelo shebang. Some-se o bit de execução e não a linha,
+    # para não divergir dos bytes do upstream. Sem isto a auditoria recusa o
+    # payload, e com razão — um executável declara o interpretador que exige.
+    #
+    # Por padrão e não por nome, para que uma versão futura com outro resquício
+    # igual já venha tratada.
+    find "$STAGE$sitedir/mesonbuild" -type f -name '*.py' -perm -u+x \
+        -exec head -1 {} \; -print 2>/dev/null |
+        awk '/^#!.*\/env python$/ { getline caminho; print caminho }' |
+        while IFS= read -r resquicio; do
+            [ -n "$resquicio" ] || continue
+            chmod a-x "$resquicio"
+            echo "  bit de execução removido de ${resquicio#"$STAGE"}"
+        done
     install -Dm755 meson.py "$STAGE/usr/bin/meson"
     install -Dm644 data/shell-completions/bash/meson \
         "$STAGE/usr/share/bash-completion/completions/meson"
