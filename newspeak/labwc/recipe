@@ -1,0 +1,73 @@
+NAME=labwc
+VERSION=0.20.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc wlroots wayland libxkbcommon pixman libinput libdrm libxml2 glib cairo pango libpng librsvg"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf wayland-protocols busybox"
+ABOUT="O GERENTE DE JANELAS. Reimplementa o modelo do Openbox sobre wlroots: temas themerc compatíveis com Openbox 3.6, configuração em rc.xml e menu raiz em menu.xml. O lema do projeto é 'no bling' — sem animação, sem painel, sem dock, só gerência de janelas —, e é essa recusa que o torna adequado a esta árvore. O que ele resolve e o weston não: cada atalho é seu, <keybind key='A-Tab'> individual em qualquer combinação, em vez de um modificador global único; binds de mouse por contexto (titlebar, borda, desktop); regras por janela; tema de verdade, com o corpus inteiro de temas Openbox como ponto de partida; e Reconfigure, que recarrega a configuração viva, enquanto o weston exige reiniciar a sessão. O que ele NÃO tem, e precisa ser dito: painel e relógio. O weston-desktop-shell desenha barra, lançadores e hora; aqui o equivalente é o menu do botão direito, e relógio não existe sem trazer uma barra de terceiro. -Dicon=disabled porque os ícones de janela exigem libsfdo, que esta árvore não tem — sem ela o alt-tab e os menus mostram texto, que funciona. XWayland desligado, coerente com o wlroots: nenhuma janela X roda sobre este compositor. Medido, para não repetir a promessa fácil: a closure AINDA traz libx11, libxcb, libxext e libxrender, porque o cairo desta árvore é construído com os backends X e o labwc depende de cairo e pangocairo — exatamente como o weston já depende. São 76 pacotes contra os 74 do weston, e a diferença não é X11: é o próprio wlroots mais este. A configuração do pacote NÃO vem daqui: o upstream instala apenas gabaritos em /usr/share/doc/labwc, e quem escreve /etc/xdg/labwc é a receita 'desktop', do mesmo jeito que hoje escreve o weston.ini — o compositor entrega o programa, a cola entrega a política. Sem systemd-session (a opção só instala uma unit), sem man-pages (exigiria scdoc) e sem nls, todas EXPLÍCITAS e não em 'auto', para que a mesma receita não gere payload diferente conforme o que estiver instalado na raiz. Licença GPL-2.0, ~45 mil linhas de C dinâmico. A credencial de campo é grande: é o compositor padrão do Raspberry Pi OS desde outubro de 2024, exercitado na classe de hardware mais fraca do desktop Linux — que é exatamente o perfil do renderizador por software desta árvore. O upstream publica só o tarball da tag no GitHub, sem assinatura, então o pino é o SHA256."
+LICENSE=GPL-2.0-only
+SRC="https://github.com/labwc/labwc/archive/refs/tags/$VERSION.tar.gz"
+SHA256="3e0b7cfd8e371ed4826f2d5467749edc7f9d6c06491dd943a55ed1c0b49a369a"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # Nenhuma opção fica em 'auto'. O labwc autodetectaria scdoc, gettext e
+    # libsfdo, e a mesma fonte produziria binários diferentes conforme a raiz
+    # em que fosse construída — foi assim que o pkgconf, entrando na árvore por
+    # causa do netfilter, mudou o que o Python compilava.
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dxwayland=disabled \
+        -Dicon=disabled \
+        -Dsvg=enabled \
+        -Dlabnag=disabled \
+        -Dman-pages=disabled \
+        -Dnls=disabled \
+        -Dsystemd-session=disabled \
+        -Dtest=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    [ -x "$STAGE/usr/bin/labwc" ] || {
+        echo "labwc: o binário não foi produzido" >&2
+        exit 1
+    }
+    # O meson do labwc tem FALLBACK para subprojeto quando não acha o
+    # wlroots-0.20 instalado. Se isso acontecer o build "passa" e entrega um
+    # labwc com uma cópia estática do wlroots embutida — invisível para o
+    # audit, fora do controle de versão da árvore, e provavelmente com o
+    # renderizador GL que a receita do wlroots recusa. O binário TEM de ligar a
+    # biblioteca compartilhada.
+    readelf -d "$STAGE/usr/bin/labwc" | grep -q 'libwlroots-0.20.so' || {
+        echo "labwc: não ligou libwlroots-0.20.so — o meson caiu no subprojeto" >&2
+        readelf -d "$STAGE/usr/bin/labwc" | grep NEEDED >&2
+        exit 1
+    }
+    # Mesma promessa do wlroots, conferida do lado de cá: se o GL voltar por
+    # qualquer caminho, é aqui que aparece.
+    for lib in libEGL libGLESv2 libgbm libX11 libxcb; do
+        if readelf -d "$STAGE/usr/bin/labwc" | grep -q "$lib"; then
+            echo "labwc: ligou $lib — GL ou X11 entraram na closure" >&2
+            exit 1
+        fi
+    done
+    # O upstream NÃO instala configuração em /etc/xdg/labwc: os gabaritos vão
+    # para $datadir/doc/labwc (conferido no docs/meson.build da fonte pinada,
+    # depois de eu ter escrito esta guarda supondo o contrário). Isso é bom
+    # para esta árvore, e não um problema: quem escreve /etc/xdg é a receita
+    # `desktop`, exatamente como já faz com o weston.ini — o compositor entrega
+    # o programa, a cola entrega a política. Conferir os gabaritos é o que
+    # importa aqui, porque é deles que a configuração do pacote vai partir.
+    for gabarito in rc.xml menu.xml themerc autostart environment; do
+        [ -e "$STAGE/usr/share/doc/labwc/$gabarito" ] || {
+            echo "labwc: gabarito $gabarito não foi instalado" >&2
+            ls "$STAGE/usr/share/doc/labwc" 2>/dev/null >&2
+            exit 1
+        }
+    done
+
+    find "$STAGE" -type d -empty -delete
+}

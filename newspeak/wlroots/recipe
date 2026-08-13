@@ -1,0 +1,76 @@
+NAME=wlroots
+VERSION=0.20.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc wayland libxkbcommon pixman libdrm libinput seatd eudev libdisplay-info hwdata"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf wayland-protocols busybox"
+ABOUT="O MOTOR do compositor. Não é um compositor: é a biblioteca que implementa backend de KMS/DRM, entrada por libinput, sessão por libseat e a árvore de cenas, e sobre a qual o labwc é escrito. Existe aqui por causa dele, e a faixa é exata — o labwc 0.20 exige >=0.20.1 <0.21, e os dois sobem juntos. SEM GL, e isto foi medido no meson da fonte pinada, não lido em documentação: 'renderers' é um array de escolhas gles2/vulkan que pode ficar VAZIO, o subdir('pixman') está fora de qualquer condição, e egl/gbm/glesv2 só viram dependência dentro do ramo 'gles2 in renderers'. Com -Drenderers=[] o renderizador de software é o único construído, e é o mesmo modelo que esta árvore já roda no weston: compor em buffer dumb do KMS, sem EGL e sem GBM. Pelo mesmo motivo -Dallocators=[]: o drm_dumb.c é incondicional, o gbm.c só entra se 'gbm' estiver no array, e com Mesa softpipe o GBM não acrescenta nada além da chance de não achar driver. XWayland desligado: o wlroots não fala X11 e nenhuma janela X roda sobre ele. Isso NÃO significa closure sem X11 — o libx11/libxcb/libxrender entram assim mesmo, pelo cairo, que esta árvore constrói com os backends X. É a mesma situação do weston, que também depende de cairo e pango; tirar o X11 de vez é decisão do cairo, não desta receita. A sessão é obrigatória e não opcional: o meson recusa 'session=disabled' junto com os backends drm/libinput, e é ela que exige libseat (seatd) e libudev (eudev); o backend DRM ainda exige hwdata e libdisplay-info para ler o EDID. Licença MIT, ~103 mil linhas de C dinâmico, que o audit enxerga inteiro. A fonte não é assinada pelo upstream — o GitLab do freedesktop publica só o tarball —, então o pino é o SHA256, igual ao libinput e ao libdisplay-info, que vêm do mesmo lugar."
+LICENSE=MIT
+SRC="https://gitlab.freedesktop.org/wlroots/wlroots/-/releases/$VERSION/downloads/wlroots-$VERSION.tar.gz"
+SHA256="a8541187baecaa2620938afacde88266cb7efa5928cb09d579d8efb07bc4901b"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    # Padrão recorrente desta toolchain: o ld nativo não resolve dependência
+    # transitiva sozinho, e sem isto os testes de link do meson respondem "não"
+    # e a funcionalidade some em silêncio.
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # Arrays VAZIOS são a decisão inteira desta receita, e não um descuido: sem
+    # 'gles2' em renderers o meson nem procura EGL/GBM/GLESv2, e sem 'gbm' em
+    # allocators sobra o alocador dumb do KMS, que é incondicional. Deixar
+    # 'auto' faria a mesma receita produzir payload diferente conforme o que
+    # estivesse instalado na raiz — a não-hermeticidade da SPEC-0013 §5.
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Drenderers=[] \
+        -Dallocators=[] \
+        -Dbackends=drm,libinput \
+        -Dsession=enabled \
+        -Dxwayland=disabled \
+        -Dxcb-errors=disabled \
+        -Dcolor-management=disabled \
+        -Dlibliftoff=disabled \
+        -Dexamples=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    # O que faz diferença na tela, não a intenção da opção — lição da Mesa.
+    [ -e "$STAGE/usr/lib/libwlroots-0.20.so" ] || {
+        echo "wlroots: a biblioteca não foi produzida" >&2
+        exit 1
+    }
+    # O labwc não consulta a biblioteca: consulta o .pc, e dele lê variáveis.
+    # Se o arquivo não sair no lugar, o meson do labwc cai no SUBPROJETO — que
+    # esta árvore não tem e não quer, porque seria uma segunda cópia do wlroots
+    # embutida estaticamente e invisível para o audit.
+    PC=$STAGE/usr/lib/pkgconfig/wlroots-0.20.pc
+    [ -e "$PC" ] || {
+        echo "wlroots: wlroots-0.20.pc não foi produzido" >&2
+        exit 1
+    }
+    # As três variáveis que o meson do labwc lê por get_variable(). O dicionário
+    # de features do wlroots nasce com todas em false, então elas EXISTEM mesmo
+    # desligadas — o que importa conferir é que as duas que sustentam a tela
+    # estão ligadas de fato.
+    for v in have_drm_backend=true have_libinput_backend=true have_xwayland=false; do
+        grep -q "^$v\$" "$PC" || {
+            echo "wlroots: $v ausente ou divergente em wlroots-0.20.pc" >&2
+            grep -E '^have_' "$PC" >&2
+            exit 1
+        }
+    done
+    # A guarda que vale por toda a decisão acima: se um dia 'auto' voltar por
+    # descuido, a biblioteca passa a ligar EGL/GLES/GBM e a promessa de
+    # renderização por software cai sem ninguém perceber. Conferido no ELF, que
+    # é onde a verdade está, e não na linha de comando do meson.
+    for lib in libEGL libGLESv2 libgbm; do
+        if readelf -d "$STAGE/usr/lib/libwlroots-0.20.so" | grep -q "$lib"; then
+            echo "wlroots: a biblioteca ligou $lib — o caminho GL voltou" >&2
+            exit 1
+        fi
+    done
+
+    find "$STAGE" -type d -empty -delete
+}
