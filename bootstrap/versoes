@@ -468,6 +468,29 @@ de_sourcehut() {  # url
         grep -oE 'refs/[0-9]+(\.[0-9]+)+' | sed 's|refs/||' | maior
 }
 
+# Codeberg roda Gitea, e a API de releases dele tem a mesma forma da do GitHub
+# sem ser ela: /api/v1/repos/<dono>/<repo>/releases devolve JSON com tag_name.
+# Entrou junto com o foot, o fcft e o tllist, que sao publicados la — sem este
+# handler os tres caem no `de_listagem`, que le a pagina de download e nao acha
+# versao nenhuma, e o gate os reporta como "consulta falhou" para sempre.
+de_codeberg() {  # url
+    caminho=$(printf '%s' "$1" | sed -n 's|^https\?://codeberg\.org/\([^/]*/[^/]*\)/.*|\1|p')
+    [ -n "$caminho" ] || return 1
+    busca "https://codeberg.org/api/v1/repos/$caminho/releases?limit=20" |
+        tr ',' '\n' | grep -oE '"tag_name":"v?[0-9]+(\.[0-9]+)*"' |
+        sed 's/.*":"//; s/"//; s/^v//' | maior
+}
+
+# O SQLite nao publica indice de diretorio nem API: a pagina de download traz o
+# nome do tarball com a versao CODIFICADA em sete digitos — 3530400 e 3.53.4.0.
+# Sem traduzir isso, comparar com o "3.53.4" da receita nao diz nada.
+de_sqlite() {  # url
+    busca "https://www.sqlite.org/download.html" |
+        grep -oE 'sqlite-autoconf-[0-9]{7}\.tar\.gz' |
+        sed -E 's/sqlite-autoconf-([0-9])([0-9]{2})([0-9]{2})([0-9]{2})\.tar\.gz/\1.\2.\3.\4/' |
+        sed -E 's/\.0([0-9])/.\1/g; s/\.00?$//' | maior
+}
+
 de_cgit() {  # url
     raiz=$(printf '%s' "$1" | sed -n 's|^\(https\?://[^/]*/[^/]*\)/.*|\1|p')
     [ -n "$raiz" ] || return 1
@@ -526,6 +549,8 @@ upstream_de() {  # url, versao pinada
         *ziglang.org/*)              de_zig ;;
         *static.rust-lang.org/*)     de_rust ;;
         *sourceforge.net/*)          de_sourceforge "$1" ;;
+        *codeberg.org/*)             de_codeberg "$1" ;;
+        *sqlite.org/*)               de_sqlite ;;
         *git.sr.ht/*)                de_sourcehut "$1" ;;
         *git.zx2c4.com/*)            de_cgit "$1" ;;
         *curl.se/ca/*)               de_curl_ca ;;

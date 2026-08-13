@@ -1,0 +1,18 @@
+# Versão pinada abaixo do "mais novo" que o upstream publica, e NÃO é atraso.
+#
+# O WebKitGTK segue a mesma convenção de minor par/ímpar: a 2.53.90 que o
+# `bootstrap/versoes` enxerga é a série de DESENVOLVIMENTO 2.53, que caminha
+# para a 2.54; a estável corrente é a 2.52, e o 2.52.5 pinado aqui é o último
+# dela.
+#
+# Num pacote deste tamanho a distinção pesa mais que no resto da árvore: é o
+# maior build do projeto, e uma série de desenvolvimento significa API em
+# movimento sob o Epiphany, que é o único consumidor. A P7 pede o estável mais
+# recente, e é o que está pinado.
+#
+# Quando a 2.54 sair, ela passa a ser a estável e este pino sobe junto com o
+# Epiphany, que acompanha a mesma cadência.
+#
+# FORMATO: a primeira linha não-comentário é o motivo que o relatório mostra.
+# Verificado em 2026-08-13.
+2.53.x e a serie de DESENVOLVIMENTO; 2.52.5 e o ultimo estavel (minor par)

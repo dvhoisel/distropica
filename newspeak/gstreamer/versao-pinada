@@ -1,0 +1,17 @@
+# Versão pinada abaixo do "mais novo" que o upstream publica, e NÃO é atraso.
+#
+# O GStreamer usa a convenção de minor PAR para série estável e ÍMPAR para
+# desenvolvimento, a mesma do GNOME e do kernel antigo. O 1.29.2 que o
+# `bootstrap/versoes` enxerga é da série de desenvolvimento 1.29; a estável
+# corrente é a 1.28, e o 1.28.6 pinado aqui é o último dela.
+#
+# A P7 diz "sempre o estável mais recente", e é exatamente isso que está pinado.
+# O que o script vê é a listagem crua do diretório de fontes, que não distingue
+# uma série da outra — e por isso este arquivo existe: para que a diferença seja
+# declarada, e não confundida com esquecimento.
+#
+# Quando a 1.30 sair, ela passa a ser a estável e este pino sobe.
+#
+# FORMATO: a primeira linha não-comentário é o motivo que o relatório mostra.
+# Verificado em 2026-08-13.
+1.29.x e a serie de DESENVOLVIMENTO; 1.28.6 e o ultimo estavel (minor par)
