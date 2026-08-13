@@ -2369,9 +2369,13 @@ mod tests {
                 "busybox"
             ]
         );
+        // `gawk` entrou com a leva que declarou o awk que cada `./configure`
+        // exige: o do gcc-pass2 chama awk para gerar o config.status, e
+        // declarar só `busybox` não garante awk — o gawk supersede o busybox e
+        // leva /usr/bin/awk embora.
         assert_eq!(
             gcc.build_deps,
-            ["gcc", "binutils-cross", "libstdcxx", "make"]
+            ["gcc", "binutils-cross", "libstdcxx", "make", "gawk"]
         );
 
         let binutils = load(&ctx, "binutils-glibc").unwrap();

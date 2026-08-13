@@ -2666,7 +2666,26 @@ impl BuildView {
 
 fn executable_mode(ctx: &Ctx, virtual_path: &str) -> Result<Option<u32>> {
     let resolved = resolve_build_virtual(ctx, virtual_path)?;
-    let metadata = fs::symlink_metadata(rooted_path(&ctx.root, &resolved)?)?;
+    let host = rooted_path(&ctx.root, &resolved)?;
+    // Symlink PENDURADO não é executável, e não é erro. O caso real é o gabarito
+    // de /etc: o fontconfig instala 23 links em
+    // /usr/share/factory/etc/fonts/conf.d/ cujo caminho relativo foi calculado
+    // para onde eles VÃO ser copiados — de /etc/fonts/conf.d o `../../../usr/…`
+    // resolve certo, de onde ficam guardados não resolve. Seguir o link para
+    // decidir se há executável a expor está certo; estourar quando ele não
+    // resolve, não.
+    //
+    // O contexto no erro é deliberado: sem ele isto chegava ao usuário como
+    // "No such file or directory (os error 2)", sem caminho nem pacote, e o
+    // build parava sem dizer o que faltava.
+    let metadata = match fs::symlink_metadata(&host) {
+        Ok(metadata) => metadata,
+        Err(erro) if erro.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(erro) => {
+            return Err(anyhow::Error::new(erro)
+                .context(format!("{virtual_path}: modo de {}", host.display())))
+        }
+    };
     if !metadata.file_type().is_file() {
         return Ok(None);
     }
