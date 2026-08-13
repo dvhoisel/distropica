@@ -42,5 +42,22 @@ build() {
         echo "$achado" >&2
         exit 1
     }
+    # `.py` instalado com modo 755 e '#!/usr/bin/env python' declara um
+    # interpretador que esta árvore não tem: ela instala python3.14, e a PEP 394
+    # deixa o nome nu a cargo da distro. A auditoria recusa o payload, e com
+    # razão — um executável declara o que exige. Some-se o BIT DE EXECUÇÃO e não
+    # a linha, para não divergir dos bytes do upstream.
+    #
+    # Sem `awk`, de propósito: a view desta receita pode não ter awk nenhum, já
+    # que o busybox cedeu /usr/bin/awk ao gawk. `case` do shell basta.
+    find "$STAGE" -type f -name '*.py' -perm -u+x -exec sh -c '
+        for arquivo do
+            case $(head -1 "$arquivo") in
+                "#!"*"/env python")
+                    chmod a-x "$arquivo"
+                    echo "  bit de execução removido de $arquivo" ;;
+            esac
+        done
+    ' _ {} +
     find "$STAGE" -type d -empty -delete
 }
