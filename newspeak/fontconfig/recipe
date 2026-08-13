@@ -9,7 +9,13 @@ DEPS="glibc freetype expat libpng zlib"
 # correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
 # está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
 # vir antes dele e dispensa a declaração.
-BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf gperf gawk"
+# python-glibc: o `./configure` do fontconfig aborta com "no suitable Python
+# interpreter found" — ele gera as tabelas de órbita Unicode com Python 3.
+# Quem instala /usr/bin/python3 nesta árvore é o python-glibc; a semente
+# `python` é provisional e cede o caminho a ele. Conferido no configure da
+# fonte pinada, e é a única receita não construída da closure com essa
+# exigência fatal.
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf gperf gawk python-glibc"
 ABOUT="Descoberta e casamento de fontes: é quem responde 'qual arquivo de fonte atende a este pedido'. O FreeType desenha o glifo, mas não sabe onde as fontes estão nem qual substituir quando a pedida falta; a fontconfig resolve isso, e cairo, pango e GTK dependem dela para qualquer texto. Lê configuração em XML, daí o expat. Precisa do gperf: gera fcobjshash.h e o tarball não o traz pronto. Baixado do GitLab do freedesktop e não do site do projeto: o caminho antigo em freedesktop.org/software responde uma página HTML, e pinar o hash dela seria pinar um erro 404 — foi o que quase aconteceu ao escrever esta receita, e só a conferência contra um canal independente pegou."
 LICENSE=MIT
 SRC="https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/$VERSION/fontconfig-$VERSION.tar.xz"
