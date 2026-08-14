@@ -3128,8 +3128,20 @@ pub(crate) fn finalize_applied(
         );
     }
     let lock_sha256 = plan.persist(ctx)?;
+    // O que o v4 afirma é "este record é factual". Um pacote cuja ABI ninguém
+    // observou não sustenta essa afirmação, e promovê-lo assim mesmo faria uma
+    // retomada tratá-lo como `keep` sem que ele jamais tenha sido auditado —
+    // trocaria a garantia pela conveniência, que é exatamente o que este
+    // fechamento existe para NÃO fazer. Ele fica em v3 e a próxima execução o
+    // reconstrói; os demais seguem promovidos.
+    let pendentes: BTreeSet<&str> = plan
+        .abi_pending
+        .iter()
+        .map(|pending| pending.package.as_str())
+        .collect();
     for (package, node) in &plan.nodes {
         if written_records.contains(package)
+            && !pendentes.contains(package.as_str())
             && node.materiality == Materiality::Runtime
             && matches!(node.action, PlanAction::Keep | PlanAction::Meta)
         {
@@ -7383,6 +7395,38 @@ pub(crate) fn verify_canonical(bytes: &[u8]) -> Result<VerifiedPlan> {
                         && matches!(node.action.as_str(), "channel" | "vendor" | "source")))
         })
     };
+    // O conjunto de pendentes é lido ANTES dos fatos ABI, e não depois, porque
+    // as regras de correlação precisam dele. Um pacote em ABI_PENDING não
+    // emitiu ABI_PROVIDE nenhum — é o que "sem ABI observada" significa —, e
+    // sem essa informação em mãos o laço de requisitos conclui que o provedor
+    // não existe. Foi assim que o fechamento parcial da v42 morreu.
+    let mut pending_packages = BTreeSet::new();
+    for line in &groups[8] {
+        let fields = record_fields(line, "ABI_PENDING", 3)?;
+        let package = decode(fields[1])?;
+        let reason = decode(fields[2])?;
+        let node = nodes
+            .get(&package)
+            .ok_or_else(|| anyhow::anyhow!("ABI_PENDING referencia pacote ausente"))?;
+        if node.role == "identity-only"
+            || node.kind == "meta"
+            || !matches!(
+                reason.as_str(),
+                "payload-nao-observado" | "auditoria-incompleta" | "auditoria-indisponivel"
+            )
+        {
+            bail!("ABI_PENDING referencia pacote ausente");
+        }
+        if !pending_packages.insert(package) {
+            bail!("ABI_PENDING repete pacote");
+        }
+    }
+    // A política estrita continua não admitindo pendência alguma, e é ela que
+    // autoriza publicação. Toda a tolerância abaixo vive em development, onde o
+    // formato JÁ aceita provider "?" — integralmente desconhecido.
+    if abi_policy == "strict" && !groups[8].is_empty() {
+        bail!("PLAN_LOCK estrito contém ABI_PENDING");
+    }
     let mut abi_covered = BTreeSet::new();
     let mut abi_providers: BTreeMap<(String, String, String, String), BTreeSet<String>> =
         BTreeMap::new();
@@ -7457,7 +7501,11 @@ pub(crate) fn verify_canonical(bytes: &[u8]) -> Result<VerifiedPlan> {
             }
         }
         abi_covered.insert(package.clone());
-        if !unknown {
+        // Ser NOMEADO como provedor por outro pacote não é fato ABI próprio, e
+        // por isso não cobre um pendente: a asserção é do consumidor, não do
+        // provedor. Marcá-lo aqui fazia o pendente colidir com a checagem de
+        // coerência mais abaixo — a segunda parede do mesmo defeito.
+        if !unknown && !pending_packages.contains(&provider_package) {
             abi_covered.insert(provider_package.clone());
         }
         abi_requirements.push(ParsedRequire {
@@ -7471,6 +7519,20 @@ pub(crate) fn verify_canonical(bytes: &[u8]) -> Result<VerifiedPlan> {
     }
     for requirement in &abi_requirements {
         if requirement.provider_package == "?" {
+            continue;
+        }
+        // Provedor DECLARADO PENDENTE: o plano diz, nos próprios bytes, que a
+        // ABI dele não foi observada, então cobrar-lhe um ABI_PROVIDE exato é
+        // cobrar prova que ele já assumiu não ter.
+        //
+        // O argumento de que isto não afrouxa nada: logo acima, o formato
+        // aceita provider "?" — desconhecido POR INTEIRO — em development.
+        // "icu, pendente" carrega estritamente MAIS informação que "?".
+        // Recusar o mais informativo enquanto se aceita o menos era a
+        // incoerência, e é o que impedia o fechamento parcial de existir.
+        //
+        // Em strict nada disso é alcançável: groups[8] tem de estar vazio.
+        if pending_packages.contains(&requirement.provider_package) {
             continue;
         }
         if abi_policy == "strict" {
@@ -7576,30 +7638,6 @@ pub(crate) fn verify_canonical(bytes: &[u8]) -> Result<VerifiedPlan> {
         .map(|line| line.as_bytes().to_vec());
     if canonical_hash_material(b"minitrue-plan-abi-v1\0", abi_lines) != abi_audit_sha256 {
         bail!("ABI_AUDIT_SHA256 não corresponde aos records ABI tipados");
-    }
-    let mut pending_packages = BTreeSet::new();
-    for line in &groups[8] {
-        let fields = record_fields(line, "ABI_PENDING", 3)?;
-        let package = decode(fields[1])?;
-        let reason = decode(fields[2])?;
-        let node = nodes
-            .get(&package)
-            .ok_or_else(|| anyhow::anyhow!("ABI_PENDING referencia pacote ausente"))?;
-        if node.role == "identity-only"
-            || node.kind == "meta"
-            || !matches!(
-                reason.as_str(),
-                "payload-nao-observado" | "auditoria-incompleta" | "auditoria-indisponivel"
-            )
-        {
-            bail!("ABI_PENDING referencia pacote ausente");
-        }
-        if !pending_packages.insert(package) {
-            bail!("ABI_PENDING repete pacote");
-        }
-    }
-    if abi_policy == "strict" && !groups[8].is_empty() {
-        bail!("PLAN_LOCK estrito contém ABI_PENDING");
     }
     if pending_packages
         .iter()

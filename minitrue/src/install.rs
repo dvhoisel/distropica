@@ -12825,6 +12825,108 @@ mod tests {
     }
 
     #[test]
+    fn fechamento_parcial_tolera_provedor_sem_abi_observada_e_nao_o_promove() {
+        // A v42 morreu no libepoxy com 74 pacotes construídos, o fechamento
+        // parcial disparou como projetado e FALHOU — "ABI_REQUIRE não
+        // corresponde a exatamente um ABI_PROVIDE factual" —, e os 74 se
+        // perderam do mesmo jeito. O teste acima não pegava isso porque no
+        // cenário dele nenhum pacote fica sem ABI observada.
+        //
+        // O gatilho real foi o `icu`: 47 erros de auditoria, três deles por
+        // instalar SCRIPTS que exigem /bin/sh sem declarar quem o fornece. Um
+        // pacote assim vai para ABI_PENDING e não emite ABI_PROVIDE nenhum —
+        // e quem o nomeia como provedor não acha correspondência.
+        //
+        // Aqui a pendência é fabricada pelo mesmo mecanismo e sem ELF nenhum:
+        // shebang apontando para arquivo de outro pacote.
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-parcial-abi-{}-{n}", std::process::id()));
+        let recipes = root.join("var/lib/minitrue/newspeak");
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: true,
+            tofu: false,
+            jobs: 1,
+        };
+        let escreve = |name: &str, deps: &str, corpo: &str| {
+            let directory = recipes.join(name);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(
+                directory.join("recipe"),
+                format!(
+                    "NAME={name}\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nTOOLCHAIN=none\nDEPS={deps:?}\nbuild() {{ {corpo} }}\n"
+                ),
+            )
+            .unwrap();
+        };
+
+        // `provedor` instala um interpretador que ele próprio invoca por
+        // shebang sem declarar o dono do /bin/sh: a auditoria acusa erro, o
+        // snapshot volta incompleto, e ele cai em ABI_PENDING.
+        escreve(
+            "provedor",
+            "",
+            "mkdir -p \"$STAGE/usr/bin\"; \
+             printf '#!/bin/sh\\nexit 0\\n' > \"$STAGE/usr/bin/interp\"; \
+             chmod 755 \"$STAGE/usr/bin/interp\";",
+        );
+        // `consumidor` aponta o shebang para o arquivo do `provedor`. É isso que
+        // gera o ABI_REQUIRE nomeando um provedor que não tem ABI_PROVIDE.
+        escreve(
+            "consumidor",
+            "provedor",
+            "mkdir -p \"$STAGE/usr/bin\"; \
+             printf '#!/usr/bin/interp\\n' > \"$STAGE/usr/bin/usa\"; \
+             chmod 755 \"$STAGE/usr/bin/usa\";",
+        );
+        escreve("quebrado", "consumidor", "exit 1;");
+
+        fs::create_dir_all(root.join("usr/bin")).unwrap();
+        fs::create_dir_all(root.join("usr/lib")).unwrap();
+        for (alias, target) in recipe::BUILD_SYSROOT_ALIASES {
+            symlink(target, root.join(alias.trim_start_matches('/'))).unwrap();
+        }
+        install_factual_test_runner(&ctx);
+
+        let erro = rectify(&ctx, &["quebrado".to_string()], BinaryPolicy::PreferBinary)
+            .expect_err("o build do 'quebrado' sai com 1 e a operação precisa falhar");
+        assert!(
+            format!("{erro:#}").contains("quebrado"),
+            "o erro devia nomear o pacote que falhou, e veio: {erro:#}"
+        );
+
+        // O CONSUMIDOR fecha. Antes da correção o fechamento inteiro abortava
+        // por causa dele: seu ABI_REQUIRE nomeia um provedor pendente.
+        let meta = read_meta_strict(&ctx.records_dir().join("consumidor"))
+            .unwrap()
+            .expect("o record do consumidor tem de existir");
+        assert_eq!(
+            meta.get("RECORD_FORMAT").map(String::as_str),
+            Some(FINAL_RECORD_FORMAT),
+            "quem depende de um pendente não pode ser punido: o payload dele foi observado"
+        );
+
+        // O PENDENTE não é promovido. É a metade que a correção NÃO afrouxa:
+        // v4 afirma "record factual", e ABI não observada não sustenta isso.
+        let pendente = read_meta_strict(&ctx.records_dir().join("provedor"))
+            .unwrap()
+            .expect("o record do provedor tem de existir");
+        assert_ne!(
+            pendente.get("RECORD_FORMAT").map(String::as_str),
+            Some(FINAL_RECORD_FORMAT),
+            "pacote sem ABI observada não pode virar v4; a retomada tem de reconstruí-lo"
+        );
+
+        assert!(!ctx.records_dir().join("quebrado").exists());
+        assert!(
+            !root.join("var/lib/minitrue/applied-plans/current").exists(),
+            "fechamento parcial não pode publicar autoridade de plano aplicado"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn diretorio_compartilhado_autoriza_so_dep_direta_e_nao_copia_filhos_ao_emitir() {
         let n = CNT.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("mt-shared-dir-{}-{n}", std::process::id()));
