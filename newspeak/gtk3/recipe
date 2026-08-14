@@ -2,8 +2,8 @@ NAME=gtk3
 VERSION=3.24.52
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc glib cairo pango gdk-pixbuf at-spi2-core libepoxy fribidi wayland wayland-protocols libxkbcommon mesa fontconfig freetype harfbuzz libx11 libxext libxi libxrandr libxcursor libxdamage libxfixes libxcomposite libxrender"
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc wayland-protocols gettext xorgproto at-spi2-core"
+DEPS="glibc glib cairo pango gdk-pixbuf at-spi2-core libepoxy fribidi wayland wayland-protocols libxkbcommon mesa fontconfig freetype harfbuzz"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc wayland-protocols gettext at-spi2-core"
 ABOUT="Toolkit gráfico de compatibilidade, presente por UMA razão: o binário do Firefox exige gtk+3.0. Não é o toolkit da distro — esse é o gtk4, e a distinção não é acadêmica. O GTK3 está em manutenção desde 2020 e foi sucedido pelo 4 em 2021; numa distro edge, deixá-lo ocupar o lugar de padrão seria inversão. Ele entrou aqui porque a pilha inteira foi construída mirando o Firefox, e o toolkit veio de carona no requisito — a versão 153, atual, continua sem porte para o 4, e não há binário de navegador nenhum ligado a GTK4 (os baseados em Chromium têm a opção de compilação e nenhum fornecedor a usa). Enquanto isso valer, esta receita fica; quando deixar de valer, ela sai. O que se escreve e se traz de fora nesta árvore é GTK4. DOIS backends, Wayland e X11; broadway, win32 e quartz desligados. O X11 está ligado a contragosto e por uma razão medida: o libxul.so do Firefox referencia vinte e um símbolos gdk_x11_* e é ligado com -z now, de modo que o carregador dinâmico os resolve TODOS antes da primeira linha de código e recusa o binário se faltar um. A versão anterior desta receita desligava o X11 e argumentava, corretamente para a época, que isso dispensava o atk-bridge, o dbus e o at-spi2-core inteiros, porque no meson.build do GTK a dependência do atk-bridge-2.0 mora dentro do bloco guardado por x11_enabled. O argumento continua verdadeiro e o preço agora é devido: ligar o X11 arrastou at-spi2-core, libxml2, onze bibliotecas cliente do X, o backend xlib do cairo e o GLX no libepoxy. Em execução nada disso é exercido — com WAYLAND_DISPLAY no ambiente e DISPLAY ausente, o GDK escolhe Wayland e o caminho X11 fica morto —, mas o carregador não sabe disso e é ele quem manda. Registrado assim, com o custo por extenso, porque a alternativa seria uma biblioteca de tocos falsos que quebraria no dia em que alguém a chamasse. Sem introspection, que serviria a ligações para outras linguagens e exigiria o gobject-introspection; sem colord, que é gestão de perfil de cor; sem tracker3, que é indexação de arquivos para o diálogo de busca; sem cloudproviders, que integra armazenamento remoto por dbus. O único backend de impressão é o de arquivo: os outros exigiriam CUPS. Falta ainda o compositor — o GTK fala o protocolo Wayland, mas sem alguém do outro lado da linha ele não abre janela nenhuma."
 LICENSE=LGPL-2.0-or-later
 SRC="https://download.gnome.org/sources/gtk/3.24/gtk-$VERSION.tar.xz"
@@ -17,7 +17,7 @@ build() {
         --libdir=lib \
         --buildtype=release \
         -Dwayland_backend=true \
-        -Dx11_backend=true \
+        -Dx11_backend=false \
         -Dbroadway_backend=false \
         -Dwin32_backend=false \
         -Dquartz_backend=false \
@@ -48,25 +48,14 @@ build() {
         echo "gtk3: backend Wayland não foi produzido" >&2
         exit 1
     }
-    [ -e "$STAGE/usr/lib/pkgconfig/gtk+-x11-3.0.pc" ] || {
-        echo "gtk3: backend X11 não foi produzido" >&2
+    # Pela AUSÊNCIA. O backend X11 existia por um motivo único e documentado: o
+    # libxul.so do Firefox referenciava vinte e um símbolos gdk_x11_* e era
+    # ligado com -z now, então o carregador os exigia todos antes da primeira
+    # linha. O Firefox saiu, e com ele o único consumidor de X desta árvore.
+    ! [ -e "$STAGE/usr/lib/pkgconfig/gtk+-x11-3.0.pc" ] || {
+        echo "gtk3: backend X11 foi produzido e não deveria" >&2
         exit 1
     }
-    # A GUARDA QUE JUSTIFICA O BACKEND X11 EXISTIR. O motivo de ele estar
-    # ligado não é usá-lo — é que o libxul.so do Firefox referencia vinte e um
-    # símbolos gdk_x11_* e é ligado com -z now, então o carregador resolve
-    # TODOS antes de rodar a primeira linha e recusa o binário se faltar um.
-    # Conferir só o .pc não pega o caso de o backend compilar e os símbolos
-    # ficarem locais; é a tabela de símbolos dinâmicos que decide.
-    for sym in gdk_x11_display_get_xdisplay gdk_x11_window_get_xid \
-               gdk_x11_get_default_xdisplay gdk_x11_atom_to_xatom \
-               gdk_x11_screen_get_screen_number; do
-        readelf -sW --dyn-syms "$STAGE/usr/lib/libgdk-3.so.0" 2>/dev/null \
-            | grep -q " $sym\$" || {
-            echo "gtk3: libgdk-3 não exporta $sym; o Firefox não carregaria" >&2
-            exit 1
-        }
-    done
     # E o Wayland tem que continuar lá: é o backend que de fato roda.
     readelf -sW --dyn-syms "$STAGE/usr/lib/libgdk-3.so.0" 2>/dev/null \
         | grep -q " gdk_wayland_display_get_wl_display\$" || {

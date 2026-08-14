@@ -2,7 +2,7 @@ NAME=gimp
 VERSION=3.2.4
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc gcc-pass2 busybox gtk3 gtk3-introspection at-spi2-core at-spi2-core-introspection babl cairo fontconfig freetype gdk-pixbuf gdk-pixbuf-introspection gegl exiv2 gexiv2 glib gobject-introspection glib-introspection harfbuzz harfbuzz-introspection json-glib lcms2 libmypaint mypaint-brushes pango pango-introspection librsvg glib-networking appstream libarchive libx11 libxmu libxext libxfixes libtiff libjpeg-turbo zlib bzip2 xz libpng poppler poppler-data libgudev libxcursor python-glibc pygobject pycairo shared-mime-info hicolor-icon-theme"
+DEPS="glibc gcc-pass2 busybox gtk3 gtk3-introspection at-spi2-core at-spi2-core-introspection babl cairo fontconfig freetype gdk-pixbuf gdk-pixbuf-introspection gegl exiv2 gexiv2 glib gobject-introspection glib-introspection harfbuzz harfbuzz-introspection json-glib lcms2 libmypaint mypaint-brushes pango pango-introspection librsvg glib-networking appstream libarchive libtiff libjpeg-turbo zlib bzip2 xz libpng poppler poppler-data libgudev python-glibc pygobject pycairo shared-mime-info hicolor-icon-theme"
 # xorgproto: quem roda pkg-config em cairo (ou em x11/xext/xrender) precisa dos
 # .pc dos PROTOCOLOS, e eles são do xorgproto. A cadeia é indireta e por isso
 # passava despercebida: cairo.pc traz `Requires.private: ... x11, xext, xrender`,
@@ -10,7 +10,7 @@ DEPS="glibc gcc-pass2 busybox gtk3 gtk3-introspection at-spi2-core at-spi2-core-
 # renderproto`. Sem o xorgproto na view, o pkg-config falha ao gerar os cflags do
 # cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
 # subprojeto. Conferido nos .pc instalados, não suposto.
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc perl gettext libxslt gobject-introspection glib-introspection harfbuzz-introspection pango-introspection gdk-pixbuf-introspection at-spi2-core-introspection gtk3-introspection xorgproto"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc perl gettext libxslt gobject-introspection glib-introspection harfbuzz-introspection pango-introspection gdk-pixbuf-introspection at-spi2-core-introspection gtk3-introspection"
 ABOUT="GIMP 3.2, editor de imagens entregue como Mundo B pelo canal e deliberadamente fora da mídia. A closure mantém gestão de cor e metadados, SVG com loader, HTTPS, pincéis MyPaint, PDF/CJK, impressão em arquivo, Python, Script-Fu, entrada Linux/tablet, Xcursor, JPEG, PNG, TIFF e OpenRaster; formatos que exigiriam pilhas próprias (HEIF/JXL/OpenEXR/JPEG2000/WebP/MNG/FITS) ficam explicitamente fora desta primeira receita auditável. Importação e exportação OpenEXR estão indisponíveis; a entrada PDB de exportação registrada pelo GIMP não tem a operação GEGL correspondente e não produz arquivo."
 LICENSE="GPL-3.0-or-later AND LGPL-3.0-or-later AND CC-BY-SA-3.0 AND CC-BY-SA-4.0 AND CC0-1.0 AND LicenseRef-GIMP-legacy-data"
 SRC="https://download.gimp.org/gimp/v3.2/gimp-$VERSION.tar.xz"
@@ -41,7 +41,7 @@ build() {
         -Dghostscript=disabled -Dgudev=enabled -Dheif=disabled \
         -Dilbm=disabled -Djpeg2000=disabled -Djpeg-xl=disabled \
         -Dmng=disabled -Dopenexr=disabled -Dopenmp=enabled \
-        -Dprint=true -Dwebp=disabled -Dwmf=disabled -Dxcursor=enabled \
+        -Dprint=true -Dwebp=disabled -Dwmf=disabled -Dxcursor=disabled \
         -Dxpm=disabled -Dheadless-tests=disabled -Dgi-docgen=disabled \
         -Dlinux-input=enabled -Dvector-icons=true -Dvala=disabled \
         -Djavascript=disabled -Dlua=false -Dlibunwind=false \

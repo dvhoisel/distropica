@@ -10,7 +10,7 @@ DEPS="glibc python-glibc glib glib-introspection libffi cairo pycairo"
 # renderproto`. Sem o xorgproto na view, o pkg-config falha ao gerar os cflags do
 # cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
 # subprojeto. Conferido nos .pc instalados, não suposto.
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc glib glib-introspection libffi cairo pycairo gobject-introspection xorgproto"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc glib glib-introspection libffi cairo pycairo gobject-introspection"
 ABOUT="Binding Python de GLib, Gio e GObject Introspection. É a ponte usada pelos plug-ins Python do GIMP para carregar Gimp, Gegl e GExiv2; a integração com pycairo fica explicitamente ligada."
 LICENSE=LGPL-2.1-or-later
 SRC="https://files.pythonhosted.org/packages/source/p/pygobject/pygobject-$VERSION.tar.gz"

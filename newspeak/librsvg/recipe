@@ -10,7 +10,7 @@ DEPS="glibc gcc-pass2 cairo freetype gdk-pixbuf glib harfbuzz libxml2 pango"
 # renderproto`. Sem o xorgproto na view, o pkg-config falha ao gerar os cflags do
 # cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
 # subprojeto. Conferido nos .pc instalados, não suposto.
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc rust cargo-c cairo freetype gdk-pixbuf glib harfbuzz libxml2 pango xorgproto"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc rust cargo-c cairo freetype gdk-pixbuf glib harfbuzz libxml2 pango"
 ABOUT="Renderizador SVG do GNOME usado pelos ícones vetoriais do GIMP. Compila Rust estritamente offline a partir do Cargo.lock e de 352 crates vendorizadas no snapshot; mantém o loader SVG do GdkPixbuf e gera seu cache determinístico, mas não instala CLI, documentação, GIR, Vala, testes ou AVIF."
 LICENSE="LGPL-2.1-or-later AND MIT AND Apache-2.0 AND BSD-3-Clause AND Unicode-3.0 AND (Apache-2.0 WITH LLVM-exception) AND ISC AND MPL-2.0"
 SRC="https://download.gnome.org/sources/librsvg/2.62/librsvg-$VERSION.tar.xz \

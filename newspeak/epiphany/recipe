@@ -10,7 +10,7 @@ DEPS="glibc glib gtk4 libadwaita webkitgtk libsoup libsecret gcr json-glib libar
 # renderproto`. Sem o xorgproto na view, o pkg-config falha ao gerar os cflags do
 # cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
 # subprojeto. Conferido nos .pc instalados, não suposto.
-BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc gettext xorgproto"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc gettext"
 ABOUT="O NAVEGADOR. GNOME Web, o cliente canonico da API webkitgtk-6.0 e o unico navegador maduro cuja interface e GTK4 nativa — todo o resto ou e GTK3, ou e Qt, ou linka X11 duro. Substitui o Firefox nesta arvore, e a troca e de UM pacote por um: medido, tirar o Firefox da closure da base remove exatamente ele mesmo, porque tudo que ele puxava e compartilhado com a pilha grafica. O que muda de verdade e a natureza do que fica: C e C++ auditaveis por NEEDED, em vez de um binario upstream opaco. Traz sincronizacao com conta Firefox (favoritos, senhas e historico), bloqueio de conteudo embutido pelos content blockers do WebKit, e nada de WebExtensions — nao ha uBlock aqui, o filtro nativo cobre parte. SEM VIDEO, herdado do WebKit construido sem decodificador nenhum: e posicao declarada, nao surpresa. O gstreamer aparece em DEPS mesmo assim porque o meson deste pacote faz dependency('gstreamer-1.0') sem 'required:' — e dependencia dura do proprio navegador, independente do motor. Sem granite (integracao com elementary OS), sem testes e sem man-pages, que exigiriam rst2man."
 LICENSE=GPL-3.0-or-later
 SRC="https://download.gnome.org/sources/epiphany/49/epiphany-$VERSION.tar.xz"

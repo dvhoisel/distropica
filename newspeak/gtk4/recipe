@@ -10,7 +10,7 @@ DEPS="glibc glib cairo pango gdk-pixbuf graphene libepoxy fribidi wayland waylan
 # renderproto`. Sem o xorgproto na view, o pkg-config falha ao gerar os cflags do
 # cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
 # subprojeto. Conferido nos .pc instalados, não suposto.
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc wayland-protocols gettext xorgproto"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc wayland-protocols gettext"
 ABOUT="O TOOLKIT DA DISTRO. Esta linha importa, porque a árvore teve o GTK3 primeiro e isso confundiu as coisas: o GTK3 está aqui como dependência de runtime do binário do Firefox, que ainda exige gtk+3.0 na versão 153 e não tem porte para o 4 — não como escolha de toolkit. Numa distro edge, deixar o legado ocupar o lugar de padrão é inversão, e esta receita a corrige. O que se escreve daqui para frente, e o que se traz de fora, é GTK4; o GTK3 fica sendo a bagagem de um pacote específico. Custou UM pacote novo, o graphene: todo o resto que o GTK4 exige já existia. Só o backend Wayland, como no GTK3. Sem Vulkan, porque o renderizador GL sobre a Mesa basta e o loader traria mais uma pilha; sem GStreamer, que é reprodução de mídia e arrastaria a cadeia inteira de codecs; sem CUPS e sem cpdb, que são impressão em rede; sem introspection, colord, tracker, sysprof, cloudproviders e accesskit. Diferente do GTK3, não precisa de ATK: a acessibilidade do GTK4 é interna, então nem a dependência nem a discussão da ponte se repetem aqui."
 LICENSE=LGPL-2.1-or-later
 SRC="https://download.gnome.org/sources/gtk/4.22/gtk-$VERSION.tar.xz"

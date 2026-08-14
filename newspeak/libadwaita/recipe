@@ -10,7 +10,7 @@ DEPS="glibc glib gtk4 pango cairo fontconfig"
 # renderproto`. Sem o xorgproto na view, o pkg-config falha ao gerar os cflags do
 # cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
 # subprojeto. Conferido nos .pc instalados, não suposto.
-BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc sassc gettext xorgproto"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc sassc gettext"
 ABOUT="Os widgets e o estilo do GNOME sobre GTK4. O Epiphany exige >= 1.8.alpha e é escrito inteiro contra ela: a barra de cabeçalho, os painéis deslizantes, as listas de preferências e o comportamento adaptativo da janela são widgets desta biblioteca, não do GTK. É o que faz o navegador parecer um aplicativo e não uma tela de teste. O sassc entra como BUILD_DEP porque o estilo é compilado de .scss para CSS durante o build e não vai para o alvo. Sem introspection, sem vapi, sem documentação, sem exemplos e sem testes."
 LICENSE=LGPL-2.1-or-later
 SRC="https://download.gnome.org/sources/libadwaita/1.9/libadwaita-$VERSION.tar.xz"

@@ -2,8 +2,8 @@ NAME=cairo
 VERSION=1.18.4
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc glib pixman freetype fontconfig libpng zlib busybox libx11 libxext libxrender"
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf libx11 libxext libxrender xorgproto"
+DEPS="glibc glib pixman freetype fontconfig libpng zlib busybox"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf"
 ABOUT="Biblioteca de desenho vetorial 2D — linhas, curvas, preenchimento, texto antialiasado. É a superfície sobre a qual o GTK3 pinta tudo: nesta versão o GTK ainda não tem renderizador próprio, então cada widget na tela passa por aqui. O rasterizador de verdade é o pixman; o cairo é a API acima dele. COM o backend xlib, revertendo a decisão original desta receita — o backend de imagem continua sendo o que o GTK usa no Wayland, e continua sendo por onde tudo passa na prática, mas o meson do GTK3 exige cairo-xlib como dependência DURA quando o backend X11 está ligado, e ligá-lo virou obrigatório para o libxul.so do Firefox carregar. O xcb fica desligado: só o cairo-xlib é exigido, e o xlib-xcb seria a ponte entre os dois. Sem o backend tee, sem spectre e sem symbol-lookup, todos ferramentas de depuração. Com glib, porque o GTK exige cairo-gobject e não só cairo. É o .tar.bz2 do gitlab.freedesktop.org, e não o .tar.xz do cairographics.org, porque é o bz2 que Alpine e Gentoo pinam com o mesmo hash — a conferência com duas fontes exige que as duas apontem para o MESMO arquivo, e não apenas para a mesma versão."
 LICENSE="LGPL-2.1-only OR MPL-1.1"
 SRC="https://gitlab.freedesktop.org/cairo/cairo/-/archive/$VERSION/cairo-$VERSION.tar.bz2"
@@ -21,7 +21,7 @@ build() {
         -Dpng=enabled \
         -Dzlib=enabled \
         -Dglib=enabled \
-        -Dxlib=enabled \
+        -Dxlib=disabled \
         -Dxcb=disabled \
         -Dxlib-xcb=disabled \
         -Dquartz=disabled \
@@ -42,12 +42,13 @@ build() {
         echo "cairo: cairo-gobject.pc não foi produzido" >&2
         exit 1
     }
-    # O cairo-xlib.pc é o que o meson do GTK3 procura pelo nome exato quando o
-    # backend X11 está ligado. O meson do cairo aceita -Dxlib=enabled e ainda
-    # assim não produz o .pc se não achar os cabeçalhos do X — falharia lá, e
-    # não aqui, com uma mensagem que não aponta para esta receita.
-    [ -e "$STAGE/usr/lib/pkgconfig/cairo-xlib.pc" ] || {
-        echo "cairo: cairo-xlib.pc não foi produzido (-Dxlib=enabled)" >&2
+    # SEM cairo-xlib, e a guarda é pela AUSÊNCIA. O xlib esteve ligado aqui por
+    # uma corrente inteira que começava no Firefox: o libxul.so exigia os
+    # símbolos gdk_x11_* do GTK3, o backend X11 do GTK3 exige cairo-xlib como
+    # dependência dura, e por isso o cairo passou a compilá-lo. O Firefox saiu
+    # da árvore; a corrente perdeu o ponto de apoio, e o X inteiro saiu com ela.
+    ! [ -e "$STAGE/usr/lib/pkgconfig/cairo-xlib.pc" ] || {
+        echo "cairo: cairo-xlib.pc foi produzido; o backend X deveria estar desligado" >&2
         exit 1
     }
     find "$STAGE" -type d -empty -delete

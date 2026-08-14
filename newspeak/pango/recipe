@@ -10,7 +10,7 @@ DEPS="glibc glib harfbuzz fribidi cairo fontconfig freetype"
 # renderproto`. Sem o xorgproto na view, o pkg-config falha ao gerar os cflags do
 # cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
 # subprojeto. Conferido nos .pc instalados, não suposto.
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc xorgproto"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc"
 ABOUT="Camada de layout de texto: recebe um parágrafo, escolhe as fontes, chama o harfbuzz para moldar cada trecho, resolve a ordem bidirecional com o fribidi, quebra as linhas e manda o cairo desenhar. É o que está entre 'uma string' e 'texto na tela', e o GTK3 não desenha uma letra sem ele. Amarra quase toda a camada de tipografia desta árvore de uma vez — fontconfig para achar as fontes, freetype para lê-las, harfbuzz para moldar, fribidi para ordenar, cairo para pintar. Sem xft, que é o caminho do X11; sem libthai, que é quebra de linha específica do tailandês e uma dependência a mais por um idioma que ninguém aqui pediu; sem sysprof, que é instrumentação de perfil."
 LICENSE=LGPL-2.0-or-later
 SRC="https://download.gnome.org/sources/pango/1.57/pango-$VERSION.tar.xz"

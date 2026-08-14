@@ -3,7 +3,7 @@ VERSION=3.24.52
 KIND=source
 TOOLCHAIN=native
 DEPS="gtk3 glib-introspection gobject-introspection harfbuzz-introspection pango-introspection gdk-pixbuf-introspection at-spi2-core-introspection"
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools gettext xorgproto wayland-protocols glib glib-introspection gobject-introspection harfbuzz harfbuzz-introspection pango pango-introspection gdk-pixbuf gdk-pixbuf-introspection at-spi2-core at-spi2-core-introspection cairo libepoxy fribidi libxkbcommon mesa fontconfig freetype libx11 libxext libxi libxrandr libxcursor libxdamage libxfixes libxcomposite libxrender"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools gettext wayland-protocols glib glib-introspection gobject-introspection harfbuzz harfbuzz-introspection pango pango-introspection gdk-pixbuf gdk-pixbuf-introspection at-spi2-core at-spi2-core-introspection cairo libepoxy fribidi libxkbcommon mesa fontconfig freetype"
 ABOUT="Overlay de canal com Gdk-3.0, GdkX11-3.0 e Gtk-3.0. Encadeia explicitamente todos os overlays que seus includes exigem — GLib, HarfBuzz/Pango, GdkPixbuf e Atk — e mantém os mesmos backends Wayland/X11 da receita-base; o stage fechado contém apenas seis arquivos GIR/typelib."
 LICENSE=LGPL-2.0-or-later
 SRC="https://download.gnome.org/sources/gtk/3.24/gtk-$VERSION.tar.xz"
@@ -14,7 +14,7 @@ build() {
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
     export SETUPTOOLS_USE_DISTUTILS=local
     meson setup build --prefix=/usr --libdir=lib --buildtype=release \
-        -Dwayland_backend=true -Dx11_backend=true \
+        -Dwayland_backend=true -Dx11_backend=false \
         -Dbroadway_backend=false -Dwin32_backend=false \
         -Dquartz_backend=false -Dxinerama=no -Dcolord=no \
         -Dcloudproviders=false -Dtracker3=false -Dprofiler=false \
