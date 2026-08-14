@@ -645,6 +645,7 @@ mod tests {
             crate::install::BinaryPolicy::PreferBinary,
             crate::plan::AbiPolicy::Strict,
             &written_records,
+            crate::plan::AppliedClosure::Complete,
         )
         .unwrap();
         fingerprint
