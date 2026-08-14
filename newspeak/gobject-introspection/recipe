@@ -3,7 +3,14 @@ VERSION=1.86.0
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc busybox glib libffi python-glibc setuptools pkgconf gcc-pass2 binutils-glibc cairo fontconfig freetype libx11 dbus"
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools glib libffi flex bison"
+# xorgproto: quem roda pkg-config em cairo (ou em x11/xext/xrender) precisa dos
+# .pc dos PROTOCOLOS, e eles são do xorgproto. A cadeia é indireta e por isso
+# passava despercebida: cairo.pc traz `Requires.private: ... x11, xext, xrender`,
+# o x11.pc traz `Requires: xproto kbproto`, e o xrender.pc traz `xproto
+# renderproto`. Sem o xorgproto na view, o pkg-config falha ao gerar os cflags do
+# cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
+# subprojeto. Conferido nos .pc instalados, não suposto.
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools glib libffi flex bison xorgproto"
 ABOUT="Compilador e scanner de GObject Introspection, acompanhado apenas dos GIR/typelibs estáticos realmente usados nesta closure: cairo, fontconfig, freetype2, xlib e DBus. Cada biblioteca que esses dados descrevem é DEPS direta; os protocolos GL/Vulkan/Win32 e bindings antigos não entram como typelibs quebrados. Desde GI 1.86 os dados de GLib/GObject/Gio são apenas auxiliares não instalados deste build e pertencem ao próprio GLib; a receita separada glib-introspection os gera depois, quebrando o ciclo de bootstrap sem fingir que estes arquivos existem aqui. O scanner resolve DT_NEEDED com objdump, por inspeção, em vez de depender do ldd ausente ou executar o loader sobre binários temporários. Documentação fica fora."
 LICENSE="LGPL-2.0-or-later AND GPL-2.0-or-later AND MIT"
 SRC="https://download.gnome.org/sources/gobject-introspection/1.86/gobject-introspection-$VERSION.tar.xz"

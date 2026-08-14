@@ -3,7 +3,14 @@ VERSION=26.08.0
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc gcc-pass2 freetype fontconfig zlib libpng libjpeg-turbo lcms2 cairo glib poppler-data"
-BUILD_DEPS="gcc-pass2 binutils-glibc cmake ninja pkgconf freetype fontconfig zlib libpng libjpeg-turbo lcms2 cairo glib poppler-data"
+# xorgproto: quem roda pkg-config em cairo (ou em x11/xext/xrender) precisa dos
+# .pc dos PROTOCOLOS, e eles são do xorgproto. A cadeia é indireta e por isso
+# passava despercebida: cairo.pc traz `Requires.private: ... x11, xext, xrender`,
+# o x11.pc traz `Requires: xproto kbproto`, e o xrender.pc traz `xproto
+# renderproto`. Sem o xorgproto na view, o pkg-config falha ao gerar os cflags do
+# cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
+# subprojeto. Conferido nos .pc instalados, não suposto.
+BUILD_DEPS="gcc-pass2 binutils-glibc cmake ninja pkgconf freetype fontconfig zlib libpng libjpeg-turbo lcms2 cairo glib poppler-data xorgproto"
 ABOUT="Renderizador PDF com o wrapper GLib/Cairo exigido pelo importador PDF do GIMP. Mantém JPEG, PNG, ICC e dados CJK; Qt, API C++, utilitários, TIFF, OpenJPEG, Boost, rede e assinaturas são componentes opcionais desligados."
 LICENSE=GPL-2.0-or-later
 SRC="https://poppler.freedesktop.org/poppler-$VERSION.tar.xz"

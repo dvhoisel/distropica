@@ -3,7 +3,14 @@ VERSION=3.56.3
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc python-glibc glib glib-introspection libffi cairo pycairo"
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc glib glib-introspection libffi cairo pycairo gobject-introspection"
+# xorgproto: quem roda pkg-config em cairo (ou em x11/xext/xrender) precisa dos
+# .pc dos PROTOCOLOS, e eles são do xorgproto. A cadeia é indireta e por isso
+# passava despercebida: cairo.pc traz `Requires.private: ... x11, xext, xrender`,
+# o x11.pc traz `Requires: xproto kbproto`, e o xrender.pc traz `xproto
+# renderproto`. Sem o xorgproto na view, o pkg-config falha ao gerar os cflags do
+# cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
+# subprojeto. Conferido nos .pc instalados, não suposto.
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc glib glib-introspection libffi cairo pycairo gobject-introspection xorgproto"
 ABOUT="Binding Python de GLib, Gio e GObject Introspection. É a ponte usada pelos plug-ins Python do GIMP para carregar Gimp, Gegl e GExiv2; a integração com pycairo fica explicitamente ligada."
 LICENSE=LGPL-2.1-or-later
 SRC="https://files.pythonhosted.org/packages/source/p/pygobject/pygobject-$VERSION.tar.gz"

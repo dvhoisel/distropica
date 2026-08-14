@@ -3,7 +3,14 @@ VERSION=0.4.70
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc gcc-pass2 babl glib glib-introspection json-glib libjpeg-turbo libpng gdk-pixbuf gexiv2 cairo pango lcms2 librsvg libtiff poppler"
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc babl glib glib-introspection gobject-introspection json-glib libjpeg-turbo libpng gdk-pixbuf gexiv2 cairo pango lcms2 librsvg libtiff poppler"
+# xorgproto: quem roda pkg-config em cairo (ou em x11/xext/xrender) precisa dos
+# .pc dos PROTOCOLOS, e eles são do xorgproto. A cadeia é indireta e por isso
+# passava despercebida: cairo.pc traz `Requires.private: ... x11, xext, xrender`,
+# o x11.pc traz `Requires: xproto kbproto`, e o xrender.pc traz `xproto
+# renderproto`. Sem o xorgproto na view, o pkg-config falha ao gerar os cflags do
+# cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
+# subprojeto. Conferido nos .pc instalados, não suposto.
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc babl glib glib-introspection gobject-introspection json-glib libjpeg-turbo libpng gdk-pixbuf gexiv2 cairo pango lcms2 librsvg libtiff poppler xorgproto"
 ABOUT="Motor de processamento de imagens do GIMP. Além da base obrigatória (babl, GLib, JSON-GLib, JPEG e PNG), ficam ligados os importadores e operações cujos provedores já pertencem à closure do editor: GdkPixbuf, metadados Exiv2, Little CMS, SVG, TIFF, Cairo/Pango, PDF e OpenMP. O GIR é obrigatório para os plug-ins Python e para o typelib do próprio GIMP; dependências opcionais ausentes continuam explicitamente desligadas para o resultado não variar conforme o builder."
 LICENSE="GPL-3.0-or-later AND LGPL-3.0-or-later AND MIT AND BSD-3-Clause"
 SRC="https://download.gimp.org/gegl/0.4/gegl-$VERSION.tar.xz"

@@ -3,7 +3,14 @@ VERSION=1.57.1
 KIND=source
 TOOLCHAIN=native
 DEPS="pango glib-introspection gobject-introspection harfbuzz-introspection"
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools glib glib-introspection gobject-introspection harfbuzz harfbuzz-introspection fribidi cairo fontconfig freetype"
+# xorgproto: quem roda pkg-config em cairo (ou em x11/xext/xrender) precisa dos
+# .pc dos PROTOCOLOS, e eles são do xorgproto. A cadeia é indireta e por isso
+# passava despercebida: cairo.pc traz `Requires.private: ... x11, xext, xrender`,
+# o x11.pc traz `Requires: xproto kbproto`, e o xrender.pc traz `xproto
+# renderproto`. Sem o xorgproto na view, o pkg-config falha ao gerar os cflags do
+# cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
+# subprojeto. Conferido nos .pc instalados, não suposto.
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools glib glib-introspection gobject-introspection harfbuzz harfbuzz-introspection fribidi cairo fontconfig freetype xorgproto"
 ABOUT="Overlay de canal com os cinco namespaces GIR do Pango habilitados pela configuração-base: Pango, PangoCairo, PangoFc, PangoFT2 e PangoOT. Depende explicitamente dos typelibs GLib/HarfBuzz e dos dados estáticos cairo/fontconfig/freetype; o stage fechado não duplica bibliotecas nem headers de pango."
 LICENSE=LGPL-2.0-or-later
 SRC="https://download.gnome.org/sources/pango/1.57/pango-$VERSION.tar.xz"
