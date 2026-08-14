@@ -24,10 +24,18 @@ build() {
     ninja -C build -j"$JOBS"
     DESTDIR="$STAGE" ninja -C build install
 
-    # O cabeçalho de GLX é o que o GTK3 inclui; sem ele o build de lá falha na
-    # compilação e não na configuração, que é bem mais difícil de ler.
-    [ -e "$STAGE/usr/include/epoxy/glx.h" ] || {
-        echo "libepoxy: epoxy/glx.h não foi gerado (-Dglx=no)" >&2
+    # Esta guarda é pela AUSÊNCIA, e o comentário anterior — "o cabeçalho de
+    # GLX é o que o GTK3 inclui" — era verdade só enquanto o GTK3 tinha backend
+    # X11. Conferido nas fontes pinadas dos três consumidores, e não suposto:
+    # no GTK 3.24.52 o epoxy/glx.h aparece exclusivamente em
+    # gdk/x11/gdkglcontext-x11.{c,h}; no GTK 4.22.4, em gdk/x11/ e mais nada;
+    # no WebKitGTK 2.52.5 não aparece em nenhum dos 25.101 .cpp/.h. Todos são
+    # arquivos que só compilam com o backend X11, que esta árvore não tem.
+    # Se o cabeçalho REAPARECER é porque -Dglx voltou a 'yes' ou 'auto', e com
+    # ele voltariam a ligação a libGL e a dependência de X11 — que é
+    # exatamente o que a remoção do X desta árvore proibiu.
+    ! [ -e "$STAGE/usr/include/epoxy/glx.h" ] || {
+        echo "libepoxy: epoxy/glx.h foi gerado — o caminho GLX voltou" >&2
         exit 1
     }
     [ -e "$STAGE/usr/include/epoxy/egl.h" ] || {
