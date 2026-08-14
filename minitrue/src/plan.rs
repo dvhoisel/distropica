@@ -3039,6 +3039,25 @@ fn resolve_for_with_intermediate(
     Ok(plan)
 }
 
+/// Abrangência do fechamento pós-apply.
+///
+/// `Complete` é o fechamento de sempre: o mundo instalado INTEIRO precisa estar
+/// `keep`, e o `APPLIED_PLAN_RECEIPT` que sai dele é a prova de que um plano foi
+/// aplicado por completo. `Partial` existe para o caminho de FALHA: fecha só o
+/// que a execução conseguiu terminar, tomando esses pacotes como raízes, e NÃO
+/// emite receipt — porque nada ali prova um mundo completo, e emitir um seria
+/// mentir sobre o estado.
+///
+/// Sem isto, uma cadeia interrompida deixava todos os seus registros em v3, e v3
+/// não é elegível para `keep`: uma retomada reconstruiria tudo, inclusive um
+/// superseder como o gawk, que não reconstrói depois de ter tomado o applet do
+/// busybox. O custo disso eram horas por falha.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppliedClosure {
+    Complete,
+    Partial,
+}
+
 /// Fecha novamente o estado *depois* da aplicação. A primeira resolução
 /// development pode declarar payload/ABI pendentes porque ainda vai produzi-los;
 /// esta passagem exige que cada material já seja `keep`, reabre todos os inputs,
@@ -3050,20 +3069,22 @@ pub(crate) fn finalize_applied(
     binary_policy: BinaryPolicy,
     abi_policy: AbiPolicy,
     written_records: &BTreeSet<String>,
+    closure: AppliedClosure,
 ) -> Result<FinalizedMaterials> {
-    let roots: Vec<PlanRoot> = if purpose == PlanPurpose::Rectify {
-        // `applied-plans/current` is the authority for the complete installed
-        // world, not merely for the package names of this invocation.
-        roots_from_system_world(ctx)?
-    } else {
-        roots
-            .iter()
-            .map(|name| PlanRoot {
-                name: name.clone(),
-                role: RootRole::Install,
-            })
-            .collect()
-    };
+    let roots: Vec<PlanRoot> =
+        if purpose == PlanPurpose::Rectify && closure == AppliedClosure::Complete {
+            // `applied-plans/current` is the authority for the complete installed
+            // world, not merely for the package names of this invocation.
+            roots_from_system_world(ctx)?
+        } else {
+            roots
+                .iter()
+                .map(|name| PlanRoot {
+                    name: name.clone(),
+                    role: RootRole::Install,
+                })
+                .collect()
+        };
     let mut plan = resolve_for_with_intermediate(
         ctx,
         &roots,
@@ -3100,7 +3121,11 @@ pub(crate) fn finalize_applied(
             plan.bind_record(ctx, package, &lock_sha256)?;
         }
     }
-    if purpose == PlanPurpose::Rectify {
+    // O receipt afirma que ESTE plano é o mundo instalado. Um fechamento
+    // parcial não pode afirmar isso: ele fecha o que deu certo até a falha, e o
+    // resto da closure não foi construído. Emitir receipt aqui trocaria a
+    // retomada barata por uma autoridade falsa.
+    if purpose == PlanPurpose::Rectify && closure == AppliedClosure::Complete {
         let receipt = persist_applied_receipt(ctx, &plan, &lock_sha256)?;
         eprintln!("  receipt aplicado: {receipt}");
     }

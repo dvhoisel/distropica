@@ -1295,6 +1295,7 @@ pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> 
     plan.persist_channels(ctx)?;
 
     let frozen_build_graph = FrozenBuildGraph::new(&plan);
+    let mut interrompida: Option<anyhow::Error> = None;
     for name in &plan.order {
         let node = plan
             .nodes
@@ -1318,7 +1319,10 @@ pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> 
             code: 2,
             msg: format!("snapshot sem fingerprint para {}", r.name),
         })?;
-        install_one(
+        // A falha de UM pacote não pode mais custar tudo o que já foi
+        // construído. Ela é capturada aqui para que o fechamento parcial rode
+        // antes de o erro subir — e o erro original sobe intacto depois.
+        if let Err(erro) = install_one(
             ctx,
             r,
             explicit.contains(r.name.as_str()),
@@ -1326,10 +1330,55 @@ pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> 
             policy,
             plan.channels.get(&r.name),
             &frozen_build_graph,
-        )?;
-        frozen_build_graph.observe_written_record(ctx, &r.name)?;
+        )
+        .and_then(|()| frozen_build_graph.observe_written_record(ctx, &r.name))
+        {
+            interrompida = Some(erro);
+            break;
+        }
     }
     let written_records = frozen_build_graph.intermediate_records.borrow().clone();
+    if let Some(erro) = interrompida {
+        // FECHAMENTO PARCIAL. Sem ele, tudo o que esta execução construiu fica
+        // em RECORD_FORMAT=3, e v3 não é elegível para `keep`: a próxima
+        // execução reconstruiria os mesmos pacotes do zero — inclusive um
+        // superseder como o gawk, que não reconstrói depois de ter tomado o
+        // /usr/bin/awk do busybox, e por isso a árvore inteira era descartada a
+        // cada falha. Medido: 12 pacotes numa raiz interrompida, e o plano de
+        // retomada propunha reconstruir 10.
+        //
+        // As raízes são os pacotes que TERMINARAM, e a closure deles está
+        // completa por construção, porque dependência instala antes de
+        // dependente. O que falhou não está entre elas.
+        if written_records.is_empty() {
+            return Err(erro);
+        }
+        let raizes: Vec<String> = written_records.iter().cloned().collect();
+        match crate::plan::finalize_applied(
+            ctx,
+            &raizes,
+            crate::plan::PlanPurpose::Rectify,
+            policy,
+            crate::plan::AbiPolicy::Development,
+            &written_records,
+            crate::plan::AppliedClosure::Partial,
+        ) {
+            Ok(parcial) => eprintln!(
+                "  fechamento parcial: {} pacote(s) preservados para a próxima execução ({})",
+                written_records.len(),
+                parcial.lock_sha256
+            ),
+            // O fechamento parcial é conveniência, não correção: se ele falhar,
+            // o estado continua exatamente o que era e a próxima execução
+            // reconstrói. O que não pode acontecer é a falha dele ESCONDER a
+            // falha real do build, que é o que o usuário precisa ler.
+            Err(secundario) => eprintln!(
+                "  aviso: fechamento parcial não pôde ser feito ({secundario:#}); \
+                 a próxima execução reconstruirá o que esta fez"
+            ),
+        }
+        return Err(erro);
+    }
     let finalized = crate::plan::finalize_applied(
         ctx,
         names,
@@ -1337,6 +1386,7 @@ pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> 
         policy,
         crate::plan::AbiPolicy::Development,
         &written_records,
+        crate::plan::AppliedClosure::Complete,
     )?;
     eprintln!(
         "  plano aplicado fechado: {} ({} material(is))",
@@ -6833,6 +6883,9 @@ pub fn channel_emit(
             crate::plan::AbiPolicy::Development
         },
         &BTreeSet::new(),
+        // Emissão de canal já usava raízes explícitas e nunca emitiu receipt —
+        // o `Complete` aqui é o comportamento de sempre, escrito por extenso.
+        crate::plan::AppliedClosure::Complete,
     )?;
     if finalized.identities.is_empty() {
         bail!("channel emit exige ao menos um payload material fechado");
@@ -10774,6 +10827,7 @@ mod tests {
             BinaryPolicy::PreferBinary,
             crate::plan::AbiPolicy::Strict,
             &BTreeSet::from([recipe::BUILD_RUNNER_PACKAGE.to_string()]),
+            crate::plan::AppliedClosure::Complete,
         )
         .unwrap();
         runner
@@ -11312,6 +11366,7 @@ mod tests {
             BinaryPolicy::PreferBinary,
             crate::plan::AbiPolicy::Strict,
             &BTreeSet::from(["successor".to_string()]),
+            crate::plan::AppliedClosure::Complete,
         )
         .unwrap();
         let exact =
@@ -12682,6 +12737,94 @@ mod tests {
     }
 
     #[test]
+    fn falha_no_meio_fecha_o_que_ja_construiu_e_nao_emite_receipt() {
+        // A cadeia de rebuild da árvore vinha custando ~2h30 por falha porque
+        // tudo o que ela construía ficava em RECORD_FORMAT=3, e v3 não é
+        // elegível para `keep`: a execução seguinte reconstruía os mesmos
+        // pacotes — inclusive um superseder como o gawk, que não reconstrói
+        // depois de ter tomado o /usr/bin/awk do busybox. Medido numa raiz
+        // interrompida de 12 pacotes: o plano de retomada propunha refazer 10.
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-parcial-{}-{n}", std::process::id()));
+        let recipes = root.join("var/lib/minitrue/newspeak");
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: true,
+            tofu: false,
+            jobs: 1,
+        };
+        let escreve = |name: &str, deps: &str, corpo: &str| {
+            let directory = recipes.join(name);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(
+                directory.join("recipe"),
+                format!(
+                    "NAME={name}\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nTOOLCHAIN=none\nDEPS={deps:?}\nbuild() {{ {corpo} }}\n"
+                ),
+            )
+            .unwrap();
+        };
+        // O quebrado DEPENDE do feito, então a ordem é determinística: o
+        // primeiro termina, o segundo morre, e o fechamento parcial tem
+        // exatamente um pacote para preservar.
+        // O `feito` precisa PRODUZIR algo: um STAGE vazio não gera claim e o
+        // rectify recusa antes de o teste chegar ao ponto que interessa.
+        escreve(
+            "feito",
+            "",
+            "mkdir -p \"$STAGE/usr/share/feito\"; echo pronto > \"$STAGE/usr/share/feito/marca\";",
+        );
+        escreve("quebrado", "feito", "exit 1;");
+
+        // Os aliases do sysroot e o runner factual são fronteira da view de
+        // build: sem eles o rectify falha antes de chegar a qualquer receita, e
+        // o teste mediria outra coisa.
+        fs::create_dir_all(root.join("usr/bin")).unwrap();
+        fs::create_dir_all(root.join("usr/lib")).unwrap();
+        for (alias, target) in recipe::BUILD_SYSROOT_ALIASES {
+            symlink(target, root.join(alias.trim_start_matches('/'))).unwrap();
+        }
+        install_factual_test_runner(&ctx);
+
+        let erro = rectify(&ctx, &["quebrado".to_string()], BinaryPolicy::PreferBinary)
+            .expect_err("o build do 'quebrado' sai com 1 e a operação precisa falhar");
+        // O erro que sobe é o do BUILD, e não o de um fechamento que não deu
+        // certo: esconder a causa real seria pior que não fechar nada.
+        assert!(
+            format!("{erro:#}").contains("quebrado"),
+            "o erro devia nomear o pacote que falhou, e veio: {erro:#}"
+        );
+
+        // O que terminou está fechado e é retomável.
+        let meta = read_meta_strict(&ctx.records_dir().join("feito"))
+            .unwrap()
+            .expect("o record do pacote que terminou tem de existir");
+        assert_eq!(
+            meta.get("RECORD_FORMAT").map(String::as_str),
+            Some(FINAL_RECORD_FORMAT),
+            "o pacote que terminou precisa ficar em v4, senão a retomada o reconstrói"
+        );
+        assert!(
+            meta.contains_key("INSTALL_PLAN_LOCK_SHA256"),
+            "v4 sem vínculo de plano não é fechamento"
+        );
+
+        // O que falhou não deixa record.
+        assert!(!ctx.records_dir().join("quebrado").exists());
+
+        // E o RECEIPT não pode existir: ele afirma que este plano É o mundo
+        // instalado, e metade de um plano não é mundo nenhum.
+        let receipts = root.join("var/lib/minitrue/applied-plans");
+        let tem_current = receipts.join("current").exists();
+        assert!(
+            !tem_current,
+            "fechamento parcial não pode publicar autoridade de plano aplicado"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn diretorio_compartilhado_autoriza_so_dep_direta_e_nao_copia_filhos_ao_emitir() {
         let n = CNT.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("mt-shared-dir-{}-{n}", std::process::id()));
@@ -12821,6 +12964,7 @@ mod tests {
                 "direct".to_string(),
                 "empty".to_string(),
             ]),
+            crate::plan::AppliedClosure::Complete,
         )
         .unwrap();
         verify(&ctx).expect("filho de DEPS direta não altera a prova D:");
@@ -13152,6 +13296,7 @@ mod tests {
             BinaryPolicy::SourceOnly,
             crate::plan::AbiPolicy::Strict,
             &BTreeSet::from(["seed".to_string()]),
+            crate::plan::AppliedClosure::Complete,
         )
         .unwrap();
         assert_eq!(
@@ -13265,6 +13410,7 @@ mod tests {
             BinaryPolicy::SourceOnly,
             crate::plan::AbiPolicy::Strict,
             &BTreeSet::from(["pkg".to_string()]),
+            crate::plan::AppliedClosure::Complete,
         )
         .unwrap();
         assert!(record_is_intact(&ctx, &rec, &recipe));
@@ -13368,6 +13514,7 @@ mod tests {
             BinaryPolicy::PreferBinary,
             crate::plan::AbiPolicy::Strict,
             &BTreeSet::from(["tool".to_string()]),
+            crate::plan::AppliedClosure::Complete,
         )
         .unwrap();
         assert!(record_is_intact(&ctx, &rec, &recipe));
@@ -13865,6 +14012,7 @@ mod tests {
             BinaryPolicy::SourceOnly,
             crate::plan::AbiPolicy::Strict,
             &BTreeSet::from(["real".to_string(), "seed".to_string()]),
+            crate::plan::AppliedClosure::Complete,
         )
         .unwrap();
         assert!(
@@ -14151,6 +14299,7 @@ mod tests {
             BinaryPolicy::SourceOnly,
             crate::plan::AbiPolicy::Strict,
             &BTreeSet::from(["real".to_string(), "seed".to_string()]),
+            crate::plan::AppliedClosure::Complete,
         )
         .unwrap();
         verify(&ctx).unwrap();
