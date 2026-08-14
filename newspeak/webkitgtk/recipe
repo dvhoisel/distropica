@@ -2,7 +2,12 @@ NAME=webkitgtk
 VERSION=2.52.5
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc libstdcxx glib gtk4 cairo pango harfbuzz icu libsoup libxml2 libxslt sqlite3 libjpeg-turbo libpng libwebp lcms2 libgcrypt libtasn1 libepoxy zlib at-spi2-core fontconfig freetype wayland libseccomp bubblewrap xdg-dbus-proxy libsecret libdrm"
+# gcc-pass2 e não libstdcxx: nesta árvore libstdc++.so.6 e libgcc_s.so.1
+# pertencem ao gcc-pass2, que sobrescreve os do libstdcxx de bootstrap. O icu
+# foi construído declarando libstdcxx e a auditoria acusou 44 erros por isso,
+# derrubando o fechamento da v42; estas três receitas trazem o mesmo defeito e
+# ainda não chegaram a construir.
+DEPS="glibc gcc-pass2 glib gtk4 cairo pango harfbuzz icu libsoup libxml2 libxslt sqlite3 libjpeg-turbo libpng libwebp lcms2 libgcrypt libtasn1 libepoxy zlib at-spi2-core fontconfig freetype wayland libseccomp bubblewrap xdg-dbus-proxy libsecret libdrm"
 # xorgproto: quem roda pkg-config em cairo (ou em x11/xext/xrender) precisa dos
 # .pc dos PROTOCOLOS, e eles são do xorgproto. A cadeia é indireta e por isso
 # passava despercebida: cairo.pc traz `Requires.private: ... x11, xext, xrender`,

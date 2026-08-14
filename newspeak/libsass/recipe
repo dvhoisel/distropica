@@ -2,7 +2,12 @@ NAME=libsass
 VERSION=3.6.6
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc libstdcxx"
+# gcc-pass2 e não libstdcxx: nesta árvore libstdc++.so.6 e libgcc_s.so.1
+# pertencem ao gcc-pass2, que sobrescreve os do libstdcxx de bootstrap. O icu
+# foi construído declarando libstdcxx e a auditoria acusou 44 erros por isso,
+# derrubando o fechamento da v42; estas três receitas trazem o mesmo defeito e
+# ainda não chegaram a construir.
+DEPS="glibc gcc-pass2"
 BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox"
 ABOUT="O compilador de Sass em C++. Existe nesta árvore por uma razão só e indireta: a libadwaita compila o estilo dela de .scss para CSS em tempo de build, e para isso chama o sassc, que é uma casca fina sobre esta biblioteca. Não vai para o alvo — é ferramenta de build, e some do sistema instalado junto com o sassc. O upstream declara o projeto em manutenção, e isso é aceitável para o papel: gerar CSS a partir de um .scss que não muda."
 LICENSE=MIT

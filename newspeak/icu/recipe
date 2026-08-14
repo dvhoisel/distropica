@@ -2,7 +2,12 @@ NAME=icu
 VERSION=78.3
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc libstdcxx"
+# gcc-pass2 e NÃO libstdcxx: a primeira escrita desta receita declarava
+# libstdcxx, e estava errada pelo mesmo motivo que a primeira escrita da mesa
+# estava — nesta árvore libstdc++.so.6 e libgcc_s.so.1 pertencem ao gcc-pass2,
+# que os sobrescreve depois. Medido pela auditoria sobre os binários prontos, e
+# não deduzido do que a receita parecia precisar.
+DEPS="glibc gcc-pass2"
 BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox python-glibc"
 ABOUT="Unicode de verdade: quebra de linha e de palavra em todas as escritas, colação, normalização, conversão de codificação, formatação de data e número por locale, e os dados que sustentam tudo isso. O WebKitGTK a exige em REQUIRED, versão 70 ou maior, com os três componentes data, i18n e uc — sem ela nem começa a configurar. É o maior pacote de DADOS da árvore: cerca de 30 MB de tabelas compiladas, que não dá para cortar sem quebrar o navegador em escritas que ninguém aqui testa. Traz também a HARFBUZZ como consequência: o WebKit pede find_package(HarfBuzz COMPONENTS ICU), e o harfbuzz desta árvore está com -Dicu=disabled, então ele terá de ser reconstruído com o módulo harfbuzz-icu — o que muda o fingerprint dele e, por tabela, de pango, cairo, gtk3, gtk4 e GIMP. O build sai do subdiretório source/, que é como o upstream empacota. Sem samples, sem testes e sem 'layoutex', a camada de layout obsoleta que o próprio ICU marca como legada."
 LICENSE=Unicode-3.0
@@ -20,9 +25,36 @@ build() {
         --disable-static \
         --disable-samples \
         --disable-tests \
-        --disable-layoutex
+        --disable-layoutex \
+        --disable-icu-config
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
+
+    # Três arquivos de SHELL que o ICU instala e que fariam uma biblioteca de
+    # Unicode depender do busybox em tempo de execução. Não é hipótese: a
+    # auditoria da v42 apontou os três, e a receita foi para ABI_PENDING por
+    # isso — o que derrubou o fechamento inteiro da cadeia.
+    #
+    # O icu-config sai pela opção acima ("do not install icu-config", conferido
+    # no configure da fonte pinada): é o mecanismo pré-pkg-config, e esta árvore
+    # descobre o ICU pelo icu-uc.pc como todo o resto.
+    #
+    # O install-sh e o mkinstalldirs são instalados INCONDICIONALMENTE pelo
+    # Makefile.in (linhas 189-190) em $(pkgdatadir). São os auxiliares de
+    # autotools que o `pkgdata` usaria para RECONSTRUIR os dados do ICU na
+    # máquina do usuário — coisa que esta distro não faz e não oferece. Quem um
+    # dia quiser esse fluxo tem de trazê-los de volta E declarar busybox.
+    rm -f "$STAGE/usr/share/icu/$VERSION/install-sh" \
+          "$STAGE/usr/share/icu/$VERSION/mkinstalldirs"
+
+    # A guarda que impede o defeito de voltar em silêncio: qualquer arquivo com
+    # shebang no payload reintroduz a dependência de shell, e a próxima pessoa
+    # descobriria de novo só quando a cadeia inteira falhasse no fechamento.
+    if grep -rlI '^#!' "$STAGE" 2>/dev/null | head -1 | grep -q .; then
+        echo "icu: o payload voltou a conter script com shebang:" >&2
+        grep -rlI '^#!' "$STAGE" >&2
+        exit 1
+    fi
     # Os três componentes que o WebKit pede por nome. Conferir só um deixaria
     # passar um build em que os DADOS não saíram, que é o modo de falha caro:
     # o navegador compila e depois erra silenciosamente em texto não-latino.
