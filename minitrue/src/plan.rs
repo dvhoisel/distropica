@@ -3108,7 +3108,25 @@ pub(crate) fn finalize_applied(
     // RECORD_FORMAT=4 nunca representa um estado pendente, mesmo quando o
     // plano foi pedido em modo development. Development permite produzir o
     // payload; esta segunda passagem já precisa prová-lo factualmente.
-    let identities = plan.material_identities(true)?;
+    //
+    // A forma ESTRITA é do fechamento completo, e cobra mais que o vínculo de
+    // record: ela recusa qualquer ABI_PENDING na seleção porque é o que
+    // autoriza publicação oficial. Um fechamento parcial não publica nada — não
+    // emite receipt, não vira autoridade de mundo — e cobrar dele a prova de um
+    // mundo inteiro é justamente o que o impede de existir. A garantia que
+    // importa aqui continua intacta e é do `bind_record`: só vira v4 o record
+    // cujo nó é `keep`/`meta` com payload factual.
+    let identities = plan.material_identities(closure == AppliedClosure::Complete)?;
+    if closure == AppliedClosure::Partial && !plan.abi_pending.is_empty() {
+        // Não é erro, e por isso não aborta: no meio de uma execução
+        // interrompida há ABI que ninguém chegou a observar. Fica dito para que
+        // a próxima investigação não precise adivinhar, que foi exatamente o
+        // que esta precisou.
+        eprintln!(
+            "  fechamento parcial: {} pacote(s) sem ABI observada, não impedem o vínculo",
+            plan.abi_pending.len()
+        );
+    }
     let lock_sha256 = plan.persist(ctx)?;
     for (package, node) in &plan.nodes {
         if written_records.contains(package)

@@ -4,7 +4,7 @@ KIND=source
 TOOLCHAIN=native
 DEPS="glibc glib libgcrypt libtasn1 p11-kit gtk4"
 BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc"
-ABOUT="A biblioteca de criptografia da interface do GNOME, em duas metades que o Epiphany pede por nome no meson: gck-2, que é a camada GObject sobre PKCS#11, e gcr-4, que é o que desenha certificado e chave na tela — o cadeado da barra de endereço e o diálogo que mostra a cadeia de confiança quando você clica nele. A variante 4 é a de GTK4, a mesma geração do resto desta troca. Sem o ssh-agent, que é um daemon de chave SSH sem relação nenhuma com navegar; sem introspection, sem vapi, sem gtk-doc e sem systemd."
+ABOUT="A biblioteca de criptografia da interface do GNOME, em duas metades que o Epiphany pede por nome no meson: gck-2, que é a camada GObject sobre PKCS#11, e gcr-4, que é o que desenha certificado e chave na tela — o cadeado da barra de endereço e o diálogo que mostra a cadeia de confiança quando você clica nele. A variante 4 é a de GTK4, a mesma geração do resto desta troca. Sem o ssh-agent, que é um daemon de chave SSH sem relação nenhuma com navegar; sem introspection, sem vapi, sem gtk-doc e sem systemd. O -Dgpg_path é DECLARAÇÃO e não conserto: o meson do gcr faz find_program('gpg2','gpg') quando a opção vem vazia, e esta árvore não tem GnuPG — o build parava aí. Preencher a opção salta a busca e grava o caminho num #define, GPG_EXECUTABLE, que só é usado pelo suporte a OpenPGP do gcr. Sem gpg instalado esse suporte é inerte, e é isso mesmo que se quer: o que o Epiphany consome do gcr é a exibição de certificado X.509, não chaveiro PGP. Trazer o GnuPG por causa de um find_program custaria libassuan, libksba e npth para um recurso que ninguém aqui usa."
 LICENSE=LGPL-2.1-or-later
 SRC="https://download.gnome.org/sources/gcr/4.4/gcr-$VERSION.tar.xz"
 SHA256="0c3c341e49f9f4f2532a4884509804190a0c2663e6120360bb298c5d174a8098"
@@ -17,6 +17,7 @@ build() {
         --libdir=lib \
         --buildtype=release \
         -Dgtk4=true \
+        -Dgpg_path=/usr/bin/gpg \
         -Dcrypto=libgcrypt \
         -Dssh_agent=false \
         -Dintrospection=false \
