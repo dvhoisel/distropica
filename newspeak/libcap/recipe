@@ -3,7 +3,13 @@ VERSION=2.78
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
-BUILD_DEPS="make gcc-pass2 binutils-glibc"
+# bash: o progs/Makefile roda `./mkcapshdoc.sh` para gerar capshdoc.c.cf, e esse
+# script declara `#!/bin/bash`. A view de build tem o `sh` do runner e mais
+# nada, então o make morre com "./mkcapshdoc.sh: not found" — que é a mensagem
+# que o shell dá quando o INTERPRETADOR do shebang falta, e não o script.
+# Não é alvo opcional: o capshdoc.c.cf entra no `all`. Conferido no shebang do
+# script dentro da fonte pinada.
+BUILD_DEPS="make gcc-pass2 binutils-glibc bash"
 ABOUT="Capabilities POSIX: a biblioteca e o setcap/getcap. É o que permite dar cap_net_raw a um auxiliar de captura em vez de torná-lo SUID root. Só faz sentido junto do pack v2, que passou a carregar security.capability — antes disso, um setcap no STAGE era descartado em silêncio no empacotamento. Sem bindings Go e sem o módulo PAM: nenhum dos dois pertence a esta base."
 LICENSE="BSD-3-Clause OR GPL-2.0-only"
 SRC="https://www.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-$VERSION.tar.xz"
