@@ -50,9 +50,29 @@ build() {
     # A guarda que impede o defeito de voltar em silêncio: qualquer arquivo com
     # shebang no payload reintroduz a dependência de shell, e a próxima pessoa
     # descobriria de novo só quando a cadeia inteira falhasse no fechamento.
-    if grep -rlI '^#!' "$STAGE" 2>/dev/null | head -1 | grep -q .; then
+    #
+    # A PRIMEIRA ESCRITA DESTA GUARDA USAVA `grep -rlI` E NÃO VALIA NADA. O grep
+    # desta view é o do BusyBox, que não implementa -I: aceita a flag em
+    # silêncio e lê o binário como texto. As tabelas Unicode do ICU contêm a
+    # sequência "#!" — offsets 86456, 320104 e 331457 do libicuuc.so.78.3 —, de
+    # modo que a receita acusou as PRÓPRIAS bibliotecas de serem script e
+    # derrubou a v44. Medido, não deduzido: o grep do GNU no mesmo arquivo não
+    # casa, e o do BusyBox casa. A lição é da view, não do ICU — dentro dela as
+    # ferramentas são as do BusyBox, e a semântica do hospedeiro não vale.
+    #
+    # Um shebang é, por definição, os dois primeiros BYTES do arquivo. Não é
+    # "#!" em qualquer início de linha, que era o outro erro da versão anterior.
+    # `head -c` e `find -exec {} +` estão ambos no BusyBox, conferidos.
+    scripts=$(find "$STAGE" -type f -exec sh -c '
+        for arquivo in "$@"; do
+            if [ "$(head -c 2 "$arquivo")" = "#!" ]; then
+                printf "%s\n" "$arquivo"
+            fi
+        done
+        exit 0' _ {} +)
+    if [ -n "$scripts" ]; then
         echo "icu: o payload voltou a conter script com shebang:" >&2
-        grep -rlI '^#!' "$STAGE" >&2
+        printf "%s\n" "$scripts" >&2
         exit 1
     fi
     # Os três componentes que o WebKit pede por nome. Conferir só um deixaria
