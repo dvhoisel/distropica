@@ -24,6 +24,19 @@ SHA256="8a531a9abd2215936e8a8a914c077b586c0228b31d652f205286a8ec90f3364b"
 build() {
     tar -xJf "$DL" --strip-components=1
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # USE_SYSTEM_UNIFDEF=OFF, e este é o caso em que embutir está CERTO. O
+    # Source/CMakeLists.txt faz `if (USE_SYSTEM_UNIFDEF) find_package(Unifdef
+    # REQUIRED) else() add_subdirectory(ThirdParty/unifdef) endif()`, e a opção
+    # é PRIVATE ON por padrão — pensada para distros que já empacotam a
+    # ferramenta. Esta não empacota, e a alternativa seria uma receita nova para
+    # um programa de mil linhas usado só para preprocessar cabeçalhos.
+    #
+    # A objeção que esta árvore faz a subprojeto embutido — a do wlroots, "uma
+    # segunda cópia invisível para o audit" — NÃO se aplica: o unifdef é
+    # ferramenta de BUILD, não vai para o payload, e o fonte dele já está dentro
+    # do tarball pinado pelo SHA256. Embutir aqui é mais hermético que trazer um
+    # tarball a mais.
+
     # AS OPÇÕES QUE ABORTAM. O OptionsGTK.cmake tem dezenove message(FATAL_ERROR)
     # e vários deles guardam opções que o upstream deixa ON por padrão — o CMake
     # não avisa nem degrada, ele PARA, depois de resolver todo o resto. Varridas
@@ -77,6 +90,7 @@ build() {
         -DUSE_JPEGXL=OFF \
         -DUSE_LIBHYPHEN=OFF \
         -DUSE_LIBBACKTRACE=OFF \
+        -DUSE_SYSTEM_UNIFDEF=OFF \
         -DUSE_SYSTEMD=OFF
     ninja -C build -j"$JOBS"
     DESTDIR="$STAGE" ninja -C build install
