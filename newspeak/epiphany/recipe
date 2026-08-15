@@ -19,6 +19,28 @@ SHA256="0b6aafe1f51da155a19825135c8dc9955587c64f8dff3db8954e829a0f01006b"
 build() {
     tar -xJf "$DL" --strip-components=1
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # O HELP SAI DA ÁRVORE DE BUILD, e não é economia: é que ele não tem leitor.
+    # O meson.build faz `subdir('help')` INCONDICIONALMENTE (linha 161 da fonte
+    # pinada) e o help/meson.build chama gnome.yelp(), que exige o itstool. Não
+    # há opção de configure para desligar — a lista inteira de meson_options.txt
+    # foi conferida: developer_mode, tech_preview, profile, unit_tests, granite,
+    # man-pages, e nada de help.
+    #
+    # Trazer o itstool custaria uma receita nova mais os bindings Python do
+    # libxml2, para produzir documentação Mallard que nenhum programa desta
+    # distro sabe abrir: não há yelp aqui, e não vai haver. Editar a fonte é a
+    # convenção da árvore para este caso — gcc, librsvg, linux, nftables e
+    # mypaint-brushes já o fazem, sempre com o motivo escrito.
+    sed -i "/^subdir('help')$/d" meson.build
+    # A guarda existe porque um sed que não casa nada FALHA EM SILÊNCIO: se o
+    # upstream mudar a linha, o build voltaria a morrer no itstool e o motivo
+    # pareceria outro.
+    grep -q "^subdir('help')$" meson.build && {
+        echo "epiphany: o sed não removeu subdir('help') — a linha mudou de forma" >&2
+        grep -n "help" meson.build >&2
+        exit 1
+    }
+
     meson setup build \
         --prefix=/usr \
         --libdir=lib \

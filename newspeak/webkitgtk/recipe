@@ -7,7 +7,13 @@ TOOLCHAIN=native
 # foi construído declarando libstdcxx e a auditoria acusou 44 erros por isso,
 # derrubando o fechamento da v42; estas três receitas trazem o mesmo defeito e
 # ainda não chegaram a construir.
-DEPS="glibc gcc-pass2 glib gtk4 cairo pango harfbuzz icu libsoup libxml2 libxslt sqlite3 libjpeg-turbo libpng libwebp lcms2 libgcrypt libtasn1 libepoxy zlib at-spi2-core fontconfig freetype wayland libseccomp bubblewrap xdg-dbus-proxy libsecret libdrm"
+# As cinco últimas saíram da AUDITORIA sobre o binário pronto, não da leitura
+# do CMake: a libwebkitgtk-6.0.so.4.16.9 e os três processos auxiliares ligam
+# libgdk_pixbuf, libgraphene e libexpat DIRETAMENTE; a biblioteca ainda liga
+# libgpg-error (por baixo do libgcrypt) e libgbm (da mesa, pelo caminho de
+# buffer gráfico). Todas chegavam transitivamente e por isso a receita parecia
+# completa — 17 erros de audit depois de sete horas de C++.
+DEPS="glibc gcc-pass2 glib gtk4 cairo pango harfbuzz icu libsoup libxml2 libxslt sqlite3 libjpeg-turbo libpng libwebp lcms2 libgcrypt libtasn1 libepoxy zlib at-spi2-core fontconfig freetype wayland libseccomp bubblewrap xdg-dbus-proxy libsecret libdrm gdk-pixbuf graphene expat libgpg-error mesa"
 # xorgproto: quem roda pkg-config em cairo (ou em x11/xext/xrender) precisa dos
 # .pc dos PROTOCOLOS, e eles são do xorgproto. A cadeia é indireta e por isso
 # passava despercebida: cairo.pc traz `Requires.private: ... x11, xext, xrender`,
