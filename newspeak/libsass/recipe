@@ -30,7 +30,19 @@ build() {
     # acrescenta -static-libgcc e -static-libstdc++ conforme STATIC_LIBGCC e
     # STATIC_LIBSTDCPP, e uma libstdc++ embutida tornaria FALSA a declaração
     # `gcc-pass2` em DEPS — o audit lê ELF, e o que está embutido ele não vê.
-    make -j"$JOBS" BUILD=shared PREFIX=/usr
+    # EXTRA_LDFLAGS e não LDFLAGS: o Makefile faz `LDFLAGS ?= -Wall` e depois
+    # `LDFLAGS += -std=...`, então definir LDFLAGS na linha de comando apagaria
+    # o que ele acrescenta. A linha 90 dele existe para isto.
+    #
+    # O SONAME é OBRIGATÓRIO e a falta dele não é cosmética. A regra de link do
+    # upstream é `$(CXX) -shared $(LDFLAGS) -o $@ ...`, sem -soname: a
+    # biblioteca sai sem DT_SONAME, quem a liga grava `NEEDED libsass.so` (nome
+    # nu), e o ABI_PROVIDE de namespace `soname` nunca é emitido. O efeito
+    # aparece DOIS passos adiante e sem relação aparente: o fechamento parcial
+    # da v46 abortou com "ABI_REQUIRE não corresponde a exatamente um
+    # ABI_PROVIDE factual", porque o requisito do sassc não achava provedor.
+    make -j"$JOBS" BUILD=shared PREFIX=/usr \
+        EXTRA_LDFLAGS="-Wl,-soname,libsass.so"
     make install BUILD=shared PREFIX=/usr DESTDIR="$STAGE"
     [ -e "$STAGE/usr/lib/libsass.so" ] || {
         echo "libsass: a biblioteca compartilhada não foi produzida" >&2
@@ -39,8 +51,12 @@ build() {
     }
     # Conferir a existência do arquivo não basta: o que importa é que ele seja
     # objeto compartilhado de verdade e que a libstdc++ tenha ficado FORA dele.
-    readelf -d "$STAGE/usr/lib/libsass.so" | grep -q 'SONAME\|NEEDED' || {
-        echo "libsass: libsass.so não é objeto dinâmico" >&2
+    # ESTA GUARDA ERA UM OU, E POR ISSO NÃO VALIA NADA: `SONAME\|NEEDED` passava
+    # com os NEEDED sozinhos, que toda biblioteca dinâmica tem. Ela dizia
+    # conferir versionamento e conferia apenas dinamicidade.
+    readelf -d "$STAGE/usr/lib/libsass.so" | grep -q 'SONAME.*libsass\.so' || {
+        echo "libsass: libsass.so saiu sem SONAME — quem a ligar grava nome nu" >&2
+        readelf -d "$STAGE/usr/lib/libsass.so" | head -8 >&2
         exit 1
     }
     readelf -d "$STAGE/usr/lib/libsass.so" | grep -q 'libstdc++' || {
