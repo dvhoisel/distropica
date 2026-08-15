@@ -16,12 +16,49 @@ SHA256="608dc9002b45a91d11ed59e352469ecc05e4f58fc1259fc9a9f5b8f0f8348a03"
 
 build() {
     tar -xzf "$DL" --strip-components=1
-    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
-    make -j"$JOBS" PREFIX=/usr
-    make install PREFIX=/usr DESTDIR="$STAGE"
+
+    # O MAKEFILE DO UPSTREAM É DESCARTADO AQUI, e não por preguiça: ele supõe um
+    # arranjo de árvore que esta distro não tem, e traz um defeito que passaria
+    # despercebido. Os três motivos, todos lidos no Makefile da fonte pinada:
+    #
+    # 1. `$(SASSC_EXE): libsass build` recursa para dentro de SASS_LIBSASS_PATH
+    #    para CONSTRUIR a libsass. O default é $(CURDIR)/.., que no confinamento
+    #    é o WORK, sem Makefile nenhum — foi assim que a retomada da v46 morreu:
+    #    "make BUILD=static -C /tmp/minitrue-build-sassc ... No targets
+    #    specified and no makefile found". Apontar a variável para /usr só
+    #    trocaria o erro por um `make -C /usr`.
+    # 2. O alvo build-shared embute `-Wl,-rpath,$(DESTDIR)$(PREFIX)/lib`, ou
+    #    seja, o caminho do STAGE dentro do ELF instalado. Vazamento de caminho
+    #    de build no payload, que a SPEC-0013 §5 proíbe e que nenhuma guarda de
+    #    "o binário existe?" pegaria.
+    # 3. `install: libsass-install-$(BUILD)` reinstalaria a libsass a partir
+    #    daqui, sobrepondo o pacote que já a possui.
+    #
+    # E o programa não justifica nada disso: SOURCES = sassc.c, um arquivo só. O
+    # resto do tarball é o cabeçalho de versão e um getopt para Windows.
+    "$CC" $CFLAGS -I. -o sassc sassc.c -lsass -Wl,-rpath-link,/usr/lib
+    mkdir -p "$STAGE/usr/bin"
+    cp sassc "$STAGE/usr/bin/sassc"
+    chmod 755 "$STAGE/usr/bin/sassc"
+
     [ -x "$STAGE/usr/bin/sassc" ] || {
         echo "sassc: o binário não foi produzido" >&2
         exit 1
     }
+    # Tem de ligar a libsass COMPARTILHADA. Se um dia ela voltar a sair só
+    # estática, o link aqui passa a embutir o interpretador de SCSS inteiro e a
+    # dependência declarada some do ELF sem ninguém notar.
+    readelf -d "$STAGE/usr/bin/sassc" | grep -q 'libsass.so' || {
+        echo "sassc: não ligou libsass.so" >&2
+        readelf -d "$STAGE/usr/bin/sassc" | grep NEEDED >&2
+        exit 1
+    }
+    # A guarda contra o defeito 2, conferida no ELF e não na linha de comando:
+    # nenhum caminho de build pode sobreviver no payload.
+    if readelf -d "$STAGE/usr/bin/sassc" | grep -qE 'RPATH|RUNPATH'; then
+        echo "sassc: o binário carrega RPATH/RUNPATH — caminho de build vazou" >&2
+        readelf -d "$STAGE/usr/bin/sassc" | grep -E 'RPATH|RUNPATH' >&2
+        exit 1
+    fi
     find "$STAGE" -type d -empty -delete
 }
