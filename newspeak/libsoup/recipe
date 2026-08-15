@@ -2,7 +2,10 @@ NAME=libsoup
 VERSION=3.6.6
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc glib glib-networking sqlite3 libpsl nghttp2 brotli libxml2"
+# zlib: a libsoup-3.0.so.0 liga libz.so.1 DIRETAMENTE — a compressão de
+# conteúdo HTTP é dela, não de quem a chama. Medido pela auditoria sobre o
+# binário pronto.
+DEPS="glibc glib glib-networking sqlite3 libpsl nghttp2 brotli libxml2 zlib"
 BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc"
 ABOUT="A pilha HTTP do GNOME, e o único caminho pelo qual o Epiphany fala com a rede. É a API 3.0 — a variante que o WebKitGTK 6.0 exige em REQUIRED, e a única que não arrasta a geração anterior. Faz HTTP/1.1 e HTTP/2 (pelo nghttp2), decodifica gzip e brotli, guarda cookies em SQLite e recusa cookie de sufixo público pela libpsl. O TLS não é dela: quem cifra é o glib-networking, que esta árvore já constrói sobre o OpenSSL, e é por isso que ele está em DEPS mesmo sem aparecer no pkg-config. Sem GSSAPI e sem NTLM, que são autenticação de domínio corporativo e trariam Kerberos e o helper externo do Samba; sem introspection, sem vapi, sem doc e sem testes."
 LICENSE=LGPL-2.1-or-later

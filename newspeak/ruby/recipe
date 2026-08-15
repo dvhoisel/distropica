@@ -26,5 +26,46 @@ build() {
         echo "ruby: o interpretador não foi produzido" >&2
         exit 1
     }
+    # ANDAIME DE DESENVOLVIMENTO FORA DO PAYLOAD. A auditoria acusou 43 erros
+    # aqui, e nenhum deles é do interpretador: 32 pedem /usr/bin/env, 8 pedem
+    # /usr/bin/bash e 3 apontam para /usr/local/bin/ruby, um caminho que nesta
+    # distro nunca existirá. Todos vêm de arquivos que existem para ajudar quem
+    # ESCREVE uma gem, não para rodá-la:
+    #
+    #   bundler/templates/       gabaritos de `bundle gem` (Executable, newgem)
+    #   gems/*/gems/*/bin/       só console e setup, atalhos de desenvolvedor
+    #   gems/*/gems/*/sample/    exemplos do bigdecimal — os 3 do /usr/local
+    #
+    # Este ruby é FERRAMENTA DE BUILD e só: declarado apenas no BUILD_DEPS do
+    # webkitgtk, para o offlineasm do JavaScriptCore gerar o interpretador de
+    # bytecode. Conferido que nada do que sai daqui é consultado por ele — o
+    # offlineasm é do WebKit e não do ruby.
+    #
+    # A alternativa seria declarar busybox e bash em DEPS por causa de gabarito,
+    # e ainda assim sobrariam os três de /usr/local, que não têm dono possível.
+    rm -rf "$STAGE"/usr/lib/ruby/*/bundler/templates
+    rm -rf "$STAGE"/usr/lib/ruby/gems/*/gems/*/bin
+    rm -rf "$STAGE"/usr/lib/ruby/gems/*/gems/*/sample
+
+    # Guarda pela ausência: o payload pode conter script de ruby — ele É um
+    # interpretador —, mas não script que peça OUTRO interpretador. Exercitada
+    # com o head -c do BusyBox, não com a semântica do hospedeiro.
+    intrusos=$(find "$STAGE" -type f -exec sh -c '
+        for arquivo in "$@"; do
+            if [ "$(head -c 2 "$arquivo")" = "#!" ]; then
+                linha=$(head -1 "$arquivo")
+                case "$linha" in
+                    *"/usr/bin/ruby"*) ;;
+                    *) printf "%s\t%s\n" "$arquivo" "$linha" ;;
+                esac
+            fi
+        done
+        exit 0' _ {} +)
+    if [ -n "$intrusos" ]; then
+        echo "ruby: o payload pede interpretador que não é o próprio ruby:" >&2
+        printf "%s\n" "$intrusos" >&2
+        exit 1
+    fi
+
     find "$STAGE" -type d -empty -delete
 }

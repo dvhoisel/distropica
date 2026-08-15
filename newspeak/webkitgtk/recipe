@@ -37,6 +37,13 @@ build() {
         -DENABLE_WEB_CODECS=OFF \
         -DENABLE_SPEECH_SYNTHESIS=OFF \
         -DENABLE_WEB_RTC=OFF \
+        # ENABLE_GAMEPAD exige a libmanette, e o CMake não avisa: ele ABORTA com
+        # "libmanette is required for ENABLE_GAMEPAD" depois de resolver tudo o
+        # mais. O padrão da porta GTK é ON (OptionsGTK.cmake:103). Um navegador
+        # sem vídeo, sem WebRTC e sem síntese de voz não tem por que falar com
+        # joystick, e desligar isto tira também o WEBXR, que o próprio CMake faz
+        # depender dele (linha 162).
+        -DENABLE_GAMEPAD=OFF \
         -DUSE_GSTREAMER=OFF \
         -DENABLE_BUBBLEWRAP_SANDBOX=ON \
         -DUSE_LIBSECRET=ON \
