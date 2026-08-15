@@ -1,0 +1,46 @@
+NAME=libyaml
+VERSION=0.2.5
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+# gawk: o configure gerado pelo autoconf usa $AWK dentro do config.status — doze
+# vezes nesta fonte, contadas — e sem ele a configuração morre depois de já ter
+# respondido a todos os testes. Mesma lição do a35f435.
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox"
+ABOUT="O parser de YAML em C, e entra por uma cadeia de três elos que só apareceu quando o WebKit começou a compilar de fato. O ruby desta árvore existe para o offlineasm do JavaScriptCore; o build do WebKit também roda Source/WebCore/Scripts/GenerateSettings.rb, que faz require 'yaml'; e o yaml.rb do Ruby é uma casca sobre a extensão psych, que é C e liga esta biblioteca. Sem ela o ruby compila, roda, e falha só naquele script — no objeto 2385 de 9375, depois de meia hora de C++. O Ruby 3.4 NÃO embute mais o libyaml: em ext/psych há apenas os fontes da extensão, e o configure procura yaml.h no sistema (o log dele diz 'yaml.h not found' e segue, o que torna a falta invisível até o momento errado). É biblioteca de build e não de superfície: nada do sistema instalado a consulta, ela chega ao alvo só porque o ruby a declara. Upstream dormente por escolha, não por abandono — a 0.2.5 é de 2020 e continua sendo a última estável; a 0.2.6 tem release candidate desde então, que a P7 proíbe. O SHA256 foi corroborado por dois canais, o release do GitHub e o pyyaml.org, com o mesmo valor."
+LICENSE=MIT
+SRC="https://github.com/yaml/libyaml/releases/download/$VERSION/yaml-$VERSION.tar.gz"
+SHA256="c642ae9b75fee120b2d96c712538bd2cf283228d2337df2cf2988e3c02678ef4"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-static
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+
+    [ -e "$STAGE/usr/lib/libyaml.so" ] || {
+        echo "libyaml: a biblioteca compartilhada não foi produzida" >&2
+        ls "$STAGE/usr/lib" 2>/dev/null >&2
+        exit 1
+    }
+    # A asserção é a que se quer, e não uma mais fraca que passa junto: exige o
+    # SONAME nomeado. O libsass e o sqlite3 desta árvore saíram sem DT_SONAME, e
+    # nos dois casos o efeito só apareceu dois passos adiante, no fechamento de
+    # um pacote diferente, com mensagem que não citava nenhum dos dois.
+    readelf -d "$STAGE"/usr/lib/libyaml.so.* 2>/dev/null | grep -q 'SONAME.*libyaml\.so\.0' || {
+        echo "libyaml: saiu sem SONAME — quem a ligar grava nome nu ou caminho" >&2
+        readelf -d "$STAGE"/usr/lib/libyaml.so.* 2>/dev/null | head -6 >&2
+        exit 1
+    }
+    # O cabeçalho é o que o configure do Ruby procura por nome. Sem ele a
+    # extensão psych é PULADA EM SILÊNCIO — o ruby diz apenas "yaml.h not found"
+    # e termina com sucesso.
+    [ -e "$STAGE/usr/include/yaml.h" ] || {
+        echo "libyaml: yaml.h não foi instalado — o psych do Ruby seria pulado" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}

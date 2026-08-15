@@ -7,7 +7,12 @@ TOOLCHAIN=native
 # correta, e exigem /usr/bin/env. Diferente do andaime removido no build(),
 # estes são programas de verdade; a convenção da árvore para script vivo é
 # declarar quem fornece o interpretador, e são 37 receitas fazendo isso.
-DEPS="glibc zlib openssl busybox"
+# libyaml: a extensão psych é C e liga esta biblioteca; sem ela o configure do
+# Ruby imprime 'yaml.h not found', PULA a extensão e termina com sucesso. O
+# preço aparece longe: o build do WebKit roda GenerateSettings.rb, que faz
+# require 'yaml', e morre no objeto 2385 de 9375 com 'cannot load such file
+# -- psych'. Declarar aqui é o que faz o pulo deixar de ser silencioso.
+DEPS="glibc zlib openssl busybox libyaml"
 BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox bison"
 ABOUT="Interpretador Ruby, e existe aqui por um motivo único: o JavaScriptCore do WebKit gera o interpretador de bytecode dele com o offlineasm, que é escrito em Ruby. O CMake do WebKit faz find_package(Ruby 2.5), e sem ele o build do JSC não sai do lugar. É FERRAMENTA DE BUILD e nada mais — não é declarado em DEPS de ninguém, não vai para o alvo, e nenhum programa do sistema instalado o invoca. Compilado sem as extensões que só serviriam a um Ruby de uso geral, e sem os documentos, que são a maior parte do tempo de build."
 LICENSE=Ruby

@@ -105,8 +105,7 @@ build() {
         -DUSE_LIBHYPHEN=OFF \
         -DUSE_LIBBACKTRACE=OFF \
         -DUSE_SYSTEM_UNIFDEF=OFF \
-        -DUSE_SYSPROF_CAPTURE=OFF \
-        -DUSE_SYSTEMD=OFF
+        -DUSE_SYSPROF_CAPTURE=OFF
     ninja -C build -j"$JOBS"
     DESTDIR="$STAGE" ninja -C build install
 
