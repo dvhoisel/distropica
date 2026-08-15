@@ -23,6 +23,41 @@ build() {
         --disable-man
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
+    # O psl-make-dafsa é GERADOR DE CÓDIGO DE BUILD e não pertence ao payload.
+    # Ele declara '#!/usr/bin/env python' — python nu, sem o 3 —, e essa é a
+    # única ocorrência do gênero na raiz inteira (conferido; a outra é um
+    # exemplo em share/doc do dbus). O efeito não foi audit e sim view: o build
+    # do libsoup, que traz o libpsl para a view, parou com "libpsl:
+    # /usr/bin/psl-make-dafsa usa env para \"python\", ausente da view
+    # declarada".
+    #
+    # Não há opção de configure para não instalá-lo — a lista de --enable/
+    # --disable da fonte pinada foi conferida inteira. E o próprio Makefile.am
+    # diz o que ele é, no comentário do MAINTAINERCLEANFILES: "building it is
+    # expensive and requires python to be installed". Ele converte a lista de
+    # sufixos públicos num autômato em C, uma vez, na hora de compilar.
+    #
+    # A alternativa seria declarar busybox E python-glibc em DEPS, e pôr o
+    # Python inteiro na closure de runtime de uma biblioteca de 200 KB por causa
+    # de um gerador que ninguém vai rodar na máquina instalada.
+    rm -f "$STAGE/usr/bin/psl-make-dafsa"
+
+    # Guarda pela ausência, exercitada com o head -c do BusyBox: nenhum script
+    # pode sobrar no payload, porque cada um traz um interpretador para a
+    # closure.
+    scripts=$(find "$STAGE" -type f -exec sh -c '
+        for arquivo in "$@"; do
+            if [ "$(head -c 2 "$arquivo")" = "#!" ]; then
+                printf "%s\n" "$arquivo"
+            fi
+        done
+        exit 0' _ {} +)
+    if [ -n "$scripts" ]; then
+        echo "libpsl: o payload contém script, e nenhum interpretador está em DEPS:" >&2
+        printf "%s\n" "$scripts" >&2
+        exit 1
+    fi
+
     [ -e "$STAGE/usr/lib/libpsl.so" ] || {
         echo "libpsl: a biblioteca compartilhada não foi produzida" >&2
         exit 1

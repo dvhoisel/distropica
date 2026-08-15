@@ -7,7 +7,10 @@ TOOLCHAIN=native
 # baixar o subprojeto por git e morre. Conferido no meson.build da fonte
 # pinada. Ela traz libfyaml e libxmlb para a closure da base, que sobe de
 # 151 para 154; o appstream já estava na árvore por causa do GIMP.
-DEPS="glibc glib gtk4 pango cairo fontconfig appstream"
+# fribidi e graphene: a libadwaita-1.so.0 liga as duas DIRETAMENTE, e não
+# só através do gtk4. Medido pela auditoria sobre o binário pronto — a
+# receita parecia não precisar porque ambas chegam transitivamente.
+DEPS="glibc glib gtk4 pango cairo fontconfig appstream fribidi graphene"
 # xorgproto: quem roda pkg-config em cairo (ou em x11/xext/xrender) precisa dos
 # .pc dos PROTOCOLOS, e eles são do xorgproto. A cadeia é indireta e por isso
 # passava despercebida: cairo.pc traz `Requires.private: ... x11, xext, xrender`,
