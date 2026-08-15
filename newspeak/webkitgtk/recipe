@@ -106,7 +106,25 @@ build() {
         -DUSE_LIBBACKTRACE=OFF \
         -DUSE_SYSTEM_UNIFDEF=OFF \
         -DUSE_SYSPROF_CAPTURE=OFF
-    ninja -C build -j"$JOBS"
+    # O PARALELISMO É LIMITADO AQUI, e o número saiu de medição e não de gosto.
+    # Os unified sources do WebCore concatenam dezenas de .cpp por unidade de
+    # tradução, e o cc1plus de cada um chega a 4,9 GB de RSS — medidos, com
+    # quatro em paralelo somando 12,6 GB numa máquina de 31 GB. O efeito não foi
+    # falha: foi THRASHING. O swap encheu (8,5 de 8,5 GB), o kswapd0 subiu a 73%
+    # de CPU, o tempo de sistema foi a 95% contra 3% de usuário, e o load bateu
+    # 69 em 8 núcleos. O build ficou dezessete minutos sem produzir um objeto,
+    # vivo e sem progredir — que é o modo de falha mais caro de diagnosticar,
+    # porque não deixa log nenhum.
+    #
+    # Duas coisas que essa medição desmente: a cadeia roda em SCHED_IDLE e isso
+    # NÃO protege contra pressão de memória, que é global; e o pacote não era
+    # vítima da carga da máquina, era a causa dela.
+    #
+    # O teto é 2 e não 4: dois cc1plus de ~5 GB cabem com folga, e o custo é
+    # tempo de parede, que é o recurso barato aqui.
+    JOBS_WEBKIT=$JOBS
+    [ "$JOBS_WEBKIT" -gt 2 ] && JOBS_WEBKIT=2
+    ninja -C build -j"$JOBS_WEBKIT"
     DESTDIR="$STAGE" ninja -C build install
 
     # E a API 6.0 que o Epiphany exige, e ela vem de USE_GTK4=ON. Se um dia a
