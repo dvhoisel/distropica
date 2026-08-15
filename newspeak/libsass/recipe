@@ -18,11 +18,34 @@ build() {
     tar -xzf "$DL" --strip-components=1
     # O tarball da tag não traz ./configure gerado; o Makefile próprio do
     # upstream constrói a biblioteca sem autotools.
-    make -j"$JOBS" PREFIX=/usr
-    make install PREFIX=/usr DESTDIR="$STAGE"
+    #
+    # BUILD=shared NÃO é opcional e não é preferência: o Makefile faz
+    # `ifneq ($BUILD,shared) → BUILD := static` e `all: $(BUILD)`, de modo que
+    # um `make` pelado produz SÓ o libsass.a. Foi o que derrubou a retomada da
+    # v46 — a guarda abaixo pegou, mas depois de compilar tudo. O alvo de
+    # instalação é `install: install-$(BUILD)`, então a variável tem de ir nas
+    # DUAS invocações; passá-la só na primeira instalaria a estática.
+    #
+    # Consequência que justifica a escolha: com BUILD=static o Makefile também
+    # acrescenta -static-libgcc e -static-libstdc++ conforme STATIC_LIBGCC e
+    # STATIC_LIBSTDCPP, e uma libstdc++ embutida tornaria FALSA a declaração
+    # `gcc-pass2` em DEPS — o audit lê ELF, e o que está embutido ele não vê.
+    make -j"$JOBS" BUILD=shared PREFIX=/usr
+    make install BUILD=shared PREFIX=/usr DESTDIR="$STAGE"
     [ -e "$STAGE/usr/lib/libsass.so" ] || {
         echo "libsass: a biblioteca compartilhada não foi produzida" >&2
         ls "$STAGE/usr/lib" 2>/dev/null >&2
+        exit 1
+    }
+    # Conferir a existência do arquivo não basta: o que importa é que ele seja
+    # objeto compartilhado de verdade e que a libstdc++ tenha ficado FORA dele.
+    readelf -d "$STAGE/usr/lib/libsass.so" | grep -q 'SONAME\|NEEDED' || {
+        echo "libsass: libsass.so não é objeto dinâmico" >&2
+        exit 1
+    }
+    readelf -d "$STAGE/usr/lib/libsass.so" | grep -q 'libstdc++' || {
+        echo "libsass: não ligou libstdc++ — foi embutida, e o DEPS mente" >&2
+        readelf -d "$STAGE/usr/lib/libsass.so" | grep NEEDED >&2
         exit 1
     }
     find "$STAGE" -type d -empty -delete
