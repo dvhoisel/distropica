@@ -3,7 +3,10 @@ VERSION=0.9.6
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
-BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf"
+# m4: o configure desta fonte tem erro DURO — `if test "x$M4" = xno ;
+# then as_fn_error "m4 missing"` — porque o ACLOCAL_AMFLAGS dele é '-I m4'.
+# Não é opcional e não depende de opção. A retomada da v46 morreu aqui.
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf m4"
 ABOUT="Parser YAML em C exigido pela biblioteca AppStream. A implementação é autônoma; suporte de desenvolvimento, sanitizadores e rede de testes ficam desligados."
 LICENSE=MIT
 SRC="https://github.com/pantoniou/libfyaml/releases/download/v$VERSION/libfyaml-$VERSION.tar.gz"

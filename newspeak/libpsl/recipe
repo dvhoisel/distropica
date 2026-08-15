@@ -3,7 +3,10 @@ VERSION=0.23.2
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
-BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox python-glibc"
+# pkgconf: o configure faz `if test -z "$PKG_CONFIG"; then as_fn_error
+# "pkg-config not found"` sem condição alguma, em dois pontos. Achado pela
+# varredura que o libfyaml motivou, ANTES de a cadeia chegar aqui.
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox python-glibc pkgconf"
 ABOUT="A Lista de Sufixos Públicos, compilada. Responde a uma pergunta que decide segurança de sessão: 'co.uk' é um domínio ou um sufixo sob o qual qualquer um registra? Sem ela, um site em 'a.co.uk' pode gravar cookie para '.co.uk' e ler a sessão de 'b.co.uk'. A libsoup3 a usa para recusar exatamente isso, e o Epiphany depende da libsoup3. A lista vem EMBUTIDA na fonte pinada e é compilada para dentro da biblioteca: nada é buscado na rede em tempo de execução, o que é a SPEC-0001 P6 aplicada a um dado que envelhece — e envelhecer é o preço aceito aqui, porque a alternativa é a rede decidir o que é verdade. Sem IDN: a conversão de nome internacionalizado exigiria libidn2 e libunistring, e a libsoup normaliza o host antes de perguntar."
 LICENSE=MIT
 SRC="https://github.com/rockdaboot/libpsl/releases/download/$VERSION/libpsl-$VERSION.tar.gz"
