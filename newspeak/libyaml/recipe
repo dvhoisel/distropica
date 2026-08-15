@@ -26,13 +26,34 @@ build() {
         ls "$STAGE/usr/lib" 2>/dev/null >&2
         exit 1
     }
-    # A asserção é a que se quer, e não uma mais fraca que passa junto: exige o
-    # SONAME nomeado. O libsass e o sqlite3 desta árvore saíram sem DT_SONAME, e
-    # nos dois casos o efeito só apareceu dois passos adiante, no fechamento de
+    # O SONAME importa: o libsass e o sqlite3 desta árvore saíram sem DT_SONAME,
+    # e nos dois casos o efeito só apareceu dois passos adiante, no fechamento de
     # um pacote diferente, com mensagem que não citava nenhum dos dois.
-    readelf -d "$STAGE"/usr/lib/libyaml.so.* 2>/dev/null | grep -q 'SONAME.*libyaml\.so\.0' || {
-        echo "libyaml: saiu sem SONAME — quem a ligar grava nome nu ou caminho" >&2
-        readelf -d "$STAGE"/usr/lib/libyaml.so.* 2>/dev/null | head -6 >&2
+    #
+    # MAS O NOME NÃO SE ADIVINHA. A primeira escrita desta guarda procurou
+    # libyaml.so.* com SONAME libyaml.so.0 e falhou num build correto: o
+    # Makefile.am passa `-release $(YAML_LT_RELEASE)` ao libtool, com RELEASE=0 e
+    # version-info 2:9:0, e o que sai é libyaml-0.so.2.0.9 com SONAME
+    # libyaml-0.so.2 — o libyaml.so é só um symlink. Medido construindo a fonte,
+    # não deduzido.
+    #
+    # Por isso a asserção é a PROPRIEDADE e não o número: existe um objeto real
+    # (não symlink) de libyaml, e ele tem SONAME que o nomeia e termina em
+    # .so.<dígitos>. Pinar a versão faria a guarda quebrar no dia em que o
+    # upstream girar o version-info, que é assunto dele.
+    SO=""
+    for f in "$STAGE"/usr/lib/libyaml*.so*; do
+        [ -L "$f" ] && continue
+        [ -f "$f" ] && { SO="$f"; break; }
+    done
+    [ -n "$SO" ] || {
+        echo "libyaml: nenhum objeto compartilhado real foi instalado" >&2
+        ls -l "$STAGE/usr/lib" 2>/dev/null >&2
+        exit 1
+    }
+    readelf -d "$SO" | grep -qE 'SONAME.*\[libyaml.*\.so\.[0-9]+\]' || {
+        echo "libyaml: $(basename "$SO") saiu sem SONAME — quem a ligar grava nome nu ou caminho" >&2
+        readelf -d "$SO" | head -6 >&2
         exit 1
     }
     # O cabeçalho é o que o configure do Ruby procura por nome. Sem ele a
