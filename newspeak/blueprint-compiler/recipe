@@ -1,0 +1,39 @@
+NAME=blueprint-compiler
+VERSION=0.22.2
+KIND=source
+TOOLCHAIN=none
+# busybox pelo '#!/usr/bin/env python3' do programa, python-glibc pelo
+# interpretador, e pygobject porque o blueprintcompiler/gir.py faz `import gi` e
+# `from gi.repository import GLib, GObject` INCONDICIONALMENTE — é assim que ele
+# lê os arquivos GIR para validar que a propriedade escrita no .blp existe mesmo
+# no widget. Conferido no fonte pinado, arquivo por arquivo: das três ocorrências
+# de gi, duas são de teste e a do gir.py é do caminho principal.
+DEPS="python-glibc pygobject busybox"
+BUILD_DEPS="meson ninja python-glibc busybox"
+ABOUT="O compilador de Blueprint, a linguagem em que o GNOME passou a escrever interface a partir da 45: um .blp legível vira o .ui em XML que o GtkBuilder consome. Entra aqui por um motivo só e mensurável — o Epiphany 49 traz TRINTA E SETE arquivos .blp e o src/meson.build:120 os compila com find_program('blueprint-compiler') sem alternativa; não há opção de configure para desligar, porque sem os .ui gerados não há janela. É FERRAMENTA DE BUILD e não vai para a superfície: nada do sistema instalado o invoca, e ele existe na raiz apenas enquanto o Epiphany se constrói. Python puro, sem uma linha de C — conferido no tarball, zero arquivos .c ou .rs. A documentação fica de fora porque a opção 'docs' já é false por padrão e exigiria o sphinx. Uma observação sobre o pino: o GitLab do GNOME gera o tarball de /-/archive/ na hora, e isso nem sempre é byte-estável entre versões do servidor; baixei duas vezes e o sha256 bateu, e a árvore já tem o precedente do iso-codes, que vem do Salsa pelo mesmo caminho."
+LICENSE=LGPL-3.0-or-later
+SRC="https://gitlab.gnome.org/jwestman/blueprint-compiler/-/archive/v$VERSION/blueprint-compiler-v$VERSION.tar.gz"
+SHA256="ba4dddeb22a1929ed5987e74cb69c592e22bc74f0c04cfdb9028b907cf688af6"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    meson setup build --prefix=/usr --buildtype=release
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    [ -x "$STAGE/usr/bin/blueprint-compiler" ] || {
+        echo "blueprint-compiler: o programa não foi instalado" >&2
+        ls "$STAGE/usr/bin" 2>/dev/null >&2
+        exit 1
+    }
+    # O que o Epiphany chama é `blueprint-compiler batch-compile`, e o subcomando
+    # vem do pacote Python instalado ao lado. Conferir só o executável deixaria
+    # passar uma instalação em que o módulo não saiu — e o erro apareceria no
+    # meio do build DELE, não aqui.
+    [ -d "$STAGE"/usr/lib/python*/site-packages/blueprintcompiler ] || {
+        echo "blueprint-compiler: o módulo blueprintcompiler não foi instalado" >&2
+        find "$STAGE/usr/lib" -maxdepth 4 -name 'blueprint*' 2>/dev/null >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}
