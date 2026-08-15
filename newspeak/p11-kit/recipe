@@ -2,7 +2,11 @@ NAME=p11-kit
 VERSION=0.26.5
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc libtasn1 libffi"
+# busybox: o payload traz /usr/libexec/p11-kit/trust-extract-compat, script de shell. É a convenção desta
+# árvore para scripts vivos — ncurses, curl, libpng, libxml2 e pcre2 declaram
+# busybox pelo mesmo motivo. Sem a declaração o pacote vai para ABI_PENDING e
+# derruba o fechamento inteiro da cadeia, e não só a si mesmo.
+DEPS="glibc libtasn1 libffi busybox"
 BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc"
 ABOUT="O carregador de módulos PKCS#11 e o módulo de confiança que expõe a loja de certificados do sistema por essa interface. Entra porque o gcr o exige, e o gcr é exigido pelo Epiphany — é a base sobre a qual o navegador lê e mostra certificado. O módulo de confiança aponta para a mesma âncora que o resto da árvore usa, o ca-certificates, em vez de manter uma segunda cópia de CAs. Sem systemd (a opção instalaria unidades de socket), sem gtk-doc, sem man e sem testes."
 LICENSE=BSD-3-Clause

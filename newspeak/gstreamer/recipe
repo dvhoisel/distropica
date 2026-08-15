@@ -34,6 +34,34 @@ build() {
         echo "gstreamer: a biblioteca compartilhada não foi produzida" >&2
         exit 1
     }
+
+    # O -Ddoc=disabled acima NÃO impede a instalação deste gerador: o upstream o
+    # instala incondicionalmente em libexec, e ele declara '#!/usr/bin/env
+    # python3'. Medido na v45 — a auditoria acusou os dois requisitos, o env do
+    # busybox e o python3, e o gstreamer foi para ABI_PENDING por causa disso.
+    #
+    # Declarar as duas dependências seria pior que remover o arquivo: colocaria
+    # o Python inteiro na closure de RUNTIME de uma biblioteca de mídia, para
+    # servir uma ferramenta que gera cache de documentação — exatamente o que a
+    # opção já disse que esta árvore não quer. Removê-lo faz o payload
+    # corresponder à intenção declarada.
+    rm -f "$STAGE/usr/libexec/gstreamer-1.0/gst-plugins-doc-cache-generator"
+
+    # A guarda que impede o retorno silencioso, conferida com o head -c do
+    # BusyBox e não com a semântica do hospedeiro (lição do icu em 332ff73):
+    # shebang são os dois primeiros BYTES do arquivo.
+    scripts=$(find "$STAGE" -type f -exec sh -c '
+        for arquivo in "$@"; do
+            if [ "$(head -c 2 "$arquivo")" = "#!" ]; then
+                printf "%s\n" "$arquivo"
+            fi
+        done
+        exit 0' _ {} +)
+    if [ -n "$scripts" ]; then
+        echo "gstreamer: o payload contém script, e nenhum interpretador está em DEPS:" >&2
+        printf "%s\n" "$scripts" >&2
+        exit 1
+    fi
     # Nenhum binário setuid pode sair daqui. O ptp-helper é o único candidato, e
     # está desligado; a guarda existe para o dia em que a opção mudar de nome.
     if find "$STAGE" -type f -perm -4000 | grep -q .; then

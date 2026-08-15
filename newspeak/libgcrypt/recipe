@@ -2,7 +2,11 @@ NAME=libgcrypt
 VERSION=1.12.2
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc libgpg-error"
+# busybox: o payload traz /usr/bin/libgcrypt-config, script de shell. É a convenção desta
+# árvore para scripts vivos — ncurses, curl, libpng, libxml2 e pcre2 declaram
+# busybox pelo mesmo motivo. Sem a declaração o pacote vai para ABI_PENDING e
+# derruba o fechamento inteiro da cadeia, e não só a si mesmo.
+DEPS="glibc libgpg-error busybox"
 BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox"
 ABOUT="A biblioteca de criptografia do GnuPG. Está aqui porque o WebKitGTK a exige em REQUIRED, não por escolha de gosto: o find_package(LibGcrypt 1.7.0 REQUIRED) do OptionsGTK.cmake para o build inteiro sem ela. O WebKit a usa para hash e para as primitivas que sustentam a Web Crypto API e o armazenamento local cifrado. Convive com o OpenSSL da árvore sem conflito — são consumidores diferentes, e nenhuma das duas substitui a outra aqui. Sem doc e sem os testes de dado grande, que gastam minutos sem provar nada que a árvore consuma."
 LICENSE=LGPL-2.1-or-later
