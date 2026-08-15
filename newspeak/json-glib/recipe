@@ -12,17 +12,29 @@ SHA256="55c5c141a564245b8f8fbe7698663c87a45a7333c2a2c56f06f811ab73b212dd"
 build() {
     tar -xJf "$DL" --strip-components=1
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # feature contra boolean, e o meson NÃO perdoa: 'documentation' e 'nls' são
+    # type:'feature' e só aceitam enabled/disabled/auto; 'man', 'tests',
+    # 'conformance' e 'installed_tests' são type:'boolean' e só aceitam
+    # true/false. A primeira escrita passou false nas seis e a cadeia morreu na
+    # configuração — "Value \"false\" (of type \"string\") for option
+    # \"documentation\" is not one of the choices". Conferido no
+    # meson_options.txt da fonte pinada, opção por opção.
+    #
+    # Varredura: as 56 receitas meson da árvore foram conferidas contra as
+    # opções reais das fontes em cache, e só esta divergia. O primeiro varredor
+    # que escrevi dizia "só 1 problema" e mentia — o regex exigia ')' em linha
+    # própria e perdia todo o estilo compacto de declaração.
     meson setup build \
         --prefix=/usr \
         --libdir=lib \
         --buildtype=release \
         -Dintrospection=disabled \
-        -Ddocumentation=false \
+        -Ddocumentation=disabled \
         -Dgtk_doc=disabled \
         -Dman=false \
         -Dtests=false \
         -Dconformance=false \
-        -Dnls=false \
+        -Dnls=disabled \
         -Dinstalled_tests=false
     ninja -C build -j"$JOBS"
     DESTDIR="$STAGE" ninja -C build install
