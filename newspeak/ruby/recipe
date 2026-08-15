@@ -2,7 +2,12 @@ NAME=ruby
 VERSION=3.4.10
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc zlib openssl"
+# busybox: os executáveis das gems embutidas — bundle, irb, rake, erb, rbs,
+# rdbg, ri, rdoc — declaram '#!/usr/bin/env ruby', que é a forma portátil e
+# correta, e exigem /usr/bin/env. Diferente do andaime removido no build(),
+# estes são programas de verdade; a convenção da árvore para script vivo é
+# declarar quem fornece o interpretador, e são 37 receitas fazendo isso.
+DEPS="glibc zlib openssl busybox"
 BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox bison"
 ABOUT="Interpretador Ruby, e existe aqui por um motivo único: o JavaScriptCore do WebKit gera o interpretador de bytecode dele com o offlineasm, que é escrito em Ruby. O CMake do WebKit faz find_package(Ruby 2.5), e sem ele o build do JSC não sai do lugar. É FERRAMENTA DE BUILD e nada mais — não é declarado em DEPS de ninguém, não vai para o alvo, e nenhum programa do sistema instalado o invoca. Compilado sem as extensões que só serviriam a um Ruby de uso geral, e sem os documentos, que são a maior parte do tempo de build."
 LICENSE=Ruby
@@ -55,7 +60,7 @@ build() {
             if [ "$(head -c 2 "$arquivo")" = "#!" ]; then
                 linha=$(head -1 "$arquivo")
                 case "$linha" in
-                    *"/usr/bin/ruby"*) ;;
+                    *"/usr/bin/ruby"*|*"/usr/bin/env ruby"*) ;;
                     *) printf "%s\t%s\n" "$arquivo" "$linha" ;;
                 esac
             fi

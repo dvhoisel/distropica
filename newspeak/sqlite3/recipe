@@ -16,12 +16,29 @@ build() {
     ./configure \
         --prefix=/usr \
         --libdir=/usr/lib \
+    # --soname=legacy NÃO é cosmético e o padrão do upstream é contra nós: o
+    # autosetup define soname 'none' quando a flag não é passada, e o comentário
+    # em sqlite-config.tcl diz por quê — "this project has no direct use for
+    # soname". Para uma distro, tem: sem DT_SONAME, quem linka grava o CAMINHO
+    # ABSOLUTO no DT_NEEDED. Foi o que aconteceu com o libsoup, que saiu com
+    # `NEEDED /usr/lib/libsqlite3.so`, e derrubou o fechamento parcial com
+    # "DT_NEEDED não é nome ABI canônico" — dois passos depois da causa, e num
+    # pacote diferente. É a mesma classe do libsass (930c42f, 5c0bfd3).
+    # 'legacy' é o valor histórico, libsqlite3.so.0.
         --disable-static \
-        --disable-load-extension
+        --disable-load-extension \
+        --soname=legacy
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
     [ -e "$STAGE/usr/lib/libsqlite3.so" ] || {
         echo "sqlite3: a biblioteca compartilhada não foi produzida" >&2
+        exit 1
+    }
+    # A asserção é a que se quer, e não uma mais fraca que passa junto: exige o
+    # SONAME nomeado, não "é objeto dinâmico".
+    readelf -d "$STAGE"/usr/lib/libsqlite3.so.* 2>/dev/null | grep -q 'SONAME.*libsqlite3\.so\.0' || {
+        echo "sqlite3: saiu sem SONAME — quem linkar grava o caminho absoluto" >&2
+        readelf -d "$STAGE"/usr/lib/libsqlite3.so.* 2>/dev/null | head -6 >&2
         exit 1
     }
     [ -e "$STAGE/usr/lib/pkgconfig/sqlite3.pc" ] || {
