@@ -13,9 +13,6 @@ build() {
     tar -xzf "$DL" --strip-components=1
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
     export CPPFLAGS="-DSQLITE_ENABLE_FTS5=1 -DSQLITE_ENABLE_COLUMN_METADATA=1 -DSQLITE_ENABLE_UNLOCK_NOTIFY=1 -DSQLITE_SECURE_DELETE=1"
-    ./configure \
-        --prefix=/usr \
-        --libdir=/usr/lib \
     # --soname=legacy NÃO é cosmético e o padrão do upstream é contra nós: o
     # autosetup define soname 'none' quando a flag não é passada, e o comentário
     # em sqlite-config.tcl diz por quê — "this project has no direct use for
@@ -25,6 +22,14 @@ build() {
     # "DT_NEEDED não é nome ABI canônico" — dois passos depois da causa, e num
     # pacote diferente. É a mesma classe do libsass (930c42f, 5c0bfd3).
     # 'legacy' é o valor histórico, libsqlite3.so.0.
+    #
+    # E o comentário fica AQUI, antes do comando, e não entre as opções: uma
+    # linha de comentário no meio de uma continuação `\` encerra o comando, e o
+    # `sh -n` não acusa porque a sintaxe continua válida. Foi assim que a
+    # retomada anterior morreu com "/bin/sh: --disable-static: not found".
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
         --disable-static \
         --disable-load-extension \
         --soname=legacy
