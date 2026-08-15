@@ -24,6 +24,20 @@ SHA256="8a531a9abd2215936e8a8a914c077b586c0228b31d652f205286a8ec90f3364b"
 build() {
     tar -xJf "$DL" --strip-components=1
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # USE_SYSPROF_CAPTURE=OFF, e aqui a escolha é o OPOSTO da do unifdef, de
+    # propósito. O CMake oferece dois caminhos — usar a libsysprof-capture-4 do
+    # sistema, ou compilar a cópia em ThirdParty/libsysprof-capture, que existe
+    # no tarball (34 arquivos, conferido). Não se toma nenhum dos dois: uma
+    # ÚNICA chave desliga o recurso inteiro, porque
+    # WEBKIT_OPTION_DEPEND(USE_SYSTEM_SYSPROF_CAPTURE USE_SYSPROF_CAPTURE) faz a
+    # do sistema depender desta, e com ela OFF os dois ramos do if ficam falsos.
+    #
+    # O que é: buffer de tracing para profiling. Numa árvore que recusou LLVM,
+    # GStreamer, vídeo, WebRTC, síntese de voz, gamepad e hifenização, telemetria
+    # de desempenho do navegador é a coisa mais dispensável da lista. Diferente
+    # do unifdef, que é FERRAMENTA e sem ele o build não sai, este é RECURSO — e
+    # a resposta certa para recurso indesejado é desligar, não embutir.
+
     # USE_SYSTEM_UNIFDEF=OFF, e este é o caso em que embutir está CERTO. O
     # Source/CMakeLists.txt faz `if (USE_SYSTEM_UNIFDEF) find_package(Unifdef
     # REQUIRED) else() add_subdirectory(ThirdParty/unifdef) endif()`, e a opção
@@ -91,6 +105,7 @@ build() {
         -DUSE_LIBHYPHEN=OFF \
         -DUSE_LIBBACKTRACE=OFF \
         -DUSE_SYSTEM_UNIFDEF=OFF \
+        -DUSE_SYSPROF_CAPTURE=OFF \
         -DUSE_SYSTEMD=OFF
     ninja -C build -j"$JOBS"
     DESTDIR="$STAGE" ninja -C build install
