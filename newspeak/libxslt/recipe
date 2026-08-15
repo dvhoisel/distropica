@@ -3,7 +3,13 @@ VERSION=1.1.43
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc libxml2 busybox"
-BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf libxml2"
+# gawk: o configure gerado pelo autoconf usa $AWK dentro do config.status,
+# e sem ele a configuração morre em "config.status: error: could not create
+# ..." depois de já ter respondido a todos os testes — erro tardio e de
+# leitura ruim. Conferido no configure da fonte pinada, não suposto: são 8 a
+# 12 usos de $AWK na seção do config.status. É a convenção da árvore, que
+# tem 75 receitas declarando gawk pelo mesmo motivo.
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf libxml2 gawk"
 ABOUT="Processador XSLT e o xsltproc usado pelos geradores do GIMP. A 1.1.43 é a última versão compatível com a série libxml2 2.13 fixada pela base; 1.1.44 e 1.1.45 exigem libxml2 2.15.1. Python, extensões criptográficas, plugins, depurador e profiler ficam desligados; as bibliotecas compartilhadas e a ferramenta de transformação permanecem."
 LICENSE=MIT
 SRC="https://download.gnome.org/sources/libxslt/1.1/libxslt-$VERSION.tar.xz"

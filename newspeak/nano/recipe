@@ -3,7 +3,13 @@ VERSION=9.2
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc ncurses"
-BUILD_DEPS="make gcc-pass2 binutils-glibc"
+# gawk: o configure gerado pelo autoconf usa $AWK dentro do config.status,
+# e sem ele a configuração morre em "config.status: error: could not create
+# ..." depois de já ter respondido a todos os testes — erro tardio e de
+# leitura ruim. Conferido no configure da fonte pinada, não suposto: são 8 a
+# 12 usos de $AWK na seção do config.status. É a convenção da árvore, que
+# tem 75 receitas declarando gawk pelo mesmo motivo.
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk"
 ABOUT="editor de texto opcional; receita online-only que baixa a fonte oficial do GNU nano e a compila localmente com a toolchain nativa"
 LICENSE=GPL-3.0-or-later
 SRC="https://ftp.gnu.org/gnu/nano/nano-$VERSION.tar.xz"

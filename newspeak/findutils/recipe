@@ -3,7 +3,13 @@ VERSION=4.11.0
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc busybox"
-BUILD_DEPS="make gcc-pass2 binutils-glibc"
+# gawk: o configure gerado pelo autoconf usa $AWK dentro do config.status,
+# e sem ele a configuração morre em "config.status: error: could not create
+# ..." depois de já ter respondido a todos os testes — erro tardio e de
+# leitura ruim. Conferido no configure da fonte pinada, não suposto: são 8 a
+# 12 usos de $AWK na seção do config.status. É a convenção da árvore, que
+# tem 75 receitas declarando gawk pelo mesmo motivo.
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk"
 SUPERSEDES="busybox"
 ABOUT="GNU find, xargs e locate. Entra por necessidade demonstrada, e a demonstração é específica: o gerador de initramfs do kernel (usr/gen_initramfs.sh) monta a lista de arquivos com 'find -printf \"%p %m %U %G\"', e o find do BusyBox não tem -printf — ele responde 'unrecognized: -printf' e devolve lista VAZIA. O kernel então embute um initramfs de 512 bytes com dois nós de dispositivo e nada mais, e a máquina boota até 'check access for rdinit=/init failed'. Sem GNU find a Distrópica não consegue construir o próprio kernel vivo, o que a tornava dependente do hospedeiro justamente para produzir a mídia. Supersede o applet do BusyBox, que fica para trás por não implementar a interface exigida. O locate não é instalado: ele pressupõe um banco atualizado por cron, que esta distro não tem."
 LICENSE=GPL-3.0-or-later

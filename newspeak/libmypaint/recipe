@@ -3,7 +3,13 @@ VERSION=1.6.1
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc json-c"
-BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf json-c"
+# gawk: o configure gerado pelo autoconf usa $AWK dentro do config.status,
+# e sem ele a configuração morre em "config.status: error: could not create
+# ..." depois de já ter respondido a todos os testes — erro tardio e de
+# leitura ruim. Conferido no configure da fonte pinada, não suposto: são 8 a
+# 12 usos de $AWK na seção do config.status. É a convenção da árvore, que
+# tem 75 receitas declarando gawk pelo mesmo motivo.
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf json-c gawk"
 ABOUT="Motor de pincéis MyPaint usado pelos pincéis paramétricos do GIMP. A biblioteca C usa apenas json-c; bindings GLib, introspecção, GEGL, OpenMP, documentação e traduções ficam fora para não duplicar APIs."
 LICENSE=ISC
 SRC="https://github.com/mypaint/libmypaint/releases/download/v$VERSION/libmypaint-$VERSION.tar.xz"

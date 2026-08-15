@@ -3,7 +3,13 @@ VERSION=2.19.1
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc zlib"
-BUILD_DEPS="gcc-pass2 binutils-glibc make zlib"
+# gawk: o configure gerado pelo autoconf usa $AWK dentro do config.status,
+# e sem ele a configuração morre em "config.status: error: could not create
+# ..." depois de já ter respondido a todos os testes — erro tardio e de
+# leitura ruim. Conferido no configure da fonte pinada, não suposto: são 8 a
+# 12 usos de $AWK na seção do config.status. É a convenção da árvore, que
+# tem 75 receitas declarando gawk pelo mesmo motivo.
+BUILD_DEPS="gcc-pass2 binutils-glibc make zlib gawk"
 ABOUT="Little CMS, o motor ICC usado diretamente pelo GIMP e pelo babl. A biblioteca mantém compressão de perfis via zlib e suporte a threads; JPEG, TIFF e plugins GPL ficam desligados porque pertencem aos utilitários de conversão, não à transformação ICC consumida pelo editor."
 LICENSE=MIT
 SRC="https://github.com/mm2/Little-CMS/releases/download/lcms2.19.1/lcms2-$VERSION.tar.gz"
