@@ -4983,8 +4983,36 @@ fn persist_applied_receipt(
         .collect();
     let record_snapshot = snapshot_record_directory(ctx)?
         .ok_or_else(|| anyhow::anyhow!("receipt global perdeu o diretório de records"))?;
-    if record_snapshot.names() != expected_records {
-        bail!("diretório de records não coincide exatamente com o world resolvido");
+    // DUAS ASSERÇÕES, e não uma igualdade. A igualdade exigia que o diretório de
+    // records fosse EXATAMENTE o mundo runtime, e isso nunca pode valer: o
+    // ferramental de build grava record como qualquer outro pacote, e ele é
+    // identity-only por definição. Medido na primeira base que chegou a fechar
+    // desde que esta checagem existe — 167 nós, 126 runtime e 41 identity-only,
+    // com os 41 sobrando e nada faltando. gcc, bison, meson, ninja, python, zig,
+    // os overlays -introspection: nenhum vai para a superfície, e todos deixam
+    // record porque o record é quem responde de quem é cada arquivo.
+    //
+    // O que a igualdade queria garantir eram duas coisas distintas, e as duas
+    // continuam garantidas separadamente: nenhum record órfão de pacote que saiu
+    // do world, e nenhum participante do world sem record. O receipt segue
+    // comprometendo só os runtime, que é o laço logo abaixo.
+    let record_names = record_snapshot.names();
+    let plan_names: BTreeSet<String> = plan.nodes.keys().cloned().collect();
+    let mut orfaos = record_names.difference(&plan_names).peekable();
+    if orfaos.peek().is_some() {
+        let lista: Vec<&str> = orfaos.map(String::as_str).collect();
+        bail!(
+            "diretório de records tem pacote fora do world resolvido: {}",
+            lista.join(" ")
+        );
+    }
+    let mut ausentes = expected_records.difference(&record_names).peekable();
+    if ausentes.peek().is_some() {
+        let lista: Vec<&str> = ausentes.map(String::as_str).collect();
+        bail!(
+            "world resolvido tem participante sem record: {}",
+            lista.join(" ")
+        );
     }
     let mut facts = Vec::new();
     for package in &expected_records {
