@@ -46,14 +46,38 @@ build() {
     module_manifest_sha256=30742e62dbb3ed046b65ffb600afb7c06876936011f31848e6222ee484fbb52c
     module_bundle=../module-signing/bundle
     module_apply=../module-signing/apply-signatures
-    [ "$(sha256sum "$module_bundle/certificate.pem" | awk '{print $1}')" = \
-        "$module_cert_sha256" ] || {
-        echo 'FATAL: certificado publico de modulos diverge'; exit 1;
-    }
-    [ "$(sha256sum "$module_bundle/manifest" | awk '{print $1}')" = \
-        "$module_manifest_sha256" ] || {
-        echo 'FATAL: manifesto publico de modulos diverge'; exit 1;
-    }
+    # SEM `awk`, e pelo mesmo motivo que o dbus e o meson já registraram: a view
+    # desta receita pode nao ter awk nenhum. O busybox cedeu /usr/bin/awk ao
+    # gawk, o gawk nao esta nos BUILD_DEPS daqui, e o symlink pendura — o `awk`
+    # some e a substituicao de comando devolve VAZIO. A comparacao entao falha
+    # anunciando "certificado diverge" com o certificado intacto: o log inteiro
+    # do room101 tinha duas linhas, o FATAL e um `/bin/sh: awk: not found`.
+    # Expansao de parametro nao depende de programa nenhum.
+    #
+    # E a soma e conferida como SOMA antes de ser comparada. Sem isso, qualquer
+    # falha em produzi-la volta a se disfarcar de divergencia — que e a mesma
+    # mentira, so que com outra causa.
+    for par in "certificate.pem:$module_cert_sha256:certificado" \
+               "manifest:$module_manifest_sha256:manifesto"; do
+        arquivo=${par%%:*}; resto=${par#*:}
+        esperado=${resto%%:*}; rotulo=${resto#*:}
+        soma=$(sha256sum "$module_bundle/$arquivo")
+        soma=${soma%% *}
+        case "$soma" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+            *)
+                echo "FATAL: nao consegui somar $arquivo (obtive '$soma')" >&2
+                exit 1
+                ;;
+        esac
+        [ "$soma" = "$esperado" ] || {
+            echo "FATAL: $rotulo publico de modulos diverge" >&2
+            echo "       esperado $esperado" >&2
+            echo "       obtido   $soma" >&2
+            exit 1
+        }
+    done
+    unset par arquivo resto esperado rotulo soma
     install -m644 "$module_bundle/certificate.pem" \
         certs/distropica-module-signing.pem
     # Config base x86_64 (EFI_STUB + virtio + 9p/ext4 builtin → o boot 9p do E3
