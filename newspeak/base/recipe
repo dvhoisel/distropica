@@ -713,10 +713,19 @@ HOSTS
 distropica
 HOST
 
-    cat > "$STAGE/etc/os-release" <<'OSREL'
+    # O NUMERO DA MIDIA MORA AQUI, UMA VEZ SO. Ele saia escrito em DOIS lugares
+    # deste heredoc — PRETTY_NAME e BUILD_ID — e na publicacao da 0.13 eu subi um
+    # e esqueci o outro: o os-release saiu dizendo BUILD_ID="0.13" e
+    # PRETTY_NAME="Distropica 0.12", que e justamente o campo que o usuario le na
+    # tela. Duas fontes para o mesmo fato e defeito, nao redundancia.
+    #
+    # O heredoc perdeu as aspas para que $MIDIA expanda. Conferido que o bloco
+    # nao tem nenhum outro $, crase ou barra invertida que fosse expandir junto.
+    MIDIA=0.13
+    cat > "$STAGE/etc/os-release" <<OSREL
 NAME="Distropica"
 ID=distropica
-PRETTY_NAME="Distropica 0.12 (edge/rolling)"
+PRETTY_NAME="Distropica $MIDIA (edge/rolling)"
 VERSION="rolling"
 # O numero da MIDIA, e nao da distro. VERSION continua "rolling" porque a
 # premissa e essa: nao ha versao do sistema a que se atualizar, ha o estado
@@ -732,10 +741,21 @@ VERSION="rolling"
 # se apresentasse como "0.11" seria um segundo artefato reivindicando a
 # identidade do primeiro — a 0.11 publicada é o sha256 3b4a2b6f, e nenhum outro
 # arquivo pode dizer que é ela.
-BUILD_ID="0.12"
+BUILD_ID="$MIDIA"
 ANSI_COLOR="1;30"
 HOME_URL="https://github.com/dvhoisel/distropica"
 OSREL
+
+    # A guarda que impede a divergencia voltar: os dois campos tem de dizer o
+    # MESMO numero, e ele tem de ser o de $MIDIA. Uma guarda que so conferisse
+    # "existe BUILD_ID" passaria pelo defeito que acabou de acontecer.
+    osrel_pretty=$(sed -n 's/^PRETTY_NAME="Distropica \([^ ]*\) .*/\1/p' "$STAGE/etc/os-release")
+    osrel_build=$(sed -n 's/^BUILD_ID="\(.*\)"/\1/p' "$STAGE/etc/os-release")
+    [ "$osrel_pretty" = "$MIDIA" ] && [ "$osrel_build" = "$MIDIA" ] || {
+        echo "base: os-release diverge — MIDIA=$MIDIA, PRETTY_NAME=$osrel_pretty, BUILD_ID=$osrel_build" >&2
+        exit 1
+    }
+    unset osrel_pretty osrel_build
 
     cat > "$STAGE/etc/motd" <<'MOTD'
 Distrópica development

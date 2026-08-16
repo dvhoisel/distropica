@@ -26,7 +26,7 @@ trust=$(sed -n 's/^TRUST=//p' "$CONFIG")
     echo "erro: URL oficial inesperada: $url" >&2
     exit 1
 }
-[ "$key" = 'RWQXESsMzaikZ69ZZDbdf02LU8K+U56UvYHlpkgMrXGcE/X3QvtKPyLI' ] || {
+[ "$key" = 'RWTyeVWVvqb7I2xJTPn5iPM3DhNaE3VrV4ZK42YI4fwVXEk0b1+SbEOM' ] || {
     echo "erro: chave pública oficial inesperada" >&2
     exit 1
 }
