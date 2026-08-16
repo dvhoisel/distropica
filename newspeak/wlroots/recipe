@@ -2,8 +2,27 @@ NAME=wlroots
 VERSION=0.20.2
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc wayland libxkbcommon pixman libdrm libinput seatd eudev libdisplay-info hwdata"
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf wayland-protocols busybox"
+DEPS="glibc wayland libxkbcommon pixman libdrm libinput seatd eudev libdisplay-info"
+# hwdata-pnp NO LUGAR DE hwdata, e em BUILD_DEPS e não em DEPS. São duas correções
+# numa linha, e as duas vieram de ler o meson em vez de confiar no nome.
+#
+# O backend/drm/meson.build:1 faz dependency('hwdata'), mas quem instala o
+# hwdata.pc nesta árvore é o hwdata-pnp — o pacote `hwdata` traz só pci.ids e
+# usb.ids, dois arquivos, e nenhum .pc. Declarar `hwdata` punha na view o pacote
+# errado: o .pc existia na raiz e mesmo assim faltava aqui, porque a view se monta
+# do que a receita DECLARA. O erro saiu como "Run-time dependency hwdata found: NO
+# (tried pkg-config)" depois de toda a configuração ter passado.
+#
+# E é BUILD e não runtime porque a tabela vira CÓDIGO: o meson lê pkgdatadir do
+# .pc, passa o pnp.ids pelo gen_pnpids.sh e o pnpids.c resultante entra em
+# wlr_files. Depois de compilado, nada do wlroots volta a abrir o arquivo —
+# conferido, wlroots não menciona pci.ids nem usb.ids em lugar nenhum. É o mesmo
+# uso que a libdisplay-info faz, e está escrito no ABOUT do hwdata-pnp.
+#
+# O gen_pnpids.sh é sh puro (read, printf, cat), então o busybox já em BUILD_DEPS
+# basta — conferido linha a linha, porque script de geração que chama awk foi o
+# que derrubou o libyaml.
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf wayland-protocols busybox hwdata-pnp"
 ABOUT="O MOTOR do compositor. Não é um compositor: é a biblioteca que implementa backend de KMS/DRM, entrada por libinput, sessão por libseat e a árvore de cenas, e sobre a qual o labwc é escrito. Existe aqui por causa dele, e a faixa é exata — o labwc 0.20 exige >=0.20.1 <0.21, e os dois sobem juntos. SEM GL, e isto foi medido no meson da fonte pinada, não lido em documentação: 'renderers' é um array de escolhas gles2/vulkan que pode ficar VAZIO, o subdir('pixman') está fora de qualquer condição, e egl/gbm/glesv2 só viram dependência dentro do ramo 'gles2 in renderers'. Com -Drenderers=[] o renderizador de software é o único construído, e é o mesmo modelo que esta árvore já roda no weston: compor em buffer dumb do KMS, sem EGL e sem GBM. Pelo mesmo motivo -Dallocators=[]: o drm_dumb.c é incondicional, o gbm.c só entra se 'gbm' estiver no array, e com Mesa softpipe o GBM não acrescenta nada além da chance de não achar driver. XWayland desligado: o wlroots não fala X11 e nenhuma janela X roda sobre ele. Isso NÃO significa closure sem X11 — o libx11/libxcb/libxrender entram assim mesmo, pelo cairo, que esta árvore constrói com os backends X. É a mesma situação do weston, que também depende de cairo e pango; tirar o X11 de vez é decisão do cairo, não desta receita. A sessão é obrigatória e não opcional: o meson recusa 'session=disabled' junto com os backends drm/libinput, e é ela que exige libseat (seatd) e libudev (eudev); o backend DRM ainda exige hwdata e libdisplay-info para ler o EDID. Licença MIT, ~103 mil linhas de C dinâmico, que o audit enxerga inteiro. A fonte não é assinada pelo upstream — o GitLab do freedesktop publica só o tarball —, então o pino é o SHA256, igual ao libinput e ao libdisplay-info, que vêm do mesmo lugar."
 LICENSE=MIT
 SRC="https://gitlab.freedesktop.org/wlroots/wlroots/-/releases/$VERSION/downloads/wlroots-$VERSION.tar.gz"
