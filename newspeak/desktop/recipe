@@ -456,9 +456,17 @@ THEMERC
     # drop-ins pertencem aos pacotes dbus e connman. E ABORTA em vez de avisar:
     # publicar uma entrada de menu que nao faz nada e publicar funcionalidade
     # que nao existe.
+    #
+    # O CAMINHO E O DE FABRICA, e nao /etc. Esta guarda nasceu procurando
+    # /etc/rc.d/rcS.d/06-dbus.sh e NUNCA PODERIA TER PASSADO: dbus, connman,
+    # alsa-utils, iwd e o proprio base entregam seus drop-ins como
+    # /usr/share/factory/etc/rc.d/rcS.d/<nome>, conferido nos manifests dos
+    # cinco, e a materializacao em /etc acontece na INSTALACAO, nao na view de
+    # build. Dentro da view so existe o caminho de fabrica. Nao apareceu antes
+    # porque nenhuma cadeia desde b0e35be tinha chegado ate aqui.
     for exigencia in \
-        "miniluv:/etc/rc.d/rcS.d/06-dbus.sh:sem barramento D-Bus do sistema o miniluv nao acha o connman" \
-        "miniluv:/etc/rc.d/rcS.d/09-connman.sh:sem o daemon connman o miniluv abre e nao lista rede nenhuma"; do
+        "miniluv:/usr/share/factory/etc/rc.d/rcS.d/06-dbus.sh:sem barramento D-Bus do sistema o miniluv nao acha o connman" \
+        "miniluv:/usr/share/factory/etc/rc.d/rcS.d/09-connman.sh:sem o daemon connman o miniluv abre e nao lista rede nenhuma"; do
         lancador=${exigencia%%:*}
         resto=${exigencia#*:}
         arquivo=${resto%%:*}
