@@ -2,7 +2,25 @@ NAME=linux
 VERSION=7.1.8
 KIND=source
 TOOLCHAIN=native
-BUILD_DEPS="gcc-pass2 binutils-glibc flex bison elfutils perl openssl make"
+# gawk: o KERNEL precisa de awk, e não a receita. São duas coisas diferentes que
+# se confundiram numa noite só. A guarda do certificado usava awk e foi reescrita
+# sem ele (expansão de parâmetro), porque guarda não deve depender de ferramenta;
+# mas o build do 7.1.8 invoca awk por conta própria em dois pontos do caminho
+# obrigatório do x86_64 — arch/x86/Makefile:274, gerando
+# arch/x86/include/generated/asm/cpufeaturemasks.h, e scripts/orc_hash.sh:9, que
+# entra com o unwinder ORC. Ambos morreram com Error 127.
+#
+# É `gawk` e não `busybox` porque /usr/bin/awk é symlink do gawk nesta árvore, e o
+# busybox não reivindica esse caminho — dentro da view sem gawk o symlink pendura.
+# Cinco receitas já declaravam gawk pelo mesmo motivo: alsa-utils, glibc,
+# libevent, python e python-glibc.
+#
+# Varridas as outras ferramentas que o kernel invoca, contra a raiz e contra a
+# config desta receita: bc vem do busybox; python3, sed, gzip, xz, tar, cpio,
+# objcopy, readelf e nm estão presentes; rsync, pahole, zstd e lz4 NÃO existem na
+# árvore e não fazem falta, porque a config não liga DEBUG_INFO_BTF nem compressão
+# zstd/lz4. Conferido antes de acrescentar, para não descobrir uma por hora.
+BUILD_DEPS="gcc-pass2 binutils-glibc flex bison elfutils perl openssl make gawk"
 ABOUT="O kernel. Mundo B por necessidade: o kernel.org só publica FONTE — não há binário oficial (um kernel é sempre específico de um .config), e binários de distro são inelegíveis (SPEC-0001 §2, SPEC-0007). Edge (P7): acompanha o stable mais recente do kernel.org, não um LTS congelado. Compilado com o gcc NATIVO do E2. MÓDULOS ASSINADOS REPRODUTÍVEIS: MODULE_SIG_FORCE confia em certificado público fixo; o build produz .ko unsigned determinístico, confere hash/cobertura e reaplica com sign-file -s um CMS público pinado por módulo. Nenhuma chave privada entra no worktree, rootfs ou build. HOSTLDFLAGS -rpath-link permite a extract-cert/sign-file/objtool resolver libcrypto/libelf e libz transitiva."
 LICENSE="GPL-2.0-only"
 SRC="https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$VERSION.tar.xz"
