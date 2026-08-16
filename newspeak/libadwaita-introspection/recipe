@@ -1,0 +1,49 @@
+NAME=libadwaita-introspection
+VERSION=1.9.3
+KIND=source
+TOOLCHAIN=native
+DEPS="libadwaita glib-introspection gobject-introspection gtk4-introspection"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc setuptools sassc gettext glib glib-introspection gobject-introspection gtk4 gtk4-introspection pango pango-introspection cairo fontconfig appstream fribidi graphene graphene-introspection"
+ABOUT="Overlay de canal com o namespace GIR Adw-1, pelo mesmo motivo do overlay do GTK4 e na mesma medida: dos 37 arquivos .blp do Epiphany, 28 abrem também com 'using Adw 1'. O src/meson.build da fonte pinada declara includes: ['Gio-2.0', 'Gtk-4.0'] na linha 471 — daí a dependência explícita do gtk4-introspection, que por sua vez encadeia o resto. O stage fechado tem dois arquivos, o .gir e o .typelib; a receita-base segue com introspection desligada e é ela que vai para a superfície."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/libadwaita/1.9/libadwaita-$VERSION.tar.xz"
+SHA256="fc59b37028fe0126308e7b805d2f6e4e80227080a1797715e5e6286b8111e723"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    export SETUPTOOLS_USE_DISTUTILS=local
+    # Opções idênticas às da receita-base, exceto introspection: o typelib tem de
+    # descrever a libadwaita instalada, e não uma variante.
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dintrospection=enabled \
+        -Dvapi=false \
+        -Ddocumentation=false \
+        -Dgtk_doc=false \
+        -Dexamples=false \
+        -Dtests=false \
+        -Dprofiling=false
+    ninja -C build -j"$JOBS" src/Adw-1.typelib
+
+    install -dm755 "$STAGE/usr/share/gir-1.0" \
+                   "$STAGE/usr/lib/girepository-1.0"
+    install -m644 build/src/Adw-1.gir "$STAGE/usr/share/gir-1.0/"
+    install -m644 build/src/Adw-1.typelib "$STAGE/usr/lib/girepository-1.0/"
+
+    [ "$(find "$STAGE" -type f | wc -l)" -eq 2 ] || {
+        echo "libadwaita-introspection: stage não contém exatamente 2 arquivos" >&2
+        find "$STAGE" -mindepth 1 >&2
+        exit 1
+    }
+    [ -z "$(find "$STAGE" -type l -print -quit)" ] || {
+        echo "libadwaita-introspection: symlink fora da allowlist" >&2
+        exit 1
+    }
+    ! grep -R -a -F "$WORK" "$STAGE" >/dev/null || {
+        echo "libadwaita-introspection: caminho do build vazou no payload" >&2
+        exit 1
+    }
+}

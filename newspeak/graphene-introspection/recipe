@@ -1,0 +1,48 @@
+NAME=graphene-introspection
+VERSION=1.10.8
+KIND=source
+TOOLCHAIN=native
+DEPS="graphene glib-introspection"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools glib glib-introspection gobject-introspection"
+ABOUT="Overlay de canal com o namespace GIR Graphene-1.0, e existe por um elo só: o Gsk-4.0 do GTK4 o declara em includes, e sem ele o typelib do Gtk-4.0 não se gera. Conferido no gtk/meson.build da fonte pinada do GTK4, linha 1198 — gsk_gir_inc = [ gdk_gir[0], 'Graphene-1.0' ]. Como toda receita -introspection desta árvore, não duplica biblioteca nem cabeçalho: o stage fechado tem dois arquivos, o .gir e o .typelib. A receita-base do graphene segue com introspection desligada, e é ela que vai para a superfície."
+LICENSE=MIT
+SRC="https://github.com/ebassi/graphene/archive/refs/tags/$VERSION.tar.gz"
+SHA256=922dc109d2dc5dc56617a29bd716c79dd84db31721a8493a13a5f79109a4a4ed
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    export SETUPTOOLS_USE_DISTUTILS=local
+    # As opções espelham as da receita-base, e isso NÃO é zelo estético: o GIR
+    # descreve a API que foi compilada. Configurar diferente aqui produziria um
+    # typelib que descreve um graphene que não é o instalado.
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dgobject_types=true \
+        -Dintrospection=enabled \
+        -Dgtk_doc=false \
+        -Dtests=false \
+        -Dinstalled_tests=false
+    ninja -C build -j"$JOBS" src/Graphene-1.0.typelib
+
+    install -dm755 "$STAGE/usr/share/gir-1.0" \
+                   "$STAGE/usr/lib/girepository-1.0"
+    install -m644 build/src/Graphene-1.0.gir "$STAGE/usr/share/gir-1.0/"
+    install -m644 build/src/Graphene-1.0.typelib "$STAGE/usr/lib/girepository-1.0/"
+
+    [ "$(find "$STAGE" -type f | wc -l)" -eq 2 ] || {
+        echo "graphene-introspection: stage não contém exatamente 2 arquivos" >&2
+        find "$STAGE" -mindepth 1 >&2
+        exit 1
+    }
+    [ -z "$(find "$STAGE" -type l -print -quit)" ] || {
+        echo "graphene-introspection: symlink fora da allowlist" >&2
+        exit 1
+    }
+    ! grep -R -a -F "$WORK" "$STAGE" >/dev/null || {
+        echo "graphene-introspection: caminho do build vazou no payload" >&2
+        exit 1
+    }
+}

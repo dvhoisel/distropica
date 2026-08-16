@@ -1,0 +1,77 @@
+NAME=gtk4-introspection
+VERSION=4.22.4
+KIND=source
+TOOLCHAIN=native
+DEPS="gtk4 glib-introspection gobject-introspection harfbuzz-introspection pango-introspection gdk-pixbuf-introspection graphene-introspection"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools gettext wayland-protocols glib glib-introspection gobject-introspection harfbuzz harfbuzz-introspection pango pango-introspection gdk-pixbuf gdk-pixbuf-introspection graphene graphene-introspection cairo libepoxy fribidi wayland libxkbcommon mesa fontconfig freetype"
+ABOUT="Overlay de canal com Gdk-4.0, Gsk-4.0 e Gtk-4.0. Não existe por gosto de completude: o blueprint-compiler valida cada .blp carregando o typelib do namespace declarado, e os 37 arquivos do Epiphany abrem com 'using Gtk 4.0'. Sem este overlay o build do navegador morre no objeto 98 de 339 com 'Namespace Gtk-4.0 could not be found', citando a busca em /usr/lib/girepository-1.0. Encadeia explicitamente os overlays que os includes do GIR exigem, todos lidos do gtk/meson.build da fonte pinada e não supostos: o Gdk pede cairo-1.0, Gio-2.0, GdkPixbuf-2.0, Pango-1.0 e PangoCairo-1.0 (linha 1089); o Gsk pede Gdk mais Graphene-1.0 (1198); e o Gtk pede Gdk e Gsk (1244). O stage fechado tem seis arquivos GIR/typelib e nenhuma biblioteca. Fica de fora o GdkWayland-4.0, que é o análogo do GdkX11-3.0 do overlay do GTK3: nenhum .blp desta árvore o nomeia, e o Gtk-4.0 não o inclui. É ferramenta de build e não vai para a superfície."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/gtk/4.22/gtk-$VERSION.tar.xz"
+SHA256=51bd9f60c7d23a665a556c7364c21fb2e4e282566b3e7e092455e8f910330893
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    export SETUPTOOLS_USE_DISTUTILS=local
+    # AS OPÇÕES SÃO AS DA RECEITA-BASE, uma a uma, mudando SÓ introspection. O
+    # GIR descreve a API QUE FOI COMPILADA: se aqui entrasse o backend X11, ou
+    # Vulkan, ou o media-gstreamer, o typelib anunciaria ao blueprint-compiler
+    # símbolos que o gtk4 instalado não tem. É a mesma disciplina do
+    # gtk3-introspection, e o motivo de a divergência ser um defeito e não uma
+    # variação inofensiva.
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dwayland-backend=true \
+        -Dx11-backend=false \
+        -Dbroadway-backend=false \
+        -Dwin32-backend=false \
+        -Dmacos-backend=false \
+        -Dandroid-backend=false \
+        -Dvulkan=disabled \
+        -Dmedia-gstreamer=disabled \
+        -Dprint-cups=disabled \
+        -Dprint-cpdb=disabled \
+        -Dcloudproviders=disabled \
+        -Dsysprof=disabled \
+        -Dtracker=disabled \
+        -Dcolord=disabled \
+        -Daccesskit=disabled \
+        -Dintrospection=enabled \
+        -Ddocumentation=false \
+        -Dscreenshots=false \
+        -Dman-pages=false \
+        -Dbuild-demos=false \
+        -Dbuild-testsuite=false \
+        -Dbuild-examples=false \
+        -Dbuild-tests=false
+    # Os três em gtk/ e não em gdk/ e gsk/: no GTK4 há UMA libgtk, e as três
+    # chamadas de generate_gir vivem no gtk/meson.build. É onde o GTK3 difere, e
+    # copiar os caminhos do overlay dele daria alvo inexistente.
+    ninja -C build -j"$JOBS" \
+        gtk/Gdk-4.0.typelib \
+        gtk/Gsk-4.0.typelib \
+        gtk/Gtk-4.0.typelib
+
+    install -dm755 "$STAGE/usr/share/gir-1.0" \
+                   "$STAGE/usr/lib/girepository-1.0"
+    for namespace in Gdk-4.0 Gsk-4.0 Gtk-4.0; do
+        install -m644 "build/gtk/$namespace.gir" "$STAGE/usr/share/gir-1.0/"
+        install -m644 "build/gtk/$namespace.typelib" "$STAGE/usr/lib/girepository-1.0/"
+    done
+
+    [ "$(find "$STAGE" -type f | wc -l)" -eq 6 ] || {
+        echo "gtk4-introspection: stage não contém exatamente 6 arquivos" >&2
+        find "$STAGE" -mindepth 1 >&2
+        exit 1
+    }
+    [ -z "$(find "$STAGE" -type l -print -quit)" ] || {
+        echo "gtk4-introspection: symlink fora da allowlist" >&2
+        exit 1
+    }
+    ! grep -R -a -F "$WORK" "$STAGE" >/dev/null || {
+        echo "gtk4-introspection: caminho do build vazou no payload" >&2
+        exit 1
+    }
+}
