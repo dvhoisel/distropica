@@ -2,7 +2,13 @@ NAME=labwc
 VERSION=0.20.1
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc wlroots wayland libxkbcommon pixman libinput libdrm libxml2 glib cairo pango libpng"
+DEPS="glibc wlroots wayland libxkbcommon pixman libinput libdrm libxml2 glib cairo pango libpng hicolor-icon-theme"
+# hicolor-icon-theme: o meson.build instala labwc.svg e labwc-symbolic.svg em
+# datadir/icons/hicolor/scalable/apps, incondicionalmente (foreach sem guarda,
+# linhas 225-229 da fonte pinada). Esse é o único SHARED_DIRS da árvore, e o minitrue
+# recusa quem escreve lá sem declarar o dono. Descoberto pela varredura depois
+# que o Epiphany caiu pelo mesmo motivo — aqui teria custado uma cadeia inteira
+# a mais, porque o labwc só constrói depois do wlroots.
 # xorgproto: quem roda pkg-config em cairo (ou em x11/xext/xrender) precisa dos
 # .pc dos PROTOCOLOS, e eles são do xorgproto. A cadeia é indireta e por isso
 # passava despercebida: cairo.pc traz `Requires.private: ... x11, xext, xrender`,

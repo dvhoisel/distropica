@@ -2,7 +2,14 @@ NAME=epiphany
 VERSION=49.9.1
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc glib gtk4 libadwaita webkitgtk libsoup libsecret gcr json-glib libarchive libportal libxml2 sqlite3 nettle iso-codes gsettings-desktop-schemas gstreamer cairo pango gdk-pixbuf"
+DEPS="glibc glib gtk4 libadwaita webkitgtk libsoup libsecret gcr json-glib libarchive libportal libxml2 sqlite3 nettle iso-codes gsettings-desktop-schemas gstreamer cairo pango gdk-pixbuf hicolor-icon-theme"
+# hicolor-icon-theme: o data/meson.build instala org.gnome.Epiphany.svg em
+# icons/hicolor/scalable/apps e o -symbolic.svg em icons/hicolor/symbolic/apps,
+# e esse diretório é o ÚNICO SHARED_DIRS da árvore inteira. O minitrue recusa
+# quem escreve lá sem declarar o dono — "doublethink detectado: ... está sob
+# diretório compartilhado ... mas hicolor-icon-theme não é DEPS direta". Não é
+# formalidade: o pacote precisa mesmo do tema instalado, porque o ícone dele só
+# tem sentido dentro da árvore de diretórios que o hicolor define.
 # xorgproto: quem roda pkg-config em cairo (ou em x11/xext/xrender) precisa dos
 # .pc dos PROTOCOLOS, e eles são do xorgproto. A cadeia é indireta e por isso
 # passava despercebida: cairo.pc traz `Requires.private: ... x11, xext, xrender`,
