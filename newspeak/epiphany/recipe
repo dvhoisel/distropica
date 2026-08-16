@@ -115,8 +115,20 @@ build() {
     # ELF aponta para eles, e sem eles o navegador aborta ao ler a primeira
     # preferencia. O gschemas.compiled em si e recompilado no boot pelo drop-in
     # do pacote 'desktop', entao a copia parcial daqui sai.
-    [ -e "$STAGE/usr/share/glib-2.0/schemas/org.gnome.Epiphany.gschema.xml" ] || {
+    #
+    # O NOME É MINÚSCULO, e a inconsistência é do upstream: o arquivo de
+    # esquema é org.gnome.epiphany.gschema.xml enquanto o .desktop logo acima é
+    # org.gnome.Epiphany.desktop. Os IDs DENTRO do arquivo são capitalizados
+    # (org.gnome.Epiphany.web, .webapp, .state), e é daí que vem a confusão. Esta
+    # guarda já falhou uma vez procurando o E maiúsculo, depois de o build ter
+    # compilado os 339 objetos e instalado tudo. Conferido no tarball pinado:
+    # data/org.gnome.epiphany.gschema.xml, um único arquivo.
+    #
+    # O `ls` no erro não é enfeite — é o que teria mostrado o nome verdadeiro na
+    # primeira falha em vez de na segunda.
+    [ -e "$STAGE/usr/share/glib-2.0/schemas/org.gnome.epiphany.gschema.xml" ] || {
         echo "epiphany: o esquema do GSettings nao foi instalado" >&2
+        ls "$STAGE/usr/share/glib-2.0/schemas" 2>/dev/null >&2
         exit 1
     }
     rm -f "$STAGE/usr/share/glib-2.0/schemas/gschemas.compiled"
