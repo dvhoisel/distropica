@@ -2,7 +2,13 @@ NAME=epiphany
 VERSION=49.9.1
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc glib gtk4 libadwaita webkitgtk libsoup libsecret gcr json-glib libarchive libportal libxml2 sqlite3 nettle iso-codes gsettings-desktop-schemas gstreamer cairo pango gdk-pixbuf hicolor-icon-theme"
+DEPS="glibc glib gtk4 libadwaita webkitgtk libsoup libsecret gcr json-glib libarchive libportal libxml2 sqlite3 nettle iso-codes gsettings-desktop-schemas gstreamer cairo pango gdk-pixbuf hicolor-icon-theme mathlibs-glibc"
+# mathlibs-glibc: a lib/sync/libephysync.so liga libgmp.so.10 DIRETAMENTE, e não
+# por engano — o código de sincronização com a conta Firefox chama a hogweed da
+# nettle, que é a metade de chave pública e é justamente a que usa GMP. Medido
+# pela auditoria no ELF construído, que é o único jeito: nada no meson.build
+# nomeia gmp, e a nettle aparece em DEPS como se bastasse. É a mesma lição das
+# cinco DEPS que faltavam no webkitgtk.
 # hicolor-icon-theme: o data/meson.build instala org.gnome.Epiphany.svg em
 # icons/hicolor/scalable/apps e o -symbolic.svg em icons/hicolor/symbolic/apps,
 # e esse diretório é o ÚNICO SHARED_DIRS da árvore inteira. O minitrue recusa

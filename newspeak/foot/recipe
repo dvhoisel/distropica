@@ -8,7 +8,7 @@ DEPS="glibc fcft fontconfig pixman libxkbcommon wayland ncurses hicolor-icon-the
 # guarda na linha 434. Esse é o único SHARED_DIRS da árvore, e o minitrue recusa
 # quem escreve lá sem declarar o dono. Mesma causa da queda do Epiphany.
 BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox tllist wayland-protocols ncurses"
-ABOUT="O EMULADOR DE TERMINAL. Devolve à sessão gráfica o que saiu junto com o weston: o weston-terminal era o único desta árvore, e sem substituto o modo gráfico teria navegador e rede e nenhuma forma de rodar um comando sem voltar para a tty. É cliente Wayland nativo, escrito em C, sem toolkit — não usa GTK nem Qt, desenha direto em superfície pixman com os glifos que o fcft rasteriza. A closure inteira dele são três receitas pequenas, e nenhuma linha de C++. O 'utmp-backend' é a opção que mais importa aqui e vem de fábrica em 'auto', que no Linux escolhe o libutempter — biblioteca que esta árvore não tem, e que faria o build variar conforme o que estivesse instalado na raiz. Fica em 'none': sem registro em utmp, o 'who' não lista a sessão do terminal, e essa é a troca. Sem IME, que serve a métodos de entrada de escritas asiáticas e traz complexidade de protocolo sem usuário aqui; sem clusterização de grafema, coerente com o fcft construído sem shaping; sem docs, que exigiriam scdoc. O terminfo É construído e instalado, e isso não é opcional: sem ele TERM=foot não resolve e programas de tela inteira desenham lixo."
+ABOUT="O EMULADOR DE TERMINAL. Devolve à sessão gráfica o que saiu junto com o weston: o weston-terminal era o único desta árvore, e sem substituto o modo gráfico teria navegador e rede e nenhuma forma de rodar um comando sem voltar para a tty. É cliente Wayland nativo, escrito em C, sem toolkit — não usa GTK nem Qt, desenha direto em superfície pixman com os glifos que o fcft rasteriza. A closure inteira dele são três receitas pequenas, e nenhuma linha de C++. O 'utmp-backend' é a opção que mais importa aqui e vem de fábrica em 'auto', que no Linux escolhe o libutempter — biblioteca que esta árvore não tem, e que faria o build variar conforme o que estivesse instalado na raiz. Fica em 'none': sem registro em utmp, o 'who' não lista a sessão do terminal, e essa é a troca. Sem IME, que serve a métodos de entrada de escritas asiáticas e traz complexidade de protocolo sem usuário aqui; sem clusterização de grafema, coerente com o fcft construído sem shaping; sem docs, que exigiriam scdoc. O terminfo É construído e instalado, mas em DIRETÓRIO PRIVADO, /usr/share/foot/terminfo, e não no compartilhado: o ncurses 6.6 desta árvore já possui /usr/share/terminfo/f/foot, e duas receitas não podem produzir o mesmo arquivo. Não é concessão — a entrada do ncurses tem 187 capacidades e não declara Tc, RGB, Sync nem Setulc, medido com infocmp, de modo que aceitá-la custaria truecolor e saída sincronizada. O foot compila o caminho privado dentro de si (FOOT_TERMINFO_PATH) e exporta TERMINFO no ambiente de todo processo filho, então o shell dentro do terminal enxerga a entrada completa e quem estiver fora cai na do ncurses."
 LICENSE=MIT
 SRC="https://codeberg.org/dnkl/foot/releases/download/$VERSION/foot-$VERSION.tar.gz"
 SHA256="d1e1d04cd7a3a1615b4d8dbf9645b9a35cdc3f36fba4e1c0fd252ad0bd6651c8"
@@ -26,6 +26,7 @@ build() {
         -Dgrapheme-clustering=disabled \
         -Dtests=false \
         -Dterminfo=enabled \
+        -Dcustom-terminfo-install-location=share/foot/terminfo \
         -Dutmp-backend=none \
         -Dsystemd-units-dir=
     ninja -C build -j"$JOBS"
@@ -35,12 +36,40 @@ build() {
         echo "foot: o binário não foi produzido" >&2
         exit 1
     }
-    # Sem o terminfo, TERM=foot não resolve e vim, less e qualquer programa de
-    # tela inteira desenham lixo. É a falha que o usuário encontra primeiro e a
-    # que menos parece com um problema de empacotamento.
-    ls "$STAGE"/usr/share/terminfo/f/foot* >/dev/null 2>&1 || {
-        echo "foot: o terminfo não foi instalado" >&2
-        find "$STAGE/usr/share/terminfo" -maxdepth 2 2>/dev/null >&2
+    # O TERMINFO VAI PARA DIRETÓRIO PRIVADO, e a razão é uma colisão real: o
+    # ncurses 6.6 desta árvore JÁ possui /usr/share/terminfo/f/foot, foot-direct
+    # e foot+base — estão no manifest dele —, e o minitrue recusou com
+    # "doublethink detectado: /usr/share/terminfo/f/foot tem donos incompatíveis:
+    # ncurses".
+    #
+    # Desligar o terminfo do foot e viver com o do ncurses seria perda MEDIDA, não
+    # hipotética: a entrada do ncurses tem 187 capacidades mas não declara Tc, RGB,
+    # Sync nem Setulc, que o foot.info declara — ou seja, sem truecolor e sem saída
+    # sincronizada. Conferido com infocmp sobre o terminfo desta raiz.
+    #
+    # E não é preciso escolher. Com custom-terminfo-install-location o meson define
+    # FOOT_TERMINFO_PATH, e o slave.c:489 põe TERMINFO=<esse caminho> no ambiente de
+    # TODO processo filho que o foot cria. O shell dentro do foot enxerga a entrada
+    # completa; quem estiver fora cai na do ncurses, que continua sendo dona do
+    # diretório compartilhado. Ninguém perde nada e nada colide.
+    ls "$STAGE"/usr/share/foot/terminfo/f/foot* >/dev/null 2>&1 || {
+        echo "foot: o terminfo não foi instalado no diretório privado" >&2
+        find "$STAGE/usr/share/foot" -maxdepth 3 2>/dev/null >&2
+        exit 1
+    }
+    # A asserção espelhada: nada pode ter sobrado no diretório do ncurses, senão a
+    # colisão volta e só aparece na hora de instalar.
+    if [ -d "$STAGE/usr/share/terminfo" ]; then
+        echo "foot: instalou em /usr/share/terminfo, que é do ncurses" >&2
+        find "$STAGE/usr/share/terminfo" -maxdepth 2 >&2
+        exit 1
+    fi
+    # E a que prova o mecanismo, não só o arquivo: sem FOOT_TERMINFO_PATH compilado
+    # dentro do binário o slave.c não exporta TERMINFO, e o terminfo privado ficaria
+    # instalado sem que ninguém o encontrasse — falha silenciosa, do tipo que só
+    # aparece como "as cores estão erradas" meses depois.
+    grep -a -F -q '/usr/share/foot/terminfo' "$STAGE/usr/bin/foot" || {
+        echo "foot: FOOT_TERMINFO_PATH não foi compilado no binário" >&2
         exit 1
     }
     # Nenhum toolkit. É a razão de o foot custar três receitas em vez de trinta,
