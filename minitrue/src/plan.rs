@@ -5413,8 +5413,32 @@ pub(crate) fn verify_applied_receipt(ctx: &Ctx) -> Result<()> {
     let record_snapshot = snapshot_record_directory(ctx)?.ok_or_else(|| {
         anyhow::anyhow!("receipt corrente referencia diretório de records ausente")
     })?;
-    if record_snapshot.names() != expected_packages {
-        bail!("diretório de records contém pacote extra ou perdeu pacote do receipt");
+    // MESMA CORREÇÃO DO persist_applied_receipt, e a irmã dela: o diretório de
+    // records guarda também o ferramental identity-only — gcc, meson, ninja, os
+    // overlays -introspection —, que não vai para a superfície e por isso não
+    // entra no receipt. Exigir igualdade com os runtime era pedir um diretório
+    // que nenhuma árvore tem.
+    //
+    // A comparação LOGO ACIMA, entre receipt.records e expected_packages, está
+    // certa e fica: o receipt compromete exatamente os runtime. O que estava
+    // errado era medir o DISCO com a régua do receipt.
+    let record_names = record_snapshot.names();
+    let lock_names: BTreeSet<String> = verified.nodes.keys().cloned().collect();
+    let mut orfaos = record_names.difference(&lock_names).peekable();
+    if orfaos.peek().is_some() {
+        let lista: Vec<&str> = orfaos.map(String::as_str).collect();
+        bail!(
+            "diretório de records tem pacote fora do PLAN_LOCK do receipt: {}",
+            lista.join(" ")
+        );
+    }
+    let mut ausentes = expected_packages.difference(&record_names).peekable();
+    if ausentes.peek().is_some() {
+        let lista: Vec<&str> = ausentes.map(String::as_str).collect();
+        bail!(
+            "diretório de records perdeu participante do receipt: {}",
+            lista.join(" ")
+        );
     }
     for (package, expected_fact) in &receipt.records {
         let node = verified.nodes.get(package).unwrap();
