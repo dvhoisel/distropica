@@ -45,6 +45,41 @@ build() {
         exit 1
     }
 
+    # NETTLE 4.0 MUDOU A ASSINATURA DO hkdf_extract, e o 49.9.1 ainda chama a
+    # antiga: `too many arguments to function 'nettle_hkdf_extract'; expected 6,
+    # have 7`, no objeto 62 de 339. O parâmetro que saiu é o digest_size, que a
+    # 4.0 passou a tirar do próprio contexto. Conferido no
+    # /usr/include/nettle/hkdf.h desta árvore, não deduzido do erro.
+    #
+    # O conserto é O DO UPSTREAM, não invenção nossa: commit 8054b92548e2 de
+    # 2026-03-03, "sync-crypto: fix build with nettle 4.0", que não foi
+    # retroportado para o ramo 49 — e o 49.9.1 É a última versão publicada, de
+    # modo que esperar não resolve. Lá o argumento fica sob `#if
+    # NETTLE_VERSION_MAJOR < 4`; aqui sai de vez, porque esta árvore pina UMA
+    # nettle e não existe o caso das duas. (O 49.9.1 sequer inclui
+    # nettle/version.h — zero ocorrências —, então o #if nem compilaria como
+    # está.)
+    #
+    # O hkdf_expand logo abaixo NÃO mudou na 4.0 e continua com sete: por isso a
+    # faixa de endereço, e não um `/SHA256_DIGEST_SIZE,/d` que apagaria os dois.
+    # Medido na fonte pinada: seis ocorrências de SHA256_DIGEST_SIZE, e o sed
+    # remove exatamente uma. O outro consumidor de nettle daqui,
+    # lib/sync/ephy-password-import.c, chama pbkdf2_hmac_sha1 com sete
+    # argumentos e a 4.0 declara sete — compatível, nada a fazer.
+    sed -i '/hkdf_extract (/,/);/{ /^ *SHA256_DIGEST_SIZE,$/d }' lib/sync/ephy-sync-crypto.c
+    # A asserção é o ESTADO FINAL das duas chamadas, e não "o sed casou": pega
+    # tanto o sed que não encontrou nada quanto o que comeu demais.
+    if sed -n '/hkdf_extract (/,/);/p' lib/sync/ephy-sync-crypto.c | grep -q SHA256_DIGEST_SIZE; then
+        echo "epiphany: o hkdf_extract ainda passa digest_size — a chamada mudou de forma" >&2
+        sed -n '/hkdf_extract (/,/);/p' lib/sync/ephy-sync-crypto.c >&2
+        exit 1
+    fi
+    if ! sed -n '/hkdf_expand (/,/);/p' lib/sync/ephy-sync-crypto.c | grep -q SHA256_DIGEST_SIZE; then
+        echo "epiphany: o sed comeu o argumento do hkdf_expand, que a nettle 4.0 mantém" >&2
+        sed -n '/hkdf_expand (/,/);/p' lib/sync/ephy-sync-crypto.c >&2
+        exit 1
+    fi
+
     meson setup build \
         --prefix=/usr \
         --libdir=lib \
