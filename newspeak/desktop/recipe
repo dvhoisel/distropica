@@ -68,11 +68,43 @@ export LANG
 # stderr aparece por um instante, o compositor toma a tela, morre, e nao sobra
 # nada. Diagnosticar a primeira falha desta pilha exigiu injetar um script na
 # imagem do disco e ler o ext4 com debugfs.
+#
+# QUEM CRIA O ARQUIVO E O DESPACHANTE DA TTY1, na receita 'base', ainda como
+# root: /var/log e de root modo 0755 e esta sessao roda como usuario comum. O
+# nome e do PAPEL e nao do compositor — ja foi weston.log, e quando o
+# compositor virou labwc esta linha mudou e a de la nao, o redirecionamento
+# falhou com "Permission denied" e o `exec` levou a sessao junto. A tela virou
+# console.
+# DISTROPICA-SESSAO-LOG-BEGIN
+SESSAO_LOG=/var/log/distropica-sessao.log
+
+# E MESMO ASSIM NAO SE MORRE POR CAUSA DE UM LOG. A linha acima combina com a
+# do 'base', mas duas receitas continuam tendo de concordar, e ja se viu o que
+# acontece quando param de concordar. Entao aqui o destino e TESTADO, e a
+# alternativa e o diretorio de runtime da sessao, que e do usuario por
+# construcao. Perde-se o log no reboot seguinte; nao se perde a sessao. E a
+# divergencia sai dita na tela, em vez de virar uma tty1 sem explicacao.
+#
+# O TESTE E O PROPRIO APPEND, dentro de um SUBSHELL, e as duas escolhas sao
+# obrigatorias. Nao e `[ -w ]` porque bit de permissao e inferencia: mount
+# somente-leitura, ACL e sistema cheio passam por ele e falham na hora da
+# escrita. E o subshell existe porque redirecionamento que falha sobre um
+# special builtin — `:` e um — encerra o SHELL, nao o comando: escrito sem os
+# parenteses, este `if` matava o lancador exatamente nos casos que ele foi
+# escrito para tratar, e o `2>/dev/null` nem esconderia a mensagem, porque quem
+# a escreve e o shell. Medido nos quatro casos antes de entrar aqui.
+if ! ( : >> "$SESSAO_LOG" ) 2>/dev/null; then
+    SESSAO_LOG=${XDG_RUNTIME_DIR:-/tmp}/distropica-sessao.log
+    echo "distropica: /var/log/distropica-sessao.log nao e gravavel;" \
+         "log da sessao em $SESSAO_LOG" >&2
+fi
+# DISTROPICA-SESSAO-LOG-END
+
 [ -x /usr/bin/dbus-run-session ] || {
     echo "distropica: dbus-run-session ausente; aplicativos GTK nao abrirao" >&2
-    exec labwc "$@" >>/var/log/labwc.log 2>&1
+    exec labwc "$@" >>"$SESSAO_LOG" 2>&1
 }
-exec dbus-run-session -- labwc "$@" >>/var/log/labwc.log 2>&1
+exec dbus-run-session -- labwc "$@" >>"$SESSAO_LOG" 2>&1
 LAUNCHER
     chmod 0755 "$STAGE/usr/bin/distropica-desktop"
 

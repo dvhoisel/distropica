@@ -150,24 +150,35 @@ if [ -x /usr/bin/distropica-desktop ]; then
             mkdir -p "/run/user/$sessao_uid"
             chown "$sessao_uid:$sessao_uid" "/run/user/$sessao_uid" 2>/dev/null || true
             chmod 0700 "/run/user/$sessao_uid"
-            # O /var/log/weston.log tem de ser GRAVAVEL PELO USUARIO, e este par
-            # de linhas e o que faltava: o lancador roda 'weston
-            # --log=/var/log/weston.log', o /var/log e de root, e assim que a
-            # sessao passou a rodar como 'distropica' o weston morreu na
-            # primeira linha com "Failed to open /var/log/weston.log: Permission
-            # denied". A tty1 caiu para o getty e a tela virou console — o
-            # defeito apareceu na PRIMEIRA foto tirada depois da queda de
-            # privilegio, e nao haveria como perceber sem ela.
+            # O LOG DA SESSAO TEM DE SER GRAVAVEL PELO USUARIO, e este par de
+            # linhas e o que faltava: o lancador redireciona a saida do
+            # compositor para /var/log, que e de root, e assim que a sessao
+            # passou a rodar como 'distropica' o compositor morreu na primeira
+            # linha com "Permission denied". A tty1 caiu para o getty e a tela
+            # virou console — o defeito apareceu na PRIMEIRA foto tirada depois
+            # da queda de privilegio, e nao haveria como perceber sem ela.
             #
             # O arquivo e criado aqui, ainda como root, e nao movido para dentro
             # da home: o valor dele e ser encontravel por quem for diagnosticar
             # um boot que nao chegou a tela, e /var/log e onde essa pessoa olha.
             # Truncar a cada sessao e proposital — o que interessa e a falha
             # desta vez, nao o historico.
+            #
+            # O NOME NAO DIZ QUAL COMPOSITOR, e isso e o conserto de segunda
+            # ordem. Ele dizia: era weston.log, escrito aqui e lido pelo
+            # lancador da receita 'desktop'. Quando o compositor virou labwc, o
+            # lancador passou a escrever labwc.log e ESTA linha continuou
+            # criando weston.log — a correcao ficou em pe, apontando para um
+            # arquivo que ninguem mais usava, e o defeito que ela existe para
+            # impedir voltou identico sob outro nome, com as mesmas doze linhas
+            # de comentario acima explicando por que nao deveria acontecer.
+            # Duas receitas guardavam o mesmo fato, e uma delas envelheceu.
+            # Agora o nome e do PAPEL, nao do programa: trocar de compositor de
+            # novo nao mexe nele.
             mkdir -p /var/log
-            : > /var/log/weston.log
-            chown "$sessao_uid:$sessao_uid" /var/log/weston.log 2>/dev/null || true
-            chmod 0644 /var/log/weston.log
+            : > /var/log/distropica-sessao.log
+            chown "$sessao_uid:$sessao_uid" /var/log/distropica-sessao.log 2>/dev/null || true
+            chmod 0644 /var/log/distropica-sessao.log
             # Uma linha de diagnostico antes da queda de privilegio. Ela existe
             # porque a falha desta etapa e MUDA por natureza: se a conta nao
             # resolver, o que aparece na tela e o erro de um programa tres

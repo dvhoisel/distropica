@@ -54,12 +54,18 @@ wireless-regdb
 connman
 
 # Modo gráfico. UM desejo, e é de propósito: o 'desktop' é o pacote de cola que
-# amarra compositor, navegador, fontes, tema de ícones e a configuração que faz
-# a tty1 virar sessão gráfica. Ele arrasta por DEPS o weston, o seatd, o
-# Firefox, o GTK3, a Mesa, as fontes DejaVu, os temas de ícone e os locales —
-# setenta e poucos pacotes ao todo. Repetir essa árvore aqui seria duplicar o
-# que os DEPS já dizem, e a primeira divergência entre as duas listas seria um
-# pacote que ninguém percebeu que saiu.
+# amarra compositor, navegador, terminal, fontes, tema de ícones e a
+# configuração que faz a tty1 virar sessão gráfica. Ele arrasta por DEPS o
+# labwc e o wlroots, o seatd, o Epiphany com o WebKitGTK, o foot, o GTK, a
+# Mesa, as fontes DejaVu, os temas de ícone e os locales — setenta e poucos
+# pacotes ao todo. Repetir essa árvore aqui seria duplicar o que os DEPS já
+# dizem, e a primeira divergência entre as duas listas seria um pacote que
+# ninguém percebeu que saiu.
+#
+# Este parágrafo dizia weston e Firefox até a 0.13, muito depois de os dois
+# terem saído da árvore. Comentário que descreve outra distro não é
+# documentação: é a mesma classe de defeito que apagou a sessão gráfica desta
+# versão, onde uma correção continuou apontando para /var/log/weston.log.
 #
 # O miniplenty-buildbase acima SOBREVIVEU à entrada do modo gráfico, e o motivo
 # é medido: o gcc-pass2 já vem no fecho de runtime porque é dele que saem

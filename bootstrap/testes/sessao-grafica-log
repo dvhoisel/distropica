@@ -1,0 +1,115 @@
+#!/bin/sh
+# Trava o defeito que apagou a sessao grafica da 0.13: DUAS RECEITAS GUARDAVAM
+# O MESMO FATO, e uma delas envelheceu.
+#
+# O despachante da tty1, na receita 'base', cria o log da sessao ainda como
+# root e o entrega ao usuario — /var/log e de root modo 0755, e a sessao roda
+# como 'distropica'. O lancador, na receita 'desktop', redireciona a saida do
+# compositor para esse arquivo. Sao dois arquivos gerados por receitas
+# diferentes que precisam concordar no CAMINHO.
+#
+# Quando o compositor virou labwc, o lancador passou a escrever labwc.log e o
+# despachante continuou criando weston.log. O redirecionamento falhou com
+# "Permission denied", o `exec` levou a sessao junto, e a tela virou console —
+# num sistema que instalou e bootou perfeitamente. As doze linhas de comentario
+# que o 'base' ja tinha, explicando exatamente por que isso nao podia
+# acontecer, continuaram la, corretas e inuteis, apontando para um arquivo que
+# ninguem mais abria.
+#
+# Este teste cobra as duas metades: que os caminhos coincidam, e que o lancador
+# SOBREVIVA quando nao coincidirem. A segunda existe porque a primeira depende
+# de alguem rodar este teste; a queda para o diretorio de runtime nao depende
+# de nada.
+set -eu
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+BASE=$REPO/newspeak/base/recipe
+DESKTOP=$REPO/newspeak/desktop/recipe
+TMP=${TMPDIR:-/tmp}/distropica-teste-sessao-log.$$
+trap 'rm -rf "$TMP"' EXIT
+mkdir -p "$TMP"
+
+falhou() { echo "FALHOU: $*" >&2; exit 1; }
+
+# Os dois scripts saem dos heredocs das receitas, e nao de uma copia mantida
+# aqui: uma copia seria a TERCEIRA fonte do mesmo fato.
+awk '/<<'"'"'SESSION'"'"'/{dentro=1;next} dentro && /^SESSION$/{exit} dentro' \
+    "$BASE" > "$TMP/despachante"
+awk '/<<'"'"'LAUNCHER'"'"'/{dentro=1;next} dentro && /^LAUNCHER$/{exit} dentro' \
+    "$DESKTOP" > "$TMP/lancador"
+[ -s "$TMP/despachante" ] || falhou 'nao extrai o despachante da tty1 do base'
+[ -s "$TMP/lancador" ]    || falhou 'nao extrai o lancador do desktop'
+sh -n "$TMP/despachante" "$TMP/lancador"
+
+# 1. O CAMINHO E UM SO. O despachante cria com `: >`; o lancador declara em
+#    SESSAO_LOG. Cada lado e lido do seu proprio arquivo, e nao de uma
+#    constante deste teste, senao o teste vira a fonte que ele deveria checar.
+criado=$(sed -n 's|^[[:space:]]*: > \(/var/log/[A-Za-z0-9._-]*\)$|\1|p' \
+    "$TMP/despachante")
+escrito=$(sed -n 's|^SESSAO_LOG=\(/var/log/[A-Za-z0-9._-]*\)$|\1|p' \
+    "$TMP/lancador")
+[ -n "$criado" ]  || falhou 'o despachante do base nao cria log nenhum em /var/log'
+[ -n "$escrito" ] || falhou 'o lancador do desktop nao declara SESSAO_LOG em /var/log'
+[ "$(printf '%s\n' "$criado" | wc -l)" -eq 1 ] ||
+    falhou "o despachante cria mais de um log em /var/log: $criado"
+[ "$criado" = "$escrito" ] || falhou \
+    "o base cria $criado e o desktop escreve em $escrito; a sessao morre em Permission denied"
+
+# 2. O NOME NAO DIZ QUAL COMPOSITOR. Foi assim que o fato envelheceu da
+#    primeira vez, e um nome de programa no contrato convida a segunda.
+for programa in weston labwc sway wayfire hyprland cage river; do
+    case $criado in
+        *"$programa"*) falhou \
+            "o log da sessao se chama $criado e cita o compositor; trocar de compositor vai reabrir o defeito" ;;
+    esac
+done
+
+# 3. O LANCADOR NAO MORRE PELO LOG. Roda o MESMO bloco do lancador — extraido
+#    entre marcadores —, com /var/log redirecionado para um diretorio de
+#    teste. So o prefixo muda; a logica e byte a byte a que vai para o disco.
+sed -n '/DISTROPICA-SESSAO-LOG-BEGIN/,/DISTROPICA-SESSAO-LOG-END/p' \
+    "$TMP/lancador" | sed '1d;$d' > "$TMP/bloco"
+[ -s "$TMP/bloco" ] || falhou 'nao extrai o bloco de escolha do log do lancador'
+{
+    sed "s|/var/log/|\$VARLOG/|g" "$TMP/bloco"
+    echo 'printf "%s\n" "$SESSAO_LOG"'
+} > "$TMP/escolhe"
+sh -n "$TMP/escolhe"
+
+VARLOG=$TMP/varlog
+RUNTIME=$TMP/runtime
+mkdir -p "$VARLOG" "$RUNTIME"
+
+escolhe() { VARLOG=$VARLOG XDG_RUNTIME_DIR=$1 sh "$TMP/escolhe" 2>"$TMP/aviso"; }
+
+# ACEITA: o arquivo que o despachante criou, gravavel pelo usuario.
+: > "$VARLOG/${criado##*/}"
+chmod 0644 "$VARLOG/${criado##*/}"
+destino=$(escolhe "$RUNTIME") ||
+    falhou 'o lancador falhou com o log gravavel — o caminho NORMAL quebrou'
+[ "$destino" = "$VARLOG/${criado##*/}" ] ||
+    falhou "com log gravavel o destino devia ser $VARLOG/${criado##*/} e foi $destino"
+[ ! -s "$TMP/aviso" ] || falhou 'avisou divergencia no caminho normal'
+
+# RECUSA: exatamente o defeito de hoje — /var/log de root e o arquivo ausente,
+# porque o despachante criou outro nome. Tem de cair de pe, e dizer onde foi.
+rm -f "$VARLOG/${criado##*/}"
+chmod 0555 "$VARLOG"
+destino=$(escolhe "$RUNTIME") ||
+    falhou 'o lancador MORREU com /var/log de root; e assim que a tela vira console'
+chmod 0755 "$VARLOG"
+[ "$destino" = "$RUNTIME/${criado##*/}" ] ||
+    falhou "sem permissao o destino devia cair em $RUNTIME e foi $destino"
+grep -q 'nao e gravavel' "$TMP/aviso" ||
+    falhou 'caiu para o runtime sem dizer nada; divergencia silenciosa'
+
+# RECUSA em cascata: sem XDG_RUNTIME_DIR nao ha runtime de sessao, e ainda
+# assim nao se perde a tela.
+: > "$VARLOG/${criado##*/}"
+chmod 0444 "$VARLOG/${criado##*/}"
+destino=$(escolhe "") ||
+    falhou 'o lancador MORREU sem XDG_RUNTIME_DIR'
+[ "$destino" = "/tmp/${criado##*/}" ] ||
+    falhou "sem XDG_RUNTIME_DIR o destino devia ser /tmp/${criado##*/} e foi $destino"
+
+echo "sessao-grafica-log: ok — base e desktop concordam em $criado, e o lancador nao morre por causa dele"
