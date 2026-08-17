@@ -31,7 +31,8 @@ build() {
         -Dxml_docs=disabled \
         -Dmodular_tests=disabled \
         -Dmessage_bus=true \
-        -Dtraditional_activation=true
+        -Dtraditional_activation=true \
+        -Dsession_socket_dir=/tmp
     ninja -C build -j"$JOBS"
     DESTDIR="$STAGE" ninja -C build install
 
@@ -39,6 +40,48 @@ build() {
         echo "dbus: dbus-daemon não foi produzido" >&2
         exit 1
     }
+
+    # O ENDERECO DO BARRAMENTO DE SESSAO NAO PODE VIR DO AMBIENTE DE BUILD.
+    #
+    # O meson deste pacote deriva o diretorio do socket lendo TMPDIR da
+    # PROPRIA maquina que compila:
+    #
+    #   values = run_command(python, '-c',
+    #       'import os; [print(os.getenv(e, "")) for e in ["TMPDIR","TEMP","TMP"]]')
+    #   values += '/tmp'
+    #   default_socket_dir = values.strip().split('\n')[0]
+    #
+    # e escreve o resultado em session.conf como
+    # `<listen>unix:tmpdir=...</listen>`. A view confinada define TMPDIR
+    # dentro do work, entao a 0.13 saiu publicando
+    #
+    #   <listen>unix:tmpdir=/tmp/minitrue-build-dbus/tmp</listen>
+    #
+    # um caminho que existe na maquina que compilou e em NENHUMA outra. No
+    # alvo, o dbus-daemon falha com "Failed to bind socket ... No such file or
+    # directory", o dbus-run-session morre atras dele e o compositor vai junto:
+    # a sessao grafica encerra sem dizer por que, e a tela vira console. O
+    # sistema instalava, bootava e nao servia.
+    #
+    # `-Dsession_socket_dir=/tmp` tira a decisao do ambiente. A guarda abaixo
+    # cobra o resultado no ARQUIVO PRODUZIDO, e nao a presenca da flag: flag
+    # aceita e ignorada e defeito silencioso, e foi assim que este nasceu.
+    sessao_conf=$STAGE/usr/share/dbus-1/session.conf
+    [ -f "$sessao_conf" ] || {
+        echo "dbus: session.conf não foi produzido" >&2
+        exit 1
+    }
+    grep -q '<listen>unix:tmpdir=/tmp</listen>' "$sessao_conf" || {
+        echo "dbus: session.conf não escuta em /tmp; saiu:" >&2
+        grep '<listen>' "$sessao_conf" >&2
+        exit 1
+    }
+    if grep -q 'minitrue-build-\|minitrue-work-' "$sessao_conf"; then
+        echo "dbus: session.conf carrega caminho do diretório de build" >&2
+        grep -n 'minitrue-build-\|minitrue-work-' "$sessao_conf" >&2
+        exit 1
+    fi
+    unset sessao_conf
     # O socket do sistema e o diretório de máquina são estado de execução, não
     # payload: nascem no boot, e reivindicá-los faria o manifesto discordar do
     # disco no primeiro start.
