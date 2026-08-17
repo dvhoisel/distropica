@@ -88,17 +88,48 @@ pub struct MediaOptions {
 
 /// Lê `<cache>/channels/<canal>/index` e devolve `(pacote, versão, fingerprint)`.
 ///
-/// O formato é o índice canônico v2 do minitrue: campos separados por espaço,
-/// com nome, versão, arquitetura e — no quarto campo — o fingerprint da receita
-/// que produziu aquele pacote.
+/// Os registros são campos separados por espaço, com nome, versão, arquitetura
+/// e — no quarto campo — o fingerprint da receita que produziu aquele pacote.
+///
+/// DOIS FORMATOS, E ISSO NÃO É TOLERÂNCIA GRATUITA. O minitrue passou a escrever
+/// um cabeçalho `CHANNEL_INDEX_FORMAT=4` seguido de `RELEASE_ROOT=`, e a regra de
+/// confiança depende dele: um índice sem cabeçalho é legado e só pode ser
+/// `builder`/não-release (channel.rs:1423), de modo que um canal `TRUST=oficial`
+/// servido no formato antigo é recusado na instalação.
+///
+/// Este leitor só conhecia o legado, e a divergência só aparecia ao COMPOR a
+/// mídia: "índice do canal com linha de 1 campos", porque o cabeçalho não tem
+/// quatro colunas. O legado continua aceito — é o que o canal publicado ainda
+/// serve —, mas um cabeçalho presente é VALIDADO em vez de pulado: aceitar um
+/// formato futuro desconhecido seria ler campos que podem ter mudado de posição.
 fn indice_do_canal(index: &Path) -> Result<Vec<(String, String, String)>> {
     let texto = fs::read_to_string(index)
         .with_context(|| format!("não li o índice do canal: {}", index.display()))?;
     let mut saida = Vec::new();
+    let mut cabecalho = true;
     for linha in texto.lines() {
         let linha = linha.trim();
         if linha.is_empty() || linha.starts_with('#') {
             continue;
+        }
+        if cabecalho {
+            if let Some(versao) = linha.strip_prefix("CHANNEL_INDEX_FORMAT=") {
+                if versao != "3" && versao != "4" {
+                    bail!(
+                        "índice do canal em formato {} desconhecido: {}",
+                        versao,
+                        index.display()
+                    );
+                }
+                continue;
+            }
+            if linha.starts_with("RELEASE_ROOT=") {
+                continue;
+            }
+            // A primeira linha que não é cabeçalho encerra o cabeçalho; daqui
+            // em diante um `CHAVE=valor` solto seria registro malformado, e cai
+            // na checagem de quatro campos abaixo.
+            cabecalho = false;
         }
         let campos: Vec<&str> = linha.split_whitespace().collect();
         if campos.len() < 4 {

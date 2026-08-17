@@ -373,7 +373,7 @@ BUSYBOX_URL=https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2
 # binário: ele é construído do tar oficial acima e da configuração versionada.
 BUSYBOX_PREBUILT_SHA256=6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348
 BUSYBOX_CONFIG=$REPO/bootstrap/live/busybox-${BUSYBOX_VERSION}.config
-BUSYBOX_CONFIG_SHA256=9bbe020ee1e7ad5f0d22d0f736d2ac8738c7e41f164d52f40a19b1b5d34699d8
+BUSYBOX_CONFIG_SHA256=1b668913cfd8ba850814e4637ea1bf800d8c9f5e0d508c26048c769a8d70682e
 E2FSPROGS_VERSION=1.47.4
 E2FSPROGS_URL=https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v${E2FSPROGS_VERSION}/e2fsprogs-${E2FSPROGS_VERSION}.tar.xz
 E2FSPROGS_SHA256=fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b
@@ -1024,11 +1024,26 @@ kmake() {
             release_run make -C "$SOURCE_INNER" \
                 HOSTLDFLAGS="-Wl,-rpath-link,/usr/lib" "$@"
         else
+            # TMPDIR E HOME PRECISAM APONTAR PARA O BIND DE ESCRITA, e nao para
+            # o /tmp da view: o rootfs entra com --ro-bind, entao TUDO nele e
+            # somente-leitura menos $WORK_INNER. Sem isto o `mktemp` do
+            # gen_initramfs.sh do kernel falha com "mktemp: (null): Read-only
+            # file system" ao gerar usr/initramfs_data.cpio — depois de compilar
+            # objtool, init/main.o e meio kernel.
+            #
+            # Nao apareceu antes porque as chamadas anteriores de kmake sao so
+            # olddefconfig, que nao usa temporario. Este e o primeiro build que
+            # chega ao initramfs.
+            #
+            # O padrao ja existe neste script: as outras duas invocacoes de
+            # bwrap (linhas 178 e 264) fazem --setenv TMPDIR /work/tmp.
+            mkdir -p "$WORK/ktmp"
             bwrap --ro-bind "$ROOTFS" / --bind "$WORK" "$WORK_INNER" \
                 --proc /proc --dev /dev \
                 --unshare-pid --die-with-parent --clearenv \
                 --setenv PATH /usr/bin:/bin \
-                --setenv HOME /tmp \
+                --setenv HOME "$WORK_INNER/ktmp" \
+                --setenv TMPDIR "$WORK_INNER/ktmp" \
                 --setenv LC_ALL C --setenv LANG C --setenv TZ UTC \
                 --setenv SOURCE_DATE_EPOCH "$EPOCH" \
                 make -C "$SOURCE_INNER" \
@@ -1222,8 +1237,37 @@ select_e2fs_cc() {
     zig_binary=${ZIG:-$(command -v zig 2>/dev/null || true)}
     if [ -n "$zig_binary" ] && [ -x "$zig_binary" ]; then
         wrapper=$WORK/zig-musl-cc
+        # O LINKER DO ZIG RECUSA TRES ARGUMENTOS QUE O BusyBox PASSA FIXO, e a
+        # falha vem so na ligacao final, depois de compilar centenas de objetos —
+        # com a mensagem enterrada em busybox_unstripped.out, invisivel no log
+        # deste script: "error: unsupported linker arg: --warn-common".
+        #
+        # OS TRES SAO DIAGNOSTICO, e quem diz isso e o proprio upstream: no
+        # scripts/trylink eles saem juntos de INFO_OPTS(), sob o cabecalho
+        # "Informational" da linha 8. --warn-common avisa sobre simbolo comum
+        # duplicado; -Map escreve o mapa de ligacao; --verbose despeja o script
+        # de ligacao usado. Nenhum muda um byte do binario.
+        #
+        # Enumerados de uma vez em vez de um por vez, porque cada descoberta
+        # custava uma compilacao inteira. Dos catorze -Wl, que o trylink pode
+        # passar, o Zig aceita dez; o quarto recusado e --undefined=lbb_main, e
+        # ele so aparece na ligacao da BIBLIOTECA COMPARTILHADA (trylink:255,
+        # com -shared -fPIC), caminho que este build estatico nao percorre.
+        #
+        # Filtrar AQUI e o lugar certo: o wrapper existe para adaptar o Zig a uma
+        # invocacao estilo gcc, e isto e uma adaptacao dessas. Remendar o
+        # scripts/trylink significaria editar um tarball de sha256 pinado.
         cat > "$wrapper" <<EOF
 #!/bin/sh
+i=\$#
+while [ "\$i" -gt 0 ]; do
+    case "\$1" in
+        -Wl,--warn-common|-Wl,--verbose|-Wl,-Map,*) ;;
+        *) set -- "\$@" "\$1" ;;
+    esac
+    shift
+    i=\$((i - 1))
+done
 exec "$zig_binary" cc -target x86_64-linux-musl "\$@"
 EOF
         chmod 755 "$wrapper"
@@ -1442,7 +1486,7 @@ build_static_ncursesw() {
     validate_tar_members "$NCURSES_TAR" -tzf
     nc_src=$WORK/ncurses-${NCURSES_VERSION}
     nc_stage=$WORK/ncursesw-stage
-    nc_prefix=$nc_stage/usr
+    nc_prefix=$NCURSESW_PREFIX
     rm -rf -- "$nc_src" "$nc_stage"
     mkdir -p "$nc_src" "$nc_stage"
     tar -xzf "$NCURSES_TAR" -C "$nc_src" --strip-components=1
@@ -1583,6 +1627,17 @@ build_static_cfdisk() {
     fi
     echo "$ul_src"
 }
+
+# O PREFIXO DA NCURSESW ESTATICA MORA AQUI, no escopo que os dois usos enxergam.
+# Ele e usado em dois lugares: a funcao que compila a ncursesw, e o inventario de
+# licencas la embaixo (NCURSES_PAYLOAD_SHA256).
+#
+# A funcao NAO pode ser a dona do valor, e isto custou uma rodada inteira: ela roda
+# em SUBSHELL DUPLO — build_static_cfdisk e chamada com $(...) e chama
+# build_static_ncursesw tambem com $(...) —, entao o nc_prefix que ela define morre
+# com ela. O inventario lia $nc_prefix e o `set -u` matava o script com
+# "nc_prefix: parameter not set", DEPOIS de compilar o kernel inteiro.
+NCURSESW_PREFIX=$WORK/ncursesw-stage/usr
 
 UTIL_LINUX_SRC=$(build_static_cfdisk)
 require_static "$UTIL_LINUX_SRC/cfdisk"
@@ -2129,7 +2184,7 @@ fi
 HELPER_SOURCE_SHA256=$(sha_path "$LIVE_LOCK_HELPER_SOURCE")
 HELPER_BINARY_SHA256=$(sha_path "$LIVE_LOCK_TOOL")
 LIVE_LOCK_SOURCE_SHA256=$(sha_path "$LIVE_LOCK_SOURCE")
-NCURSES_PAYLOAD_SHA256=$(sha_path "$nc_prefix/lib/libncursesw.a")
+NCURSES_PAYLOAD_SHA256=$(sha_path "$NCURSESW_PREFIX/lib/libncursesw.a")
 MUSL_RUNTIME_PAYLOAD_SHA256=$({
     printf '%s\n' "$BUSYBOX_BINARY_SHA256" "$E2FS_PAYLOAD_SHA256" \
         "$MINIPAX_SHA256" "$MINITRUE_SHA256" "$UTIL_LINUX_PAYLOAD_SHA256"

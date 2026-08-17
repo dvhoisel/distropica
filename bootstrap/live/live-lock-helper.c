@@ -47,6 +47,11 @@
 #define SMALL_FILE_LIMIT (1024U * 1024U)
 #define ELF_TABLE_LIMIT (256U * 1024U * 1024U)
 #define CPIO_MEMBER_LIMIT (512U * 1024U * 1024U)
+/* Ancora e janela da busca por conteudo do initramfs no vmlinux extraido. */
+#define ELF_SCAN_ANCHOR (4U * 1024U)
+#define ELF_SCAN_CHUNK (4U * 1024U * 1024U)
+/* Janela do fim do blob onde o membro TRAILER!!! precisa aparecer. */
+#define CPIO_TRAILER_WINDOW (4U * 1024U)
 #define CPIO_ENTRY_LIMIT 100000U
 #define TREE_ENTRY_LIMIT 1000000U
 #define TREE_PATH_LIMIT (64U * 1024U)
@@ -754,7 +759,27 @@ struct elf_initramfs {
     uint64_t size;
 };
 
-static struct elf_initramfs locate_elf_initramfs(int fd, const struct stat *st) {
+/* Localiza o initramfs no vmlinux extraido POR CONTEUDO, e nao por simbolo.
+ *
+ * A versao anterior lia __initramfs_start/__initramfs_size da symtab. Isso nao
+ * pode funcionar aqui e nunca funcionou: o que o kernel comprime dentro do
+ * bzImage e o arch/x86/boot/compressed/vmlinux.bin, que ja saiu do objcopy SEM
+ * tabela de simbolos — o extract-vmlinux devolve um ELF que o `file` classifica
+ * como "stripped". Os dois simbolos existem no linux-source/vmlinux, que e outro
+ * arquivo. A guarda pedia o impossivel, e ninguem notou porque ela nasceu depois
+ * da ultima midia publicada.
+ *
+ * A prova por conteudo e MAIS FORTE que a por simbolo, e nao um contorno: em vez
+ * de acreditar num rotulo que diz onde o blob deveria estar, exige que os bytes
+ * do blob estejam la — uma vez so, e dentro de um PT_LOAD. Um simbolo mentiroso
+ * passaria pela versao antiga; bytes nao mentem sobre si mesmos.
+ *
+ * A busca usa uma ancora dos primeiros bytes para achar candidatos e so entao
+ * compara o blob inteiro. Ocorrencia dupla e recusada em vez de aceita: se o
+ * mesmo blob aparece duas vezes, nao se sabe qual e o que o kernel usa.
+ */
+static struct elf_initramfs locate_elf_initramfs(int fd, const struct stat *st,
+                                                 int blob, uint64_t blob_size) {
     if (st->st_size < (off_t)sizeof(Elf64_Ehdr)) die("ELF truncado");
     uint64_t file_size = (uint64_t)st->st_size;
     Elf64_Ehdr eh;
@@ -768,82 +793,101 @@ static struct elf_initramfs locate_elf_initramfs(int fd, const struct stat *st) 
         die("vmlinux precisa ser ELF64 little-endian x86-64");
     if (eh.e_ehsize != sizeof(Elf64_Ehdr) ||
         eh.e_phentsize != sizeof(Elf64_Phdr) ||
-        eh.e_shentsize != sizeof(Elf64_Shdr) ||
-        eh.e_phnum == PN_XNUM || eh.e_shnum == 0 || eh.e_shnum == SHN_UNDEF)
-        die("tabelas ELF estendidas/não canônicas não são aceitas");
+        eh.e_phnum == PN_XNUM || eh.e_phnum == 0)
+        die("tabelas ELF estendidas/nao canonicas nao sao aceitas");
     uint64_t ph_size = (uint64_t)eh.e_phnum * sizeof(Elf64_Phdr);
-    uint64_t sh_size = (uint64_t)eh.e_shnum * sizeof(Elf64_Shdr);
-    if (ph_size > ELF_TABLE_LIMIT || sh_size > ELF_TABLE_LIMIT ||
-        !range_in_file(eh.e_phoff, ph_size, file_size) ||
-        !range_in_file(eh.e_shoff, sh_size, file_size))
+    if (ph_size > ELF_TABLE_LIMIT ||
+        !range_in_file(eh.e_phoff, ph_size, file_size))
         die("tabela ELF fora do arquivo/limite");
     Elf64_Phdr *ph = xmalloc((size_t)ph_size);
-    Elf64_Shdr *sh = xmalloc((size_t)sh_size);
     pread_all(fd, ph, (size_t)ph_size, (off_t)eh.e_phoff);
-    pread_all(fd, sh, (size_t)sh_size, (off_t)eh.e_shoff);
-    bool have_start = false, have_size = false;
-    uint64_t start = 0, init_size = 0;
-    for (uint16_t si = 0; si < eh.e_shnum; si++) {
-        if (sh[si].sh_type != SHT_SYMTAB) continue;
-        if (sh[si].sh_link >= eh.e_shnum ||
-            sh[si].sh_entsize != sizeof(Elf64_Sym) ||
-            sh[si].sh_size % sizeof(Elf64_Sym) ||
-            sh[si].sh_size > ELF_TABLE_LIMIT ||
-            !range_in_file(sh[si].sh_offset, sh[si].sh_size, file_size))
-            die("symtab ELF inválida");
-        Elf64_Shdr strings = sh[sh[si].sh_link];
-        if (strings.sh_type != SHT_STRTAB || strings.sh_size == 0 ||
-            strings.sh_size > ELF_TABLE_LIMIT ||
-            !range_in_file(strings.sh_offset, strings.sh_size, file_size))
-            die("strtab ELF inválida");
-        char *strtab = xmalloc((size_t)strings.sh_size);
-        Elf64_Sym *syms = xmalloc((size_t)sh[si].sh_size);
-        pread_all(fd, strtab, (size_t)strings.sh_size, (off_t)strings.sh_offset);
-        pread_all(fd, syms, (size_t)sh[si].sh_size, (off_t)sh[si].sh_offset);
-        if (strtab[strings.sh_size - 1] != '\0') die("strtab ELF sem NUL final");
-        size_t count = (size_t)(sh[si].sh_size / sizeof(Elf64_Sym));
-        for (size_t i = 0; i < count; i++) {
-            if (syms[i].st_name >= strings.sh_size) die("nome de símbolo fora da strtab");
-            const char *name = strtab + syms[i].st_name;
-            if (!memchr(name, '\0', (size_t)strings.sh_size - syms[i].st_name))
-                die("nome de símbolo sem NUL");
-            if (!strcmp(name, "__initramfs_start")) {
-                if (have_start) die("__initramfs_start duplicado");
-                start = syms[i].st_value;
-                have_start = true;
-            } else if (!strcmp(name, "__initramfs_size")) {
-                if (have_size) die("__initramfs_size duplicado");
-                if (syms[i].st_shndx != SHN_ABS)
-                    die("__initramfs_size não é símbolo absoluto");
-                init_size = syms[i].st_value;
-                have_size = true;
+
+    if (blob_size == 0 || blob_size > CPIO_MEMBER_LIMIT || blob_size > file_size)
+        die("blob initramfs vazio ou fora do limite");
+
+    /* O BLOB PRECISA SER UM ARQUIVO newc COMPLETO, e nao um prefixo dele.
+     *
+     * A busca por conteudo sozinha aceitaria um pedaco: os primeiros mil bytes
+     * do initramfs verdadeiro TAMBEM aparecem no vmlinux, uma vez so e dentro
+     * de um PT_LOAD, entao passariam por todas as outras checagens. Medido, nao
+     * suposto — foi o unico dos cinco casos de teste que passou quando nao
+     * devia.
+     *
+     * Todo cpio newc termina no membro TRAILER!!!, e exigi-lo fecha o buraco:
+     * um prefixo nao o contem. */
+    {
+        size_t tail_len = blob_size < CPIO_TRAILER_WINDOW
+                              ? (size_t)blob_size : CPIO_TRAILER_WINDOW;
+        unsigned char *tail = xmalloc(tail_len);
+        pread_all(blob, tail, tail_len, (off_t)(blob_size - tail_len));
+        static const char marker[] = "TRAILER!!!";
+        bool has_trailer = false;
+        if (tail_len >= sizeof(marker) - 1) {
+            for (size_t i = 0; i + sizeof(marker) - 1 <= tail_len; i++) {
+                if (!memcmp(tail + i, marker, sizeof(marker) - 1)) {
+                    has_trailer = true;
+                    break;
+                }
             }
         }
-        free(syms);
-        free(strtab);
+        free(tail);
+        if (!has_trailer)
+            die("blob initramfs nao termina em TRAILER!!! — cpio incompleto");
     }
-    free(sh);
-    if (!have_start || !have_size || init_size == 0 || init_size > CPIO_MEMBER_LIMIT)
-        die("símbolos initramfs ausentes/tamanho fora do limite");
+
+    size_t anchor_len = blob_size < ELF_SCAN_ANCHOR
+                            ? (size_t)blob_size : ELF_SCAN_ANCHOR;
+    unsigned char *anchor = xmalloc(anchor_len);
+    pread_all(blob, anchor, anchor_len, 0);
+
+    uint64_t last_start = file_size - blob_size;
+    unsigned char *buf = xmalloc(ELF_SCAN_CHUNK);
+    bool found = false;
+    uint64_t found_off = 0;
+    uint64_t pos = 0;
+    while (pos <= last_start) {
+        uint64_t want = file_size - pos;
+        if (want > ELF_SCAN_CHUNK) want = ELF_SCAN_CHUNK;
+        if (want < (uint64_t)anchor_len) break;
+        pread_all(fd, buf, (size_t)want, (off_t)pos);
+        size_t scan = (size_t)want - anchor_len + 1;
+        size_t i = 0;
+        while (i < scan) {
+            unsigned char *hit = memchr(buf + i, anchor[0], scan - i);
+            if (!hit) break;
+            size_t at = (size_t)(hit - buf);
+            if (!memcmp(hit, anchor, anchor_len)) {
+                uint64_t cand = pos + at;
+                if (cand <= last_start &&
+                    fd_bytes_equal(fd, blob, cand, 0, blob_size)) {
+                    if (found && cand != found_off)
+                        die("initramfs aparece mais de uma vez no vmlinux");
+                    found = true;
+                    found_off = cand;
+                }
+            }
+            i = at + 1;
+        }
+        if (want < ELF_SCAN_CHUNK) break;
+        pos += want - (uint64_t)(anchor_len - 1);
+    }
+    free(buf);
+    free(anchor);
+    if (!found) die("initramfs nao aparece no vmlinux extraido");
+
     bool mapped = false;
-    uint64_t mapped_off = 0;
     for (uint16_t i = 0; i < eh.e_phnum; i++) {
-        if (ph[i].p_type != PT_LOAD || start < ph[i].p_vaddr) continue;
-        uint64_t delta = start - ph[i].p_vaddr;
-        if (delta <= ph[i].p_filesz && init_size <= ph[i].p_filesz - delta) {
-            uint64_t candidate = checked_add_u64(ph[i].p_offset, delta,
-                                                  "offset initramfs ELF");
-            if (!range_in_file(candidate, init_size, file_size))
-                die("initramfs ELF fora do arquivo");
-            if (mapped && candidate != mapped_off)
-                die("initramfs ELF tem mapeamento ambíguo");
+        if (ph[i].p_type != PT_LOAD) continue;
+        if (found_off < ph[i].p_offset) continue;
+        uint64_t delta = found_off - ph[i].p_offset;
+        if (delta <= ph[i].p_filesz && blob_size <= ph[i].p_filesz - delta) {
             mapped = true;
-            mapped_off = candidate;
+            break;
         }
     }
     free(ph);
-    if (!mapped) die("__initramfs_start não mapeia para PT_LOAD");
-    struct elf_initramfs result = {.file_offset = mapped_off, .size = init_size};
+    if (!mapped) die("initramfs encontrado fora de qualquer PT_LOAD");
+    struct elf_initramfs result = {.file_offset = found_off, .size = blob_size};
     return result;
 }
 
@@ -877,7 +921,9 @@ static void verify_elf_initramfs(const char *vmlinux_path,
     struct stat elf_before, elf_after, blob_before, blob_after;
     int elf = open_regular_abs(vmlinux_path, false, true, &elf_before);
     int blob = open_regular_abs(blob_path, false, true, &blob_before);
-    struct elf_initramfs where = locate_elf_initramfs(elf, &elf_before);
+    if (blob_before.st_size < 0) die("blob initramfs com tamanho invalido");
+    struct elf_initramfs where =
+        locate_elf_initramfs(elf, &elf_before, blob, (uint64_t)blob_before.st_size);
     if (blob_before.st_size < 0 || where.size != (uint64_t)blob_before.st_size ||
         !fd_bytes_equal(elf, blob, where.file_offset, 0, where.size))
         die("blob initramfs não é o intervalo ELF declarado");
