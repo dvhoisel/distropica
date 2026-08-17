@@ -16171,6 +16171,157 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    /// O fechamento pós-apply de um mundo vindo do canal não cobra a fonte
+    /// upstream — e continua cobrando a de quem não veio do canal.
+    ///
+    /// A matriz canônica já diz que a prova de um Keep de canal é o
+    /// `record-channel`: CHANNEL_SHA256 e ARTIFACT_HASH do próprio record.
+    /// Mesmo assim `authenticate_objects` autenticava os SRC de TODO Keep ao
+    /// fechar. A fixture vizinha não pegava isso porque a receita dela não
+    /// declara SRC — sem fonte declarada não há objeto a cobrar —, e toda
+    /// receita real do Mundo B declara. Na 0.13 o defeito matou a instalação no
+    /// PRIMEIRO pacote da ordem topológica, depois de os 126 anteriores já
+    /// terem sido gravados e o disco já ter sido apagado.
+    #[test]
+    fn fechamento_de_mundo_de_canal_nao_cobra_a_fonte_upstream() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let base = std::env::temp_dir().join(format!("mt-keep-canal-{}-{n}", std::process::id()));
+        let root = base.join("root");
+        let stage = base.join("stage");
+        fs::create_dir_all(stage.join("usr/share/pkg")).unwrap();
+        for directory in [
+            stage.join("usr"),
+            stage.join("usr/share"),
+            stage.join("usr/share/pkg"),
+        ] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        fs::write(stage.join("usr/share/pkg/marker"), b"payload de canal\n").unwrap();
+
+        let epoch = 1_704_067_200;
+        let mut tar_bytes = Vec::new();
+        let reprocorr = crate::pack::pack_deterministic(&stage, epoch, &mut tar_bytes).unwrap();
+        let compressed = zstd_fixture(&tar_bytes);
+        let transport_hash = sha256_bytes(&compressed);
+        // A FONTE UPSTREAM. Ela nunca entra no cache: é exatamente o que uma
+        // máquina instalada por canal binário não tem, e não deve precisar ter.
+        let upstream_hash = sha256_bytes(b"tarball upstream que a midia nao carrega");
+
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: true,
+            tofu: false,
+            jobs: 1,
+        };
+        let recipes = root.join("var/lib/minitrue/newspeak");
+        fs::create_dir_all(recipes.join("pkg")).unwrap();
+        // SIG/SIGKEY não são enfeite da fixture: a evidência de assinatura
+        // upstream é o segundo braço do mesmo defeito. Ela nasce com transporte
+        // `pending` — só o fetch a resolve —, e o fechamento completo recusa
+        // pending. Sem declarar assinatura nenhuma, o teste passaria sem tocar
+        // nisso, e é assim que toda receita real do canal difere da fixture.
+        fs::write(
+            recipes.join("pkg/recipe"),
+            format!(
+                "NAME=pkg\nVERSION=1\nKIND=source\nLICENSE=NOASSERTION\nTOOLCHAIN=none\nSRC=https://example.invalid/pkg-1.tar.gz\nSHA256={upstream_hash}\nSIG=https://example.invalid/pkg-1.tar.gz.minisig\nSIGKEY=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U\nREPROCORR={reprocorr}\nEPOCH={epoch}\nbuild() {{\n  printf 'BUILD NAO PODIA RODAR\\n' > \"$ROOT/build-ran\"\n  return 99\n}}\n"
+            ),
+        )
+        .unwrap();
+        // O runner é Mundo A: origem `vendor`, cujo payload É o objeto pinado.
+        // Ele fica no mesmo mundo justamente para provar que a dispensa é
+        // estreita — vale para canal, e só para canal.
+        let runner = install_factual_test_runner(&ctx);
+        let runner_artifact = ctx.cache_dir().join(&runner.sha256[0]);
+        assert!(runner_artifact.is_file());
+
+        let mut identity = Vec::new();
+        collect_identity(
+            &ctx,
+            "pkg",
+            &mut HashSet::new(),
+            &mut Vec::new(),
+            &mut identity,
+        )
+        .unwrap();
+        let fingerprints = recipe::build_fingerprints(&identity).unwrap();
+        let effective_fingerprint = fingerprints.get("pkg").unwrap().clone();
+        let producer_plan = crate::plan::synthetic_channel_emit_plan(
+            &recipe::load(&ctx, "pkg").unwrap(),
+            &effective_fingerprint,
+            &reprocorr,
+        )
+        .unwrap();
+        let producer_plan_hash = sha256_bytes(&producer_plan);
+
+        let artifact_relative = "pool/pkg-1-x86_64.tar.zst";
+        let index = format!(
+            "CHANNEL_INDEX_FORMAT=4\nRELEASE_ROOT=no\npkg 1 x86_64 {effective_fingerprint} {artifact_relative} {transport_hash} {reprocorr} {producer_plan_hash}\n"
+        );
+        let (key, signature) = signed_channel_index(index.as_bytes());
+        let config_dir = root.join("var/cache/minitrue/channel-config");
+        let snapshot_dir = root.join("var/cache/minitrue/channels/oficial");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::create_dir_all(&snapshot_dir).unwrap();
+        fs::write(
+            config_dir.join("oficial"),
+            format!(
+                "URL=https://example.invalid/distropica/\nKEY={key}\nPRIORITY=100\nTRUST=oficial\n"
+            ),
+        )
+        .unwrap();
+        fs::write(snapshot_dir.join("index"), &index).unwrap();
+        fs::write(snapshot_dir.join("index.minisig"), signature).unwrap();
+        fs::write(ctx.cache_dir().join(&transport_hash), &compressed).unwrap();
+        fs::write(ctx.cache_dir().join(&producer_plan_hash), &producer_plan).unwrap();
+        fs::set_permissions(ctx.cache_dir(), fs::Permissions::from_mode(0o700)).unwrap();
+
+        // A guarda não pode passar por acidente: a fonte tem de estar mesmo
+        // ausente do cache no momento em que o fechamento roda.
+        assert!(
+            !ctx.cache_dir().join(&upstream_hash).exists(),
+            "a fixture precisa exercer a ausência real da fonte"
+        );
+
+        // ACEITA: o mundo fecha sem a fonte, e fecha DE VERDADE — record v4,
+        // origem canal e verify limpo. O runner entra por pedido explícito
+        // porque `pkg` não o alcança por DEPS, e um Keep fora da closure não
+        // seria exercido por fechamento nenhum.
+        let requested = vec!["pkg".to_string(), recipe::BUILD_RUNNER_PACKAGE.to_string()];
+        rectify(&ctx, &requested, BinaryPolicy::BinaryOnly)
+            .expect("mundo de canal fecha sem o tarball upstream de cada pacote");
+        assert!(!root.join("build-ran").exists());
+        let meta = read_meta_strict(&ctx.records_dir().join("pkg"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            meta.get("ORIGIN").map(String::as_str),
+            Some("canal:oficial")
+        );
+        assert_eq!(meta.get("RECORD_FORMAT").map(String::as_str), Some("4"));
+        assert!(
+            !ctx.cache_dir().join(&upstream_hash).exists(),
+            "o fechamento não pode ter baixado nada"
+        );
+        verify(&ctx).unwrap();
+
+        // RECUSA: o mesmo fechamento, no mesmo mundo, sem o objeto do Keep de
+        // origem `vendor`. Aqui o artefato upstream É a prova do payload, e
+        // dispensá-lo silenciaria a única evidência que o record tem.
+        let saved_runner = base.join("runner-guardado");
+        fs::rename(&runner_artifact, &saved_runner).unwrap();
+        let missing = rectify(&ctx, &requested, BinaryPolicy::BinaryOnly)
+            .expect_err("Keep de origem vendor precisa continuar exigindo o objeto pinado");
+        assert_eq!(
+            missing.downcast_ref::<crate::Fail>().map(|fail| fail.code),
+            Some(6)
+        );
+        fs::rename(&saved_runner, &runner_artifact).unwrap();
+        rectify(&ctx, &requested, BinaryPolicy::BinaryOnly)
+            .expect("devolvido o objeto do vendor, o mundo volta a fechar");
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
     fn be(work: &Path) -> BuildEnv {
         BuildEnv {
             cc: "x-gcc".into(),

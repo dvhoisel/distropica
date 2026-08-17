@@ -1889,10 +1889,31 @@ fn material_order(nodes: &BTreeMap<String, PlanNode>, edges: &[PlanEdge]) -> Res
     Ok(out)
 }
 
+/// Quem respondeu pelos objetos upstream deste nó.
+///
+/// O SRC pinado é fato da RECEITA e viaja sempre: o hash está escrito lá, e a
+/// impressão digital do pacote já o cobre. A evidência de assinatura upstream
+/// — a assinatura destacada, o manifesto de checksums e a chave que os julga —
+/// é outra coisa: ela descreve BYTES QUE ALGUÉM BAIXOU E CONFERIU. Só pode
+/// viajar no nó de quem de fato o fez.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UpstreamEvidence {
+    /// Esta máquina autenticou os objetos, ou vai autenticá-los antes de
+    /// construir. A evidência é dela.
+    Observed,
+    /// O payload chegou pronto de um canal. Quem autenticou o upstream foi o
+    /// PRODUTOR, e a prova disso é o `record-channel` do nó; repetir aqui os
+    /// fatos de assinatura seria afirmar uma observação que nunca houve — e é
+    /// por isso que eles saíam com transporte `pending`, valor que o fechamento
+    /// completo recusa, e com razão.
+    FromChannel,
+}
+
 fn input_artifacts(
     recipe: &Recipe,
     origin_kind: &str,
     materiality: Materiality,
+    evidence: UpstreamEvidence,
 ) -> Result<Vec<PlanArtifact>> {
     let mut artifacts: Vec<PlanArtifact> = recipe
         .srcs
@@ -1929,7 +1950,15 @@ fn input_artifacts(
             identifier: "recipe:SRC=none".to_string(),
         });
     }
-    for input in crate::fetch::signature_input_facts(recipe)? {
+    let signature_facts = match evidence {
+        UpstreamEvidence::Observed => crate::fetch::signature_input_facts(recipe)?,
+        // Tudo ou nada. As regras de coerência do validador são bijeções entre
+        // assinatura, chave e slot SRC: deixar a chave sem a assinatura que ela
+        // julga é recusado explicitamente, e com razão. Ou o nó responde pela
+        // evidência inteira, ou não responde por nenhuma.
+        UpstreamEvidence::FromChannel => Vec::new(),
+    };
+    for input in signature_facts {
         artifacts.push(PlanArtifact {
             package: recipe.name.clone(),
             origin_kind: input.origin_kind,
@@ -2839,6 +2868,7 @@ fn resolve_for_with_intermediate(
                     recipe,
                     "identity-source-input",
                     Materiality::IdentityOnly,
+                    UpstreamEvidence::Observed,
                 )?);
                 let selection = channels
                     .get(&node.name)
@@ -2894,7 +2924,12 @@ fn resolve_for_with_intermediate(
                 });
             }
             PlanAction::Vendor => {
-                artifacts.extend(input_artifacts(recipe, "vendor-input", node.materiality)?);
+                artifacts.extend(input_artifacts(
+                    recipe,
+                    "vendor-input",
+                    node.materiality,
+                    UpstreamEvidence::Observed,
+                )?);
                 if strict_media && node.materiality == Materiality::Runtime {
                     let producer =
                         install::vendor_producer_record_fact(ctx, recipe, &node.fingerprint)?;
@@ -2902,15 +2937,23 @@ fn resolve_for_with_intermediate(
                     runtime_vendor_facts.insert(node.name.clone(), producer);
                 }
             }
-            PlanAction::Source => {
-                artifacts.extend(input_artifacts(recipe, "source-input", node.materiality)?)
-            }
+            PlanAction::Source => artifacts.extend(input_artifacts(
+                recipe,
+                "source-input",
+                node.materiality,
+                UpstreamEvidence::Observed,
+            )?),
             PlanAction::Keep => {
                 if recipe.kind != Kind::Meta {
                     artifacts.extend(input_artifacts(
                         recipe,
                         "record-input",
                         Materiality::IdentityOnly,
+                        if node.origin.starts_with("canal:") {
+                            UpstreamEvidence::FromChannel
+                        } else {
+                            UpstreamEvidence::Observed
+                        },
                     )?);
                 }
                 if let Some(artifact) = factual_artifact(ctx, node)? {
@@ -4210,7 +4253,26 @@ impl ResolvedPlan {
                     }
                 }
                 PlanAction::Keep => {
-                    if closing_applied || self.abi_policy == AbiPolicy::Strict {
+                    // A prova de um Keep é o artefato factual do seu record, e a
+                    // matriz canônica o nomeia POR ORIGEM: `record-vendor` para
+                    // vendor, `record-source` para fonte, `record-channel` para
+                    // canal. Só as duas primeiras têm o objeto upstream como
+                    // insumo. A terceira prende CHANNEL_SHA256 e ARTIFACT_HASH
+                    // gravados no record — o tarball do upstream não participa
+                    // da cadeia, e quem o autenticou foi o produtor do canal.
+                    //
+                    // Cobrá-lo aqui obrigaria toda máquina instalada por canal a
+                    // carregar a fonte de cada pacote, o oposto do que um canal
+                    // binário existe para fazer. O ramo Channel trata a MESMA
+                    // receita assim: SRC vira `identity-source-input`,
+                    // identidade sem objeto. Um Keep de canal é aquele mesmo nó
+                    // depois de aplicado, e não pode passar a dever mais.
+                    //
+                    // Estrito continua cobrando tudo: ele recusa transporte
+                    // `pending` e roda onde a mídia é emitida, com os objetos à
+                    // mão.
+                    let from_channel = node.origin.starts_with("canal:");
+                    if (closing_applied && !from_channel) || self.abi_policy == AbiPolicy::Strict {
                         observed_inputs.extend(
                             crate::fetch::ensure_artifacts_authenticated(&effective, recipe)?
                                 .inputs
@@ -5536,7 +5598,24 @@ pub(crate) fn synthetic_channel_emit_plan(
     {
         bail!("fixture produtora exige identidade source factual");
     }
-    let mut artifacts = input_artifacts(recipe, "record-input", Materiality::IdentityOnly)?;
+    let mut artifacts = input_artifacts(
+        recipe,
+        "record-input",
+        Materiality::IdentityOnly,
+        UpstreamEvidence::Observed,
+    )?;
+    // O PRODUTOR baixou e conferiu a assinatura antes de emitir: nos bytes dele
+    // esses inputs não são `pending`, e um lock estrito recusaria se fossem.
+    // A fixture registra a observação em vez de suprimir o fato — suprimi-lo
+    // faria a receita assinada e a não assinada gerarem o mesmo plano, que é
+    // exatamente a confusão que a evidência tipada existe para impedir.
+    for artifact in &mut artifacts {
+        if artifact.transport_sha256 == "pending" {
+            artifact.transport_sha256 = hex::encode(Sha256::digest(
+                format!("fixture-produtor-observou:{}", artifact.identifier).as_bytes(),
+            ));
+        }
+    }
     artifacts.push(PlanArtifact {
         package: recipe.name.clone(),
         origin_kind: "record-source".to_string(),
