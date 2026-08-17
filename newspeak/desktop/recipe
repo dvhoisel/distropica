@@ -100,13 +100,53 @@ if ! ( : >> "$SESSAO_LOG" ) 2>/dev/null; then
 fi
 # DISTROPICA-SESSAO-LOG-END
 
-[ -x /usr/bin/dbus-run-session ] || {
-    echo "distropica: dbus-run-session ausente; aplicativos GTK nao abrirao" >&2
-    exec labwc "$@" >>"$SESSAO_LOG" 2>&1
-}
-exec dbus-run-session -- labwc "$@" >>"$SESSAO_LOG" 2>&1
+# O ENDERECO DO BARRAMENTO E DECLARADO AQUI, e nao herdado do session.conf.
+#
+# O meson do dbus deriva o diretorio do socket lendo TMPDIR da maquina que
+# COMPILA, e grava o resultado em session.conf como <listen>. A 0.13 saiu com
+#
+#   <listen>unix:tmpdir=/tmp/minitrue-build-dbus/tmp</listen>
+#
+# um caminho que existe na maquina de build e em nenhuma outra. No alvo o
+# dbus-daemon falha com "Failed to bind socket ... No such file or directory",
+# o dbus-run-session morre atras dele e o compositor vai junto: a sessao
+# encerra sem dizer por que e a tela vira console.
+#
+# Consertar a receita do dbus e o certo, e esta em aberto (#69) — mas invalida
+# a impressao digital de 25 pacotes, webkitgtk e gimp inclusive, e custa horas
+# de reconstrucao que produzem payload IDENTICO em 15 de 16 casos medidos
+# (#67). Enquanto isso, a sessao nao pode depender de um valor compilado dentro
+# de OUTRO pacote — e nao deveria depender nem depois de consertado. E o mesmo
+# principio do log acima.
+#
+# COMO, e por que assim. `--config-file` obrigaria a duplicar a politica
+# inteira do dbus aqui, criando a segunda fonte de verdade que este arquivo
+# passou o dia combatendo. `--dbus-daemon=BINARIO` troca so o executavel, e o
+# invólucro acrescenta `--address`, que SOBREPOE o <listen> do arquivo.
+# Medido contra o dbus real: config com <listen> invalido falha sozinha e sobe
+# com `--address`, nas duas ordens de argumento. E o dbus-run-session continua
+# dono do ciclo de vida — quando o compositor sai, o barramento morre junto.
+if [ -x /usr/libexec/distropica-dbus-daemon ] && [ -x /usr/bin/dbus-run-session ]; then
+    exec dbus-run-session --dbus-daemon=/usr/libexec/distropica-dbus-daemon \
+        -- labwc "$@" >>"$SESSAO_LOG" 2>&1
+fi
+echo "distropica: barramento de sessao indisponivel; aplicativos GTK nao abrirao" >&2
+exec labwc "$@" >>"$SESSAO_LOG" 2>&1
 LAUNCHER
     chmod 0755 "$STAGE/usr/bin/distropica-desktop"
+
+    # O invólucro é uma linha de comando, e existe para ser lido: quem
+    # investigar por que o barramento sobe num lugar diferente do que o
+    # session.conf diz encontra a resposta aqui, e não num binário.
+    mkdir -p "$STAGE/usr/libexec"
+    cat > "$STAGE/usr/libexec/distropica-dbus-daemon" <<'DBUSWRAP'
+#!/bin/sh
+# Sobe o dbus-daemon com o endereço do socket DECLARADO, ignorando o <listen>
+# que o session.conf herdou do TMPDIR de quem compilou o pacote. Ver o
+# comentário em /usr/bin/distropica-desktop, que é quem chama isto.
+exec /usr/bin/dbus-daemon "$@" --address=unix:tmpdir=/tmp
+DBUSWRAP
+    chmod 0755 "$STAGE/usr/libexec/distropica-dbus-daemon"
 
     cat > "$STAGE/etc/rc.d/rcS.d/01-machine-id.sh" <<'MACHINEID'
 # Drop-in de inicializacao: o identificador da maquina.
@@ -525,6 +565,33 @@ THEMERC
         }
     done
     unset comando
+
+    # O BARRAMENTO DE SESSAO SOBE COM ENDERECO DECLARADO. Sao duas metades e
+    # nenhuma vale sozinha: o lancador tem de CHAMAR o invólucro, e o invólucro
+    # tem de DECLARAR o endereco. Se o lancador voltar a chamar o
+    # `dbus-run-session` pelado, ele herda o <listen> que o session.conf trouxe
+    # do TMPDIR de quem compilou o dbus, e a sessao morre calada — que foi
+    # exatamente o defeito da 0.13.
+    inv=$STAGE/usr/libexec/distropica-dbus-daemon
+    [ -x "$inv" ] || {
+        echo "desktop: o invólucro do dbus-daemon nao foi instalado" >&2
+        exit 1
+    }
+    grep -q -- '--address=unix:tmpdir=/tmp' "$inv" || {
+        echo "desktop: o invólucro do dbus-daemon nao declara o endereco" >&2
+        exit 1
+    }
+    grep -q -- "--dbus-daemon=/usr/libexec/distropica-dbus-daemon" \
+        "$STAGE/usr/bin/distropica-desktop" || {
+        echo "desktop: o lancador nao usa o invólucro do dbus-daemon" >&2
+        exit 1
+    }
+    ! grep -qE '^[[:space:]]*exec dbus-run-session[[:space:]]+--[[:space:]]' \
+        "$STAGE/usr/bin/distropica-desktop" || {
+        echo "desktop: o lancador ainda chama dbus-run-session sem o invólucro" >&2
+        exit 1
+    }
+    unset inv
 
     # O texto do chrome do navegador depende da base de esquemas do GSettings —
     # e de nada dentro do settings.ini. Guarda, e nao comentario.
