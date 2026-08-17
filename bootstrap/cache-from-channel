@@ -833,12 +833,26 @@ for name in $wanted; do
         # signature_cache_name em minitrue/src/fetch.rs — e NÃO pelo hash do
         # artefato. Copiar só "<hash>.minisig" deixa o cache passar na
         # composição e falhar no boot, com "assinatura ausente/inválida".
-        # Por isso se varre o diretório inteiro por .minisig e se copia o que
+        # Por isso se varre o diretório inteiro pelos sidecars e se copia o que
         # ainda não existe no destino: é barato e não erra.
-        for sidecar in "$source"/*.minisig; do
-            [ -e "$sidecar" ] || continue
-            base=$(basename "$sidecar")
-            [ -e "$OUTPUT/$base" ] || cp "$sidecar" "$OUTPUT/$base"
+        #
+        # E SÃO CINCO EXTENSÕES, NÃO UMA. Este laço pegava só .minisig, e o
+        # comentário acima já dizia "TODAS as assinaturas" — a implementação
+        # ficou aquém da própria promessa. O cache de fontes desta árvore tem
+        # .minisig, .openpgp-sig, .asc, .sig e .openpgp-sums; as OpenPGP são a
+        # maioria (onze contra duas).
+        #
+        # O preço foi medido e pago: a ISO 0.13 compôs sem reclamar, bootou,
+        # particionou o disco do usuário, formatou, e SÓ ENTÃO falhou com
+        # "--offline e assinatura-openpgp ausente no cache:
+        # .../make-4.4.1.tar.gz.sig", caindo no shell de resgate com o disco já
+        # apagado. É o modo de falha mais caro que existe: tarde e destrutivo.
+        for ext in minisig openpgp-sig openpgp-sums asc sig; do
+            for sidecar in "$source"/*."$ext"; do
+                [ -e "$sidecar" ] || continue
+                base=$(basename "$sidecar")
+                [ -e "$OUTPUT/$base" ] || cp "$sidecar" "$OUTPUT/$base"
+            done
         done
         achou=yes
         copiados=$((copiados + 1))
