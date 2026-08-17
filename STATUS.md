@@ -1,20 +1,22 @@
 # STATUS — o que está feito, testado e futuro
 
 Fonte única da verdade sobre a maturidade. As `specs/` descrevem a **norma**;
-este arquivo descreve o **estado**. Atualizado à mão em 2026-07-28 após
-reconstruir a closure com o perfil de rede, provar o fechamento de
-dependências, emitir e assinar o canal com ferramenta própria, compor a ISO e
-concluir o aceite automatizado `rede-v2` no VirtualBox.
+este arquivo descreve o **estado**. Atualizado à mão em 2026-08-17, depois que a
+mídia `0.13` passou a instalar e bootar num VirtualBox de verdade.
 
-O que mudou de natureza nesta revisão: a auditoria de fechamento deixou de
-**reprovar** — os 11 erros viraram 0, e agora medidos sobre a closure real, não
-em simulação. Entraram onze receitas de rede (bash, nftables, WireGuard, nmap,
-mtr, tcpdump e as bibliotecas), mais `pkgconf` e `findutils`, que o kernel e o
-netfilter exigiam para construir. A raiz do alvo passou a ser **ext4** com
-tabela **GPT escrita pelo Minipax**, ambas exercitadas contra disco pela
-primeira vez. O kernel da mídia passou a ser compilado **dentro do rootfs**,
-pelo compilador que a própria distro produziu. E o **IPv6 saiu do zero**: há
-evidência, não configuração escrita.
+O que mudou de natureza nesta revisão: **a instalação a partir do canal binário
+fechou**. Ela não fechava, e a causa era do resolvedor, não da mídia — o
+fechamento pós-apply cobrava de cada pacote instalado a prova que pertence a
+quem o produziu. Um sistema que baixa 126 pacotes prontos não tem, nem deve ter,
+o tarball upstream de cada um; a matriz de proveniência já dizia isso, e só o
+`authenticate_objects` não sabia. O compositor passou a ser o **labwc**, o
+navegador o **Epiphany** e o terminal o **foot**; o Firefox e o weston saíram da
+árvore. O canal saiu em **formato 4**, assinado com a chave de produção, e o
+registro fecha em `RECORD_FORMAT=4` com receipt do mundo completo.
+
+O que esta revisão **não** prova, e a distinção importa: a sessão gráfica da
+`0.13` ainda não foi vista de pé. O defeito que a derrubava está consertado e
+medido em teste, mas o boot que exercita o conserto ainda não aconteceu.
 Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
 ## Licenciamento e publicação
@@ -123,7 +125,82 @@ O aviso que a receita já tinha detecta o estrago **depois de feito**. O `sync`
 fecha a janela, custa uma fração de segundo uma vez na vida da instalação, e
 não havia motivo para ele não estar lá.
 
-## Evidência integrada atual — `grafica-v1`
+## Evidência integrada atual — `0.13`
+
+A mídia instala a partir do canal binário, reinicia sem ISO e chega ao login.
+Quem a bootou foi o Daniel, no VirtualBox, com disco de verdade — e é essa a
+prova, não o aceite: a distância entre "a mídia boota" e "a mídia instala" foi
+onde moraram os três defeitos desta revisão, e nenhum deles falhava no build.
+
+```text
+CANAL=177 pacotes Mundo B, CHANNEL_INDEX_FORMAT=4, assinado com a chave de produção
+CANAL_INDEX_SHA256=1cfc7097e93813c22455a79ce6ad8dfe2f3e2c6d4ccc1e650dab1d0c5efd63b8
+POOL=917 MB · CACHE=1247 MB (19 sidecars de assinatura: .minisig, .openpgp-sig,
+                             .openpgp-sums, .asc, .sig)
+EFI=target/release-0.13/BOOTX64-0.13.EFI                (22.1 MB)
+EFI_SHA256=9a4a9949da66dfac013e066e42dd00166df8afdb3552257dbfac7f2a2f161b5a
+ISO=target/release-0.13/distropica-0.13-x86_64.iso      (1402 MB)
+ISO_SHA256=a61ffa6b8af3cec3213805314e35d47c0b81db46835b22a82a9bbb26a60cf050
+RAIZ_PRODUTORA=target/rebuild-0.13-gimp-root — receipt f69fc7c0, plano e5ea95fa
+```
+
+**Não publicada.** `distropica.com.br` ainda serve a `0.12` e o índice de canal
+**legado v2**; a `0.13` existe só localmente. Publicar exige, além do upload, o
+bundle de fontes correspondentes, que ainda não foi gerado para esta mídia.
+
+**Três defeitos, e o padrão entre eles importa mais que cada um.**
+
+| Sintoma | Causa |
+|---|---|
+| instala 126 pacotes e morre em `--offline e artefato ausente do cache: hicolor-icon-theme-0.18.tar.xz` | o fechamento pós-apply autenticava os artefatos upstream de TODO Keep, inclusive os que vieram prontos do canal |
+| removido o fetch, `proveniência material ainda tem input pending` | sem baixar, os fatos de assinatura upstream ficam `pending`, e o fechamento completo os recusa — corretamente |
+| instala, boota, e a tela vira console: `can't create /var/log/labwc.log: Permission denied` | o despachante da tty1 criava `weston.log`; o lançador escrevia `labwc.log`. Duas receitas guardavam o mesmo fato e uma envelheceu na troca de compositor |
+
+Os dois primeiros são o mesmo erro em dois braços: **exigir do consumidor a
+prova que é do produtor**. A matriz de proveniência do `verify_canonical` já
+nomeava o artefato factual por origem — `record-vendor`, `record-source`,
+`record-channel` —, e só o `record-channel` não tem o objeto upstream como
+insumo. `UpstreamEvidence` põe isso no tipo: o SRC pinado é fato da receita e
+viaja sempre; a evidência de assinatura descreve bytes que alguém baixou e
+conferiu, e só viaja no nó de quem o fez.
+
+O terceiro é de outra natureza e mais instrutivo: **já tinha sido consertado**.
+O `base` cria o log ainda como root e o entrega ao usuário, com doze linhas
+explicando que o defeito apareceu na primeira foto tirada depois da queda de
+privilégio. As linhas continuam lá, corretas, apontando para um arquivo que
+ninguém mais abria. O log agora se chama `/var/log/distropica-sessao.log` —
+nome do papel, não do programa — e o lançador não morre por causa dele: testa o
+destino, cai para o diretório de runtime da sessão e diz na tela para onde foi.
+
+**O que foi medido, e como:**
+
+- **A instalação inteira, offline, fora da VM.** Raiz limpa com os symlinks de
+  usr-merge que o `minipax` cria, cache da release, as 28 raízes do
+  `target.world`: 126 records em `RECORD_FORMAT=4`, `receipt aplicado
+  b579cf5d`, `plano aplicado fechado 143c4b3b (126 materiais)` e `verify` limpo.
+  Antes do conserto, morria no primeiro pacote da ordem topológica.
+- **Cada braço do conserto, revertido um por vez.** O teste de regressão
+  (`install::tests::fechamento_de_mundo_de_canal_nao_cobra_a_fonte_upstream`)
+  falha em cada um separadamente. A fixture vizinha não pegava o defeito porque
+  a receita dela não declara SRC — sem fonte declarada não há objeto a cobrar
+  nem assinatura a resolver.
+- **A guarda do log, contra os três estados defeituosos.**
+  `bootstrap/testes/sessao-grafica-log` extrai os dois heredocs das duas
+  receitas e recusa: caminhos divergentes, nome que cite compositor, e o `if`
+  sem subshell — porque redirecionamento que falha sobre um special builtin
+  encerra o shell, e escrito sem parênteses o teste matava o lançador
+  exatamente nos casos que ele existe para tratar.
+- **O canal, diferencial.** O índice novo contra o antigo diverge em
+  exatamente `base` e `desktop`; os payloads desses dois carregam o conserto.
+
+**Aberto nesta mídia:** a sessão gráfica não foi vista de pé (#54); o console
+fica em US enquanto só a sessão gráfica é ABNT2 (#65); reinstalar sobre uma raiz
+que morreu em `RECORD_FORMAT=3` colide no diretório compartilhado do
+`hicolor-icon-theme` (#64); e o instalador continua apagando o disco antes de
+saber se consegue instalar (#63) — que é o que tornou os dois primeiros defeitos
+caros em vez de apenas irritantes.
+
+## Evidência integrada anterior — `grafica-v1`
 
 A ISO com modo gráfico instala, reinicia sem mídia e **abre o Firefox em
 português**. A prova não é o aceite: o `accept-qemu` lê o SERIAL, e sessão
@@ -239,7 +316,7 @@ O que a revisão traz, e o que custou:
   confere cada sha256 contra o índice e aborta em vez de produzir um cache que
   só falha na máquina do usuário.
 
-## Evidência integrada anterior — `rede-v3`
+## Evidência integrada mais antiga — `rede-v3`
 
 A closure foi reconstruída com o perfil de rede e emitida num canal local
 assinado com **24 artefatos** (eram 11). A instalação direta
@@ -574,7 +651,7 @@ artefato existente muda de hash. A terceira é o bug. A quarta é o conserto.
 | Auditoria ELF/ABI + mapa de provedores (`audit`) | ✅ | ✅ unit + cotejo com `readelf` | `AUDIT_FORMAT=1`; lê `PT_INTERP`, `DT_NEEDED`, `DT_SONAME`, `RPATH`/`RUNPATH`, `verneed`/`verdef` e shebang **sem executar nada** — parser próprio pela tabela de programa, sem `ldd`. Mapa de provedores vem dos registros, resolve usr-merge componente a componente e árvore `d:` do mundo A. Serialização canônica + `CLOSURE_SHA256`. **É gate de `channel emit`**: publicar payload com requisito sem provedor declarado é recusado. `dlopen`/plugin/subprocesso continuam fora do alcance estático, e a composição de mídia ainda não é gateada |
 | PATH/view de build fechado | ⬜ | — | o runner limpa o ambiente, mas ainda expõe `/usr/bin:/bin` do rootfs; ferramentas implícitas podem vazar para o build |
 | `rollback` / `unperson` / `lint` | ⬜ | — | stub |
-| Canal binário assinado | ✅ | ✅ unit + E2E offline | config HTTPS/chave minisign pinada, índice canônico v2 assinado com `RECIPE_FINGERPRINT`, cache endereçado por conteúdo, `.tar.zst` com limites e conferência do tar interno; seleção exige que a identidade autenticada coincida com a receita efetiva. Cada `rectify` online é mutação explícita: busca, autentica e pode persistir o snapshot operacional preso no próprio lock; não há avanço em background. Offline usa a seed assinada. `/etc/minitrue/channels/` existente é autoritativo e, vazio, desativa a seed |
+| Canal binário assinado | ✅ | ✅ unit + E2E offline | config HTTPS/chave minisign pinada, índice canônico **v4** assinado com `RECIPE_FINGERPRINT` — com `RELEASE_ROOT` e o PLAN_LOCK do produtor no cabeçalho, e `REPROCORR` por pacote —, cache endereçado por conteúdo, `.tar.zst` com limites e conferência do tar interno; seleção exige que a identidade autenticada coincida com a receita efetiva. Cada `rectify` online é mutação explícita: busca, autentica e pode persistir o snapshot operacional preso no próprio lock; não há avanço em background. Offline usa a seed assinada. `/etc/minitrue/channels/` existente é autoritativo e, vazio, desativa a seed |
 | Resolução `--no-binary` / `--only-binary` | ✅ | ✅ unit + E2E offline histórico | binário de canal preserva mundo B; `--only-binary` resolve metapacotes locais sem artefato, mas exige artefato para cada dependência fonte e não expande `BUILD_DEPS` nem Zig implícito |
 | Lock de canal | ✅ | ✅ unit + E2E offline | `CHANNEL_LOCK_FORMAT=2`; seleção, chave, índice, pacote, fingerprint autenticado, caminho, hash de transporte, `reprocorr` e trust; persistido por hash em `/var/lib/minitrue/channel-locks/` e cotejado semanticamente por `verify` |
 | `channel emit` | ✅ | ✅ unit | builds locais retêm atomicamente o tar selado por `ARTIFACT_HASH`; `--release` exige/revalida somente esses objetos e marca `RELEASE_ROOT=yes`. `emit.meta` v3 prende o índice exato por `INDEX_SHA256`, impedindo mistura entre emissões. O modo comum prefere retido, permite objeto de canal/reconstrução provada e marca `RELEASE_ROOT=no`; emite pool + índice sem assinatura |
@@ -964,13 +1041,16 @@ foi publicada.
   ainda está instalado, mas `ARTIFACT_HASH`/`FINGERPRINT` sem pino externo ainda
   são campos locais. Provar contra adulteração privilegiada posterior exige
   retenção do artefato selado, índice/canal assinado ou attestation no build.
-- **Confiança de canal vs P6:** o índice v2 assinado carrega o
+- **Confiança de canal vs P6:** o índice v4 assinado carrega o
   `recipe_fingerprint`, e a seleção exige que ele coincida com a receita
-  efetiva; o lock v2 e o `CHANNEL_PATH` do registro preservam essa identidade,
-  que `verify` coteja semanticamente. Sem `REPROCORR`, porém, o hash continua
-  autenticando o publicador, não uma reprodução independente. Também não há
-  monotonicidade externa para impedir que um servidor reapresente um índice
-  antigo ainda corretamente assinado.
+  efetiva; o lock e o `CHANNEL_PATH` do registro preservam essa identidade, que
+  `verify` coteja semanticamente. O `REPROCORR` por pacote entrou, e com ele a
+  identidade do payload DESCOMPACTADO deixou de depender do transporte — mas
+  ele continua sendo o que o produtor reobservou, e não uma reprodução
+  independente de terceiro. Também não há monotonicidade externa para impedir
+  que um servidor reapresente um índice antigo ainda corretamente assinado; o
+  canal publicado hoje é prova disso pelo avesso, servindo ainda o formato
+  legado v2 que o `TRUST=oficial` recusa (#53).
 - **Atualização administrativa de canal:** consumo, lock v2, emissão e
   `channel refresh` existem. O refresh mostra o diff autenticado antes de
   avançar e não instala; cada `rectify` online é uma mutação explícita que

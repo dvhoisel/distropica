@@ -3,27 +3,35 @@
 > Uma distribuição Linux distópica. Não instala pacotes: **retifica registros**.
 
 **[Site oficial](https://distropica.com.br/)** ·
-**[Baixar a ISO 0.11 (717 MB)](https://distropica.com.br/releases/distropica-0.11-x86_64.iso)** ·
-**[SHA-256](https://distropica.com.br/releases/distropica-0.11-x86_64.iso.sha256)** ·
-**[Manifesto](https://distropica.com.br/releases/distropica-0.11-x86_64.iso.manifest)** ·
-**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.11-corresponding-sources.tar.zst)** ·
-**[SHA das fontes](https://distropica.com.br/releases/distropica-0.11-corresponding-sources.tar.zst.sha256)** ·
-**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.11-sources.tsv)** ·
-**[Índice de licenças](https://distropica.com.br/releases/distropica-0.11-licencas.tsv)**
+**[Baixar a ISO 0.12 (999 MB)](https://distropica.com.br/releases/distropica-0.12-x86_64.iso)** ·
+**[SHA-256](https://distropica.com.br/releases/distropica-0.12-x86_64.iso.sha256)** ·
+**[Manifesto](https://distropica.com.br/releases/distropica-0.12-x86_64.iso.manifest)** ·
+**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.12-corresponding-sources.tar.zst)** ·
+**[SHA das fontes](https://distropica.com.br/releases/distropica-0.12-corresponding-sources.tar.zst.sha256)** ·
+**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.12-sources.tsv)** ·
+**[Índice de licenças](https://distropica.com.br/releases/distropica-0.12-licencas.tsv)**
 
-> **Atenção:** a `0.11` é uma **pré-release de desenvolvimento** para VM UEFI
+> **Atenção:** a `0.12` é uma **pré-release de desenvolvimento** para VM UEFI
 > **64 bits**, e a própria mídia declara isso de si: `PROFILE_CLASS=custom`.
 > O instalador apaga integralmente o dispositivo escolhido. Use um disco virtual
-> descartável e confira o SHA-256 antes do boot.
+> descartável e confira o SHA-256 antes do boot
+> (`b52843ceb592d16eef756fe22201b321c913177e6fdc20ab198b6f3c56aef250`).
 >
 > Ela pede a **senha de root antes do caminho do disco**: toda a interação
 > acontece antes de qualquer escrita, e a partir do disco escolhido a
 > instalação corre sozinha.
 >
 > Requisitos da VM: firmware **EFI de 64 bits** (no VirtualBox, `--firmware efi64`;
-> o EFI de 32 bits não carrega o `BOOTX64.EFI` e reporta "no bootable medium") e
-> disco cuja raiz comporte **3,1 GiB** — a regra do instalador é `cache × 4 +
-> 512 MiB`, e ele recusa disco menor. O sistema instalado ocupa 2,4 GiB.
+> o EFI de 32 bits não carrega o `BOOTX64.EFI` e reporta "no bootable medium").
+>
+> O tamanho mínimo da raiz **não é constante**: o instalador o calcula a partir
+> do cache da própria mídia e recusa disco menor dizendo de quanto precisa. A
+> conta é `cache × 5 + 512 MiB` — cinco e não quatro porque, durante a
+> instalação, o cache **vive no disco alvo ao mesmo tempo** que a árvore cresce,
+> e o pico é a soma dos dois, não o maior deles; o fator quatro em si saiu de
+> medição (um cache de 664 MiB produziu uma árvore de 2096 MiB, razão 3,16) e o
+> resto é margem. O `cache.tar` da `0.12` tem 868 MiB, o que dá cerca de
+> **4,7 GiB** de raiz mínima.
 
 A Distrópica parte de uma observação desconfortável sobre o mundo atual: os
 projetos novos (Zig, Go, Rust, os aplicativos das corporações) distribuem
@@ -64,16 +72,20 @@ nas combinações efetivamente distribuídas.
 Cada ISO, EFI, cache ou canal binário publicado deve vir acompanhado de acesso
 equivalente ao seu bundle de fontes correspondentes: revisão da Distrópica,
 crates Rust vendorizadas, fontes upstream exatas, configurações, patches,
-scripts, licenças e inventário. A imagem custom `0.11` atende essa
-regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-0.11-corresponding-sources.tar.zst),
-preso à revisão `eb6d32f` e ao SHA-256 da ISO, e acompanha um
-[índice de licenças](https://distropica.com.br/releases/distropica-0.11-licencas.tsv)
-com os 411 textos extraídos de dentro dos próprios artefatos. Todos os 104
-pacotes do inventário declaram licença — não há mais nenhum
+scripts, licenças e inventário. A imagem custom `0.12` atende essa
+regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-0.12-corresponding-sources.tar.zst),
+preso à revisão `14cbbab` e ao SHA-256 da ISO, e acompanha um
+[índice de licenças](https://distropica.com.br/releases/distropica-0.12-licencas.tsv)
+com os 5450 textos extraídos de dentro dos próprios artefatos. Todos os 118
+pacotes do inventário declaram licença — não há nenhum
 `LICENSE=NOASSERTION`. Oito deles não carregam o texto da licença dentro do
-próprio artefato (`busybox`, `ca-certificates`, `firefox`, `jq`, `libcap`,
-`libdrm`, `libxml2`, `ripgrep`); para esses a evidência está no bundle de
-fontes, e não na mídia, e o índice diz de onde veio cada texto.
+próprio artefato, e por dois motivos diferentes que vale separar. Três são
+**receitas de montagem da própria Distrópica** (`base`, `desktop`, `miniluv`):
+não têm SRC, geram arquivos legíveis, e a licença delas é a do repositório —
+`GPL-3.0-or-later`, em [LICENSE](LICENSE). Os outros cinco são de terceiros
+(`ca-certificates`, `libcap`, `libdrm`, `libxml2`, `ripgrep`) e simplesmente não
+embarcam o texto no artefato publicado; para esses a evidência está no bundle de
+fontes, e não na mídia. O índice diz de onde veio cada texto.
 O repositório público é a fonte
 do desenvolvimento, mas não substitui sozinho esse conjunto por artefato.
 Gerar uma imagem para uso privado não exige publicá-la; redistribuí-la
@@ -172,13 +184,21 @@ partir de nada além de binários upstream — foi **demonstrada**:
   empacotamento determinístico (`pack`), imagem de STAGE selada, attestations
   Ed25519 sem replay histórico, toolchain por estágio, journal transacional com
   recuperação global no mundo B, runner de build em rootfs via bwrap e
-  **`explain`/`why`** (a proveniência como comando). O canal binário mínimo
-  também está implementado: índice canônico v2 assinado por minisign, com o
+  **`explain`/`why`** (a proveniência como comando). O canal binário está
+  implementado no **formato de índice 4**, assinado por minisign, com o
   fingerprint da receita dentro da identidade autenticada, chave pinada,
-  artefatos `.tar.zst` endereçados por conteúdo, lock imutável v2 da seleção e
-  resolução `--no-binary`/`--only-binary` sem puxar dependências de build
-  quando um artefato de canal é escolhido. `verify` coteja semanticamente a
+  artefatos `.tar.zst` endereçados por conteúdo, `RELEASE_ROOT` e o PLAN_LOCK do
+  produtor no cabeçalho, lock imutável da seleção e resolução
+  `--no-binary`/`--only-binary` sem puxar dependências de build quando um
+  artefato de canal é escolhido. O registro fecha em `RECORD_FORMAT=4`, com
+  `APPLIED_PLAN_RECEIPT` *content-addressed* do mundo completo e ponteiro
+  atômico `applied-plans/current`. `verify` coteja semanticamente a
   proveniência gravada com esse lock, inclusive caminho e fingerprint.
+  A prova de um pacote instalado é a da sua ORIGEM, e não uma só: `record-vendor`
+  para o Mundo A, `record-source` para o que se compilou aqui, `record-channel`
+  para o que veio pronto — este último preso ao `CHANNEL_SHA256` e ao
+  `ARTIFACT_HASH` do registro, sem exigir da máquina instalada o tarball
+  upstream que ela nunca baixou.
   Há uma suíte local automatizada; a matriz de cobertura vive no `STATUS.md`.
 - **`minipax` — núcleo implementado** (Rust): resolve um perfil comum, sela
   seus insumos num `profile.lock`, materializa o sistema em um `--target` e
@@ -248,34 +268,39 @@ partir de nada além de binários upstream — foi **demonstrada**:
   do ext4 guardava tamanho de arquivo sem os dados, corrompendo o `/etc/passwd`
   no boot seguinte de um jeito que o busybox tolera e a glibc não.
 
-- **Modo gráfico — Wayland, weston e Firefox.** A tty1 vira sessão gráfica
-  quando o pacote `desktop` está instalado e existe `/dev/dri/card*`; senão,
-  vira um getty, e a tty2 é sempre um getty de emergência. O compositor é o
-  **weston** com backend DRM e renderizador **pixman** — que compõe direto no
-  buffer do KMS, sem EGL e sem GBM, porque numa árvore com Mesa softpipe o GL
-  não aceleraria nada e só acrescentaria uma superfície de falha. O navegador é
-  o binário oficial pt-BR da Mozilla, do Mundo A, em `/opt`.
+- **Modo gráfico — Wayland, labwc, Epiphany e foot.** A tty1 vira sessão
+  gráfica quando o pacote `desktop` está instalado e existe `/dev/dri/card*`;
+  senão, vira um getty, e a tty2 é sempre um getty de emergência. A sessão
+  **não roda como root** desde a 0.12: o despachante da tty1 é o init, e a
+  queda de privilégio para a conta comum é dele.
 
-  **O preço do Firefox está escrito porque é grande.** Medindo o `libxul.so`
-  com `readelf -d`, ele declara `libX11`, `libxcb`, `libXext`, `libXrandr`,
-  `libXcomposite`, `libXdamage`, `libXfixes`, `libXrender`, `libXcursor`,
-  `libXi` e `libasound` no `NEEDED` — ligação dura, com `-z now`, resolvida
-  pelo carregador antes da primeira linha de código. Pior: ele referencia
-  **vinte e um símbolos `gdk_x11_*`**, que só existem num GTK3 compilado com o
-  backend X11. Uma árvore Wayland-only simplesmente não carrega esse binário, e
-  isso não se descobre lendo documentação — se descobriu executando e lendo
-  `undefined symbol: gdk_x11_display_get_xdisplay`.
+  O compositor é o **labwc** sobre **wlroots**, e o renderizador continua sendo
+  por software: o wlroots é construído com `-Drenderers=[]` e compõe direto no
+  buffer *dumb* do KMS, sem EGL e sem GBM, porque numa árvore com Mesa softpipe
+  o GL não aceleraria nada e ainda dependeria de o gbm achar driver. O labwc
+  reimplementa o modelo do Openbox: tema `themerc` compatível com Openbox 3.6,
+  configuração em `rc.xml`, menu raiz em `menu.xml`, e cada atalho declarado um
+  a um em vez de um modificador global único. O lema do projeto é *no bling* —
+  e é essa recusa que o torna adequado aqui. **Não há painel nem relógio**: o
+  equivalente é o menu do botão direito. XWayland fica desligado, coerente com o
+  wlroots; nenhuma janela X roda sobre este compositor.
 
-  Daí a corrente: dezessete receitas novas de bibliotecas **cliente** do X11
-  (não há servidor X nesta árvore, nem XWayland), o `at-spi2-core` — que o
-  backend X11 do GTK3 exige como dependência dura e que substituiu o `atk`
-  avulso —, o `libxml2` de que ele depende, o backend `xlib` no cairo e o GLX
-  no libepoxy. Em execução, **nada disso é exercido**: com `WAYLAND_DISPLAY`
-  no ambiente e `DISPLAY` ausente, o GDK escolhe Wayland e o caminho X11 fica
-  morto. Elas existem para o `ld.so`, não para o usuário. A alternativa seria
-  uma biblioteca de tocos falsos que quebraria no dia em que alguém a
-  chamasse, ou compilar o Firefox da fonte — o que exige Rust, clang,
-  cbindgen, nodejs e NASM.
+  O navegador é o **Epiphany** (GNOME Web) sobre **WebKitGTK**, e a troca pelo
+  Firefox foi de um pacote por um: medido, tirar o Firefox da closure removia
+  exatamente ele mesmo, porque tudo o que ele puxava é compartilhado com a
+  pilha gráfica. O que muda de verdade é a natureza do que fica — C e C++
+  auditáveis por `NEEDED`, em vez de um binário upstream opaco. **Sem vídeo**,
+  herdado do WebKit construído sem decodificador nenhum: é posição declarada,
+  não surpresa. O terminal é o **foot**, cliente Wayland nativo em C, sem
+  toolkit — desenha direto em superfície pixman com os glifos que o fcft
+  rasteriza, e sua closure inteira são três receitas pequenas.
+
+  **O X11 não saiu da closure, e vale dizer por quê**, porque é fácil prometer
+  o contrário. A árvore ainda traz `libx11`, `libxcb`, `libxext` e `libxrender`
+  — não por causa do navegador nem do compositor, mas porque o **cairo** desta
+  árvore é construído com os backends X, e labwc depende de cairo e pangocairo.
+  Em execução nada disso é exercido: elas existem para o `ld.so`, não para o
+  usuário. Quem tirará o X11 daqui é a troca do gtk3/GIMP, não a do navegador.
 - **Mídia viva UEFI — implementação inicial.**
   `bootstrap/live/build-efi` produz um kernel EFI-stub com initramfs,
   BusyBox, Minipax e Minitrue `static-pie` ligados com musl. O PID 1 encontra a
@@ -587,8 +612,8 @@ recompilar GCC no computador do usuário. O cache de desenvolvimento usado nos
 testes não é versionado como release. Cada build fonte local passa a reter
 atomicamente o tar selado sob o próprio `ARTIFACT_HASH`. `minitrue channel emit
 --release --output DIR <pacotes...>` exige e revalida esses objetos, gera pool,
-índice v2 e `emit.meta` v3 com `INDEX_SHA256` e `RELEASE_ROOT=yes`; o índice
-ainda precisa ser assinado. Sem `--release`, o comando prefere o retido, mas aceita o tar
+índice v4 e `emit.meta` v4 com `INDEX_SHA256`, `PRODUCER_PLAN_LOCK_SHA256` e
+`RELEASE_ROOT=yes`; o índice ainda precisa ser assinado. Sem `--release`, o comando prefere o retido, mas aceita o tar
 autenticado de outro canal ou a reconstrução provada das claims e marca
 `RELEASE_ROOT=no`. Esse fallback é desenvolvimento/recuperação, nunca raiz de
 publicação.
