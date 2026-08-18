@@ -1412,6 +1412,9 @@ fn identity_visit(
     for dependency in recipe.runner_build_deps() {
         identity_visit(dependency, all, seen, stack, out)?;
     }
+    for dependency in recipe.ccache_build_deps() {
+        identity_visit(dependency, all, seen, stack, out)?;
+    }
     stack.pop();
     out.push(recipe.clone());
     Ok(())
@@ -1749,6 +1752,42 @@ fn activate(
                 order,
             )?;
         }
+        for dependency in recipe.ccache_build_deps() {
+            // A aresta viaja como Toolchain de propósito: o formato do
+            // PLAN_LOCK já conhece esse tipo, o payload materializa inteiro
+            // na view (o masquerade executa /usr/bin/ccache lá dentro), e
+            // nenhum parser precisa aprender um tipo novo quando o portão
+            // ligar.
+            active_edges
+                .entry((
+                    name.to_string(),
+                    EdgeKind::Toolchain,
+                    dependency.to_string(),
+                ))
+                .and_modify(|role| *role = role.merge(requested_materiality))
+                .or_insert(requested_materiality);
+            activate(
+                ctx,
+                dependency,
+                requested_materiality,
+                purpose,
+                policy,
+                mode,
+                allow_legacy_channel,
+                strict_media,
+                intermediate_records,
+                force_materialization,
+                recipes,
+                fingerprints,
+                nodes,
+                catalog,
+                channel_keep_candidates,
+                active_edges,
+                done,
+                stack,
+                order,
+            )?;
+        }
         for dependency in recipe.runner_build_deps() {
             active_edges
                 .entry((name.to_string(), EdgeKind::Runner, dependency.to_string()))
@@ -1828,6 +1867,9 @@ fn edge_list(
             add(EdgeKind::Build, dependency)?;
         }
         for dependency in recipe.toolchain_build_deps() {
+            add(EdgeKind::Toolchain, dependency)?;
+        }
+        for dependency in recipe.ccache_build_deps() {
             add(EdgeKind::Toolchain, dependency)?;
         }
         for dependency in recipe.runner_build_deps() {

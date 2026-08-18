@@ -123,6 +123,20 @@ pub const BUILD_RUNNER_FORMAT: &str = "1";
 pub const BUILD_VIEW_FORMAT: &str = "1";
 pub const BUILD_SYSROOT_FORMAT: &str = "1";
 pub const BUILD_RUNNER_PACKAGE: &str = "busybox";
+/// O acelerador do caminho GCC (#68): cache de compilação montado na view,
+/// nos moldes do cache global do Zig. O pacote é Mundo A — binário estático
+/// musl assinado pelo upstream com minisign — e NÃO entra em DEPS de receita
+/// nenhuma: quando o portão abaixo liga, `ccache_build_deps()` o concede como
+/// aresta implícita a todo build nativo, como o runner concede o shell.
+pub const BUILD_CCACHE_PACKAGE: &str = "ccache";
+/// O PORTÃO. Nasce desligado porque ligá-lo muda o ambiente de build de todo
+/// Mundo B — o fingerprint ganha a aresta ccache e o material do runner ganha
+/// as linhas CCACHE_* — e uma mudança dessas não sai avulsa: ela espera o
+/// ponto de reconstrução total já devido (#50), junto com o bump de
+/// BUILD_VIEW_FORMAT. Há um teste que FALHA se alguém ligar isto sem o bump.
+/// A lição que motivou a regra custou horas: uma linha na receita do dbus
+/// invalidou 25 pacotes, e 15 dos 16 reconstruídos saíram bit a bit idênticos.
+pub const BUILD_CCACHE_VIEW: bool = false;
 
 /// Diretórios de executáveis que o bwrap substitui pela view filtrada. A lista
 /// é também serializada por [`build_runner_material`]; executor e identidade
@@ -195,6 +209,15 @@ pub fn build_runner_material() -> String {
     out.push_str(BUILD_RUNNER_PACKAGE);
     out.push('\n');
     out.push_str("RUNNER_SHELL=ELF64-x86_64-static\n");
+    if BUILD_CCACHE_VIEW {
+        // Só existe no material quando o portão está ligado: enquanto
+        // desligado, o material é byte a byte o de sempre e nenhum
+        // fingerprint se move. Ao ligar, TODOS se movem — e é para isso que o
+        // teste de tripwire exige o bump de BUILD_VIEW_FORMAT junto.
+        out.push_str("CCACHE_PACKAGE=");
+        out.push_str(BUILD_CCACHE_PACKAGE);
+        out.push('\n');
+    }
     out.push_str("EXEC_DIRS=");
     out.push_str(&BUILD_EXEC_DIRS.join(":"));
     out.push('\n');
@@ -266,6 +289,20 @@ impl Recipe {
     pub fn runner_build_deps(&self) -> &'static [&'static str] {
         if self.kind == Kind::Source {
             &[BUILD_RUNNER_PACKAGE]
+        } else {
+            &[]
+        }
+    }
+
+    /// Aresta implícita do acelerador de compilação (#68). Só o caminho GCC
+    /// nativo: seed e cross compilam pelo Zig, que tem cache próprio. Enquanto
+    /// `BUILD_CCACHE_VIEW` está desligado devolve vazio, e vazio aqui é
+    /// contrato: nenhum byte novo entra no fingerprint, nenhuma aresta nova
+    /// entra no plano — ligar o portão é a única mudança, e ela é auditável
+    /// num diff de duas linhas.
+    pub fn ccache_build_deps(&self) -> &'static [&'static str] {
+        if BUILD_CCACHE_VIEW && self.kind == Kind::Source && self.toolchain == Toolchain::Native {
+            &[BUILD_CCACHE_PACKAGE]
         } else {
             &[]
         }
@@ -1385,6 +1422,7 @@ fn build_fp_from_snapshots(
         ),
         ("toolchain", r.toolchain_build_deps().to_vec()),
         ("runner", r.runner_build_deps().to_vec()),
+        ("ccache", r.ccache_build_deps().to_vec()),
     ] {
         let mut dependencies = dependencies;
         dependencies.sort_unstable();
@@ -1500,6 +1538,29 @@ mod tests {
             assert!(!error.to_string().contains("--tofu"));
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// O tripwire do portão do ccache (#68). Enquanto desligado, o material
+    /// do runner não pode ter vestígio nenhum — é isso que garante que os
+    /// fingerprints de hoje não se movem. Ligado, o bump de BUILD_VIEW_FORMAT
+    /// tem de vir junto: quem ligar sem o bump quebra ESTE teste, e não a
+    /// máquina de um usuário.
+    #[test]
+    fn ligar_o_ccache_exige_bump_do_view_format() {
+        if BUILD_CCACHE_VIEW {
+            assert_ne!(
+                BUILD_VIEW_FORMAT, "1",
+                "ligar BUILD_CCACHE_VIEW muda o ambiente de build de todo o \
+                 Mundo B; o bump de BUILD_VIEW_FORMAT vem junto, e a mudança \
+                 espera um ponto de reconstrucao total (#50)"
+            );
+            assert!(build_runner_material().contains("CCACHE_PACKAGE=ccache"));
+        } else {
+            assert!(
+                !build_runner_material().contains("CCACHE"),
+                "portao desligado nao pode deixar vestigio no material"
+            );
+        }
     }
 
     #[test]

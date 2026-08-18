@@ -1439,6 +1439,9 @@ fn collect_identity(
     for d in r.runner_build_deps() {
         collect_identity(ctx, d, seen, stack, out)?;
     }
+    for d in r.ccache_build_deps() {
+        collect_identity(ctx, d, seen, stack, out)?;
+    }
     stack.pop();
     out.push(r);
     Ok(())
@@ -2238,6 +2241,15 @@ fn build_provider_closure(
         }
     }
     for name in recipe.toolchain_build_deps() {
+        collect_build_runtime_closure(
+            name,
+            BuildAuthority::Toolchain,
+            recipes,
+            &mut providers,
+            &mut Vec::new(),
+        )?;
+    }
+    for name in recipe.ccache_build_deps() {
         collect_build_runtime_closure(
             name,
             BuildAuthority::Toolchain,
@@ -3163,7 +3175,12 @@ fn create_build_view(
         symlink(target, root.join(alias.trim_start_matches('/')))?;
     }
     let zig_cache_mountpoint = ctx.cache_dir().join("zig");
-    for mountpoint in [work, zig_cache_mountpoint.as_path()] {
+    let ccache_cache_mountpoint = ctx.cache_dir().join("ccache");
+    let mut view_mountpoints = vec![work, zig_cache_mountpoint.as_path()];
+    if recipe::BUILD_CCACHE_VIEW {
+        view_mountpoints.push(ccache_cache_mountpoint.as_path());
+    }
+    for mountpoint in view_mountpoints {
         let virtual_path = in_chroot(&ctx.root, mountpoint);
         let destination = root.join(virtual_path.strip_prefix("/").unwrap_or(&virtual_path));
         ensure_build_view_parent(&root, &destination)?;
@@ -3414,6 +3431,11 @@ struct BuildEnv {
     ld: String,
     nm: String,
     path_prefix: Vec<PathBuf>,
+    /// O build recebe o acelerador de compilação (#68): masquerade no PATH,
+    /// CCACHE_* no ambiente e o cache global montado gravável. Só o caminho
+    /// GCC nativo com o portão `BUILD_CCACHE_VIEW` ligado; em todo o resto é
+    /// false e nada do ccache aparece no ambiente.
+    ccache: bool,
 }
 
 /// Alvo do gcc/binutils cross que produz glibc (SPEC-0005).
@@ -3422,6 +3444,51 @@ const CROSS_TRIPLE: &str = "x86_64-distropica-linux-gnu";
 /// Cria os shims da semente (zig cc/c++/ld/ar…) num diretório e o devolve.
 /// `-ffile-prefix-map=$WORK=.` torna a reprodutibilidade independente do
 /// caminho de build (SPEC-0010): reescreve o comp_dir/__FILE__ para relativo.
+/// Masquerade do ccache (#68): um diretório na frente do PATH em que os nomes
+/// dos compiladores são invólucros de uma linha sobre /usr/bin/ccache. Shell
+/// legível, como os seed shims — quem investigar por que `gcc` não é o gcc
+/// encontra a resposta lendo. O compilador real vai por caminho ABSOLUTO:
+/// entregue por nome, o ccache o procuraria no PATH, acharia o próprio
+/// masquerade primeiro e recursaria. Só os compiladores entram — ar, ld e
+/// ranlib não passam pelo ccache porque ele só entende compilação.
+fn ccache_masquerade(work: &Path) -> Result<PathBuf> {
+    let tc = work.join(".ccache-tc");
+    fs::create_dir_all(&tc)?;
+    for (nome, real) in [
+        ("cc", "/usr/bin/gcc"),
+        ("gcc", "/usr/bin/gcc"),
+        ("c++", "/usr/bin/g++"),
+        ("g++", "/usr/bin/g++"),
+    ] {
+        let shim = tc.join(nome);
+        write_new(
+            &shim,
+            format!("#!/bin/sh\nexec /usr/bin/ccache {real} \"$@\"\n").as_bytes(),
+        )?;
+        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755))?;
+    }
+    // Os nomes triplos do binutils/gcc nativo também compilam em muitos
+    // configures; mascarar só os curtos deixaria metade dos acertos na mesa.
+    for (nome, real) in [
+        (
+            format!("{CROSS_TRIPLE}-gcc"),
+            "/usr/bin/x86_64-distropica-linux-gnu-gcc",
+        ),
+        (
+            format!("{CROSS_TRIPLE}-g++"),
+            "/usr/bin/x86_64-distropica-linux-gnu-g++",
+        ),
+    ] {
+        let shim = tc.join(&nome);
+        write_new(
+            &shim,
+            format!("#!/bin/sh\nexec /usr/bin/ccache {real} \"$@\"\n").as_bytes(),
+        )?;
+        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(tc)
+}
+
 fn seed_shims(ctx: &Ctx, work: &Path, epoch: u64) -> Result<PathBuf> {
     let zig_host = ctx.root.join("opt/zig/current/zig");
     if !zig_host.exists() {
@@ -3484,6 +3551,7 @@ fn setup_toolchain(ctx: &Ctx, work: &Path, r: &Recipe, epoch: u64) -> Result<Bui
             ld: "false".into(),
             nm: "false".into(),
             path_prefix: Vec::new(),
+            ccache: false,
         }),
         Toolchain::Seed => {
             let tc = seed_shims(ctx, work, epoch)?;
@@ -3495,6 +3563,7 @@ fn setup_toolchain(ctx: &Ctx, work: &Path, r: &Recipe, epoch: u64) -> Result<Bui
                 ld: "ld".into(),
                 nm: "nm".into(),
                 path_prefix: vec![tc],
+                ccache: false,
             })
         }
         Toolchain::Cross => {
@@ -3511,11 +3580,22 @@ fn setup_toolchain(ctx: &Ctx, work: &Path, r: &Recipe, epoch: u64) -> Result<Bui
                 ld: format!("{CROSS_TRIPLE}-ld"),
                 nm: format!("{CROSS_TRIPLE}-nm"),
                 path_prefix: vec![tc],
+                ccache: false,
             })
         }
         Toolchain::Native => {
             // gcc nativo hospedado na glibc (passada 2), concedido somente
-            // pelas arestas explícitas da receita.
+            // pelas arestas explícitas da receita. Com o portão do ccache
+            // ligado, o masquerade entra na FRENTE do PATH: `gcc` resolve
+            // para o invólucro, que chama /usr/bin/ccache com o compilador
+            // REAL por caminho absoluto — absoluto para que o próprio ccache
+            // não reencontre o masquerade no PATH e recurse.
+            let mut path_prefix = Vec::new();
+            let mut ccache = false;
+            if recipe::BUILD_CCACHE_VIEW {
+                path_prefix.push(ccache_masquerade(work)?);
+                ccache = true;
+            }
             Ok(BuildEnv {
                 cc: "gcc".into(),
                 cxx: "g++".into(),
@@ -3523,7 +3603,8 @@ fn setup_toolchain(ctx: &Ctx, work: &Path, r: &Recipe, epoch: u64) -> Result<Bui
                 ranlib: "ranlib".into(),
                 ld: "ld".into(),
                 nm: "nm".into(),
-                path_prefix: Vec::new(),
+                path_prefix,
+                ccache,
             })
         }
     }
@@ -3614,6 +3695,19 @@ fn build_command(
         ("LANGUAGE".into(), String::new()),
         ("TZ".into(), "UTC".into()),
     ];
+    if be.ccache {
+        let ccache_cache = ctx.cache_dir().join("ccache");
+        envs.push(("CCACHE_DIR".into(), c(&ccache_cache)));
+        // BASEDIR reescreve caminhos sob o WORK como relativos ANTES de
+        // hashear: sem isto o caminho do work entra na chave e acerto nunca
+        // acontece entre dois builds — além de ser a mesma classe de
+        // vazamento do session.conf do dbus (#66/#69).
+        envs.push(("CCACHE_BASEDIR".into(), c(work)));
+        // O compilador entra na chave pelo CONTEÚDO, não pelo mtime: numa
+        // view recém-materializada o mtime não diz nada.
+        envs.push(("CCACHE_COMPILERCHECK".into(), "content".into()));
+        envs.push(("CCACHE_MAXSIZE".into(), "20G".into()));
+    }
     for (nome, valor) in recipe::BUILD_FLAGS {
         envs.push(((*nome).into(), (*valor).into()));
     }
@@ -3644,6 +3738,12 @@ fn build_command(
         .arg("--ro-bind")
         .arg(&view.root)
         .arg(in_chroot(&root, &view.root));
+    if be.ccache {
+        let ccache_cache = ctx.cache_dir().join("ccache");
+        cmd.arg("--bind")
+            .arg(&ccache_cache)
+            .arg(in_chroot(&root, &ccache_cache));
+    }
     for prefix in &be.path_prefix {
         cmd.arg("--ro-bind")
             .arg(prefix)
@@ -5680,6 +5780,12 @@ fn install_source(
     ensure_real_directory_or_absent(&ctx.root, &zig_cache, "cache global do zig")?;
     fs::create_dir_all(&zig_cache)?;
     ensure_real_directory_or_absent(&ctx.root, &zig_cache, "cache global do zig")?;
+    if recipe::BUILD_CCACHE_VIEW {
+        let ccache_cache = ctx.cache_dir().join("ccache");
+        ensure_real_directory_or_absent(&ctx.root, &ccache_cache, "cache global do ccache")?;
+        fs::create_dir_all(&ccache_cache)?;
+        ensure_real_directory_or_absent(&ctx.root, &ccache_cache, "cache global do ccache")?;
+    }
     // Receita e auxiliares são os snapshots capturados por `recipe::load`: o
     // build, o fingerprint e o registro observam exatamente os mesmos bytes.
     r.materialize_files(&work)?;
@@ -16324,6 +16430,7 @@ mod tests {
 
     fn be(work: &Path) -> BuildEnv {
         BuildEnv {
+            ccache: false,
             cc: "x-gcc".into(),
             cxx: "x-g++".into(),
             ar: "x-ar".into(),

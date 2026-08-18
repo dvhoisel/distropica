@@ -1,0 +1,33 @@
+NAME=ccache
+VERSION=4.13.6
+KIND=binary
+ABOUT="O ACELERADOR DO CAMINHO GCC. Cache de compilacao: indexa cada unidade de traducao pelo hash do fonte pre-processado, do compilador e das flags, e devolve o objeto pronto quando os tres coincidem. Existe por uma medicao, nao por conforto: uma linha acrescentada a receita do dbus invalidou a impressao digital de 25 pacotes e obrigou horas de reconstrucao — e dos 16 que chegaram a fechar antes de o operador mandar parar, QUINZE produziram payload bit a bit identico ao ja publicado. A identidade desta arvore propaga pelo texto das receitas (e deve, ate a propagacao por interface consumida existir), entao reconstruir-para-reescriturar e rotina; o que este pacote elimina e o custo de CPU dessa rotina, sem afrouxar prova nenhuma: o build continua rodando inteiro, o payload continua sendo observado, o REPROCORR continua sendo cotejado — apenas nao se recompila o que e o mesmo insumo byte a byte. Acerto de cache TEM de produzir o mesmo objeto que a compilacao fria, e esta arvore ja sabe medir isso: as quinze reconstrucoes identicas sao a prova de que a compilacao aqui e deterministica, que e exatamente a premissa de que o cache precisa. MUNDO A DE PROPOSITO: o upstream publica binario estatico musl (static-pie, roda em qualquer view confinada) assinado com minisign — binario do mantenedor original primeiro e a premissa numero um desta distro, e e o mesmo caminho do busybox do runner e do Zig. De quebra, um ccache de fonte exigiria cmake, C++ e uma receita de zstd que a arvore nao tem. NAO ENTRA EM DEPS DE NINGUEM: ele e infraestrutura da view de build, como o runner — a aresta implicita ccache_build_deps() do minitrue o concede a toda receita KIND=source TOOLCHAIN=native quando o portao BUILD_CCACHE_VIEW estiver ligado, e o portao nasce DESLIGADO: liga-lo muda o ambiente de build de todo Mundo B e por isso so acontece junto com o bump de BUILD_VIEW_FORMAT numa reconstrucao total ja devida (a troca de compositor e navegador moveu a arvore inteira). Ha um teste que FALHA se alguem ligar o portao sem o bump. O agregado de licencas vem do LICENSE.md de dentro do proprio artefato: GPL-3.0-or-later no todo; fmt (MIT), cpp-httplib (MIT), cxxurl (MIT), tl-expected (CC0-1.0), blake3 (CC0-1.0 OU Apache-2.0); o binario estatico embute ainda musl (MIT), zstd, xxhash e hiredis, cujos textos nao viajam no tarball — a evidencia desses fica no bundle de fontes correspondentes, como ja acontece com libcap, libdrm e ripgrep."
+LICENSE="GPL-3.0-or-later AND MIT AND CC0-1.0 AND (CC0-1.0 OR Apache-2.0) AND BSD-2-Clause AND BSD-3-Clause"
+SRC="https://github.com/ccache/ccache/releases/download/v$VERSION/ccache-$VERSION-linux-x86_64-musl-static.tar.xz"
+SHA256=156ec57c5198cc849d92834023d09910b83dc5504c6cf405d09e6ae7b208a3e5
+SIG="https://github.com/ccache/ccache/releases/download/v4.13.6/ccache-4.13.6-linux-x86_64-musl-static.tar.xz.minisig"
+SIGKEY="RWQX7yXbBedVfI4PNx6FLdFXu9GHUFsr28s4BVGxm4BeybtnX3P06saF"
+LINKS="ccache=ccache"
+
+install_pkg() {
+    tar -xJf "$DL" --strip-components=1 -C "$PREFIX"
+    # O QUE FAZ DIFERENCA NO USO, nao a intencao do pacote — licao da Mesa.
+    # O binario precisa existir, ser executavel e responder pela PROPRIA
+    # versao pinada: um tarball de outra release com o mesmo layout passaria
+    # por qualquer teste de existencia.
+    [ -x "$PREFIX/ccache" ] || {
+        echo "ccache: o binario nao veio no tarball" >&2
+        exit 1
+    }
+    "$PREFIX/ccache" --version | grep -q "^ccache version $VERSION$" || {
+        echo "ccache: o binario nao responde pela versao $VERSION" >&2
+        "$PREFIX/ccache" --version | head -1 >&2
+        exit 1
+    }
+    # A evidencia de licenca viaja NO artefato; se o upstream parar de
+    # embarca-la, e para este build quebrar, nao para o sbom descobrir depois.
+    [ -s "$PREFIX/GPL-3.0.txt" ] && [ -s "$PREFIX/LICENSE.md" ] || {
+        echo "ccache: o tarball nao carrega GPL-3.0.txt e LICENSE.md" >&2
+        exit 1
+    }
+}
