@@ -384,7 +384,11 @@ GTKINI
   </core>
 
   <theme>
-    <name></name>
+    <!-- SEM <name>: e assim que se diz "use o themerc daqui do lado". O labwc
+         recusa string vazia — "Empty string is not allowed for name.theme" —
+         e um <name></name> vazio nao e o mesmo que ausente. O tema desta
+         arvore e o /etc/xdg/labwc/themerc, que o labwc le do proprio
+         diretorio de configuracao quando nenhum nome e dado. -->
     <cornerRadius>0</cornerRadius>
     <font place="ActiveWindow">
       <name>DejaVu Sans</name>
@@ -485,6 +489,26 @@ MENUXML
 # e os dados vem do xkeyboard-config — sem ele a montagem do mapa falha e o
 # compositor morre antes de desenhar.
 XKB_DEFAULT_LAYOUT=br
+
+# O RENDERIZADOR E ESCOLHIDO AQUI, e nao pelo automatico, porque o automatico
+# escolhe errado nesta arvore. O wlroots e construido com -Drenderers=[]: sem
+# GLES2 e sem Vulkan, de proposito, porque com Mesa softpipe o GL nao acelera
+# nada. Sobra o pixman, que e compilado INCONDICIONALMENTE — mas compilado nao
+# e escolhido. Em wlr_renderer_autocreate:
+#
+#   if ((is_auto && !has_render_node(backend)) || strcmp(renderer_name, "pixman") == 0)
+#
+# no modo automatico o pixman so entra quando o backend NAO tem render node. Uma
+# VM com /dev/dri/renderD128 tem, entao o automatico pula o pixman, os outros
+# dois nao existem, e o labwc morre com "Could not initialize renderer" seguido
+# de "unable to create renderer". A sessao encerra e a tela vira console — sem
+# nada apontar para renderizador, e num sistema que instalou e bootou inteiro.
+#
+# Nomear o renderizador satisfaz o segundo ramo da condicao e torna a escolha
+# independente do hardware. Esta e a UNICA declaracao dela: o lancador nao
+# repete, porque dois lugares guardando o mesmo fato foi o defeito do log e o do
+# barramento nesta mesma sessao.
+WLR_RENDERER=pixman
 ENVIRONMENT
     chmod 0644 "$STAGE/etc/xdg/labwc/environment"
 
@@ -592,6 +616,27 @@ THEMERC
         exit 1
     }
     unset inv
+
+    # O RENDERIZADOR TEM DE ESTAR NOMEADO. Sem isto o wlroots escolhe pelo
+    # automatico, que so cai no pixman quando o backend NAO tem render node —
+    # e qualquer maquina com /dev/dri/renderD128 tem. Como -Drenderers=[] tirou
+    # GLES2 e Vulkan de proposito, o automatico nao acha nenhum e o labwc morre
+    # com "Could not initialize renderer". A guarda cobra o ARQUIVO, porque foi
+    # a ausencia silenciosa dele que derrubou a sessao da 0.13.
+    grep -q '^WLR_RENDERER=pixman$' "$STAGE/etc/xdg/labwc/environment" || {
+        echo "desktop: o environment nao nomeia o renderizador pixman; o" \
+             "automatico nao acha nenhum numa maquina com render node" >&2
+        exit 1
+    }
+
+    # <name> VAZIO NAO E <name> AUSENTE. O labwc recusa string vazia com
+    # "Empty string is not allowed for name.theme" e ignora a diretiva; a forma
+    # de dizer "use o themerc daqui" e omitir o elemento.
+    ! grep -qE '<name></name>|<name>[[:space:]]+</name>' \
+        "$STAGE/etc/xdg/labwc/rc.xml" || {
+        echo "desktop: o rc.xml tem <name> vazio, que o labwc recusa" >&2
+        exit 1
+    }
 
     # O texto do chrome do navegador depende da base de esquemas do GSettings —
     # e de nada dentro do settings.ini. Guarda, e nao comentario.
