@@ -579,6 +579,18 @@ $BB mount -t devtmpfs dev  /dev  2>/dev/null
 # lancador do terminal na sessao grafica.
 $BB mkdir -p /dev/pts 2>/dev/null
 $BB mount -t devpts -o gid=5,mode=620 devpts /dev/pts 2>/dev/null
+# /dev/shm E REQUISITO DA SESSAO GRAFICA INTEIRA, nao de um detalhe dela. O
+# shm_open() da glibc cria os segmentos ali; o wlroots serializa o keymap por
+# ele — "Failed to allocate shm file for keymap" foi o erro que derrubou a
+# sessao da 0.13 DEPOIS de renderer e barramento consertados — e todo cliente
+# Wayland de renderizador por software compartilha buffers por wl_shm, que e o
+# mesmo caminho: sem este mount o compositor nao sobe e nenhum cliente abriria
+# janela. O devtmpfs NAO o traz: ele cria nos de dispositivo, e /dev/shm e um
+# tmpfs que alguem tem de montar — este alguem e o init. mode=1777 porque quem
+# aloca e a sessao de uid 1000, nao o root; nosuid,nodev porque e area de
+# dados de usuario, nao lugar de executavel privilegiado nem de no de device.
+$BB mkdir -p /dev/shm 2>/dev/null
+$BB mount -t tmpfs -o mode=1777,nosuid,nodev shm /dev/shm 2>/dev/null
 $BB mount -t tmpfs    tmp  /tmp  2>/dev/null
 $BB mount -t tmpfs    run  /run  2>/dev/null
 # O grupo audio PRECISA existir antes do mdev. O 04-usuario.sh tambem o cria,
@@ -672,6 +684,15 @@ done
 echo "distropica: rcS ok (mounts, mdev, hostname)"
 RCS
     chmod 755 "$STAGE/etc/rc.d/rcS"
+    # A sessao grafica depende deste mount e ja morreu uma vez pela falta dele;
+    # a guarda cobra o ARQUIVO PRODUZIDO, com o modo exato — um mount sem o
+    # 1777 passa num grep frouxo e falha na alocacao do primeiro usuario comum.
+    grep -q 'mount -t tmpfs -o mode=1777,nosuid,nodev shm /dev/shm' \
+        "$STAGE/etc/rc.d/rcS" || {
+        echo "base: o rcS nao monta /dev/shm; a sessao grafica nao alocaria" \
+             "shm nenhum (keymap do wlroots, buffers wl_shm de todo cliente)" >&2
+        exit 1
+    }
 
     cat > "$STAGE/etc/rc.d/rcK" <<'RCK'
 #!/bin/sh

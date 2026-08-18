@@ -112,4 +112,14 @@ destino=$(escolhe "") ||
 [ "$destino" = "/tmp/${criado##*/}" ] ||
     falhou "sem XDG_RUNTIME_DIR o destino devia ser /tmp/${criado##*/} e foi $destino"
 
-echo "sessao-grafica-log: ok — base e desktop concordam em $criado, e o lancador nao morre por causa dele"
+# 4. O BOOT MONTA O QUE A SESSAO ALOCA. O rcS e do base; quem morre sem ele
+#    e a sessao do desktop — a mesma separacao de propriedade dos outros
+#    casos deste teste, e por isso a cobranca mora aqui.
+awk '/<<'"'"'RCS'"'"'/{dentro=1;next} dentro && /^RCS$/{exit} dentro' \
+    "$BASE" > "$TMP/rcS"
+[ -s "$TMP/rcS" ] || falhou 'nao extrai o rcS do base'
+sh -n "$TMP/rcS"
+grep -q 'mount -t tmpfs -o mode=1777,nosuid,nodev shm /dev/shm' "$TMP/rcS" ||
+    falhou 'o rcS nao monta /dev/shm 1777; wlroots nao aloca keymap e cliente nenhum abre janela'
+
+echo "sessao-grafica-log: ok — base e desktop concordam em $criado, o lancador nao morre por causa dele, e o boot monta o shm que a sessao aloca"
