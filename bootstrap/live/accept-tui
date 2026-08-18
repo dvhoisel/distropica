@@ -32,6 +32,7 @@ LOG_DIR=
 QEMU=${QEMU_SYSTEM_X86_64:-}
 DISK_SIZE_MIB=8192
 MEMORY_MIB=2048
+ACCEL=tcg
 ATRASO=8
 # O teto por cenario e generoso porque a instalacao roda em tcg. Quem de fato
 # reprova e a falta de avanco: cada `espera` tem seu proprio prazo, e um
@@ -54,6 +55,12 @@ uso: bootstrap/live/accept-tui --efi ARQ --iso ARQ --disk NOVO.raw \
   --disk-size-mib N   default: 8192
   --memory-mib N      default: 2048
   --qemu ARQ          default: qemu-system-x86_64 do PATH
+  --accel MODO        tcg (default) ou kvm. O tcg roda em qualquer maquina e
+                      por isso segue sendo o default do aceite; o kvm existe
+                      para a iteracao local — instalar 126 pacotes em emulacao
+                      pura custa horas, e com aceleracao custa minutos. A
+                      conducao da TUI nao depende do modo: ela REAGE ao que
+                      aparece na tela, nao a tempos fixos.
 
 Dois cenários, cada um com seu disco:
   1. mídia atrasada + rota "usar o disco inteiro", até INSTALLATION COMPLETE
@@ -77,6 +84,7 @@ while [ "$#" -gt 0 ]; do
         --disk-size-mib) DISK_SIZE_MIB=${2:?}; shift 2 ;;
         --memory-mib) MEMORY_MIB=${2:?}; shift 2 ;;
         --qemu) QEMU=${2:?}; shift 2 ;;
+        --accel) ACCEL="${2:?}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) falha "opção desconhecida: $1" ;;
     esac
@@ -91,6 +99,18 @@ done
 [ ! -e "$LOG_DIR" ] || falha "log-dir já existe: $LOG_DIR"
 [ -z "$QEMU" ] && QEMU=$(command -v qemu-system-x86_64 || true)
 [ -n "$QEMU" ] && [ -x "$QEMU" ] || falha "qemu-system-x86_64 ausente (use --qemu)"
+case $ACCEL in
+    tcg) ;;
+    kvm)
+        # A falha aqui é do ambiente, não do aceite: sem /dev/kvm gravável o
+        # QEMU cairia num erro tardio e confuso. Melhor recusar já, dizendo o
+        # que falta — e nunca cair para tcg em silêncio, porque quem pediu kvm
+        # pediu pelo tempo, e 4 horas caladas no lugar de 15 minutos é
+        # exatamente o tipo de surpresa que este script existe para impedir.
+        [ -w /dev/kvm ] || falha "--accel kvm exige /dev/kvm gravável"
+        ;;
+    *) falha "--accel aceita tcg ou kvm, não '$ACCEL'" ;;
+esac
 command -v socat >/dev/null 2>&1 || falha "socat é necessário para ligar a mídia pelo monitor"
 case "$DISK_SIZE_MIB" in *[!0-9]*|"") falha "--disk-size-mib inválido" ;; esac
 [ "$DISK_SIZE_MIB" -ge 2048 ] || falha "--disk-size-mib mínimo é 2048"
@@ -163,7 +183,7 @@ sobe() {
     mkfifo "$TECLAS"
 
     set -- "$QEMU" \
-        -machine "pc,accel=tcg" -cpu qemu64 -smp 2 -m "$MEMORY_MIB" \
+        -machine "pc,accel=$ACCEL" -cpu qemu64 -smp 2 -m "$MEMORY_MIB" \
         -kernel "$EFI" \
         -append 'console=ttyS0,115200 panic=-1 rdinit=/init distropica.test=1' \
         -drive "if=none,id=alvo,format=raw,cache=writethrough,file=$disco" \
