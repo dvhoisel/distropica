@@ -509,6 +509,18 @@ XKB_DEFAULT_LAYOUT=br
 # repete, porque dois lugares guardando o mesmo fato foi o defeito do log e o do
 # barramento nesta mesma sessao.
 WLR_RENDERER=pixman
+
+# O CURSOR E COMPOSTO POR SOFTWARE, e a linha existe por causa de um
+# travamento medido, nao de gosto. No VirtualBox com VMSVGA — a controladora
+# PADRAO do VirtualBox 7, a placa que quem testar vai ter — o labwc pendurava
+# ao programar o cursor de hardware do vmwgfx: a sessao iniciava, a tela
+# ficava congelada no texto do boot e nem a troca de VT respondia. Sem esta
+# variavel o sistema instalava, bootava e travava; com ela, a mesma imagem
+# desenhou a sessao no mesmo VirtualBox. Atribuicao limpa: um knob, duas
+# fotos. No QEMU/virtio-gpu funciona com e sem — o custo de desligar o cursor
+# de hardware em todo lugar e o cursor viajar composto no frame, que numa
+# arvore de renderizacao por software ja e o regime de tudo o mais.
+WLR_NO_HARDWARE_CURSORS=1
 ENVIRONMENT
     chmod 0644 "$STAGE/etc/xdg/labwc/environment"
 
@@ -623,6 +635,12 @@ THEMERC
     # GLES2 e Vulkan de proposito, o automatico nao acha nenhum e o labwc morre
     # com "Could not initialize renderer". A guarda cobra o ARQUIVO, porque foi
     # a ausencia silenciosa dele que derrubou a sessao da 0.13.
+    grep -q '^WLR_NO_HARDWARE_CURSORS=1$' "$STAGE/etc/xdg/labwc/environment" || {
+        echo "desktop: o environment nao desliga o cursor de hardware; no" \
+             "VMSVGA do VirtualBox o labwc trava programando o cursor do" \
+             "vmwgfx e a sessao congela a tela inteira" >&2
+        exit 1
+    }
     grep -q '^WLR_RENDERER=pixman$' "$STAGE/etc/xdg/labwc/environment" || {
         echo "desktop: o environment nao nomeia o renderizador pixman; o" \
              "automatico nao acha nenhum numa maquina com render node" >&2
