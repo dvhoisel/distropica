@@ -632,11 +632,19 @@ THEMERC
     # <name> VAZIO NAO E <name> AUSENTE. O labwc recusa string vazia com
     # "Empty string is not allowed for name.theme" e ignora a diretiva; a forma
     # de dizer "use o themerc daqui" e omitir o elemento.
-    ! grep -qE '<name></name>|<name>[[:space:]]+</name>' \
-        "$STAGE/etc/xdg/labwc/rc.xml" || {
+    #
+    # OS COMENTARIOS SAO REMOVIDOS ANTES DE OLHAR, e isso nao e zelo: a primeira
+    # versao desta guarda reprovou o proprio arquivo correto, porque o
+    # comentario que explica a ausencia do elemento CITA a forma vazia dele. Uma
+    # guarda que le comentario como conteudo acusa a documentacao de ser o
+    # defeito que ela descreve.
+    conteudo_rcxml=$(awk '/<!--/{dentro=1} !dentro{print} /-->/{dentro=0}' \
+        "$STAGE/etc/xdg/labwc/rc.xml")
+    ! printf '%s\n' "$conteudo_rcxml" | grep -qE '<name>[[:space:]]*</name>' || {
         echo "desktop: o rc.xml tem <name> vazio, que o labwc recusa" >&2
         exit 1
     }
+    unset conteudo_rcxml
 
     # O texto do chrome do navegador depende da base de esquemas do GSettings —
     # e de nada dentro do settings.ini. Guarda, e nao comentario.
