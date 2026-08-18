@@ -638,8 +638,12 @@ THEMERC
     # comentario que explica a ausencia do elemento CITA a forma vazia dele. Uma
     # guarda que le comentario como conteudo acusa a documentacao de ser o
     # defeito que ela descreve.
-    conteudo_rcxml=$(awk '/<!--/{dentro=1} !dentro{print} /-->/{dentro=0}' \
-        "$STAGE/etc/xdg/labwc/rc.xml")
+    #
+    # SED E NAO AWK: dentro da view confinada as ferramentas sao as do BusyBox
+    # mais o que a receita DECLARA, e `awk` de verdade vem do gawk, que o
+    # desktop nao declara — o build morreu com "awk: not found". O intervalo
+    # /<!--/,/-->/ do sed faz o mesmo e existe no BusyBox.
+    conteudo_rcxml=$(sed '/<!--/,/-->/d' "$STAGE/etc/xdg/labwc/rc.xml")
     ! printf '%s\n' "$conteudo_rcxml" | grep -qE '<name>[[:space:]]*</name>' || {
         echo "desktop: o rc.xml tem <name> vazio, que o labwc recusa" >&2
         exit 1
