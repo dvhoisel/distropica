@@ -434,6 +434,14 @@ GTKINI
   </keyboard>
 
   <mouse>
+    <!-- O <default/> NAO E ENFEITE: sem ele este arquivo APAGA todos os binds
+         de mouse do labwc. No post_processing do rcxml.c, os defaults so
+         carregam quando ha ZERO mousebinds — declarar UM (o menu abaixo)
+         descarta o resto: arrastar pela barra de titulo, duplo-clique para
+         maximizar, os botoes da janela. Foi assim que a 0.13 saiu com janelas
+         que nao se moviam. O <default/> carrega os defaults explicitamente e
+         os binds daqui SOMAM em vez de substituir. -->
+    <default />
     <context name="Root">
       <mousebind button="Right" action="Press">
         <action name="ShowMenu" menu="root-menu"/>
@@ -635,6 +643,19 @@ THEMERC
     # GLES2 e Vulkan de proposito, o automatico nao acha nenhum e o labwc morre
     # com "Could not initialize renderer". A guarda cobra o ARQUIVO, porque foi
     # a ausencia silenciosa dele que derrubou a sessao da 0.13.
+    # Dentro de <mouse>, o <default/> e o que preserva arrastar/maximizar/
+    # fechar; declarar so o bind do menu descarta os defaults (zero-check no
+    # post_processing do labwc) e as janelas ficam imoveis.
+    # COMENTARIO SAI ANTES DE OLHAR — o comentario do proprio <mouse> cita o
+    # elemento para explica-lo, e a primeira versao desta guarda passava por
+    # causa DELE, com o elemento real ausente. Mesma licao da guarda do <name>.
+    sed '/<!--/,/-->/d' "$STAGE/etc/xdg/labwc/rc.xml" | \
+        sed -n '/<mouse>/,/<\/mouse>/p' | \
+        grep -q '<default */>' || {
+        echo "desktop: o <mouse> do rc.xml nao tem <default/>; declarar um" \
+             "bind descarta os defaults do labwc e a janela nao se move" >&2
+        exit 1
+    }
     grep -q '^WLR_NO_HARDWARE_CURSORS=1$' "$STAGE/etc/xdg/labwc/environment" || {
         echo "desktop: o environment nao desliga o cursor de hardware; no" \
              "VMSVGA do VirtualBox o labwc trava programando o cursor do" \
