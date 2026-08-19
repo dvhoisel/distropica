@@ -1338,6 +1338,10 @@ pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> 
         }
     }
     let written_records = frozen_build_graph.intermediate_records.borrow().clone();
+    // Derivados que o boot mantém são refeitos AGORA, para a sessão corrente
+    // — inclusive quando a operação foi interrompida: o que terminou já está
+    // no disco e a base velha morderia do mesmo jeito.
+    refresh_derived_artifacts(ctx, &written_records);
     if let Some(erro) = interrompida {
         // FECHAMENTO PARCIAL. Sem ele, tudo o que esta execução construiu fica
         // em RECORD_FORMAT=3, e v3 não é elegível para `keep`: a próxima
@@ -1379,6 +1383,11 @@ pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> 
         }
         return Err(erro);
     }
+    // O rótulo desta espera não é enfeite: a reobservação leva minutos, é
+    // muda por natureza, e já foi confundida com travamento duas vezes no
+    // mesmo dia — na instalação e num rectify de gimp. Espera sem rótulo
+    // parece defeito; esta linha é a diferença.
+    eprintln!("  fechando o plano aplicado: reobservando payload e ABI do mundo (leva minutos)");
     let finalized = crate::plan::finalize_applied(
         ctx,
         names,
@@ -1407,6 +1416,98 @@ pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> 
     // Com o refresh no lugar, `anotar_correcao_descartada` ficou sem chamador
     // nenhum, e foi o compilador quem apontou isso.
     Ok(())
+}
+
+/// Um artefato DERIVADO que o boot mantém e que um rectify no sistema vivo
+/// precisa refazer na hora. Sem isto, a sessão corrente fica com a base
+/// velha até o próximo boot — medido em 2026-08-19: a closure do gimp
+/// re-retificou o gtk3, o gschemas.compiled ficou para trás, e o gimp
+/// recém-instalado abortou em g_settings_new até a máquina reiniciar,
+/// exatamente o cenário que o comentário do 02-gschemas.sh descreve.
+///
+/// A tabela é, de propósito, a MESMA lista dos drop-ins de rcS.d que
+/// regeneram derivados — hoje, um. A decisão do mantenedor foi a via
+/// estreita: o minitrue NÃO executa script nenhum do sistema; refaz ele
+/// próprio os derivados que conhece, e o par de cada entrada daqui é um
+/// drop-in de boot que presta o mesmo serviço à máquina que ainda não ligou.
+struct DerivedArtifact {
+    /// prefixo no manifesto que denuncia que o pacote toca a base
+    trigger: &'static str,
+    /// ferramenta DO ALVO que refaz o derivado, e os argumentos dela
+    tool: &'static str,
+    args: &'static [&'static str],
+    label: &'static str,
+}
+
+const DERIVED_ARTIFACTS: &[DerivedArtifact] = &[DerivedArtifact {
+    trigger: "/usr/share/glib-2.0/schemas/",
+    tool: "/usr/bin/glib-compile-schemas",
+    args: &["/usr/share/glib-2.0/schemas"],
+    label: "base de esquemas do GSettings",
+}];
+
+/// Decide quais derivados os records aplicados tocaram. Pura e separada do
+/// executor, para o teste cobrar a decisão sem executar ferramenta nenhuma.
+fn derived_artifacts_touched(
+    records_dir: &Path,
+    written: &BTreeSet<String>,
+) -> Vec<(&'static DerivedArtifact, Vec<String>)> {
+    let mut fired = Vec::new();
+    for artifact in DERIVED_ARTIFACTS {
+        let touchers: Vec<String> = written
+            .iter()
+            .filter(|name| {
+                read_manifest(&records_dir.join(name.as_str()))
+                    .iter()
+                    .filter_map(|line| line.split_once("  ").map(|(_, path)| path))
+                    .any(|path| path.starts_with(artifact.trigger))
+            })
+            .cloned()
+            .collect();
+        if !touchers.is_empty() {
+            fired.push((artifact, touchers));
+        }
+    }
+    fired
+}
+
+/// Refaz os derivados tocados. Nunca vira erro: derivado é cache e o boot o
+/// refaz; a falha daqui não pode esconder um rectify que deu certo. Mas sai
+/// DITA — foi o silêncio desta lacuna que custou o dia da caça ao gimp.
+fn refresh_derived_artifacts(ctx: &Ctx, written: &BTreeSet<String>) {
+    for (artifact, touchers) in derived_artifacts_touched(&ctx.records_dir(), written) {
+        let quem = touchers.join(", ");
+        // Fora do sistema vivo (--root de imagem, raiz de build) não se
+        // executa ferramenta do alvo: o 02-gschemas.sh cobre no boot dele.
+        if ctx.root != Path::new("/") {
+            eprintln!(
+                "  derivado tocado fora do sistema vivo: {} ({quem}); o boot do alvo refaz",
+                artifact.label
+            );
+            continue;
+        }
+        if !Path::new(artifact.tool).is_file() {
+            eprintln!(
+                "  aviso: {} tocada ({quem}), mas {} não existe; o próximo boot refaz",
+                artifact.label, artifact.tool
+            );
+            continue;
+        }
+        eprintln!("  refazendo derivado: {} (tocada por {quem})", artifact.label);
+        match std::process::Command::new(artifact.tool).args(artifact.args).output() {
+            Ok(saida) if saida.status.success() => {}
+            Ok(saida) => eprintln!(
+                "  aviso: {} falhou ({}); o próximo boot refaz — {}",
+                artifact.tool,
+                saida.status,
+                String::from_utf8_lossy(&saida.stderr).trim()
+            ),
+            Err(erro) => eprintln!(
+                "  aviso: não executei {} ({erro}); o próximo boot refaz",
+                artifact.tool
+            ),
+        }
+    }
 }
 
 fn collect_identity(
@@ -10753,6 +10854,49 @@ mod tests {
         fs::write(record.join("manifest"), b"manifest-v1\n").unwrap();
         fs::write(record.join("manifest@1"), b"manifest-v1\n").unwrap();
         (root, record)
+    }
+
+    #[test]
+    fn derivado_dispara_so_para_quem_toca_o_gatilho() {
+        // O caso do gimp: gtk3 re-retificado embarca .gschema.xml e a base
+        // compilada precisa ser refeita; um pacote qualquer não dispara nada.
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "minitrue-derivados-{}-{n}",
+            std::process::id()
+        ));
+        let records = root.join("records");
+        for (nome, linha) in [
+            ("toca-schema", "f:aaaa  /usr/share/glib-2.0/schemas/org.gtk.Settings.FileChooser.gschema.xml"),
+            ("nao-toca", "f:bbbb  /usr/bin/qualquer"),
+        ] {
+            let dir = records.join(nome);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("manifest"), format!("{linha}\n")).unwrap();
+        }
+        let written: BTreeSet<String> =
+            ["toca-schema".to_string(), "nao-toca".to_string()].into();
+        let fired = derived_artifacts_touched(&records, &written);
+        assert_eq!(fired.len(), 1, "só o gatilho do GSettings devia disparar");
+        assert!(fired[0].0.label.contains("GSettings"));
+        assert_eq!(fired[0].1, vec!["toca-schema".to_string()]);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn derivado_fica_quieto_quando_ninguem_toca() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "minitrue-derivados-quieto-{}-{n}",
+            std::process::id()
+        ));
+        let records = root.join("records");
+        let dir = records.join("inocente");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("manifest"), "f:cccc  /usr/lib/libx.so\n").unwrap();
+        let written: BTreeSet<String> = ["inocente".to_string()].into();
+        assert!(derived_artifacts_touched(&records, &written).is_empty());
+        fs::remove_dir_all(&root).ok();
     }
 
     #[test]
