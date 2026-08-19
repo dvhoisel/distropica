@@ -676,15 +676,18 @@ bar:
     # A ativa leva o azul do tema por baixo; as demais ficam em cinza. O max
     # corta titulo de navegador, que nao tem limite natural de tamanho.
     #
-    # O CLIQUE ATIVA A JANELA, via wlrctl: o yambar so desenha, e ativar e
-    # conversa do protocolo wlr-foreign-toplevel-management, que o wlrctl
-    # fala. O filtro e app_id e nao title, porque titulo tem espaco e o
-    # on-click separa por palavras SEM shell — um titulo de navegador viraria
-    # seis argumentos. Com duas janelas do MESMO programa o wlrctl ativa a
-    # primeira que casa e para (toplevel.c:297); o desempate fino continua
-    # sendo o Alt+Tab, e nao ha como fazer melhor daqui: app-id e titulo sao
-    # as unicas tags que existem para filtrar. Na janela ja ativa o clique
-    # re-ativa, que e inofensivo.
+    # O CLIQUE E UM TOGGLE, via wlrctl: o yambar so desenha, e mexer em
+    # janela e conversa do protocolo wlr-foreign-toplevel-management, que o
+    # wlrctl fala. Os dois ramos do map dao os dois sentidos do clique de
+    # barra classico — na entrada INATIVA, focar (traz, foca e desminimiza);
+    # na ATIVA, minimizar. O filtro e app_id e nao title, porque titulo tem
+    # espaco e o on-click separa por palavras SEM shell — um titulo de
+    # navegador viraria seis argumentos. No focus, duas janelas do MESMO
+    # programa: o wlrctl ativa a primeira que casa e para (toplevel.c:297);
+    # desempate fino continua no Alt+Tab. No minimize nao ha empate nenhum:
+    # o state:active reduz o alvo a janela ativa, que e uma so por definicao
+    # — sem ele, minimizar a ativa levaria junto TODAS as irmas de app_id
+    # (o minimize do wlrctl nao para na primeira, medido no toplevel.c:291).
     - foreign-toplevel:
         content:
           map:
@@ -696,7 +699,7 @@ bar:
                   margin: 10
                   foreground: ffffffff
                   deco: {underline: {size: 2, color: 3a5a8aff}}
-                  on-click: /usr/bin/wlrctl toplevel focus app_id:{app-id}
+                  on-click: /usr/bin/wlrctl toplevel minimize app_id:{app-id} state:active
               ~activated:
                 string:
                   text: "{title}"
