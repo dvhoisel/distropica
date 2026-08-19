@@ -281,8 +281,12 @@ partir de nada além de binários upstream — foi **demonstrada**:
   reimplementa o modelo do Openbox: tema `themerc` compatível com Openbox 3.6,
   configuração em `rc.xml`, menu raiz em `menu.xml`, e cada atalho declarado um
   a um em vez de um modificador global único. O lema do projeto é *no bling* —
-  e é essa recusa que o torna adequado aqui. **Não há painel nem relógio**: o
-  equivalente é o menu do botão direito. XWayland fica desligado, coerente com o
+  e é essa recusa que o torna adequado aqui. O labwc em si não traz painel nem
+  relógio; quem os repõe é a **barra de tarefas**: o **yambar**, do mesmo autor
+  do foot e da mesma matéria — C sem toolkit sobre fcft e pixman —, que lista
+  as janelas abertas (minimizadas inclusive, que sem ela desapareceriam da
+  tela sem caminho de volta), o estado da rede e o relógio. Os lançadores
+  continuam no menu do botão direito. XWayland fica desligado, coerente com o
   wlroots; nenhuma janela X roda sobre este compositor.
 
   O navegador é o **Epiphany** (GNOME Web) sobre **WebKitGTK**, e a troca pelo

@@ -2,8 +2,8 @@ NAME=desktop
 VERSION=0.1
 KIND=source
 TOOLCHAIN=none
-DEPS="labwc seatd eudev dbus epiphany foot dejavu-fonts adwaita-icon-theme hicolor-icon-theme mesa locales busybox alsa-utils miniluv"
-ABOUT="A COLA. Tudo o que faz a pilha grafica virar uma tela em vez de um monte de bibliotecas instaladas: quem sobe o compositor, onde ele acha a configuracao, e o que o botao direito oferece. Receita de montagem, sem SRC — so gera arquivos legiveis. Tres pecas. (1) /usr/bin/distropica-desktop, o lancador: cria o XDG_RUNTIME_DIR, que o protocolo Wayland exige e sem o qual o compositor sai com uma linha de erro e nada mais; sobe o seatd se ninguem o subiu; e exec no labwc dentro de um barramento de sessao. (2) quatro drop-ins em /etc/rc.d/rcS.d, que e como um pacote acrescenta trabalho de inicializacao sem ser dono do /etc/inittab, que e do base: 01-machine-id.sh, 02-gschemas.sh, 05-udevd.sh e 10-seatd.sh, nesta ordem. O 02-gschemas.sh e o menos evidente e o que custou mais caro: ele compila a base de esquemas do GSettings, e sem ela o backend Wayland do GTK abandona a propria inicializacao antes de chegar ao update_xft_settings, que e o unico lugar que define a resolucao da tela — ela fica em -1, todo tamanho de fonte em pontos passa a ser negativo, e o navegador abre sem UMA LETRA no proprio chrome enquanto a pagina ao lado renderiza normalmente. O udevd NAO e redundante com o mdev, e essa foi a causa da primeira tela preta: o mdev cria os NOS de dispositivo, mas quem enumera dispositivo de entrada e a libinput, e ela pergunta a libudev — cujo udev_enumerate_scan_devices filtra tudo que nao tem entrada na base em /run/udev. (3) a configuracao do labwc em /etc/xdg/labwc: rc.xml, menu.xml, themerc, environment e autostart. O COMPOSITOR MUDOU, e com ele o modelo: o weston tinha painel, relogio e lancadores, e UM modificador global para todos os atalhos — mover o Alt+Tab movia tudo junto, e o Alt+K matava a aplicacao em foco sem confirmacao. O labwc nao tem painel nem relogio, e em troca cada atalho e declarado um a um no rc.xml, o tema e um themerc compativel com Openbox 3.6, e o menu do botao direito substitui os lancadores. O renderizador continua sendo por SOFTWARE: o wlroots foi construido com -Drenderers=[] e compoe no buffer dumb do KMS, sem EGL e sem GBM, pelo mesmo motivo de antes — numa arvore com Mesa softpipe o GL nao acelera nada e ainda depende de o gbm achar driver. O TERMINAL e o foot, e ele entrou junto com esta troca: o unico emulador anterior era o weston-terminal, que saiu com o weston, e uma sessao grafica sem forma de rodar um comando nao e uma sessao. O foot e cliente Wayland nativo sem toolkit — nao usa GTK nem Qt —, e custa tres receitas pequenas de C."
+DEPS="labwc seatd eudev dbus epiphany foot yambar dejavu-fonts adwaita-icon-theme hicolor-icon-theme mesa locales busybox alsa-utils miniluv"
+ABOUT="A COLA. Tudo o que faz a pilha grafica virar uma tela em vez de um monte de bibliotecas instaladas: quem sobe o compositor, onde ele acha a configuracao, e o que o botao direito oferece. Receita de montagem, sem SRC — so gera arquivos legiveis. Quatro pecas. (1) /usr/bin/distropica-desktop, o lancador: cria o XDG_RUNTIME_DIR, que o protocolo Wayland exige e sem o qual o compositor sai com uma linha de erro e nada mais; sobe o seatd se ninguem o subiu; e exec no labwc dentro de um barramento de sessao. (2) quatro drop-ins em /etc/rc.d/rcS.d, que e como um pacote acrescenta trabalho de inicializacao sem ser dono do /etc/inittab, que e do base: 01-machine-id.sh, 02-gschemas.sh, 05-udevd.sh e 10-seatd.sh, nesta ordem. O 02-gschemas.sh e o menos evidente e o que custou mais caro: ele compila a base de esquemas do GSettings, e sem ela o backend Wayland do GTK abandona a propria inicializacao antes de chegar ao update_xft_settings, que e o unico lugar que define a resolucao da tela — ela fica em -1, todo tamanho de fonte em pontos passa a ser negativo, e o navegador abre sem UMA LETRA no proprio chrome enquanto a pagina ao lado renderiza normalmente. O udevd NAO e redundante com o mdev, e essa foi a causa da primeira tela preta: o mdev cria os NOS de dispositivo, mas quem enumera dispositivo de entrada e a libinput, e ela pergunta a libudev — cujo udev_enumerate_scan_devices filtra tudo que nao tem entrada na base em /run/udev. (3) a configuracao do labwc em /etc/xdg/labwc: rc.xml, menu.xml, themerc, environment e autostart. (4) a barra de tarefas: o yambar, erguido pelo autostart e configurado em /etc/xdg/yambar — a lista de janelas abertas, o relogio e a rede; sem ela, janela minimizada some sem deixar rastro em canto nenhum da tela. O COMPOSITOR MUDOU, e com ele o modelo: o weston tinha painel, relogio e lancadores, e UM modificador global para todos os atalhos — mover o Alt+Tab movia tudo junto, e o Alt+K matava a aplicacao em foco sem confirmacao. O labwc nao tem painel nem relogio proprios — quem os repoe e a barra da peca 4 —, e em troca cada atalho e declarado um a um no rc.xml, o tema e um themerc compativel com Openbox 3.6, e o menu do botao direito substitui os lancadores. O renderizador continua sendo por SOFTWARE: o wlroots foi construido com -Drenderers=[] e compoe no buffer dumb do KMS, sem EGL e sem GBM, pelo mesmo motivo de antes — numa arvore com Mesa softpipe o GL nao acelera nada e ainda depende de o gbm achar driver. O TERMINAL e o foot, e ele entrou junto com esta troca: o unico emulador anterior era o weston-terminal, que saiu com o weston, e uma sessao grafica sem forma de rodar um comando nao e uma sessao. O foot e cliente Wayland nativo sem toolkit — nao usa GTK nem Qt —, e custa tres receitas pequenas de C."
 LICENSE="GPL-3.0-or-later"
 
 build() {
@@ -533,14 +533,110 @@ ENVIRONMENT
     chmod 0644 "$STAGE/etc/xdg/labwc/environment"
 
     cat > "$STAGE/etc/xdg/labwc/autostart" <<'AUTOSTART'
-# autostart - executado pelo labwc ao subir.
+# autostart - executado pelo labwc ao subir, via `sh <este arquivo>` — medido
+# no session_run_script do labwc 0.20.1, que monta "sh %s" e faz spawn. Nao
+# precisa de bit de execucao, e e shell de verdade. Se o usuario tiver um
+# autostart em ~/.config/labwc, e o DELE que roda, no lugar deste.
 #
-# Vazio de proposito. O weston subia painel e relogio como clientes proprios;
-# aqui nao ha nem um nem outro, e acrescentar um daemon so para ter relogio
-# seria trocar 'no bling' por bling com outro nome. Fica como ponto de extensao
-# para quem quiser: o arquivo existe e e do usuario sobrepor em ~/.config/labwc.
+# Este arquivo ja foi vazio de proposito, com a nota de que subir um daemon so
+# para ter relogio seria trocar 'no bling' por bling com outro nome. A barra
+# nao entrou pelo relogio: sem ela, janela MINIMIZADA some sem deixar rastro —
+# nao ha lista de janelas em canto nenhum da tela, e o unico caminho de volta
+# e saber de cor que Alt+Tab existe. Relogio e rede vem na mesma peca, e a
+# peca custou uma receita: o yambar e do mesmo autor do foot e desenha com o
+# fcft que a arvore ja paga.
+#
+# O -c NAO E ZELO, E REQUISITO: o yambar procura configuracao apenas em
+# $XDG_CONFIG_HOME/yambar e ~/.config/yambar — medido no get_config_path() do
+# main.c dele; XDG_CONFIG_DIRS nao participa da busca. Sem o -c, o
+# /etc/xdg/yambar/config.yml desta arvore e letra morta e a barra morre no
+# nascimento com "could not find a configuration". A escolha abaixo poe a
+# sobreposicao do usuario na frente, que e o que o -c tirou dele.
+#
+# O '&' e o contrato: um cliente em primeiro plano seguraria o sh deste
+# script vivo a sessao inteira a troco de nada. E ninguem precisa derrubar a
+# barra na saida — ela e cliente Wayland, e quando o compositor morre o
+# socket fecha e ela sai sozinha.
+barra=${XDG_CONFIG_HOME:-$HOME/.config}/yambar/config.yml
+[ -e "$barra" ] || barra=/etc/xdg/yambar/config.yml
+yambar -c "$barra" &
 AUTOSTART
     chmod 0644 "$STAGE/etc/xdg/labwc/autostart"
+
+    # --- a barra de tarefas -------------------------------------------------
+    # A configuracao mora AQUI e nao na receita yambar, pelo mesmo motivo do
+    # rc.xml nao morar na do labwc: o compositor e a barra entregam programa,
+    # a cola entrega politica. E um arquivo de /etc/xdg como os outros — o
+    # usuario sobrepoe em ~/.config/yambar, que o autostart prefere.
+    install -d "$STAGE/etc/xdg/yambar"
+    cat > "$STAGE/etc/xdg/yambar/config.yml" <<'YAMBARCONF'
+# config.yml - a barra de tarefas da sessao grafica (yambar).
+#
+# TRES CAMPOS, e por que estes: a lista de janelas (foreign-toplevel) e a
+# razao de a barra existir — janela minimizada nao tem outro lugar onde
+# aparecer; a rede diz se ha endereco antes de o navegador dizer "sem
+# internet"; e o relogio e o relogio. Nada de cpu, memoria ou disco: monitor
+# de sistema e programa que se abre, nao mobilia pendurada na tela.
+#
+# As cores repetem o themerc do labwc de proposito — mesma faixa de cinzas,
+# mesmo azul de "ativo". Quem mudar la, muda aqui, e a barra continua
+# parecendo parte do resto em vez de enfeite colado.
+bar:
+  height: 28
+  location: bottom
+  background: 1a1a1aff
+  foreground: e0e0e0ff
+  font: DejaVu Sans:size=11
+
+  left:
+    # Uma entrada por janela aberta, minimizada inclusive — e essa a funcao.
+    # A ativa leva o azul do tema por baixo; as demais ficam em cinza. O max
+    # corta titulo de navegador, que nao tem limite natural de tamanho.
+    - foreign-toplevel:
+        content:
+          map:
+            conditions:
+              activated:
+                string:
+                  text: "{title}"
+                  max: 48
+                  margin: 10
+                  foreground: ffffffff
+                  deco: {underline: {size: 2, color: 3a5a8aff}}
+              ~activated:
+                string:
+                  text: "{title}"
+                  max: 48
+                  margin: 10
+                  foreground: 808080ff
+
+  right:
+    # So interface de verdade, de pe e com endereco: o lo fica de fora, e
+    # interface sem IPv4 ainda nao e noticia. NAO ha nome de interface fixo
+    # aqui, de proposito: com o 80-net-name-slot.rules do eudev os nomes
+    # variam por maquina (enp0s3 no VirtualBox, outro no QEMU, outro em
+    # maquina real), e o modulo instancia o conteudo para CADA interface que
+    # o netlink reportar — o filtro escolhe, nao o nome.
+    - network:
+        content:
+          map:
+            default: {empty: {}}
+            conditions:
+              name != "lo" && state == "up" && ipv4 != "":
+                string:
+                  text: "{name} {ipv4}"
+                  margin: 10
+    # %a e %b saem no idioma da sessao: o LANG=pt_BR.UTF-8 do lancador chega
+    # aqui por heranca, labwc -> sh do autostart -> yambar.
+    - clock:
+        date-format: "%a %d %b"
+        time-format: "%H:%M"
+        content:
+          string:
+            text: "{date}  {time}"
+            margin: 10
+YAMBARCONF
+    chmod 0644 "$STAGE/etc/xdg/yambar/config.yml"
 
     cat > "$STAGE/etc/xdg/labwc/themerc" <<'THEMERC'
 # themerc - tema no formato Openbox 3.6, que o labwc le nativamente.
@@ -717,6 +813,12 @@ THEMERC
         echo "desktop: o rc.xml nao nomeia a fonte '$fc_familia' do settings.ini" >&2
         exit 1
     }
+    # E a barra desenha com fcft, que resolve pelo mesmo fontconfig: a familia
+    # e uma so na arvore inteira, ou alguem fica com retangulo no lugar de letra.
+    grep -q "^  font: $fc_familia:size=" "$STAGE/etc/xdg/yambar/config.yml" || {
+        echo "desktop: a barra nao usa a fonte '$fc_familia' do settings.ini" >&2
+        exit 1
+    }
     unset fc_familia
 
     [ -x "$STAGE/usr/bin/distropica-desktop" ] || {
@@ -739,4 +841,49 @@ THEMERC
         echo "desktop: falta o drop-in do udevd" >&2
         exit 1
     }
+
+    # --- guardas da barra ---------------------------------------------------
+    # A barra e arquivos CONCORDANDO, e concordancia entre arquivos ja matou
+    # esta sessao duas vezes (o log, o barramento). (a) o autostart sobe a
+    # barra e o binario existe na arvore instalada — mesma cobranca que o
+    # menu.xml paga pelos comandos dele.
+    grep -q '^yambar -c "\$barra" &$' "$STAGE/etc/xdg/labwc/autostart" || {
+        echo "desktop: o autostart nao sobe a barra de tarefas" >&2
+        exit 1
+    }
+    [ -x /usr/bin/yambar ] || {
+        echo "desktop: o autostart chama yambar, que nao esta em /usr/bin" >&2
+        exit 1
+    }
+    # (b) o recuo do -c aponta para um arquivo que ESTA receita instala. E o
+    # par log-da-sessao de novo: dois pontos do mesmo caminho, so que aqui os
+    # dois saem do mesmo heredoc — a guarda existe para quando deixarem de sair.
+    barra_recuo=$(sed -n 's/^\[ -e "\$barra" \] || barra=\(\/etc\/[^ ]*\)$/\1/p' \
+        "$STAGE/etc/xdg/labwc/autostart")
+    [ -n "$barra_recuo" ] || {
+        echo "desktop: o autostart nao declara recuo de configuracao em /etc" >&2
+        exit 1
+    }
+    [ -e "$STAGE$barra_recuo" ] || {
+        echo "desktop: o autostart aponta $barra_recuo, que esta receita nao instala" >&2
+        exit 1
+    }
+    # (c) a config PASSA NO PARSER QUE VAI LE-LA: yambar --validate carrega o
+    # arquivo inteiro — yml, gramatica do map, particles, cores, a fonte via
+    # fcft/fontconfig da view — e sai antes de tocar em qualquer socket. Com
+    # backend-x11 desligado no build, o AUTO cai no vtable Wayland sem
+    # consultar WAYLAND_DISPLAY (bar_new, ramo !ENABLE_X11 && ENABLE_WAYLAND),
+    # e a conexao so aconteceria no run(), que o -C nunca chama — medido no
+    # main.c antes de entrar aqui. Isto tambem cobre modulo por modulo: um
+    # nome que o yambar da arvore nao compilou reprova aqui, pela boca do
+    # proprio registro de plugins. Erro nesta config nao tem outra guarda: em
+    # runtime a barra morre SEM derrubar a sessao, e a unica testemunha seria
+    # a foto sem barra.
+    /usr/bin/yambar -C -c "$STAGE$barra_recuo" -s 2>./barra-validate.err || {
+        echo "desktop: a config da barra nao passa no yambar --validate:" >&2
+        cat ./barra-validate.err >&2
+        exit 1
+    }
+    rm -f ./barra-validate.err
+    unset barra_recuo
 }

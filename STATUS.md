@@ -133,16 +133,22 @@ prova, não o aceite: a distância entre "a mídia boota" e "a mídia instala" f
 onde moraram os três defeitos desta revisão, e nenhum deles falhava no build.
 
 ```text
-CANAL=177 pacotes Mundo B, CHANNEL_INDEX_FORMAT=4, assinado com a chave de produção
-CANAL_INDEX_SHA256=1cfc7097e93813c22455a79ce6ad8dfe2f3e2c6d4ccc1e650dab1d0c5efd63b8
-POOL=917 MB · CACHE=1247 MB (19 sidecars de assinatura: .minisig, .openpgp-sig,
+CANAL=178 pacotes Mundo B (canal-013e), CHANNEL_INDEX_FORMAT=4, assinado com a chave de produção
+CANAL_INDEX_SHA256=32b495573e8527a7ecad5c49407370e4446b98661806721bdf4a131757bc698d
+POOL=918 MB · CACHE=1247 MB (19 sidecars de assinatura: .minisig, .openpgp-sig,
                              .openpgp-sums, .asc, .sig)
 EFI=target/release-0.13/BOOTX64-0.13.EFI                (22.1 MB)
 EFI_SHA256=9a4a9949da66dfac013e066e42dd00166df8afdb3552257dbfac7f2a2f161b5a
 ISO=target/release-0.13/distropica-0.13-x86_64.iso      (1402 MB)
-ISO_SHA256=a61ffa6b8af3cec3213805314e35d47c0b81db46835b22a82a9bbb26a60cf050
-RAIZ_PRODUTORA=target/rebuild-0.13-gimp-root — receipt f69fc7c0, plano e5ea95fa
+ISO_SHA256=3e82450dc0ad2768d5917aeba4ab979d6ed835a9c3b70f9ff9cd53abce5d794e
+RAIZ_PRODUTORA=target/rebuild-0.13-gimp-root — plano 94f9b340
 ```
+
+O 178º pacote é o **yambar**, a barra de tarefas — o lote fotografado mais
+recente: instalação limpa desta ISO, sessão com barra (janelas, rede, relógio
+pt-BR), foot minimizado **permanecendo listado** e restaurado por Alt+Tab, no
+QEMU/virtio e no VirtualBox/VMSVGA, com zero mortes de sessão no serial. As
+seis correções da revisão anterior seguem a bordo.
 
 **Não publicada.** `distropica.com.br` ainda serve a `0.12` e o índice de canal
 **legado v2**; a `0.13` existe só localmente. Publicar exige, além do upload, o

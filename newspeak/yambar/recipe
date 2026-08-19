@@ -1,0 +1,145 @@
+NAME=yambar
+VERSION=1.11.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc fcft pixman wayland libyaml"
+# flex e bison: a condição do particle map ("state == \"up\" && ...") não é
+# string comparada na unha, é gramática de verdade — map.l e map.y na fonte,
+# find_program(required: true) no particles/meson.build. A view sem eles morre
+# no setup, medido na primeira tentativa desta receita.
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox tllist wayland-protocols flex bison"
+ABOUT="A BARRA DE TAREFAS. Entrou por decisão, depois de a sessão rodar sem ela e cobrar o preço: janela minimizada simplesmente desaparece — não há lista de janelas em canto nenhum da tela, e o caminho de volta é saber de cor que Alt+Tab existe. Relógio e estado da rede sumiram junto com o painel do weston e não tinham voltado. O yambar é do mesmo autor do foot e da mesma matéria: C sem toolkit, desenha com o fcft e o pixman que esta árvore já paga, fala wlr-layer-shell para reservar a faixa da tela e wlr-foreign-toplevel-management para enxergar as janelas dos outros — os dois protocolos que o labwc implementa. A alternativa era o waybar, que é GTK e arrastaria gtk-layer-shell e mais uma camada inteira para desenhar texto numa faixa de 28 pixels; o custo marginal daqui foi UMA receita, porque fcft, tllist, pixman e libyaml já estavam pagos. Os módulos compilam DENTRO do binário (core-plugins-as-shared-libraries=false, o padrão), e só entram os que a configuração desta árvore usa mais os de custo zero: clock, foreign-toplevel e network SÃO a barra; label e script são os pontos de extensão — qualquer coisa que um shell script imprima vira conteúdo da barra sem recompilar nada. Fora, cada um por seu motivo: backend e módulos X11 (xkb, xwindow), numa árvore sem X11; dwl, river, i3 e sway-xkb, que falam IPC de compositores que não são o labwc; mpd, pulse e pipewire, cujas bibliotecas não existem aqui; alsa, que espera o áudio ser resolvido de verdade (#52) em vez de exibir um volume que o boot deixou mudo; battery, backlight e removables, hardware que as VMs desta fase não têm; cpu, mem e disk-io, que são mobília de monitor e não tarefa. A configuração NÃO mora aqui: é política de sessão e mora na receita desktop, em /etc/xdg/yambar — este pacote entrega o programa."
+LICENSE=MIT
+SRC="https://codeberg.org/dnkl/yambar/releases/download/$VERSION/yambar-$VERSION.tar.gz"
+SHA256="9859ef16ba16069c3442283d76607712c0b7bc602b6fadf41b2c3d97a754d5f9"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    # O doc/meson.build exige scdoc SEM 'required: false', e o meson.build o
+    # inclui incondicionalmente — não há -Ddocs aqui, ao contrário do foot.
+    # A linha da árvore é sem man pages, explícita no labwc (-Dman-pages=
+    # disabled) e no foot (-Ddocs=disabled); o scdoc de newspeak é receita
+    # órfã de propósito. Como o yambar não dá opção, o subdir sai ANTES do
+    # setup — com conferência dos dois lados, para que um 1.12 que mude o
+    # arranjo derrube este build em voz alta em vez de deixar um sed morto.
+    grep -qx "subdir('doc')" meson.build || {
+        echo "yambar: meson.build mudou; o corte do doc/ precisa ser revisto" >&2
+        exit 1
+    }
+    sed -i "/^subdir('doc')$/d" meson.build
+    # O executável declara install_rpath \$ORIGIN/../lib/yambar — o diretório
+    # de onde os plugins COMPARTILHADOS seriam carregados, que este build não
+    # produz: os módulos são estáticos, escolhidos abaixo. A auditoria de
+    # fechamento recusa RPATH que aponta para fora da closure, e com razão:
+    # caminho de carga que ninguém instala é promessa que ninguém prova —
+    # medido na quinta tentativa desta receita, em que TUDO o mais passou e a
+    # publicação caiu só nisto. Sem chrpath nem patchelf na view, o corte é
+    # na fonte do build, com a mesma conferência de dois lados do doc/.
+    grep -q "^  install_rpath: '" meson.build || {
+        echo "yambar: meson.build mudou; o corte do install_rpath precisa ser revisto" >&2
+        exit 1
+    }
+    sed -i "s|^  install_rpath: .*|  )|" meson.build
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # --wrap-mode=nofallback: o tarball traz fcft.wrap e tllist.wrap, e sem o
+    # portão o meson tentaria BAIXAR os subprojects — a view não tem rede, e
+    # mesmo que tivesse, uma segunda fcft embutida por baixo da árvore é
+    # exatamente o tipo de cópia que esta distro não aceita. Com nofallback,
+    # ou as do sistema servem ou o build morre dizendo qual faltou.
+    # -Dwerror=false NÃO é afrouxo de qualidade, é skew de toolchain: o
+    # upstream fixa werror=true no project() (meson.build:7), e a glibc 2.44
+    # desta árvore expõe o strchr const-correto — chamado sobre const char*,
+    # devolve const char*. O tag.c:564 do 1.11.0 guarda o retorno num char*
+    # (para escrever o '\0' num buffer que É mutável; só a tipagem discorda),
+    # o gcc avisa discarded-qualifiers, e o -Werror transforma o aviso em
+    # morte. Medido na segunda tentativa desta receita. O -Werror pertence ao
+    # laço de desenvolvimento do upstream; aviso novo de toolchain mais novo
+    # não é defeito do pacote, e patch em código C vendorizado seria remédio
+    # pior que a doença.
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        --wrap-mode=nofallback \
+        -Dwerror=false \
+        -Dbackend-x11=disabled \
+        -Dbackend-wayland=enabled \
+        -Dcore-plugins-as-shared-libraries=false \
+        -Dplugin-clock=enabled \
+        -Dplugin-foreign-toplevel=enabled \
+        -Dplugin-label=enabled \
+        -Dplugin-network=enabled \
+        -Dplugin-script=enabled \
+        -Dplugin-alsa=disabled \
+        -Dplugin-backlight=disabled \
+        -Dplugin-battery=disabled \
+        -Dplugin-cpu=disabled \
+        -Dplugin-disk-io=disabled \
+        -Dplugin-dwl=disabled \
+        -Dplugin-i3=disabled \
+        -Dplugin-mem=disabled \
+        -Dplugin-mpd=disabled \
+        -Dplugin-pipewire=disabled \
+        -Dplugin-pulse=disabled \
+        -Dplugin-removables=disabled \
+        -Dplugin-river=disabled \
+        -Dplugin-sway-xkb=disabled \
+        -Dplugin-xkb=disabled \
+        -Dplugin-xwindow=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    [ -x "$STAGE/usr/bin/yambar" ] || {
+        echo "yambar: o binário não foi produzido" >&2
+        exit 1
+    }
+    # Cabeçalhos de desenvolvimento de plugin: esta árvore não compila plugin
+    # de yambar nenhum — os módulos dela são estáticos, escolhidos acima — e
+    # payload que ninguém consome é dívida de auditoria, não generosidade.
+    # As completions de zsh saem pelo mesmo motivo: não há zsh aqui.
+    rm -rf "$STAGE/usr/include" "$STAGE/usr/share/zsh"
+
+    # OS MÓDULOS SÃO ESTÁTICOS, e um nome que a configuração pedir e não
+    # estiver compilado mata a barra no primeiro parse — com a sessão já de
+    # pé e nenhuma mensagem na tela. A prova é o SÍMBOLO, não uma string:
+    # cada módulo ligado define module_<nome>_iface com ligação externa
+    # (plugin.c o referencia de outra unidade, atrás de HAVE_PLUGIN_*), e o
+    # meson não faz strip, então ele está no .symtab do binário instalado.
+    # A primeira versão desta guarda procurava o NOME como corrida imprimível
+    # no binário e reprovou um build correto: o linker funde sufixos de
+    # string em .rodata e "clock" não sobrevive como corrida própria. Grep de
+    # string curta em binário não é evidência, para nenhum dos lados. E o -W
+    # é obrigatório: sem ele o readelf TRUNCA o nome na largura da coluna, e
+    # module_foreign_toplevel_iface (29 caracteres) reprovou um binário que o
+    # continha — dois builds corretos mortos por instrumento, um por guarda.
+    for modulo in clock foreign_toplevel network label script; do
+        readelf -sW "$STAGE/usr/bin/yambar" | grep -q "module_${modulo}_iface" || {
+            echo "yambar: o módulo '$modulo' não foi compilado no binário" >&2
+            readelf -sW "$STAGE/usr/bin/yambar" | grep -c 'module_.*_iface' >&2
+            exit 1
+        }
+    done
+    unset modulo
+
+    # E a prova de que o corte do install_rpath pegou é no ELF, não no sed:
+    # qualquer RPATH aqui reprova a auditoria de fechamento lá na frente, com
+    # a mensagem menos útil "foge da closure" — melhor morrer aqui dizendo.
+    if readelf -d "$STAGE/usr/bin/yambar" | grep -qE 'RPATH|RUNPATH'; then
+        echo "yambar: o binário saiu com RPATH; a auditoria vai recusar" >&2
+        readelf -d "$STAGE/usr/bin/yambar" | grep -E 'RPATH|RUNPATH' >&2
+        exit 1
+    fi
+
+    # O que foi desligado tem de FICAR desligado. O alsa é o único descarte
+    # cuja biblioteca EXISTE nesta árvore — um -D esquecido numa atualização
+    # e o auto o pesca de volta em silêncio. X11 idem, pela via do backend.
+    for lib in libasound libX11 libxcb; do
+        if readelf -d "$STAGE/usr/bin/yambar" | grep -q "$lib"; then
+            echo "yambar: ligou $lib, que deveria estar fora" >&2
+            readelf -d "$STAGE/usr/bin/yambar" | grep NEEDED >&2
+            exit 1
+        fi
+    done
+    unset lib
+    find "$STAGE" -type d -empty -delete
+}
