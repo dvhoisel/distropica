@@ -282,12 +282,15 @@ partir de nada além de binários upstream — foi **demonstrada**:
   configuração em `rc.xml`, menu raiz em `menu.xml`, e cada atalho declarado um
   a um em vez de um modificador global único. O lema do projeto é *no bling* —
   e é essa recusa que o torna adequado aqui. O labwc em si não traz painel nem
-  relógio; quem os repõe é a **barra de tarefas**: o **yambar**, do mesmo autor
-  do foot e da mesma matéria — C sem toolkit sobre fcft e pixman —, que lista
-  as janelas abertas (minimizadas inclusive, que sem ela desapareceriam da
-  tela sem caminho de volta), o estado da rede e o relógio. Os lançadores
-  continuam no menu do botão direito. XWayland fica desligado, coerente com o
-  wlroots; nenhuma janela X roda sobre este compositor.
+  relógio; quem os repõe é a **família do foot**, toda em C sem toolkit sobre
+  fcft e pixman: o **yambar** é a barra de tarefas — janelas abertas
+  (minimizadas inclusive, que sem ela desapareceriam da tela sem caminho de
+  volta; clicar ativa, via **wlrctl**), estado da rede (clicar abre o applet)
+  e relógio —, o **fuzzel** é o lançador (`W-d`, três letras, Enter), o
+  **fnott** dá dono às notificações e o **wbg** desenha a logo da distro na
+  camada de fundo. Os lançadores continuam também no menu do botão direito.
+  XWayland fica desligado, coerente com o wlroots; nenhuma janela X roda
+  sobre este compositor.
 
   O navegador é o **Epiphany** (GNOME Web) sobre **WebKitGTK**, e a troca pelo
   Firefox foi de um pacote por um: medido, tirar o Firefox da closure removia

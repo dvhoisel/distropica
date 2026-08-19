@@ -1,0 +1,60 @@
+NAME=fnott
+VERSION=1.8.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc fcft fontconfig pixman wayland libpng dbus"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox tllist wayland-protocols"
+ABOUT="O DAEMON DE NOTIFICAÇÕES. Sem ele, org.freedesktop.Notifications não tem dono no barramento de sessão e todo aviso morre calado — download que o Epiphany terminou, evento que um aplicativo futuro queira contar. Mesma família do foot, yambar e fuzzel: C sem toolkit, fcft e pixman, wlr-layer-shell para desenhar o balão. Fala libdbus de verdade — a dependência nova é só a biblioteca do dbus que a árvore já instala pelo daemon. Sobe pelo autostart do labwc, explícito e visível; o arquivo de serviço D-Bus que o pacote instala em /usr/share/dbus-1/services fica como rede de segurança — se o daemon morrer, a primeira notificação o reativa pela ativação tradicional que este dbus tem. Sem systemd (o meson pula sozinho quando não o encontra), sem man pages (-Ddocs=disabled, linha da árvore) — e como o corte das docs leva junto a LICENSE e o fnott.ini de exemplo, a licença volta à mão: evidência não é documentação. Configuração de tema fica para quando doer: os padrões são legíveis, e o arquivo, quando vier, mora em /etc/xdg/fnott — caminho que o próprio upstream usa."
+LICENSE=MIT
+SRC="https://codeberg.org/dnkl/fnott/releases/download/$VERSION/fnott-$VERSION.tar.gz"
+SHA256="e48744c4f4d653e217dec04e0608d97295a055c66104bb95c7008f53b9a49373"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        --wrap-mode=nofallback \
+        -Dwerror=false \
+        -Ddocs=disabled \
+        -Dsystem-nanosvg=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    for bin in fnott fnottctl; do
+        [ -x "$STAGE/usr/bin/$bin" ] || {
+            echo "fnott: $bin não foi produzido" >&2
+            exit 1
+        }
+    done
+    unset bin
+    install -d "$STAGE/usr/share/doc/fnott"
+    install -m 0644 LICENSE "$STAGE/usr/share/doc/fnott/LICENSE"
+    [ -s "$STAGE/usr/share/doc/fnott/LICENSE" ] || {
+        echo "fnott: LICENSE não instalada" >&2
+        exit 1
+    }
+    # A rede de segurança da ativação: sem este arquivo, fnott morto significa
+    # notificação perdida até a próxima sessão.
+    [ -f "$STAGE/usr/share/dbus-1/services/fnott.service" ] || {
+        echo "fnott: o arquivo de serviço D-Bus não foi instalado" >&2
+        find "$STAGE/usr/share/dbus-1" -type f 2>/dev/null >&2
+        exit 1
+    }
+    if readelf -d "$STAGE/usr/bin/fnott" | grep -qE 'libX11|libxcb|libgtk'; then
+        echo "fnott: ligou X11 ou toolkit num cliente Wayland puro" >&2
+        readelf -d "$STAGE/usr/bin/fnott" | grep NEEDED >&2
+        exit 1
+    fi
+    readelf -d "$STAGE/usr/bin/fnott" | grep -q 'libdbus-1' || {
+        echo "fnott: não ligou a libdbus, que é o ofício dele" >&2
+        exit 1
+    }
+    if readelf -d "$STAGE/usr/bin/fnott" | grep -qE 'RPATH|RUNPATH'; then
+        echo "fnott: o binário saiu com RPATH; a auditoria vai recusar" >&2
+        exit 1
+    fi
+    find "$STAGE" -type d -empty -delete
+}

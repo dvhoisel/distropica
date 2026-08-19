@@ -1,0 +1,49 @@
+NAME=wlrctl
+VERSION=0.2.2
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc wayland libxkbcommon"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox"
+ABOUT="O BRAÇO DO CLIQUE DA BARRA. O yambar desenha a lista de janelas mas não fala com elas: o particle dele executa um comando ao clique, e só — ativar janela é conversa do protocolo wlr-foreign-toplevel-management, que é exatamente o que este utilitário fala. 'wlrctl toplevel focus app_id:X' pede ao compositor que ative a janela, e o labwc obedece: traz para a frente, foca e desminimiza. Medido no toplevel.c:297: o focus ativa a PRIMEIRA janela que casa com o filtro e para — com duas janelas do mesmo programa a escolha é a primeira da lista do compositor, e não há como fazer melhor por fora: as tags que a barra tem para oferecer (app-id, título) são tudo o que qualquer ferramenta externa pode usar de filtro, e duas janelas iguais são indistinguíveis por elas. Para esse empate existe o Alt+Tab, que continua sendo o caminho fino. O binário também sabe minimizar, fechar, maximizar e esperar janela por filtro, e fala teclado e ponteiro virtuais — nada disso é usado pela árvore hoje, mas vem no mesmo executável pequeno de C com três dependências que já estavam pagas: wayland-client, xkbcommon e a libc. Os XMLs de protocolo vêm vendorizados no tarball, então nem o wayland-protocols entra no build. Man page e completions de zsh ficam de fora pelas opções próprias do meson, na linha da árvore."
+LICENSE=MIT
+SRC="https://git.sr.ht/~brocellous/wlrctl/archive/v$VERSION.tar.gz"
+SHA256="b5b3836091c41de09a832df1e5eb4747841d7ae670367e413487d5be7a5f2849"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # -Dwerror=false pela mesma política medida no yambar: o upstream fixa
+    # werror=true no project(), o código é de 2021, e o toolchain desta árvore
+    # (gcc 15, glibc 2.44) promove a aviso coisas que na época não eram —
+    # aviso de toolchain novo não é defeito do pacote.
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dwerror=false \
+        -Dman-pages=disabled \
+        -Dzsh-completions=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    [ -x "$STAGE/usr/bin/wlrctl" ] || {
+        echo "wlrctl: o binário não foi produzido" >&2
+        exit 1
+    }
+    # As três dependências declaradas, e nenhuma além: quem dá o clique da
+    # barra não pode ser a porta de entrada de um toolkit.
+    for lib in libxkbcommon libwayland-client; do
+        readelf -d "$STAGE/usr/bin/wlrctl" | grep -q "$lib" || {
+            echo "wlrctl: não ligou $lib, que a receita declara" >&2
+            readelf -d "$STAGE/usr/bin/wlrctl" | grep NEEDED >&2
+            exit 1
+        }
+    done
+    unset lib
+    if readelf -d "$STAGE/usr/bin/wlrctl" | grep -qE 'libX11|libxcb|libgtk'; then
+        echo "wlrctl: ligou X11 ou toolkit; era para ser um cliente Wayland puro" >&2
+        readelf -d "$STAGE/usr/bin/wlrctl" | grep NEEDED >&2
+        exit 1
+    fi
+    find "$STAGE" -type d -empty -delete
+}

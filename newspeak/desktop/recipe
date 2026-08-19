@@ -2,8 +2,8 @@ NAME=desktop
 VERSION=0.1
 KIND=source
 TOOLCHAIN=none
-DEPS="labwc seatd eudev dbus epiphany foot yambar dejavu-fonts adwaita-icon-theme hicolor-icon-theme mesa locales busybox alsa-utils miniluv"
-ABOUT="A COLA. Tudo o que faz a pilha grafica virar uma tela em vez de um monte de bibliotecas instaladas: quem sobe o compositor, onde ele acha a configuracao, e o que o botao direito oferece. Receita de montagem, sem SRC — so gera arquivos legiveis. Quatro pecas. (1) /usr/bin/distropica-desktop, o lancador: cria o XDG_RUNTIME_DIR, que o protocolo Wayland exige e sem o qual o compositor sai com uma linha de erro e nada mais; sobe o seatd se ninguem o subiu; e exec no labwc dentro de um barramento de sessao. (2) quatro drop-ins em /etc/rc.d/rcS.d, que e como um pacote acrescenta trabalho de inicializacao sem ser dono do /etc/inittab, que e do base: 01-machine-id.sh, 02-gschemas.sh, 05-udevd.sh e 10-seatd.sh, nesta ordem. O 02-gschemas.sh e o menos evidente e o que custou mais caro: ele compila a base de esquemas do GSettings, e sem ela o backend Wayland do GTK abandona a propria inicializacao antes de chegar ao update_xft_settings, que e o unico lugar que define a resolucao da tela — ela fica em -1, todo tamanho de fonte em pontos passa a ser negativo, e o navegador abre sem UMA LETRA no proprio chrome enquanto a pagina ao lado renderiza normalmente. O udevd NAO e redundante com o mdev, e essa foi a causa da primeira tela preta: o mdev cria os NOS de dispositivo, mas quem enumera dispositivo de entrada e a libinput, e ela pergunta a libudev — cujo udev_enumerate_scan_devices filtra tudo que nao tem entrada na base em /run/udev. (3) a configuracao do labwc em /etc/xdg/labwc: rc.xml, menu.xml, themerc, environment e autostart. (4) a barra de tarefas: o yambar, erguido pelo autostart e configurado em /etc/xdg/yambar — a lista de janelas abertas, o relogio e a rede; sem ela, janela minimizada some sem deixar rastro em canto nenhum da tela. O COMPOSITOR MUDOU, e com ele o modelo: o weston tinha painel, relogio e lancadores, e UM modificador global para todos os atalhos — mover o Alt+Tab movia tudo junto, e o Alt+K matava a aplicacao em foco sem confirmacao. O labwc nao tem painel nem relogio proprios — quem os repoe e a barra da peca 4 —, e em troca cada atalho e declarado um a um no rc.xml, o tema e um themerc compativel com Openbox 3.6, e o menu do botao direito substitui os lancadores. O renderizador continua sendo por SOFTWARE: o wlroots foi construido com -Drenderers=[] e compoe no buffer dumb do KMS, sem EGL e sem GBM, pelo mesmo motivo de antes — numa arvore com Mesa softpipe o GL nao acelera nada e ainda depende de o gbm achar driver. O TERMINAL e o foot, e ele entrou junto com esta troca: o unico emulador anterior era o weston-terminal, que saiu com o weston, e uma sessao grafica sem forma de rodar um comando nao e uma sessao. O foot e cliente Wayland nativo sem toolkit — nao usa GTK nem Qt —, e custa tres receitas pequenas de C."
+DEPS="labwc seatd eudev dbus epiphany foot yambar wlrctl fuzzel fnott wbg dejavu-fonts adwaita-icon-theme hicolor-icon-theme mesa locales busybox alsa-utils miniluv"
+ABOUT="A COLA. Tudo o que faz a pilha grafica virar uma tela em vez de um monte de bibliotecas instaladas: quem sobe o compositor, onde ele acha a configuracao, e o que o botao direito oferece. Receita de montagem, sem SRC — so gera arquivos legiveis. Quatro pecas. (1) /usr/bin/distropica-desktop, o lancador: cria o XDG_RUNTIME_DIR, que o protocolo Wayland exige e sem o qual o compositor sai com uma linha de erro e nada mais; sobe o seatd se ninguem o subiu; e exec no labwc dentro de um barramento de sessao. (2) quatro drop-ins em /etc/rc.d/rcS.d, que e como um pacote acrescenta trabalho de inicializacao sem ser dono do /etc/inittab, que e do base: 01-machine-id.sh, 02-gschemas.sh, 05-udevd.sh e 10-seatd.sh, nesta ordem. O 02-gschemas.sh e o menos evidente e o que custou mais caro: ele compila a base de esquemas do GSettings, e sem ela o backend Wayland do GTK abandona a propria inicializacao antes de chegar ao update_xft_settings, que e o unico lugar que define a resolucao da tela — ela fica em -1, todo tamanho de fonte em pontos passa a ser negativo, e o navegador abre sem UMA LETRA no proprio chrome enquanto a pagina ao lado renderiza normalmente. O udevd NAO e redundante com o mdev, e essa foi a causa da primeira tela preta: o mdev cria os NOS de dispositivo, mas quem enumera dispositivo de entrada e a libinput, e ela pergunta a libudev — cujo udev_enumerate_scan_devices filtra tudo que nao tem entrada na base em /run/udev. (3) a configuracao do labwc em /etc/xdg/labwc: rc.xml, menu.xml, themerc, environment e autostart. (4) a barra de tarefas: o yambar, erguido pelo autostart e configurado em /etc/xdg/yambar — a lista de janelas abertas, o relogio e a rede (que clicada abre o applet); sem ela, janela minimizada some sem deixar rastro em canto nenhum da tela. E dois padroes de sessao midos que valem parágrafo: o mimeapps.list de /etc/xdg, que faz do Epiphany o navegador padrao DECLARADO — sem ele todo primeiro uso abre com 'Definir como navegador padrao?' em cima da pagina, porque o glib responde vazio —, e o override de schema que aponta a home para o site da distro, compilado na base do GSettings pelo 02-gschemas.sh e vencivel pelo usuario no keyfile dele. A sessao completa-se com o resto da familia do foot, cada um subindo do autostart ou de atalho: o wbg desenha a logo da distro sobre o cinza do tema na camada de fundo (a imagem e desta receita, em files/), o fnott da dono ao org.freedesktop.Notifications para aviso nenhum morrer calado, e o fuzzel no W-d lanca qualquer .desktop instalado por tres letras e um Enter. O COMPOSITOR MUDOU, e com ele o modelo: o weston tinha painel, relogio e lancadores, e UM modificador global para todos os atalhos — mover o Alt+Tab movia tudo junto, e o Alt+K matava a aplicacao em foco sem confirmacao. O labwc nao tem painel nem relogio proprios — quem os repoe e a barra da peca 4 —, e em troca cada atalho e declarado um a um no rc.xml, o tema e um themerc compativel com Openbox 3.6, e o menu do botao direito substitui os lancadores. O renderizador continua sendo por SOFTWARE: o wlroots foi construido com -Drenderers=[] e compoe no buffer dumb do KMS, sem EGL e sem GBM, pelo mesmo motivo de antes — numa arvore com Mesa softpipe o GL nao acelera nada e ainda depende de o gbm achar driver. O TERMINAL e o foot, e ele entrou junto com esta troca: o unico emulador anterior era o weston-terminal, que saiu com o weston, e uma sessao grafica sem forma de rodar um comando nao e uma sessao. O foot e cliente Wayland nativo sem toolkit — nao usa GTK nem Qt —, e custa tres receitas pequenas de C."
 LICENSE="GPL-3.0-or-later"
 
 build() {
@@ -219,14 +219,17 @@ MACHINEID
 # Gerado no boot e nao no pacote porque o arquivo e funcao do conjunto de
 # TODOS os pacotes instalados e portanto nao pode pertencer a nenhum — mesmo
 # argumento do hwdb.bin do eudev e do loaders.cache do gdk-pixbuf. Refaz
-# quando falta ou quando alguma .gschema.xml e mais nova que ele, que e
-# exatamente o caso depois de instalar um pacote novo.
+# quando falta ou quando alguma .gschema.xml OU .gschema.override e mais nova
+# que ele — o override e como o padrao de fabrica desta distro (a home do
+# navegador, por exemplo) entra na base compilada, e um override novo sem
+# recompilacao seria padrao escrito e nunca lido.
 if [ -x /usr/bin/glib-compile-schemas ] && [ -d /usr/share/glib-2.0/schemas ]; then
     gschemas_refazer=nao
     if [ ! -s /usr/share/glib-2.0/schemas/gschemas.compiled ]; then
         gschemas_refazer=sim
     else
-        for gschemas_xml in /usr/share/glib-2.0/schemas/*.gschema.xml; do
+        for gschemas_xml in /usr/share/glib-2.0/schemas/*.gschema.xml \
+                            /usr/share/glib-2.0/schemas/*.gschema.override; do
             [ -e "$gschemas_xml" ] || break
             if [ "$gschemas_xml" -nt /usr/share/glib-2.0/schemas/gschemas.compiled ]; then
                 gschemas_refazer=sim
@@ -308,6 +311,40 @@ SEATD
     chmod 0644 "$STAGE/etc/rc.d/rcS.d/10-seatd.sh"
 
     install -d "$STAGE/etc/gtk-3.0"
+    # O NAVEGADOR PADRAO E DECLARADO, e nao perguntado. Sem este arquivo o
+    # Epiphany abre com "Definir como navegador padrao?" em cima da pagina:
+    # ele pergunta ao glib quem atende x-scheme-handler/http, o glib nao acha
+    # mimeapps.list nenhum, e a resposta vazia dispara o dialogo — em toda
+    # instalacao, para sempre, porque ninguem aqui responderia por ele. O
+    # glib le a cadeia XDG_CONFIG_HOME > XDG_CONFIG_DIRS (/etc/xdg e o
+    # padrao), entao esta e a camada certa: o sistema declara o padrao, o
+    # usuario sobrepoe em ~/.config/mimeapps.list se quiser. O dialogo morre
+    # pela causa certa — o navegador E o padrao — e nao por uma chave que o
+    # mande calar a boca com o estado errado.
+    cat > "$STAGE/etc/xdg/mimeapps.list" <<'MIMEAPPS'
+[Default Applications]
+x-scheme-handler/http=org.gnome.Epiphany.desktop
+x-scheme-handler/https=org.gnome.Epiphany.desktop
+text/html=org.gnome.Epiphany.desktop
+application/xhtml+xml=org.gnome.Epiphany.desktop
+MIMEAPPS
+    chmod 0644 "$STAGE/etc/xdg/mimeapps.list"
+
+    # A PAGINA INICIAL e o site da distro, por sobreposicao de schema — a
+    # camada de PADRAO do GSettings, compilada dentro da gschemas.compiled
+    # pelo 02-gschemas.sh no boot. Nao e configuracao imposta: sem dconf, o
+    # backend keyfile grava a escolha do usuario em ~/.config/glib-2.0 e ela
+    # vence isto aqui; o override so responde pelo primeiro uso. A validacao
+    # do nome da chave contra o schema real acontece na guarda do build, com
+    # --strict — um upstream que renomeie homepage-url derruba o build em vez
+    # de deixar a home morrer calada.
+    install -d "$STAGE/usr/share/glib-2.0/schemas"
+    cat > "$STAGE/usr/share/glib-2.0/schemas/90_distropica.gschema.override" <<'OVERRIDE'
+[org.gnome.Epiphany]
+homepage-url='https://distropica.com.br/'
+OVERRIDE
+    chmod 0644 "$STAGE/usr/share/glib-2.0/schemas/90_distropica.gschema.override"
+
     cat > "$STAGE/etc/gtk-3.0/settings.ini" <<'GTKINI'
 # Configuracao do GTK3 para uma sessao SEM gerenciador de configuracao.
 #
@@ -419,6 +456,12 @@ GTKINI
     <keybind key="W-n">
       <action name="Execute" command="miniluv"/>
     </keybind>
+    <!-- O lancador por teclado: tres letras filtram os .desktop instalados,
+         Enter executa. E o caminho do meio entre o menu do botao direito e
+         decorar um atalho por programa. -->
+    <keybind key="W-d">
+      <action name="Execute" command="fuzzel"/>
+    </keybind>
     <!-- Recarrega a configuracao viva. O weston exigia reiniciar a sessao. -->
     <keybind key="W-r">
       <action name="Reconfigure"/>
@@ -455,6 +498,18 @@ GTKINI
       <tap>yes</tap>
     </device>
   </libinput>
+
+  <!-- O NAVEGADOR ABRE MAXIMIZADO, por regra do compositor e nao por pedido
+       do aplicativo: em Wayland quem manda no tamanho da janela e o gerente,
+       e o GTK nao tem "abra maximizado" confiavel para oferecer. O
+       identificador e o app-id Wayland do Epiphany, que e o nome do .desktop
+       dele sem a extensao — a guarda do build cobra essa igualdade contra o
+       mimeapps.list, para os dois arquivos nao divergirem em silencio. -->
+  <windowRules>
+    <windowRule identifier="org.gnome.Epiphany">
+      <action name="Maximize" />
+    </windowRule>
+  </windowRules>
 </labwc_config>
 RCXML
     chmod 0644 "$STAGE/etc/xdg/labwc/rc.xml"
@@ -476,6 +531,9 @@ RCXML
     </item>
     <item label="Rede">
       <action name="Execute" command="miniluv"/>
+    </item>
+    <item label="Lançador (W-d)">
+      <action name="Execute" command="fuzzel"/>
     </item>
     <separator/>
     <item label="Recarregar configuracao">
@@ -557,11 +615,36 @@ ENVIRONMENT
 # script vivo a sessao inteira a troco de nada. E ninguem precisa derrubar a
 # barra na saida — ela e cliente Wayland, e quando o compositor morre o
 # socket fecha e ela sai sozinha.
+# A PAREDE PRIMEIRO: o wbg toma a camada de fundo (wlr-layer-shell,
+# background) e fica de pe segurando a superficie; morre com o compositor
+# como todo cliente. A imagem e desta receita — a logo sobre o cinza do
+# tema — e a guarda do build cobra que o caminho aqui e o arquivo instalado
+# sejam o mesmo fato.
+wbg /usr/share/distropica/parede.png &
+
+# O DAEMON DE NOTIFICACOES sobe explicito, e nao pela ativacao D-Bus, de
+# proposito: visivel aqui, ambiente herdado direto (WAYLAND_DISPLAY ja
+# existe neste ponto; no ambiente de ativacao do barramento ele so existe
+# se o labwc conseguir empurra-lo). O arquivo de servico que o pacote
+# instala fica de rede de seguranca: fnott morto renasce na primeira
+# notificacao.
+fnott &
+
 barra=${XDG_CONFIG_HOME:-$HOME/.config}/yambar/config.yml
 [ -e "$barra" ] || barra=/etc/xdg/yambar/config.yml
 yambar -c "$barra" &
 AUTOSTART
     chmod 0644 "$STAGE/etc/xdg/labwc/autostart"
+
+    # --- o papel de parede --------------------------------------------------
+    # A imagem vem do snapshot de files/ desta receita (a logo da distro
+    # composta sobre o cinza 1a1a1a do themerc, 1920x1200 — mesma proporcao
+    # 1.6:1 do 1280x800 das VMs, entao o wbg escala sem distorcer). Entra no
+    # fingerprint como tudo em files/: trocar a parede reconstroi o pacote.
+    # O snapshot materializa em $WORK, e o cwd do build nao e o $WORK — o
+    # librsvg consome o cargo-config.toml dele exatamente assim.
+    install -d "$STAGE/usr/share/distropica"
+    install -m 0644 "$WORK/parede.png" "$STAGE/usr/share/distropica/parede.png"
 
     # --- a barra de tarefas -------------------------------------------------
     # A configuracao mora AQUI e nao na receita yambar, pelo mesmo motivo do
@@ -592,6 +675,16 @@ bar:
     # Uma entrada por janela aberta, minimizada inclusive — e essa a funcao.
     # A ativa leva o azul do tema por baixo; as demais ficam em cinza. O max
     # corta titulo de navegador, que nao tem limite natural de tamanho.
+    #
+    # O CLIQUE ATIVA A JANELA, via wlrctl: o yambar so desenha, e ativar e
+    # conversa do protocolo wlr-foreign-toplevel-management, que o wlrctl
+    # fala. O filtro e app_id e nao title, porque titulo tem espaco e o
+    # on-click separa por palavras SEM shell — um titulo de navegador viraria
+    # seis argumentos. Com duas janelas do MESMO programa o wlrctl ativa a
+    # primeira que casa e para (toplevel.c:297); o desempate fino continua
+    # sendo o Alt+Tab, e nao ha como fazer melhor daqui: app-id e titulo sao
+    # as unicas tags que existem para filtrar. Na janela ja ativa o clique
+    # re-ativa, que e inofensivo.
     - foreign-toplevel:
         content:
           map:
@@ -603,12 +696,14 @@ bar:
                   margin: 10
                   foreground: ffffffff
                   deco: {underline: {size: 2, color: 3a5a8aff}}
+                  on-click: /usr/bin/wlrctl toplevel focus app_id:{app-id}
               ~activated:
                 string:
                   text: "{title}"
                   max: 48
                   margin: 10
                   foreground: 808080ff
+                  on-click: /usr/bin/wlrctl toplevel focus app_id:{app-id}
 
   right:
     # So interface de verdade, de pe e com endereco: o lo fica de fora, e
@@ -617,6 +712,11 @@ bar:
     # variam por maquina (enp0s3 no VirtualBox, outro no QEMU, outro em
     # maquina real), e o modulo instancia o conteudo para CADA interface que
     # o netlink reportar — o filtro escolhe, nao o nome.
+    #
+    # O clique abre o applet de rede. Caminho ABSOLUTO porque o on-click do
+    # yambar nao passa por shell (doc dele: "not executed in a shell") e
+    # PATH nao e garantia de nada fora de um. Clicar de novo nao abre outro:
+    # o miniluv e GApplication, e a segunda ativacao foca a instancia viva.
     - network:
         content:
           map:
@@ -626,6 +726,7 @@ bar:
                 string:
                   text: "{name} {ipv4}"
                   margin: 10
+                  on-click: /usr/bin/miniluv
     # %a e %b saem no idioma da sessao: o LANG=pt_BR.UTF-8 do lancador chega
     # aqui por heranca, labwc -> sh do autostart -> yambar.
     - clock:
@@ -886,4 +987,92 @@ THEMERC
     }
     rm -f ./barra-validate.err
     unset barra_recuo
+    # (d) todo on-click da barra aponta para executavel INSTALADO. O clique
+    # nao passa por shell nem por PATH; um caminho errado e um clique que
+    # morre em silencio, o mesmo defeito do menu com PNG inexistente. So o
+    # PRIMEIRO campo e o executavel — o resto da linha e argumento.
+    for barra_clique in $(sed -n 's|^[[:space:]]*on-click: \(/[^ ]*\).*$|\1|p' \
+                              "$STAGE/etc/xdg/yambar/config.yml" | sort -u); do
+        [ -x "$barra_clique" ] || {
+            echo "desktop: a barra clica em $barra_clique, que nao existe na arvore" >&2
+            exit 1
+        }
+    done
+    unset barra_clique
+
+    # --- guardas do navegador padrao --------------------------------------
+    # TRES ARQUIVOS NOMEIAM O MESMO NAVEGADOR: o mimeapps.list (padrao XDG),
+    # o windowRule do rc.xml (maximizar) e o proprio .desktop instalado. Um
+    # rename no Epiphany quebraria os tres de formas diferentes e caladas;
+    # aqui os tres sao amarrados um no outro.
+    nav_id=$(sed -n 's|^x-scheme-handler/https=\(.*\)\.desktop$|\1|p' \
+        "$STAGE/etc/xdg/mimeapps.list")
+    [ -n "$nav_id" ] || {
+        echo "desktop: mimeapps.list sem navegador para https" >&2
+        exit 1
+    }
+    [ -e "/usr/share/applications/$nav_id.desktop" ] || {
+        echo "desktop: mimeapps aponta $nav_id.desktop, que nao esta instalado" >&2
+        exit 1
+    }
+    grep -q "windowRule identifier=\"$nav_id\"" "$STAGE/etc/xdg/labwc/rc.xml" || {
+        echo "desktop: o rc.xml nao maximiza o navegador do mimeapps ($nav_id)" >&2
+        exit 1
+    }
+    unset nav_id
+    # E O OVERRIDE DE SCHEMA PASSA NO COMPILADOR, contra os schemas REAIS da
+    # arvore e em modo estrito. Sem --strict o glib-compile-schemas apenas
+    # AVISA e ignora um override com chave errada — a home morreria calada, e
+    # so a foto contaria. Com ele, um Epiphany futuro que renomeie
+    # homepage-url derruba este build com a mensagem certa.
+    mkdir -p ./schemas-teste
+    cp /usr/share/glib-2.0/schemas/*.gschema.xml ./schemas-teste/
+    # Os enums moram em *.enums.xml (org.gnome.desktop.enums.xml, do
+    # gsettings-desktop-schemas) e o --strict recusa schema com enum de fora;
+    # sem eles esta guarda reprovava a arvore correta — medido na simulacao.
+    for gschemas_enums in /usr/share/glib-2.0/schemas/*.enums.xml; do
+        [ -e "$gschemas_enums" ] || break
+        cp "$gschemas_enums" ./schemas-teste/
+    done
+    unset gschemas_enums
+    cp "$STAGE/usr/share/glib-2.0/schemas/90_distropica.gschema.override" ./schemas-teste/
+    /usr/bin/glib-compile-schemas --strict --dry-run ./schemas-teste 2>./override-erro || {
+        echo "desktop: o override de schema nao casa com os schemas da arvore:" >&2
+        cat ./override-erro >&2
+        exit 1
+    }
+    rm -rf ./schemas-teste ./override-erro
+
+    # --- guardas da parede e dos daemons de sessao -------------------------
+    # (a) o autostart e esta receita apontam para a MESMA parede, e ela e um
+    # PNG de verdade — o wbg desta arvore so decodifica PNG, de proposito.
+    # Dois pontos do mesmo caminho, ainda que no mesmo pacote: ja se viu o
+    # que acontece quando pontos combinados param de combinar.
+    parede=$(sed -n 's|^wbg \(/usr/[^ ]*\) &$|\1|p' "$STAGE/etc/xdg/labwc/autostart")
+    [ -n "$parede" ] || {
+        echo "desktop: o autostart nao sobe a parede" >&2
+        exit 1
+    }
+    [ -s "$STAGE$parede" ] || {
+        echo "desktop: o autostart aponta $parede, que esta receita nao instala" >&2
+        exit 1
+    }
+    [ "$(head -c 4 "$STAGE$parede" | tail -c 3)" = "PNG" ] || {
+        echo "desktop: $parede nao tem assinatura de PNG" >&2
+        exit 1
+    }
+    unset parede
+    # (b) todo daemon que o autostart sobe existe na arvore instalada — a
+    # mesma cobranca que o menu paga pelos comandos dele.
+    for sessao_daemon in wbg fnott; do
+        grep -q "^$sessao_daemon " "$STAGE/etc/xdg/labwc/autostart" || {
+            echo "desktop: o autostart nao sobe o $sessao_daemon" >&2
+            exit 1
+        }
+        [ -x "/usr/bin/$sessao_daemon" ] || {
+            echo "desktop: o autostart chama $sessao_daemon, que nao esta em /usr/bin" >&2
+            exit 1
+        }
+    done
+    unset sessao_daemon
 }

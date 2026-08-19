@@ -37,7 +37,10 @@ ATRASO=8
 # O teto por cenario e generoso porque a instalacao roda em tcg. Quem de fato
 # reprova e a falta de avanco: cada `espera` tem seu proprio prazo, e um
 # convidado travado estoura o da tela que nao chegou, dizendo QUAL nao chegou.
-CENARIO_TIMEOUT=5400
+# O default ja matou uma instalacao SAUDAVEL: 182 pacotes em tcg passam de 90
+# minutos com folga — a midia cresceu desde que o numero foi escolhido, e ele
+# nao cresceu junto. Dai o --timeout: o teto e do operador, nao do arquivo.
+CENARIO_TIMEOUT=9000
 QPID=
 OFFSET=1
 LOG=
@@ -61,6 +64,10 @@ uso: bootstrap/live/accept-tui --efi ARQ --iso ARQ --disk NOVO.raw \
                       pura custa horas, e com aceleracao custa minutos. A
                       conducao da TUI nao depende do modo: ela REAGE ao que
                       aparece na tela, nao a tempos fixos.
+  --timeout SEGUNDOS  teto por cenario (default: 9000). So reprova de verdade
+                      quem PAROU: o prazo cobre o cenario inteiro, e em tcg a
+                      midia atual passa de 90 minutos saudavel — o default
+                      antigo, 5400, matou uma instalacao que ia terminar.
 
 Dois cenários, cada um com seu disco:
   1. mídia atrasada + rota "usar o disco inteiro", até INSTALLATION COMPLETE
@@ -85,6 +92,7 @@ while [ "$#" -gt 0 ]; do
         --memory-mib) MEMORY_MIB=${2:?}; shift 2 ;;
         --qemu) QEMU=${2:?}; shift 2 ;;
         --accel) ACCEL="${2:?}"; shift 2 ;;
+        --timeout) CENARIO_TIMEOUT="${2:?}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) falha "opção desconhecida: $1" ;;
     esac
