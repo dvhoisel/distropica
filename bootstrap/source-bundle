@@ -556,13 +556,24 @@ kind_da_receita() { # RECEITA
 }
 
 version_da_receita() { # RECEITA
-    quantidade_version=$(grep -c '^VERSION=' "$1" || true)
-    suspeitas_version=$(grep -Ec \
-        '^[[:space:]]*(export[[:space:]]+|readonly[[:space:]]+)?VERSION(\+)?=' \
-        "$1" || true)
+    # O escopo e o CABECALHO: campos de receita moram antes do build(), e e
+    # so ali que se conta. Contado no arquivo inteiro, o base reprovava a si
+    # mesmo: o os-release que o build() dele escreve carrega VERSION="rolling"
+    # dentro de um heredoc, e a paranoia certa no escopo errado virou falso
+    # positivo — medido na primeira rodada do bundle do canal.
+    quantidade_version=$(awk '/^build\(\)/{exit} /^VERSION=/{n++} END{print n+0}' "$1")
+    suspeitas_version=$(awk '/^build\(\)/{exit}
+        /^[[:space:]]*(export[[:space:]]+|readonly[[:space:]]+)?VERSION(\+)?=/{n++}
+        END{print n+0}' "$1")
     [ "$quantidade_version" -eq 1 ] &&
         [ "$suspeitas_version" -eq 1 ] || return 1
-    valor_version=$(sed -n 's/^VERSION=//p' "$1")
+    # A extracao obedece ao MESMO escopo da contagem — na primeira versao do
+    # conserto so a contagem foi escopada, o sed continuou lendo o arquivo
+    # inteiro, e o VERSION="rolling" do os-release entrava junto: o newline
+    # entre os dois valores caia na classe [[:space:]] logo abaixo e a funcao
+    # reprovava o base do mesmo jeito, agora pela outra metade.
+    valor_version=$(awk '/^build\(\)/{exit}
+        sub(/^VERSION=/, ""){print; exit}' "$1")
     case "$valor_version" in
         \"*\")
             valor_version=${valor_version#\"}
