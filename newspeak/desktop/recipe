@@ -651,6 +651,42 @@ AUTOSTART
     # rc.xml nao morar na do labwc: o compositor e a barra entregam programa,
     # a cola entrega politica. E um arquivo de /etc/xdg como os outros — o
     # usuario sobrepoe em ~/.config/yambar, que o autostart prefere.
+    # --- o lancador procura pelo nome QUE A PESSOA SABE ---------------------
+    # O fuzzel exibe o campo Name do .desktop, e o do GIMP e "GNU Image
+    # Manipulation Program": quem instalou o gimp e abriu o lancador nao acha
+    # "GIMP" na lista, e por padrao o fuzzel casa a digitacao so contra
+    # filename, name e generic. Acrescentar keywords e comment resolve pela
+    # raiz e para todo aplicativo: o proprio .desktop do GIMP declara
+    # Keywords=GIMP;graphic;design;..., o do Epiphany declara "navegador",
+    # e passam a ser encontrados pelo nome popular e pelo que fazem — sem
+    # reescrever o Name do upstream, que e dele e nao nosso.
+    #
+    # Ao contrario do yambar, o fuzzel LE /etc/xdg: sem XDG_CONFIG_DIRS ele
+    # usa "/etc/xdg" como default (config.c:209), entao a politica mora aqui
+    # e o usuario sobrepoe em ~/.config/fuzzel/fuzzel.ini.
+    install -d "$STAGE/etc/xdg/fuzzel"
+    cat > "$STAGE/etc/xdg/fuzzel/fuzzel.ini" <<'FUZZELINI'
+# fuzzel.ini - o lancador da sessao (W-d). Ver o ABOUT da receita 'desktop'.
+font=DejaVu Sans:size=12
+fields=filename,name,generic,keywords,comment
+terminal=foot -e
+lines=12
+width=40
+
+[colors]
+background=1a1a1aee
+text=e0e0e0ff
+match=3a5a8aff
+selection=3a5a8aff
+selection-text=ffffffff
+border=3a3a3aff
+
+[border]
+width=1
+radius=0
+FUZZELINI
+    chmod 0644 "$STAGE/etc/xdg/fuzzel/fuzzel.ini"
+
     install -d "$STAGE/etc/xdg/yambar"
     cat > "$STAGE/etc/xdg/yambar/config.yml" <<'YAMBARCONF'
 # config.yml - a barra de tarefas da sessao grafica (yambar).
@@ -1045,6 +1081,26 @@ THEMERC
         exit 1
     }
     rm -rf ./schemas-teste ./override-erro
+
+    # --- guarda do lancador -------------------------------------------------
+    # O proprio fuzzel valida a config, e e ele quem vai le-la: --check-config
+    # carrega o arquivo e sai. Sem isto, uma chave errada viraria lancador com
+    # padroes silenciosos — o mesmo tipo de falha muda que o --validate do
+    # yambar fecha do outro lado. E a busca por palavra-chave e cobrada por
+    # nome: e ela que faz "gimp" achar um .desktop cujo Name e "GNU Image
+    # Manipulation Program".
+    grep -q '^fields=.*keywords' "$STAGE/etc/xdg/fuzzel/fuzzel.ini" || {
+        echo "desktop: o fuzzel nao casa por keywords; aplicativo com Name" \
+             "diferente do nome popular fica inacessivel pela digitacao" >&2
+        exit 1
+    }
+    /usr/bin/fuzzel --check-config --config "$STAGE/etc/xdg/fuzzel/fuzzel.ini" \
+        2>./fuzzel-check.err || {
+        echo "desktop: a config do lancador nao passa no fuzzel --check-config:" >&2
+        cat ./fuzzel-check.err >&2
+        exit 1
+    }
+    rm -f ./fuzzel-check.err
 
     # --- guardas da parede e dos daemons de sessao -------------------------
     # (a) o autostart e esta receita apontam para a MESMA parede, e ela e um
