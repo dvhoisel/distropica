@@ -2166,7 +2166,11 @@ fn finalize_media_cache_payloads(plan: &mut ResolvedPlan) -> Result<()> {
     Ok(())
 }
 
-fn finalize_abi(plan: &mut ResolvedPlan, ctx: &Ctx) -> Result<()> {
+fn finalize_abi(
+    plan: &mut ResolvedPlan,
+    ctx: &Ctx,
+    written_records: &BTreeSet<String>,
+) -> Result<()> {
     let material: Vec<String> = plan
         .nodes
         .values()
@@ -2181,7 +2185,75 @@ fn finalize_abi(plan: &mut ResolvedPlan, ctx: &Ctx) -> Result<()> {
     let mut provides = BTreeSet::new();
     let mut static_objects = BTreeSet::new();
     let mut none = BTreeSet::new();
+    // REOBSERVAÇÃO INCREMENTAL (#74). A reobservação de mundo inteiro custava
+    // a maior parte da cauda do rectify — medido: ~5 min no host para ~190
+    // pacotes, multiplicado em VM — e o teto de projeto é 10 minutos para a
+    // operação inteira. A evidência para não re-medir já existe e é SELADA:
+    // o applied-plans/current é um PLAN_LOCK canônico, verificado por hash na
+    // cadeia ponteiro→receipt→lock, e carrega a observação ABI de cada
+    // pacote do mundo como ela foi feita quando ele foi aplicado.
+    //
+    // Reaproveita-se a observação anterior de um pacote quando NADA que a
+    // sustenta mudou: ele não foi escrito nesta operação, é factual no lock
+    // anterior, e nenhum provider dos requisitos dele foi escrito ou saiu do
+    // mundo. Todo o resto — os escritos, os afetados por provider, os que o
+    // lock anterior não cobre — passa pela análise fresca de sempre. Não é
+    // relaxamento do princípio de medir o estado final: é escopo. A medição
+    // reaproveitada FOI feita, está presa por hash, e o `verify` continua
+    // sendo a re-medição completa sob demanda. O portão
+    // MINITRUE_REOBSERVACAO_COMPLETA=1 força o caminho antigo — é o
+    // interruptor da prova frio==morno e a saída de emergência.
+    let material_set: BTreeSet<String> = material.iter().cloned().collect();
+    let previous = if plan.purpose == PlanPurpose::Rectify
+        && std::env::var_os("MINITRUE_REOBSERVACAO_COMPLETA").is_none()
+    {
+        load_previous_applied_plan(ctx)
+    } else {
+        None
+    };
+    let reuse: BTreeSet<String> = previous
+        .as_ref()
+        .map(|prev| abi_reuse_set(prev, &material_set, written_records))
+        .unwrap_or_default();
+    if let Some(prev) = &previous {
+        if !reuse.is_empty() {
+            match prev.abi_projection(&reuse) {
+                Ok(projection) => {
+                    requires.extend(projection.requires);
+                    provides.extend(projection.provides);
+                    static_objects.extend(projection.static_objects);
+                    none.extend(projection.none);
+                    eprintln!(
+                        "  ABI reaproveitada do plano aplicado anterior: {} pacote(s); {} para reanálise",
+                        reuse.len(),
+                        material.len() - reuse.len()
+                    );
+                }
+                Err(erro) => {
+                    // O reuso é otimização; a recusa dele não pode derrubar um
+                    // rectify correto. Mas sai dita, e o caminho completo assume.
+                    eprintln!(
+                        "  aviso: projeção ABI do plano anterior recusada ({erro:#}); reobservação completa"
+                    );
+                    requires.clear();
+                    provides.clear();
+                    static_objects.clear();
+                    none.clear();
+                }
+            }
+        }
+    }
+    let reused: BTreeSet<String> = none
+        .iter()
+        .map(|n: &AbiNone| n.package.clone())
+        .chain(provides.iter().map(|p: &AbiProvide| p.package.clone()))
+        .chain(requires.iter().map(|r: &AbiRequire| r.package.clone()))
+        .chain(static_objects.iter().map(|s: &AbiStatic| s.package.clone()))
+        .collect();
     for package in &material {
+        if reused.contains(package) {
+            continue;
+        }
         let node = plan.nodes.get(package).expect("pacote material coletado");
         if plan.purpose == PlanPurpose::Media && node.materiality == Materiality::CacheOnly {
             none.insert(AbiNone {
@@ -2287,6 +2359,73 @@ fn finalize_abi(plan: &mut ResolvedPlan, ctx: &Ctx) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Carrega o PLAN_LOCK do `applied-plans/current` VERIFICADO — ponteiro →
+/// receipt → lock persistido com sha conferido e forma canônica — para servir
+/// de evidência selada à reobservação incremental. Qualquer degrau ausente ou
+/// incoerente devolve None: sem autoridade anterior utilizável, reobserva-se
+/// tudo, como sempre. A cadeia é a mesma que `verify_applied_receipt` percorre;
+/// aquele segue sendo o verificador ESTRITO (cobra também coerência
+/// receipt×mundo×árvore), e este é só o leitor — se um terceiro consumidor
+/// aparecer, a leitura compartilhada se extrai para um lugar só.
+fn load_previous_applied_plan(ctx: &Ctx) -> Option<VerifiedPlan> {
+    let directory_path = ctx.root.join("var/lib/minitrue/applied-plans");
+    let directory =
+        open_anchored_directory_optional(&directory_path, "diretório de receipts aplicados")
+            .ok()
+            .flatten()?;
+    let current_name = CString::new("current").ok()?;
+    let pointer_bytes =
+        read_existing_regular_at(&directory, &current_name, 1024, "ponteiro de receipt")
+            .ok()
+            .flatten()?;
+    let (receipt_sha256, pointer_plan_sha256) =
+        parse_current_receipt_pointer(&pointer_bytes).ok()?;
+    let receipt_name = CString::new(format!("{receipt_sha256}.receipt")).ok()?;
+    let receipt_bytes = read_existing_regular_at(
+        &directory,
+        &receipt_name,
+        MAX_PLAN_BYTES,
+        "receipt aplicado",
+    )
+    .ok()
+    .flatten()?;
+    let receipt = parse_applied_receipt(&receipt_bytes, &receipt_sha256).ok()?;
+    if pointer_plan_sha256 != receipt.plan_lock_sha256 {
+        return None;
+    }
+    let lock = persisted_lock_bytes(ctx, &receipt.plan_lock_sha256).ok()?;
+    verify_canonical(&lock).ok()
+}
+
+/// Decide, pela evidência do plano anterior, quais pacotes materiais podem
+/// reaproveitar a observação ABI dele. Pura, para o teste cobrar cada regra:
+/// escrito nesta operação reanalisa; sem cobertura factual (ou pendente) no
+/// lock anterior reanalisa; e requerente cujo provider foi escrito OU saiu do
+/// mundo reanalisa, porque a resolução dele pode ter mudado de resposta.
+fn abi_reuse_set(
+    previous: &VerifiedPlan,
+    material: &BTreeSet<String>,
+    written: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut affected: BTreeSet<String> = BTreeSet::new();
+    for line in previous.abi_require_edges() {
+        let (requirer, provider) = line;
+        if written.contains(&provider) || !material.contains(&provider) {
+            affected.insert(requirer);
+        }
+    }
+    material
+        .iter()
+        .filter(|package| {
+            !written.contains(*package)
+                && !affected.contains(*package)
+                && previous.abi_factual_packages.contains(*package)
+                && !previous.abi_pending_packages.contains(*package)
+        })
+        .cloned()
+        .collect()
 }
 
 fn hydrate_media_channel_abi(
@@ -3117,7 +3256,7 @@ fn resolve_for_with_intermediate(
         tree_revalidated: Cell::new(false),
     };
     finalize_media_cache_payloads(&mut plan)?;
-    finalize_abi(&mut plan, ctx)?;
+    finalize_abi(&mut plan, ctx, intermediate_records)?;
     // Todos os vetores são canônicos antes de qualquer consumidor vê-los.
     plan.edges.sort();
     plan.edges.dedup();
@@ -6042,6 +6181,23 @@ impl VerifiedPlan {
         }
         facts.sort();
         Ok(facts)
+    }
+
+    /// Pares (requerente, provider) das linhas ABI_REQUIRE do lock, para a
+    /// partição do reuso decidir quem a mudança de um provider afeta.
+    fn abi_require_edges(&self) -> Vec<(String, String)> {
+        let mut edges = Vec::new();
+        for line in &self.records {
+            if let Some(rest) = line.strip_prefix("ABI_REQUIRE\t") {
+                let fields: Vec<&str> = rest.split('\t').collect();
+                if fields.len() == 7 {
+                    if let (Ok(requirer), Ok(provider)) = (decode(fields[0]), decode(fields[5])) {
+                        edges.push((requirer, provider));
+                    }
+                }
+            }
+        }
+        edges
     }
 
     fn abi_projection(&self, packages: &BTreeSet<String>) -> Result<AbiProjection> {
@@ -9038,6 +9194,74 @@ mod tests {
         )
         .is_err());
         let _ = fs::remove_dir_all(root);
+    }
+
+    fn plano_anterior_para_reuso(
+        require_edges: &[(&str, &str)],
+        factual: &[&str],
+        pendente: &[&str],
+    ) -> VerifiedPlan {
+        VerifiedPlan {
+            lock_sha256: "-".to_string(),
+            tree_sha256: "-".to_string(),
+            build_contract_sha256: "-".to_string(),
+            purpose: "rectify".to_string(),
+            binary_policy: "source-only".to_string(),
+            abi_policy: "development".to_string(),
+            abi_audit_sha256: "-".to_string(),
+            records: require_edges
+                .iter()
+                .map(|(requirer, provider)| {
+                    format!(
+                        "ABI_REQUIRE\t{}\tobj\tsoname\tlibx.so\t-\t{}\tlibx",
+                        encode(requirer),
+                        encode(provider),
+                    )
+                })
+                .collect(),
+            roots: BTreeMap::new(),
+            nodes: BTreeMap::new(),
+            abi_factual_packages: factual.iter().map(|s| s.to_string()).collect(),
+            abi_pending_packages: pendente.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn reuso_abi_reanalisa_escritos_afetados_e_descobertos() {
+        // O caso do gimp ao contrário: gtk3 foi escrito, então quem REQUER o
+        // gtk3 reanalisa; quem não tem nada com ele reaproveita; quem o lock
+        // anterior não cobre (pacote novo) reanalisa; pendente reanalisa; e
+        // requerente de provider que SAIU do mundo reanalisa.
+        let anterior = plano_anterior_para_reuso(
+            &[
+                ("epiphany", "gtk3"),
+                ("foot", "fcft"),
+                ("orfao", "sumido"),
+            ],
+            &["epiphany", "foot", "fcft", "gtk3", "orfao", "pendurado"],
+            &["pendurado"],
+        );
+        let material: BTreeSet<String> = ["epiphany", "foot", "fcft", "gtk3", "orfao", "gimp", "pendurado"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let escritos: BTreeSet<String> = ["gtk3".to_string(), "gimp".to_string()].into();
+        let reuso = abi_reuse_set(&anterior, &material, &escritos);
+        // reaproveitam: foot (provider intocado) e fcft (sem requires).
+        assert!(reuso.contains("foot"));
+        assert!(reuso.contains("fcft"));
+        // reanalisam: os escritos, o afetado, o sem cobertura, o pendente, o
+        // requerente do provider sumido.
+        for reanalisa in ["gtk3", "gimp", "epiphany", "orfao", "pendurado"] {
+            assert!(!reuso.contains(reanalisa), "{reanalisa} devia reanalisar");
+        }
+    }
+
+    #[test]
+    fn reuso_abi_vazio_sem_lock_util() {
+        let anterior = plano_anterior_para_reuso(&[], &[], &[]);
+        let material: BTreeSet<String> = ["a".to_string()].into();
+        assert!(abi_reuse_set(&anterior, &material, &BTreeSet::new()).is_empty());
     }
 
     #[test]
