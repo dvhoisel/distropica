@@ -1263,6 +1263,15 @@ pub fn lint_build(ctx: &Ctx, requested: &[String]) -> Result<()> {
 }
 
 pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> {
+    // A ABERTURA se apresenta antes de qualquer trabalho: a primeira
+    // resolução — impressões digitais da árvore, registros, canal — leva
+    // perto de um minuto e não imprimia nada, e o operador via o comando
+    // parado sem saber se andava. Mesma lição, três vezes no mesmo tema:
+    // espera sem rótulo parece travamento (#73).
+    eprintln!(
+        "resolvendo o plano: {} — medindo o mundo instalado (leva um minuto)",
+        names.join(" ")
+    );
     let _lock = acquire_lock(ctx)?; // segurado até o fim da operação
                                     // Uma transação órfã de outro pacote pode ter substituído justamente um
                                     // caminho que o pacote pedido pretende tomar. Resolva-a antes de carregar
@@ -1284,7 +1293,7 @@ pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> 
     )?;
     // Nenhum lock/snapshot é publicado antes de todos os objetos ativos e
     // assinaturas terem sido autenticados contra exatamente esta seleção.
-    plan.authenticate_objects(ctx, false)?;
+    plan.authenticate_objects(ctx, false, None)?;
     plan.revalidate_tree(ctx)?;
     // Esta é a última fronteira antes de qualquer payload/record da operação:
     // todos os namespaces de lock, slice, record, receipt e current são
@@ -16108,7 +16117,7 @@ mod tests {
             channel::LoadMode::ReadOnly,
         )
         .unwrap();
-        assert!(missing_plan.authenticate_objects(&context, true).is_err());
+        assert!(missing_plan.authenticate_objects(&context, true, None).is_err());
         fs::rename(&missing_producer, &producer_cache_path).unwrap();
 
         fs::write(&producer_cache_path, b"PLAN_LOCK adulterado\n").unwrap();
@@ -16121,7 +16130,7 @@ mod tests {
             channel::LoadMode::ReadOnly,
         )
         .unwrap();
-        assert!(tampered_plan.authenticate_objects(&context, true).is_err());
+        assert!(tampered_plan.authenticate_objects(&context, true, None).is_err());
         fs::write(&producer_cache_path, &producer_plan).unwrap();
 
         let unrelated_payload = sha256_bytes(b"payload factual de outro produtor");
@@ -16151,7 +16160,7 @@ mod tests {
         )
         .unwrap();
         assert!(unrelated_media
-            .authenticate_objects(&context, true)
+            .authenticate_objects(&context, true, None)
             .is_err());
 
         let wrong_reprocorr = "0".repeat(64);
@@ -16208,7 +16217,7 @@ mod tests {
         );
         assert_eq!(producer_media.nodes["pkg"].payload_sha256, reprocorr);
         assert!(producer_media.material_identities(true).is_err());
-        producer_media.authenticate_objects(&context, true).unwrap();
+        producer_media.authenticate_objects(&context, true, None).unwrap();
         producer_media.revalidate_tree(&context).unwrap();
         let producer_media_bytes = producer_media.canonical_bytes().unwrap();
         let producer_materials = producer_media.material_identities(true).unwrap();
@@ -16249,7 +16258,7 @@ mod tests {
         )
         .unwrap();
         empty_consumer_media
-            .authenticate_objects(&context, true)
+            .authenticate_objects(&context, true, None)
             .unwrap();
         empty_consumer_media.revalidate_tree(&context).unwrap();
         assert_eq!(

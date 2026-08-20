@@ -25,7 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 static DOWNLOAD_COUNTER: AtomicU64 = AtomicU64::new(0);
 const MAX_PINNED_OBJECT_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct FileSnapshot {
     dev: u64,
     ino: u64,
@@ -919,6 +919,29 @@ fn sha256_fd_stable(
     label: &str,
 ) -> Result<(String, FileSnapshot)> {
     let before = validate_regular_metadata(&file.metadata()?, max_bytes, label)?;
+    // Fatia 4 do #74: dentro de UM processo, artefato já medido com este
+    // EXATO snapshot — dev, inode, nlink, tamanho, mtime e ctime em
+    // nanossegundos — é o mesmo arquivo com os mesmos bytes. Não é confiar
+    // em memória: é o MESMO critério de estabilidade que esta função sempre
+    // usou para afirmar que nada mudou durante uma leitura, estendido entre
+    // leituras da mesma execução. Sem isto, a instalação conferia os ~500 MB
+    // do rust duas vezes — no apply e de novo na varredura material do
+    // fechamento — e a repetição saía na tela, palavra por palavra igual.
+    // Qualquer mudança no arquivo muda o ctime e o snapshot deixa de casar:
+    // re-hash completo. Entre processos, quem re-mede o disco é o verify.
+    static MEDIDOS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<FileSnapshot, String>>,
+    > =
+        std::sync::OnceLock::new();
+    let medidos = MEDIDOS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Some(hash) = medidos
+        .lock()
+        .expect("memo de artefatos medidos envenenado")
+        .get(&before)
+        .cloned()
+    {
+        return Ok((hash, before));
+    }
     file.seek(SeekFrom::Start(0))?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
@@ -2605,7 +2628,7 @@ mod tests {
             crate::channel::LoadMode::Mutating,
         )
         .unwrap();
-        plan.authenticate_objects(&ctx, false).unwrap();
+        plan.authenticate_objects(&ctx, false, None).unwrap();
         plan.revalidate_tree(&ctx).unwrap();
         let bytes = plan.canonical_bytes().unwrap();
         crate::plan::verify_canonical(&bytes).unwrap();

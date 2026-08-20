@@ -540,7 +540,7 @@ fn run() -> anyhow::Result<()> {
                     plan::AbiPolicy::Strict,
                     channel::LoadMode::ReadOnly,
                 )?;
-                resolved.authenticate_objects(&ctx, true)?;
+                resolved.authenticate_objects(&ctx, true, None)?;
                 resolved.revalidate_tree(&ctx)?;
                 match output.as_deref() {
                     // create_new: um lock de mídia é insumo de composição, e
@@ -687,7 +687,7 @@ fn run() -> anyhow::Result<()> {
                     plan::AbiPolicy::Development,
                     channel::LoadMode::ReadOnly,
                 )?;
-                resolved.authenticate_objects(&offline, true)?;
+                resolved.authenticate_objects(&offline, true, None)?;
                 resolved.revalidate_tree(&offline)?;
                 println!(
                     "cache closure íntegra: PLAN_LOCK_SHA256={}",

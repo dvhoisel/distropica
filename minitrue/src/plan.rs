@@ -3327,7 +3327,7 @@ pub(crate) fn finalize_applied(
             "fechamento pós-apply encontrou payload material que ainda não é keep",
         );
     }
-    plan.authenticate_objects(ctx, false)?;
+    plan.authenticate_objects(ctx, false, Some(written_records))?;
     plan.revalidate_tree(ctx)?;
     // RECORD_FORMAT=4 nunca representa um estado pendente, mesmo quando o
     // plano foi pedido em modo development. Development permite produzir o
@@ -4344,7 +4344,16 @@ impl ResolvedPlan {
     /// Prova todos os objetos ativos segundo a origem escolhida. Em modo
     /// offline `ensure_artifacts` apenas reabre e revalida cache + assinaturas;
     /// o precheck do diretório impede que a própria prova crie estado vazio.
-    pub fn authenticate_objects(&mut self, ctx: &Ctx, cache_only: bool) -> Result<()> {
+    /// `written`: no fechamento pós-apply, o conjunto de records escritos
+    /// nesta operação — habilita a fatia 5 do #74 (material selado de Keeps
+    /// intocados não é reautenticado). `None` mantém o comportamento
+    /// completo de sempre; Strict ignora o selo por definição.
+    pub fn authenticate_objects(
+        &mut self,
+        ctx: &Ctx,
+        cache_only: bool,
+        written: Option<&BTreeSet<String>>,
+    ) -> Result<()> {
         let effective = if cache_only {
             let needs_cache = self.order.iter().any(|name| {
                 self.nodes
@@ -4373,6 +4382,25 @@ impl ResolvedPlan {
                 || matches!(node.action, PlanAction::Keep | PlanAction::Meta)
         });
         let producer_plans = self.channels.authenticate_producer_plans(&effective)?;
+        // Fatia 5 do #74. A varredura material re-hasheava, num rectify de
+        // gimp, os tarballs do rust, do go e do busybox — evidência de
+        // pacotes que a operação nem encostou, e que o plano aplicado
+        // anterior já prende por hash na cadeia ponteiro→receipt→lock. Um
+        // Keep fora do conjunto escrito, com fingerprint E payload idênticos
+        // aos do lock anterior verificado, tem a sua seleção material
+        // SELADA: reautenticá-la é re-medir o que já foi medido e preso.
+        // Quem re-mede disco entre operações é o verify; o portão
+        // MINITRUE_REOBSERVACAO_COMPLETA=1 força o caminho antigo.
+        let sealed_previous = match written {
+            Some(_)
+                if self.abi_policy != AbiPolicy::Strict
+                    && std::env::var_os("MINITRUE_REOBSERVACAO_COMPLETA").is_none() =>
+            {
+                load_previous_applied_plan(ctx)
+            }
+            _ => None,
+        };
+        let mut sealed_material: Vec<String> = Vec::new();
         let mut observed_inputs = Vec::new();
         for name in &self.order {
             let node = self
@@ -4454,16 +4482,65 @@ impl ResolvedPlan {
                     // mão.
                     let from_channel = node.origin.starts_with("canal:");
                     if (closing_applied && !from_channel) || self.abi_policy == AbiPolicy::Strict {
-                        observed_inputs.extend(
-                            crate::fetch::ensure_artifacts_authenticated(&effective, recipe)?
-                                .inputs
-                                .into_iter()
-                                .map(|fact| (name.clone(), fact)),
-                        );
+                        let sealed = self.abi_policy != AbiPolicy::Strict
+                            && written.is_some_and(|written| !written.contains(name))
+                            && sealed_previous.as_ref().is_some_and(|previous| {
+                                previous.nodes.get(name).is_some_and(|sealed_node| {
+                                    sealed_node.fingerprint == node.fingerprint
+                                        && sealed_node.payload == node.payload_sha256
+                                })
+                            });
+                        // O selo NÃO pula o preenchimento: os transportes
+                        // pendentes dos rows deste plano são preenchidos com
+                        // os FATOS do lock anterior — a mesma mecânica do
+                        // caminho medido, com a evidência vinda do selo. Foi
+                        // um rc=5 de verdade ("proveniência material ainda
+                        // tem input pending", no binutils-glibc) que ensinou:
+                        // pular a autenticação inteira deixava o fill por
+                        // fazer. Facts sem sha canônico não alimentam nada, e
+                        // qualquer tropeço aqui cai no caminho medido.
+                        let sealed_facts = if sealed {
+                            sealed_previous
+                                .as_ref()
+                                .and_then(|previous| previous.artifact_facts(name).ok())
+                        } else {
+                            None
+                        };
+                        if let Some(facts) = sealed_facts {
+                            sealed_material.push(name.clone());
+                            observed_inputs.extend(
+                                facts
+                                    .into_iter()
+                                    .filter(|fact| canonical_sha256(&fact.transport_sha256))
+                                    .map(|fact| {
+                                        (
+                                            name.clone(),
+                                            crate::fetch::AuthenticatedInputFact {
+                                                origin_kind: fact.kind,
+                                                identifier: fact.identifier,
+                                                sha256: fact.transport_sha256,
+                                            },
+                                        )
+                                    }),
+                            );
+                        } else {
+                            observed_inputs.extend(
+                                crate::fetch::ensure_artifacts_authenticated(&effective, recipe)?
+                                    .inputs
+                                    .into_iter()
+                                    .map(|fact| (name.clone(), fact)),
+                            );
+                        }
                     }
                 }
                 PlanAction::Meta => unreachable!(),
             }
+        }
+        if !sealed_material.is_empty() {
+            eprintln!(
+                "  material selado reaproveitado do plano anterior: {} pacote(s)",
+                sealed_material.len()
+            );
         }
         for (package, observed) in observed_inputs {
             let artifact = self
@@ -9827,7 +9904,7 @@ mod tests {
                 && edge.kind == EdgeKind::Runner
                 && edge.materiality == Materiality::CacheOnly
         }));
-        plan.authenticate_objects(&ctx, true).unwrap();
+        plan.authenticate_objects(&ctx, true, None).unwrap();
         plan.revalidate_tree(&ctx).unwrap();
         let bytes = plan.canonical_bytes().unwrap();
         verify_canonical(&bytes).unwrap();
@@ -9859,7 +9936,7 @@ mod tests {
             LoadMode::ReadOnly,
         )
         .unwrap();
-        assert!(insecure.authenticate_objects(&ctx, true).is_err());
+        assert!(insecure.authenticate_objects(&ctx, true, None).is_err());
         assert_eq!(
             fs::metadata(ctx.cache_dir()).unwrap().permissions().mode() & 0o777,
             mode_before
@@ -10029,7 +10106,7 @@ mod tests {
         .unwrap();
         assert!(plan.persist(&ctx).is_err());
         assert!(!root.join("var/lib/minitrue/plan-locks").exists());
-        plan.authenticate_objects(&ctx, false).unwrap();
+        plan.authenticate_objects(&ctx, false, None).unwrap();
         plan.revalidate_tree(&ctx).unwrap();
         let development_lock = plan.persist(&ctx).unwrap();
         let record = ctx.records_dir().join("tool");
