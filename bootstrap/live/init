@@ -847,6 +847,12 @@ install_system() {
     apply_root_password /target || rescue "não configurei a senha de root"
     say "senha de root configurada"
 
+    # O rótulo desta espera não é enfeite: o verify re-mede o sistema
+    # instalado inteiro (2m06 medidos no host, mais em VM), em silêncio — e
+    # sem esta linha o operador vê a senha confirmada e um cursor parado por
+    # minutos. Espera sem rótulo parece travamento; foi assim que esta cauda
+    # virou a tarefa #73.
+    say "conferindo o sistema instalado contra os registros (leva alguns minutos)"
     /bin/minitrue --root /target verify ||
         rescue "o sistema instalado não confere com os registros"
     [ -f /target/var/lib/minipax/profile.lock ] &&
@@ -871,6 +877,9 @@ install_system() {
         rescue "BOOTX64.EFI instalado diverge do exportado pelo Minipax"
     rm -f -- /run/distropica-BOOTX64.EFI
 
+    # O sync paga de uma vez todo o cache de página que a instalação deixou —
+    # dezenas de segundos num disco virtual. Mesmo remédio do verify acima.
+    say "descarregando os caches no disco"
     sync || rescue "sync falhou antes de publicar a instalação"
     marker=/target/var/lib/minipax/disk-install.complete
     marker_tmp=/target/var/lib/minipax/.disk-install.complete.tmp
