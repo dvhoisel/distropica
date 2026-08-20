@@ -514,6 +514,129 @@ GTKINI
 RCXML
     chmod 0644 "$STAGE/etc/xdg/labwc/rc.xml"
 
+    # --- o menu do botao direito lista o que ESTA INSTALADO -----------------
+    # O menu raiz era uma lista escrita a mao, e por isso um pacote instalado
+    # depois — o GIMP, no primeiro teste de campo — nao aparecia nele. Quem
+    # clica com o botao direito na area de trabalho espera ver os programas
+    # da maquina, nao os quatro que a receita decorou.
+    #
+    # O labwc resolve isso com PIPEMENU: <menu execute="COMANDO"/> roda o
+    # comando na primeira vez que o item e selecionado e usa a saida XML como
+    # submenu (labwc-menu.5). Este script e esse comando: le os .desktop
+    # instalados e emite um item por aplicativo.
+    #
+    # Escrito em sh do BusyBox, porque e o que a maquina instalada tem
+    # garantido; sem awk, que pertence ao gawk nesta arvore e ja derrubou uma
+    # guarda antes.
+    mkdir -p "$STAGE/usr/libexec"
+    cat > "$STAGE/usr/libexec/distropica-menu-aplicativos" <<'PIPEMENU'
+#!/bin/sh
+# Emite, para o labwc, um submenu com os aplicativos instalados. Ver o
+# comentario da receita 'desktop' que o instala.
+#
+# Contrato do pipemenu: TODA saida vai dentro de <openbox_pipe_menu>, e ela
+# precisa sair MESMO se nada for encontrado — um pipemenu que imprime nada
+# vira submenu quebrado em vez de submenu vazio.
+set -u
+printf '<openbox_pipe_menu>\n'
+
+# A cadeia XDG, com o default da especificacao quando a variavel nao existe.
+dirs=${XDG_DATA_DIRS:-/usr/local/share:/usr/share}
+dirs=${XDG_DATA_HOME:-$HOME/.local/share}:$dirs
+
+# Um .desktop pode aparecer em mais de um diretorio; o primeiro vence, que e
+# a regra do XDG. 'visto' guarda os ids ja emitidos.
+visto=
+saida=
+IFS=:
+for dir in $dirs; do
+    unset IFS
+    [ -d "$dir/applications" ] || { IFS=:; continue; }
+    for arquivo in "$dir"/applications/*.desktop; do
+        [ -f "$arquivo" ] || continue
+        id=${arquivo##*/}
+        case " $visto " in *" $id "*) continue ;; esac
+        visto="$visto $id"
+
+        # Somente o grupo [Desktop Entry]: as secoes [Desktop Action ...] tem
+        # Name e Exec proprios, e emiti-las misturaria acoes com aplicativos.
+        cabecalho=$(sed -n '/^\[Desktop Entry\]/,/^\[/p' "$arquivo")
+
+        case $cabecalho in
+            *"NoDisplay=true"*|*"Hidden=true"*) continue ;;
+        esac
+        case $cabecalho in
+            *"Type=Application"*) ;;
+            *) continue ;;
+        esac
+
+        # O nome no idioma da sessao quando existir; senao o generico. O
+        # locale sai de LANG (pt_BR.UTF-8 -> pt_BR -> pt).
+        idioma=${LANG%%.*}
+        curto=${idioma%%_*}
+        nome=
+        for chave in "Name[$idioma]" "Name[$curto]" "Name"; do
+            nome=$(printf '%s\n' "$cabecalho" | sed -n "s/^$(printf '%s' "$chave" | sed 's/[][]/\\&/g')=//p" | head -1)
+            [ -n "$nome" ] && break
+        done
+        [ -n "$nome" ] || continue
+
+        comando=$(printf '%s\n' "$cabecalho" | sed -n 's/^Exec=//p' | head -1)
+        [ -n "$comando" ] || continue
+        # Codigos de campo do XDG (%f %F %u %U %i %c %k) nao valem como
+        # argumento literal; %% e um % de verdade.
+        comando=$(printf '%s\n' "$comando" | sed 's/%%/\x01/g; s/%[fFuUickdDnNvm]//g; s/\x01/%/g; s/  */ /g; s/ *$//')
+
+        # Terminal=true precisa de um terminal, e o desta arvore e o foot.
+        case $cabecalho in
+            *"Terminal=true"*) comando="foot -e $comando" ;;
+        esac
+
+        # XML nao aceita & < > crus, e ha .desktop com E comercial no nome. O
+        # & vem primeiro, senao as entidades seguintes seriam re-escapadas.
+        escapa() {
+            printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'
+        }
+        # O NOME POPULAR ENTRA QUANDO O UPSTREAM NAO O DIZ. O Name do GIMP e
+        # "GNU Image Manipulation Program" — em pt_BR, "Programa de
+        # manipulacao de imagem do GNU" —, e quem instalou 'gimp' nao acha
+        # isso numa lista. Reescrever o Name do upstream nao cabe a esta
+        # distro; dizer TAMBEM o comando cabe, e e a mesma honestidade do
+        # resto da arvore: a linha mostra o que o item vai executar. So
+        # quando o nome ainda nao contem o comando, senao viraria "Foot
+        # (foot)".
+        rotulo=$nome
+        base=${comando%% *}
+        base=${base##*/}
+        nome_minusculo=$(printf '%s' "$nome" | tr '[:upper:]' '[:lower:]')
+        base_minusculo=$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')
+        case $nome_minusculo in
+            *"$base_minusculo"*) ;;
+            *) rotulo="$nome ($base)" ;;
+        esac
+
+        # CADA APLICATIVO E UMA LINHA SO ate a ordenacao terminar. O item tem
+        # tres linhas de XML, e ordenar com elas soltas embaralha os itens uns
+        # dentro dos outros — medido, com o menu saindo em pedacos trocados.
+        # O \001 e a quebra de linha disfarcada, desfeita no fim.
+        chave=$(printf '%s' "$rotulo" | tr -d '\t')
+        saida="$saida$(printf '%s\t  <item label="%s">\001    <action name="Execute" command="%s"/>\001  </item>' \
+            "$chave" "$(escapa "$rotulo")" "$(escapa "$comando")")
+"
+    done
+    IFS=:
+done
+unset IFS
+
+# Ordem alfabetica pelo nome exibido, e nao pela ordem do diretorio. A chave
+# viaja na frente separada por TAB — que e justamente o separador default do
+# `cut`, e por isso ele desfaz o par sem depender de regex com \t, que o sed
+# do BusyBox nao promete.
+printf '%s' "$saida" | sort -f | cut -f2- | tr '\001' '\n'
+printf '</openbox_pipe_menu>\n'
+PIPEMENU
+    chmod 0755 "$STAGE/usr/libexec/distropica-menu-aplicativos"
+
     cat > "$STAGE/etc/xdg/labwc/menu.xml" <<'MENUXML'
 <?xml version="1.0"?>
 <!--
@@ -535,6 +658,12 @@ RCXML
     <item label="Lançador (W-d)">
       <action name="Execute" command="fuzzel"/>
     </item>
+    <!-- PIPEMENU: os quatro itens acima sao os de uso diario, escritos a
+         mao; este submenu e a maquina, lida no momento em que se abre. Foi a
+         falta dele que fez o GIMP recem-instalado nao aparecer no botao
+         direito. -->
+    <menu id="aplicativos" label="Aplicativos"
+          execute="/usr/libexec/distropica-menu-aplicativos"/>
     <separator/>
     <item label="Recarregar configuracao">
       <action name="Reconfigure"/>
@@ -1081,6 +1210,51 @@ THEMERC
         exit 1
     }
     rm -rf ./schemas-teste ./override-erro
+
+    # --- guarda do menu de aplicativos --------------------------------------
+    # O pipemenu e um contrato entre TRES coisas: o menu.xml que o invoca, o
+    # script instalado, e a saida dele. As tres sao cobradas aqui, e a
+    # ultima RODANDO o script de verdade — dentro da view, com o BusyBox que
+    # a maquina instalada tem —, porque um pipemenu que emite lixo nao
+    # derruba a sessao: ele so faz o submenu nao abrir, em silencio.
+    menu_pipe=$(sed -n 's|.*execute="\(/usr/libexec/[a-z-]*\)".*|\1|p' \
+        "$STAGE/etc/xdg/labwc/menu.xml")
+    [ -n "$menu_pipe" ] || {
+        echo "desktop: o menu raiz nao tem submenu de aplicativos" >&2
+        exit 1
+    }
+    [ -x "$STAGE$menu_pipe" ] || {
+        echo "desktop: o menu aponta $menu_pipe, que esta receita nao instala" >&2
+        exit 1
+    }
+    sh -n "$STAGE$menu_pipe" || {
+        echo "desktop: o gerador do menu de aplicativos nao e shell valido" >&2
+        exit 1
+    }
+    LANG=pt_BR.UTF-8 sh "$STAGE$menu_pipe" > ./menu-aplicativos.xml 2>./menu-erro || {
+        echo "desktop: o gerador do menu de aplicativos falhou:" >&2
+        cat ./menu-erro >&2
+        exit 1
+    }
+    [ "$(head -1 ./menu-aplicativos.xml)" = "<openbox_pipe_menu>" ] &&
+        [ "$(tail -1 ./menu-aplicativos.xml)" = "</openbox_pipe_menu>" ] || {
+        echo "desktop: a saida do menu de aplicativos nao esta dentro de" \
+             "<openbox_pipe_menu>; o labwc descarta o submenu inteiro" >&2
+        head -3 ./menu-aplicativos.xml >&2
+        exit 1
+    }
+    # Um item por linha e ACAO por item: foi a ordenacao linha a linha que
+    # embaralhou os itens uns dentro dos outros na primeira versao, e o
+    # sintoma era XML que ainda abria e fechava direito.
+    menu_itens=$(grep -c '<item label=' ./menu-aplicativos.xml || true)
+    menu_acoes=$(grep -c '<action name="Execute"' ./menu-aplicativos.xml || true)
+    [ "$menu_itens" -ge 1 ] && [ "$menu_itens" = "$menu_acoes" ] || {
+        echo "desktop: o menu de aplicativos saiu com $menu_itens item(ns) e" \
+             "$menu_acoes acao(oes); a ordenacao embaralhou os registros" >&2
+        exit 1
+    }
+    rm -f ./menu-aplicativos.xml ./menu-erro
+    unset menu_pipe menu_itens menu_acoes
 
     # --- guarda do lancador -------------------------------------------------
     # O proprio fuzzel valida a config, e e ele quem vai le-la: --check-config
