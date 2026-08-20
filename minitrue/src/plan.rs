@@ -8235,6 +8235,49 @@ fn read_record_payload(record: &Path, name: &str) -> Result<Vec<u8>> {
 /// Verifica vínculos históricos opcionais de v3 e o fechamento obrigatório de
 /// v4. V3 permanece legível/migrável, mas só v4 declara ação, payload e ABI
 /// factuais junto do lock+slice em uma única troca de `meta`.
+/// PLAN_LOCKs verificados, com o PARSE memoizado por hash — fatias 2 e 3 do
+/// #74.
+///
+/// O que se repete a cada chamada, de propósito: a leitura endereçada por
+/// conteúdo, que inspeciona o namespace inteiro (é ela que reprova um
+/// hard-link estranho em plan-locks — há teste cobrando isso), e o sha256
+/// dos bytes contra o nome. O que NÃO precisa se repetir é o parse
+/// canônico: dez mil linhas validadas campo a campo, que o rectify refazia
+/// ~190 vezes para o MESMO lock — uma por keep no resolve e outra na
+/// religação. Medido num rectify no-op de host: 132s + 154s, as duas
+/// maiores fatias da cauda depois da ABI. Bytes com o mesmo hash parseiam
+/// para o mesmo fato; a chave do memo É o hash já conferido dos bytes lidos
+/// AGORA, então higiene e conteúdo continuam medidos em toda chamada.
+fn verified_lock_by_hash(ctx: &Ctx, lock_sha256: &str) -> Result<std::sync::Arc<VerifiedPlan>> {
+    use std::sync::{Arc, Mutex, OnceLock};
+    static PARSES: OnceLock<Mutex<HashMap<String, Arc<VerifiedPlan>>>> = OnceLock::new();
+    let lock_directory = ctx.root.join("var/lib/minitrue/plan-locks");
+    let lock =
+        read_content_addressed(&lock_directory, &format!("{lock_sha256}.lock"), "PLAN_LOCK")?;
+    if sha256(&lock) != lock_sha256 {
+        bail!("PLAN_LOCK referenciado não corresponde ao próprio hash");
+    }
+    let parses = PARSES.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(hit) = parses
+        .lock()
+        .expect("memo de parses envenenado")
+        .get(lock_sha256)
+        .cloned()
+    {
+        return Ok(hit);
+    }
+    let verified = verify_canonical(&lock)?;
+    if verified.lock_sha256 != lock_sha256 {
+        bail!("parser do PLAN_LOCK divergiu do hash do record");
+    }
+    let shared = Arc::new(verified);
+    parses
+        .lock()
+        .expect("memo de parses envenenado")
+        .insert(lock_sha256.to_string(), shared.clone());
+    Ok(shared)
+}
+
 pub(crate) fn verify_record_binding(
     ctx: &Ctx,
     record: &Path,
@@ -8292,16 +8335,7 @@ pub(crate) fn verify_record_binding(
         bail!("record vinculado não corresponde ao próprio NAME");
     }
 
-    let lock_directory = ctx.root.join("var/lib/minitrue/plan-locks");
-    let lock =
-        read_content_addressed(&lock_directory, &format!("{lock_sha256}.lock"), "PLAN_LOCK")?;
-    if sha256(&lock) != lock_sha256 {
-        bail!("PLAN_LOCK referenciado não corresponde ao próprio hash");
-    }
-    let verified = verify_canonical(&lock)?;
-    if verified.lock_sha256 != lock_sha256 {
-        bail!("parser do PLAN_LOCK divergiu do hash do record");
-    }
+    let verified = verified_lock_by_hash(ctx, lock_sha256)?;
     let node = verified
         .nodes
         .get(package)
