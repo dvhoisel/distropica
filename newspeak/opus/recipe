@@ -1,0 +1,23 @@
+NAME=opus
+VERSION=1.5.2
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="gcc-pass2 binutils-glibc make busybox gawk"
+ABOUT="O codec de áudio Opus — e é ELE que o YouTube usa hoje na trilha de áudio do WebM. Padronizado pela IETF na RFC 6716, com licença BSD e a promessa de patentes irrevogável da Xiph, Mozilla, Broadcom e Microsoft: é o codec moderno que cabe numa distro que recusa a conversa de patente. Sem as ferramentas de linha de comando (opusenc, opusdec) e sem os testes: quem consome a biblioteca é o plugin opus do gst-plugins-base, em runtime. -Ddeep-plc e afins ficam no default do upstream; ligar a extensão neural custaria peso de modelo e CPU num sistema que renderiza tudo por software."
+LICENSE="BSD-3-Clause"
+SRC="https://downloads.xiph.org/releases/opus/opus-$VERSION.tar.gz"
+SHA256="65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    ./configure --prefix=/usr --disable-static --disable-doc --disable-extra-programs
+    make -j"$JOBS"
+    make DESTDIR="$STAGE" install
+    [ -e "$STAGE/usr/lib/libopus.so" ] || {
+        echo "opus: a biblioteca não foi produzida" >&2
+        exit 1
+    }
+    rm -rf "$STAGE/usr/share/doc"
+    find "$STAGE" -type d -empty -delete
+}

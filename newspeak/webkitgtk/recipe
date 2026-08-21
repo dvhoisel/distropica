@@ -13,7 +13,7 @@ TOOLCHAIN=native
 # libgpg-error (por baixo do libgcrypt) e libgbm (da mesa, pelo caminho de
 # buffer gráfico). Todas chegavam transitivamente e por isso a receita parecia
 # completa — 17 erros de audit depois de sete horas de C++.
-DEPS="glibc gcc-pass2 glib gtk4 cairo pango harfbuzz icu libsoup libxml2 libxslt sqlite3 libjpeg-turbo libpng libwebp lcms2 libgcrypt libtasn1 libepoxy zlib at-spi2-core fontconfig freetype wayland libseccomp bubblewrap xdg-dbus-proxy libsecret libdrm gdk-pixbuf graphene expat libgpg-error mesa"
+DEPS="glibc gcc-pass2 glib gtk4 cairo pango harfbuzz icu libsoup libxml2 libxslt sqlite3 libjpeg-turbo libpng libwebp lcms2 libgcrypt libtasn1 libepoxy zlib at-spi2-core fontconfig freetype wayland libseccomp bubblewrap xdg-dbus-proxy libsecret libdrm gdk-pixbuf graphene expat libgpg-error mesa gstreamer gst-plugins-base gst-plugins-good"
 # xorgproto: quem roda pkg-config em cairo (ou em x11/xext/xrender) precisa dos
 # .pc dos PROTOCOLOS, e eles são do xorgproto. A cadeia é indireta e por isso
 # passava despercebida: cairo.pc traz `Requires.private: ... x11, xext, xrender`,
@@ -22,7 +22,7 @@ DEPS="glibc gcc-pass2 glib gtk4 cairo pango harfbuzz icu libsoup libxml2 libxslt
 # cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
 # subprojeto. Conferido nos .pc instalados, não suposto.
 BUILD_DEPS="make gcc-pass2 binutils-glibc cmake ninja pkgconf busybox python-glibc ruby gperf gettext perl wayland-protocols"
-ABOUT="O MOTOR DE NAVEGACAO, e o maior build desta arvore — C++ na escala de horas. E a variante GTK4 da API, webkitgtk-6.0, que o Epiphany exige e que e o unico caminho para um navegador maduro sem X11 duro na interface. SEM LLVM, e isso nao e detalhe: o JIT do JavaScriptCore usa o backend B3 proprio desde 2016, entao nada de clang nem de libLLVM — a mesma recusa escrita na receita da Mesa continua de pe. Renderiza por SOFTWARE: desde a 2.46 o WebKit rasteriza com Skia e tem caminho de CPU real, que e o que casa com o pixman e a Mesa softpipe daqui. SEM VIDEO E SEM AUDIO, por decisao declarada: ENABLE_VIDEO, ENABLE_WEB_AUDIO, ENABLE_WEB_CODECS e ENABLE_SPEECH_SYNTHESIS desligados, o que pelo GStreamerDependencies.cmake desliga USE_GSTREAMER inteiro e mantem a arvore sem um unico decodificador de midia. O preco e o YouTube nao tocar, e esta escrito aqui em vez de virar surpresa. O CONFINAMENTO fica LIGADO: cada processo que interpreta HTML de origem desconhecida roda dentro de um bubblewrap com syscalls filtradas pela libseccomp e o D-Bus atras do xdg-dbus-proxy; desligar compilaria e regrediria seguranca em relacao ao que o Firefox ja entregava. Sem XWayland e sem alvo X11 — o ENABLE_X11_TARGET exigiria um GTK com backend X11 e traria as bibliotecas cliente de volta pela porta do navegador. Sem introspection, sem documentacao, sem journald, sem MiniBrowser e sem corretor ortografico, que exigiria enchant e dicionarios."
+ABOUT="O MOTOR DE NAVEGACAO, e o maior build desta arvore — C++ na escala de horas. E a variante GTK4 da API, webkitgtk-6.0, que o Epiphany exige e que e o unico caminho para um navegador maduro sem X11 duro na interface. SEM LLVM, e isso nao e detalhe: o JIT do JavaScriptCore usa o backend B3 proprio desde 2016, entao nada de clang nem de libLLVM — a mesma recusa escrita na receita da Mesa continua de pe. Renderiza por SOFTWARE: desde a 2.46 o WebKit rasteriza com Skia e tem caminho de CPU real, que e o que casa com o pixman e a Mesa softpipe daqui. COM VIDEO E AUDIO desde a 0.14, e a posicao anterior era o contrario: ate a 0.13 esta receita desligava ENABLE_VIDEO, ENABLE_WEB_AUDIO e ENABLE_WEB_CODECS, o que pelo GStreamerDependencies.cmake desligava USE_GSTREAMER inteiro e deixava a arvore sem um unico decodificador — 'o preco e o YouTube nao tocar', dizia aqui. O preco foi cobrado e a decisao mudou. O que entrou foi a pilha LIVRE e so ela: gst-plugins-base pelo encanamento e pelo audio da Xiph, gst-plugins-good pelo matroskademux e pelo vpxdec, que sao o WebM e o VP9. H.264 e AAC continuam de fora, porque moram no 'bad' e no 'ugly' e trazem a conversa de patente que o LICENSING.md nao quer — uma pagina que so ofereca MP4/H.264 segue sem tocar, e isso continua sendo posicao. O ENABLE_MEDIA_SOURCE vem junto e ligado por default do proprio port (GStreamerDefinitions.cmake), que e o que faz streaming adaptativo funcionar. USE_GSTREAMER_GL fica OFF: a arvore compoe por software. ENABLE_SPEECH_SYNTHESIS segue desligado, que exigiria flite ou spiel. O CONFINAMENTO fica LIGADO: cada processo que interpreta HTML de origem desconhecida roda dentro de um bubblewrap com syscalls filtradas pela libseccomp e o D-Bus atras do xdg-dbus-proxy; desligar compilaria e regrediria seguranca em relacao ao que o Firefox ja entregava. Sem XWayland e sem alvo X11 — o ENABLE_X11_TARGET exigiria um GTK com backend X11 e traria as bibliotecas cliente de volta pela porta do navegador. Sem introspection, sem documentacao, sem journald, sem MiniBrowser e sem corretor ortografico, que exigiria enchant e dicionarios."
 LICENSE=LGPL-2.1-or-later
 SRC="https://webkitgtk.org/releases/webkitgtk-$VERSION.tar.xz"
 SHA256="8a531a9abd2215936e8a8a914c077b586c0228b31d652f205286a8ec90f3364b"
@@ -91,13 +91,16 @@ build() {
         -DUSE_GTK4=ON \
         -DENABLE_WAYLAND_TARGET=ON \
         -DENABLE_X11_TARGET=OFF \
-        -DENABLE_VIDEO=OFF \
-        -DENABLE_WEB_AUDIO=OFF \
-        -DENABLE_WEB_CODECS=OFF \
+        -DENABLE_VIDEO=ON \
+        -DENABLE_WEB_AUDIO=ON \
+        -DENABLE_WEB_CODECS=ON \
         -DENABLE_SPEECH_SYNTHESIS=OFF \
         -DENABLE_WEB_RTC=OFF \
         -DENABLE_GAMEPAD=OFF \
-        -DUSE_GSTREAMER=OFF \
+        -DUSE_GSTREAMER=ON \
+        -DUSE_GSTREAMER_GL=OFF \
+        -DUSE_GSTREAMER_MPEGTS=OFF \
+        -DUSE_GSTREAMER_WEBRTC=OFF \
         -DENABLE_BUBBLEWRAP_SANDBOX=ON \
         -DUSE_LIBSECRET=ON \
         -DENABLE_INTROSPECTION=OFF \
@@ -151,13 +154,32 @@ build() {
         echo "webkitgtk: libwebkitgtk-6.0.so nao foi produzida" >&2
         exit 1
     }
-    for lib in libgstreamer libX11 libxcb; do
+    for lib in libX11 libxcb; do
         if readelf -d "$SO" | grep -q "$lib"; then
             echo "webkitgtk: o motor ligou $lib, contrariando as opcoes" >&2
             readelf -d "$SO" | grep NEEDED >&2
             exit 1
         fi
     done
+    # A GUARDA DO GSTREAMER INVERTEU DE SINAL, e a inversao e a mudanca: ate a
+    # 0.13 ela cobrava a AUSENCIA do libgstreamer, porque a arvore nao tocava
+    # midia por decisao. Agora toca, e o que se cobra e a presenca — de novo
+    # aqui e nao na tela do usuario. Sem estas ligacoes o motor compila e o
+    # <video> fica mudo, que e o silencio que esta receita existe para negar.
+    for lib in libgstreamer libgstapp libgstpbutils libgsttag libgstvideo libgstaudio libgstfft; do
+        readelf -d "$SO" | grep -q "$lib" || {
+            echo "webkitgtk: o motor NAO ligou $lib; o video nao vai tocar" >&2
+            readelf -d "$SO" | grep NEEDED >&2
+            exit 1
+        }
+    done
+    unset lib
+    # GL do GStreamer fora: a arvore compoe por software, e o caminho GL
+    # exigiria EGL/GLES que o wlroots e a Mesa daqui nao oferecem.
+    if readelf -d "$SO" | grep -q 'libgstgl'; then
+        echo "webkitgtk: ligou o GStreamer GL, que esta arvore nao tem" >&2
+        exit 1
+    fi
     # O confinamento e o outro compromisso: sem os processos auxiliares no
     # lugar, o navegador nao sobe.
     [ -d "$STAGE/usr/libexec/webkitgtk-6.0" ] || {

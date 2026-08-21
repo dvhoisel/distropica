@@ -296,9 +296,13 @@ partir de nada além de binários upstream — foi **demonstrada**:
   Firefox foi de um pacote por um: medido, tirar o Firefox da closure removia
   exatamente ele mesmo, porque tudo o que ele puxava é compartilhado com a
   pilha gráfica. O que muda de verdade é a natureza do que fica — C e C++
-  auditáveis por `NEEDED`, em vez de um binário upstream opaco. **Sem vídeo**,
-  herdado do WebKit construído sem decodificador nenhum: é posição declarada,
-  não surpresa. O terminal é o **foot**, cliente Wayland nativo em C, sem
+  auditáveis por `NEEDED`, em vez de um binário upstream opaco. **Vídeo, só o
+  livre**: o WebKit é construído com GStreamer e a pilha entra até o
+  `gst-plugins-good` — WebM, VP9, Opus e Vorbis tocam, com Media Source
+  ligado, que é o que o streaming adaptativo exige. O `bad` e o `ugly` ficam
+  de fora, e com eles H.264 e AAC: uma página que só ofereça MP4/H.264
+  continua muda, e isso é posição declarada, não surpresa. O terminal é o
+  **foot**, cliente Wayland nativo em C, sem
   toolkit — desenha direto em superfície pixman com os glifos que o fcft
   rasteriza, e sua closure inteira são três receitas pequenas.
 

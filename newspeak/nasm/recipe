@@ -1,0 +1,23 @@
+NAME=nasm
+VERSION=2.16.03
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="gcc-pass2 binutils-glibc make busybox perl gawk"
+ABOUT="O montador x86, e ele existe aqui por UMA razão medida: o libvpx recusa compilar a decodificação VP8/VP9 com SIMD sem yasm ou nasm, e sem SIMD o VP9 vira C escalar. Numa árvore que já compõe a tela por software, decodificar vídeo em C escalar não é lentidão aceitável — é vídeo que não toca. O nasm é ferramenta de BUILD e não payload de sessão: quem o consome é o libvpx, dentro da view, e nada em runtime depende dele. O perl entra em BUILD_DEPS porque os geradores de tabela de instrução do nasm são scripts perl, e o configure os roda."
+LICENSE="BSD-2-Clause"
+SRC="https://www.nasm.us/pub/nasm/releasebuilds/$VERSION/nasm-$VERSION.tar.xz"
+SHA256="1412a1c760bbd05db026b6c0d1657affd6631cd0a63cddb6f73cc6d4aa616148"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    ./configure --prefix=/usr
+    make -j"$JOBS"
+    make DESTDIR="$STAGE" install
+    [ -x "$STAGE/usr/bin/nasm" ] || {
+        echo "nasm: o montador não foi produzido" >&2
+        exit 1
+    }
+    rm -rf "$STAGE/usr/share/man" "$STAGE/usr/share/info"
+    find "$STAGE" -type d -empty -delete
+}

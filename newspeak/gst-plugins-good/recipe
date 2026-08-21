@@ -1,0 +1,108 @@
+NAME=gst-plugins-good
+VERSION=1.28.6
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib gstreamer gst-plugins-base orc libvpx zlib bzip2"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc nasm"
+ABOUT="OS DECODIFICADORES, e é este pacote que faz o <video> tocar. O nome não é marketing do upstream: 'good' é o conjunto cuja licença é LGPL e cujo código o projeto considera de qualidade — e é justamente a fronteira que esta distro queria. Aqui estão o matroskademux, que abre o WebM, e o vpxdec, que decodifica VP8 e VP9; com o opusdec e o vorbisdec que vêm do base, isso é a pilha inteira do vídeo livre da web, YouTube moderno incluído. O que NÃO está aqui é o que esta árvore não quis: H.264 e AAC moram no 'bad' e no 'ugly', com a conversa de patente que o LICENSING.md não quer ter — uma página que só ofereça MP4/H.264 vai continuar sem tocar, e isso é posição e não defeito. O isomp4 entra mesmo assim porque demuxar não é decodificar: um .mp4 com trilha AV1 ou Opus abre; um com H.264 não. Fora ficam todos os plugins de saída e de captura que esta sessão não usa — pulse, jack, oss, v4l2, ximagesrc, gtk3, qt —, além dos codecs proprietários que exigiriam lame, mpg123 ou twolame. Todas as opções são EXPLÍCITAS: 'auto' faria o payload variar com o que estivesse instalado na raiz."
+LICENSE="LGPL-2.1-or-later"
+SRC="https://gstreamer.freedesktop.org/src/gst-plugins-good/gst-plugins-good-$VERSION.tar.xz"
+SHA256="b0c620a4b18b6ee931b4c43bbf1760d308666dc37f730a7e7f1ad327e59ce2df"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        --wrap-mode=nodownload \
+        -Dorc=enabled \
+        -Dasm=enabled \
+        -Dvpx=enabled \
+        -Dmatroska=enabled \
+        -Disomp4=enabled \
+        -Daudioparsers=enabled \
+        -Dautodetect=enabled \
+        -Daudiofx=enabled \
+        -Dvideofilter=enabled \
+        -Ddeinterlace=enabled \
+        -Dvideocrop=enabled \
+        -Dinterleave=enabled \
+        -Dequalizer=enabled \
+        -Dreplaygain=enabled \
+        -Dapetag=enabled \
+        -Did3demux=enabled \
+        -Dicydemux=enabled \
+        -Drtp=enabled \
+        -Drtpmanager=enabled \
+        -Dwavparse=enabled \
+        -Dwavenc=enabled \
+        -Dflv=enabled \
+        -Davi=enabled \
+        -Dbz2=enabled \
+        -Dpulse=disabled \
+        -Djack=disabled \
+        -Doss=disabled \
+        -Doss4=disabled \
+        -Dv4l2=disabled \
+        -Dximagesrc=disabled \
+        -Dgtk3=disabled \
+        -Dqt5=disabled \
+        -Dqt6=disabled \
+        -Dcairo=disabled \
+        -Dgdk-pixbuf=disabled \
+        -Djpeg=disabled \
+        -Dpng=disabled \
+        -Dflac=disabled \
+        -Dspeex=disabled \
+        -Dtaglib=disabled \
+        -Dwavpack=disabled \
+        -Dsoup=disabled \
+        -Ddv=disabled \
+        -Ddv1394=disabled \
+        -Dlame=disabled \
+        -Dmpg123=disabled \
+        -Dtwolame=disabled \
+        -Daalib=disabled \
+        -Dlibcaca=disabled \
+        -Dshout2=disabled \
+        -Damrnb=disabled \
+        -Damrwbdec=disabled \
+        -Dadaptivedemux2=disabled \
+        -Dexamples=disabled \
+        -Dtests=disabled \
+        -Dnls=disabled \
+        -Ddoc=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    # A PILHA DO WEBM, item por item. Sem qualquer um deles o vídeo não toca
+    # e o sintoma é uma página em branco, não um erro — que é exatamente o
+    # tipo de silêncio que esta árvore recusa.
+    for plugin in matroska vpx isomp4 audioparsers autodetect; do
+        [ -e "$STAGE/usr/lib/gstreamer-1.0/libgst${plugin}.so" ] || {
+            echo "gst-plugins-good: o plugin $plugin não foi produzido" >&2
+            ls "$STAGE/usr/lib/gstreamer-1.0" >&2
+            exit 1
+        }
+    done
+    unset plugin
+    # O vpxdec tem de estar LIGADO na libvpx: o plugin compila e carrega sem
+    # ela, e aí o VP9 simplesmente não é oferecido ao pipeline.
+    readelf -d "$STAGE/usr/lib/gstreamer-1.0/libgstvpx.so" | grep -q 'libvpx' || {
+        echo "gst-plugins-good: o plugin vpx não ligou a libvpx" >&2
+        readelf -d "$STAGE/usr/lib/gstreamer-1.0/libgstvpx.so" | grep NEEDED >&2
+        exit 1
+    }
+    # Saída de áudio e captura que esta sessão não usa não podem voltar por
+    # uma opção 'auto' esquecida.
+    for proibido in pulseaudio jack oss4 video4linux2 ximagesrc; do
+        [ ! -e "$STAGE/usr/lib/gstreamer-1.0/libgst${proibido}.so" ] || {
+            echo "gst-plugins-good: $proibido entrou e deveria estar fora" >&2
+            exit 1
+        }
+    done
+    unset proibido
+    find "$STAGE" -type d -empty -delete
+}

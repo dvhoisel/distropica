@@ -1,0 +1,74 @@
+NAME=gst-plugins-base
+VERSION=1.28.6
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib gstreamer orc opus libogg libvorbis alsa-lib zlib"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc"
+ABOUT="A camada de que o WebKit não abre mão para tocar mídia: o GStreamerChecks.cmake dele exige as bibliotecas app, pbutils, tag e video para ENABLE_VIDEO, e audio e fft para ENABLE_WEB_AUDIO — todas moram AQUI, e nenhuma delas é decodificador. Este pacote é o encanamento: negociação de formato, conversão de amostra e de espaço de cor, escala, o appsrc por onde o WebKit injeta os bytes que a rede dele baixou, e o alsasink por onde o áudio sai. Os codecs de verdade estão no gst-plugins-good, e o que entra de codec por aqui é o áudio livre da Xiph: opus, vorbis e o contêiner ogg — o Opus porque é ele que o YouTube usa na trilha de áudio do WebM. O orc entra porque audioconvert, videoconvert e videoscale são laços que rodam em cada quadro, e esta árvore compõe a tela por software. Fica FORA: gl e egl inteiros (a árvore não tem GL acelerado e o WebKit é construído sem USE_GSTREAMER_GL), x11/xvideo/xshm pelo mesmo motivo dos outros pacotes gráficos, theora e tremor por obsolescência, cdparanoia, libvisual e pango, que resolvem problemas que ninguém aqui tem. Todas as opções são EXPLÍCITAS e não 'auto': a mesma receita tem de gerar o mesmo payload em qualquer raiz."
+LICENSE="LGPL-2.1-or-later"
+SRC="https://gstreamer.freedesktop.org/src/gst-plugins-base/gst-plugins-base-$VERSION.tar.xz"
+SHA256="0ba699c7c6c66f4ba640be78cb38a24715add9683f3e3a199f5369dc5a4f04ac"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        --wrap-mode=nodownload \
+        -Dorc=enabled \
+        -Dalsa=enabled \
+        -Dopus=enabled \
+        -Dogg=enabled \
+        -Dvorbis=enabled \
+        -Dgl=disabled \
+        -Dx11=disabled \
+        -Dxshm=disabled \
+        -Dxvideo=disabled \
+        -Dxi=disabled \
+        -Dtheora=disabled \
+        -Dtremor=disabled \
+        -Dcdparanoia=disabled \
+        -Dlibvisual=disabled \
+        -Dpango=disabled \
+        -Dintrospection=disabled \
+        -Dexamples=disabled \
+        -Dtests=disabled \
+        -Dtools=disabled \
+        -Dnls=disabled \
+        -Ddoc=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    # AS BIBLIOTECAS QUE O WEBKIT COBRA, uma a uma. Sem elas o cmake dele
+    # aborta com "Video playback requires the following GStreamer libraries",
+    # e é melhor descobrir aqui do que três horas de C++ adiante.
+    for lib in app pbutils tag video audio fft; do
+        [ -e "$STAGE/usr/lib/libgst${lib}-1.0.so" ] || {
+            echo "gst-plugins-base: libgst$lib não foi produzida; o WebKit a exige" >&2
+            ls "$STAGE/usr/lib" >&2
+            exit 1
+        }
+    done
+    unset lib
+    # E os plugins de runtime que fazem a mídia andar.
+    # coreelements NAO entra nesta lista: ele e do NUCLEO (o pacote
+    # gstreamer, que o manifesto dele reivindica), e cobra-lo aqui reprovava
+    # um base perfeito — medido.
+    for plugin in typefindfunctions playback audioconvert audioresample videoconvertscale opus vorbis ogg alsa app; do
+        [ -e "$STAGE/usr/lib/gstreamer-1.0/libgst${plugin}.so" ] || {
+            echo "gst-plugins-base: o plugin $plugin não foi produzido" >&2
+            ls "$STAGE/usr/lib/gstreamer-1.0" >&2
+            exit 1
+        }
+    done
+    unset plugin
+    # X11 e GL ficam fora de verdade: uma opção 'auto' esquecida os traria de
+    # volta conforme o que estivesse instalado na raiz.
+    if readelf -d "$STAGE/usr/lib/libgstvideo-1.0.so" | grep -qE 'libX11|libEGL|libGL'; then
+        echo "gst-plugins-base: ligou X11 ou GL, que deveriam estar fora" >&2
+        exit 1
+    fi
+    find "$STAGE" -type d -empty -delete
+}

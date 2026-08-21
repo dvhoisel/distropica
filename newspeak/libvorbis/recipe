@@ -1,0 +1,26 @@
+NAME=libvorbis
+VERSION=1.3.7
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libogg"
+BUILD_DEPS="gcc-pass2 binutils-glibc make busybox gawk"
+ABOUT="O codec de áudio Vorbis da Xiph. É a geração anterior ao Opus e continua em uso: WebM antigo e boa parte do acervo em .ogg da web ainda são Vorbis, e sem o decodificador a página toca silêncio em vez de dizer que não sabe. Livre de patentes por construção — foi essa a razão de ele existir — e por isso cabe nesta árvore sem a conversa que o MP3 e o AAC exigiriam."
+LICENSE="BSD-3-Clause"
+SRC="https://downloads.xiph.org/releases/vorbis/libvorbis-$VERSION.tar.xz"
+SHA256="b33cc4934322bcbf6efcbacf49e3ca01aadbea4114ec9589d1b1e9d20f72954b"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    ./configure --prefix=/usr --disable-static --disable-docs
+    make -j"$JOBS"
+    make DESTDIR="$STAGE" install
+    for lib in libvorbis libvorbisenc libvorbisfile; do
+        [ -e "$STAGE/usr/lib/$lib.so" ] || {
+            echo "libvorbis: $lib não foi produzida" >&2
+            exit 1
+        }
+    done
+    unset lib
+    rm -rf "$STAGE/usr/share/doc"
+    find "$STAGE" -type d -empty -delete
+}

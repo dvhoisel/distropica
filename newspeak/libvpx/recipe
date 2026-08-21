@@ -1,0 +1,60 @@
+NAME=libvpx
+VERSION=1.15.2
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2"
+BUILD_DEPS="gcc-pass2 binutils-glibc make busybox nasm gawk perl"
+ABOUT="Os codecs VP8 e VP9 do WebM Project. O gcc-pass2 está em DEPS porque parte do codificador VP9 é C++ e o objeto acaba ligando libstdc++ e libgcc_s — a auditoria de ABI cobrou, e cobrou certo: a receita dizia 'só a libc' e o binário dizia outra coisa, e é o VP9 que carrega a imagem do YouTube moderno dentro do contêiner WebM. Licença BSD com concessão de patente explícita do Google — a razão de o VP9 caber nesta árvore onde H.264 e AAC não cabem sem a conversa que esta distro não quis ter. Compilado com o SIMD ligado, que é por isso que o nasm entra em BUILD_DEPS: sem as rotinas em assembly a decodificação vira C escalar, e num sistema que já compõe a tela por software isso não é lentidão, é vídeo que não toca. Sem exemplos, sem docs e sem os testes unitários, que baixariam vetores de teste da rede. O codificador fica: ele é pequeno perto do decodificador, e é o mesmo binário."
+LICENSE="BSD-3-Clause"
+SRC="https://github.com/webmproject/libvpx/archive/refs/tags/v$VERSION.tar.gz"
+SHA256="26fcd3db88045dee380e581862a6ef106f49b74b6396ee95c2993a260b4636aa"
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    # A SONDAGEM PEDE UM GNU-ISMO QUE O USO NÃO PRECISA. O configure aborta com
+    # "diff missing" quando `diff --version` falha, e o diff do BusyBox — que é
+    # o desta árvore — não responde a essa opção. Mas o único uso REAL de diff
+    # em todo o build é comparar dois arquivos (build/make/version.sh:77), e
+    # isso o BusyBox faz: medido com grep sobre configure, configure.sh, os
+    # Makefiles e libs.mk. Trazer o diffutils inteiro para responder a uma
+    # sondagem seria pagar um pacote por uma pergunta.
+    #
+    # Conferência dos dois lados, como nos outros cortes desta árvore: se o
+    # upstream mudar a linha, o build para em vez de deixar um sed morto.
+    grep -qx 'if ! diff --version >/dev/null; then' configure || {
+        echo "libvpx: o configure mudou; a sondagem de diff precisa ser revista" >&2
+        exit 1
+    }
+    sed -i 's|^if ! diff --version >/dev/null; then$|if false; then|' configure
+
+    # O configure do libvpx não é autotools: é o script próprio do projeto, e
+    # ele constrói FORA da árvore de fonte por padrão de uso. --enable-pic é
+    # requisito de biblioteca compartilhada em x86_64.
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --enable-shared \
+        --disable-static \
+        --enable-pic \
+        --enable-vp8 \
+        --enable-vp9 \
+        --disable-examples \
+        --disable-tools \
+        --disable-docs \
+        --disable-unit-tests \
+        --as=nasm
+    make -j"$JOBS"
+    make DESTDIR="$STAGE" install
+    [ -e "$STAGE/usr/lib/libvpx.so" ] || {
+        echo "libvpx: a biblioteca compartilhada não foi produzida" >&2
+        ls "$STAGE/usr/lib" >&2
+        exit 1
+    }
+    # A prova de que o SIMD entrou: sem ele o objeto não tem as rotinas
+    # vetoriais, e o sintoma seria vídeo travado em vez de erro de build.
+    readelf -sW "$STAGE/usr/lib/libvpx.so" | grep -q 'vpx_.*_sse2\|_avx2' || {
+        echo "libvpx: nenhuma rotina SIMD no binário; o nasm não foi usado" >&2
+        exit 1
+    }
+    find "$STAGE" -type d -empty -delete
+}
