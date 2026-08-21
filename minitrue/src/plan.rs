@@ -4506,23 +4506,46 @@ impl ResolvedPlan {
                         } else {
                             None
                         };
-                        if let Some(facts) = sealed_facts {
+                        // O SELO SUBSTITUI POR INTEIRO OU NAO VALE. Cada linha
+                        // de artefato deste pacote que ainda esta `pending`
+                        // precisa achar o seu fato no lock anterior; se uma
+                        // sobrar, o pacote inteiro volta ao caminho medido.
+                        // Sem esta cobranca o selo deixava rastro — medido
+                        // duas vezes, "proveniencia material ainda tem input
+                        // pending" no binutils-glibc e depois no binutils —,
+                        // e o cheiro era sempre o mesmo: substituir metade de
+                        // uma prova nao e prova nenhuma.
+                        let usaveis: Vec<_> = sealed_facts
+                            .into_iter()
+                            .flatten()
+                            .filter(|fact| canonical_sha256(&fact.transport_sha256))
+                            .collect();
+                        let cobre_tudo = !usaveis.is_empty()
+                            && self
+                                .artifacts
+                                .iter()
+                                .filter(|artifact| {
+                                    artifact.package == *name
+                                        && artifact.transport_sha256 == "pending"
+                                })
+                                .all(|artifact| {
+                                    usaveis.iter().any(|fact| {
+                                        fact.kind == artifact.origin_kind
+                                            && fact.identifier == artifact.identifier
+                                    })
+                                });
+                        if cobre_tudo {
                             sealed_material.push(name.clone());
-                            observed_inputs.extend(
-                                facts
-                                    .into_iter()
-                                    .filter(|fact| canonical_sha256(&fact.transport_sha256))
-                                    .map(|fact| {
-                                        (
-                                            name.clone(),
-                                            crate::fetch::AuthenticatedInputFact {
-                                                origin_kind: fact.kind,
-                                                identifier: fact.identifier,
-                                                sha256: fact.transport_sha256,
-                                            },
-                                        )
-                                    }),
-                            );
+                            observed_inputs.extend(usaveis.into_iter().map(|fact| {
+                                (
+                                    name.clone(),
+                                    crate::fetch::AuthenticatedInputFact {
+                                        origin_kind: fact.kind,
+                                        identifier: fact.identifier,
+                                        sha256: fact.transport_sha256,
+                                    },
+                                )
+                            }));
                         } else {
                             observed_inputs.extend(
                                 crate::fetch::ensure_artifacts_authenticated(&effective, recipe)?

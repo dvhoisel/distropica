@@ -52,6 +52,31 @@ build() {
     rm -rf "$STAGE/usr/share/bash-completion" "$STAGE/usr/share/zsh" \
            "$STAGE/usr/share/fish"
 
+    # O GABARITO DO UPSTREAM VIRA DOCUMENTAÇÃO, e não configuração viva. O
+    # meson dele instala fuzzel.ini em $sysconfdir/xdg/fuzzel (meson.build:260),
+    # e nesta árvore /etc de pacote é materializado a partir de
+    # /usr/share/factory/etc — de modo que o arquivo passaria a ser propriedade
+    # DESTE pacote. Mas quem escreve /etc/xdg/fuzzel é a receita 'desktop', do
+    # mesmo jeito que escreve o rc.xml do labwc e o config.yml do yambar: o
+    # pacote entrega o programa, a cola entrega a política. Duas receitas
+    # reivindicando o mesmo caminho é doublethink, e foi exatamente assim que o
+    # minitrue recusou — "donos incompatíveis: fuzzel" — quando a config de
+    # sessão entrou. O exemplo continua legível em /usr/share/doc, que é onde o
+    # labwc também deixa os dele.
+    gabarito=$(find "$STAGE" -path '*/xdg/fuzzel/fuzzel.ini' -type f | head -1)
+    [ -n "$gabarito" ] || {
+        echo "fuzzel: o gabarito fuzzel.ini não foi encontrado; o upstream mudou" >&2
+        exit 1
+    }
+    install -d "$STAGE/usr/share/doc/fuzzel"
+    mv "$gabarito" "$STAGE/usr/share/doc/fuzzel/fuzzel.ini.exemplo"
+    unset gabarito
+    if find "$STAGE" -path '*/xdg/fuzzel/*' -type f | grep -q .; then
+        echo "fuzzel: ainda há configuração de sessão no payload; ela é da receita desktop" >&2
+        find "$STAGE" -path '*/xdg/fuzzel/*' >&2
+        exit 1
+    fi
+
     # cairo/librsvg fora de verdade, e nada de X11 num cliente Wayland puro.
     if readelf -d "$STAGE/usr/bin/fuzzel" | grep -qE 'libcairo|librsvg|libX11|libxcb'; then
         echo "fuzzel: ligou cairo/librsvg/X11, que deveriam estar fora" >&2
