@@ -168,6 +168,7 @@
          alt="Distrópica — início" width="315" height="84" decoding="async"></a>
       <div class="navlinks">
         <a href="#premissas">Premissas</a>
+        <a href="#diferencas">Diferenças</a>
         <a href="#download">Download</a>
         <a href="https://github.com/dvhoisel/distropica">Código-fonte</a>
       </div>
@@ -179,7 +180,7 @@
         <div class="eyebrow">protótipo instalável · x86_64 · UEFI</div>
         <h1><img src="/distropica-logo-grande-v1.png" alt="Distrópica"
             width="1280" height="341" fetchpriority="high" decoding="async"></h1>
-        <p class="lead">Uma distribuição Linux distópica. Não instala pacotes: <strong>retifica registros</strong>. Binário do mantenedor primeiro; depois, binário da Distrópica; fonte quando ninguém publica um.</p>
+        <p class="lead">Uma distribuição Linux distópica em que <strong>instalar é provar</strong>. Ela não instala pacotes: <strong>retifica registros</strong>. Cada arquivo do sistema tem um dono declarado, cada artefato tem seu hash pinado na receita, e o que o binário de fato exige é conferido contra o que a receita promete — antes de tocar no seu disco.</p>
         <div class="actions">
           <a class="button primary" href="/releases/distropica-0.13-x86_64.iso">Baixar ISO · 1355 MB</a>
           <a class="button" href="/releases/distropica-0.13-corresponding-sources.tar.zst">Fontes correspondentes</a>
@@ -198,6 +199,12 @@
       <div class="wrap">
         <span class="stamp">Ministério da Verdade</span>
         <h2>O sistema é o registro.</h2>
+        <p class="lead">A pergunta que a Distrópica responde não é
+        &ldquo;como instalo software?&rdquo;, e sim <strong>&ldquo;como sei o que está
+        instalado, de onde veio e por que está assim?&rdquo;</strong>. Não há solver
+        nem banco de dados opaco: o estado é o filesystem, e o registro de cada
+        pacote é um texto legível com o hash do que entrou. O gerenciador cabe
+        numa leitura; o sistema inteiro se explica em uma página.</p>
         <div class="grid">
           <article class="card">
             <span class="number">01 / ORIGEM</span>
@@ -213,6 +220,62 @@
             <span class="number">03 / FONTE</span>
             <h3>Compilar como último recurso</h3>
             <p>Quando nem o mantenedor nem um canal confiável publicam binário, a fonte oficial é compilada localmente e sua proveniência fica registrada.</p>
+          </article>
+        </div>
+        <h2 id="diferencas">Onde ela difere.</h2>
+        <p class="lead">Nenhum destes pontos é exclusividade de ideia —
+        são exclusividade de <em>execução</em>: cada um é um portão que recusa,
+        e não um propósito declarado. Tudo abaixo é verificável na própria
+        mídia, sem confiar em nós.</p>
+        <div class="grid">
+          <article class="card">
+            <span class="number">A / ORDEM</span>
+            <h3>O binário do autor vem primeiro</h3>
+            <p>Quase toda distribuição recompila tudo por conta própria, ou
+            compila tudo na sua máquina. Aqui a ordem é declarada e visível
+            pacote a pacote: <strong>binário oficial do mantenedor</strong>,
+            depois binário assinado da Distrópica, e fonte só quando ninguém
+            publica um. Cada registro diz qual dos três aconteceu.</p>
+          </article>
+          <article class="card">
+            <span class="number">B / PROVA</span>
+            <h3>O que o binário pede é conferido</h3>
+            <p>A auditoria lê os ELF com <code>readelf</code> — sem executar
+            nada — e cobra que <em>todo</em> requisito observado tenha provedor
+            declarado. Dependência esquecida vira erro de construção, não uma
+            tela preta meses depois. Foi assim que o VP9 revelou um C++
+            escondido dentro de si.</p>
+          </article>
+          <article class="card">
+            <span class="number">C / RECUSA</span>
+            <h3>Recusar em vez de degradar</h3>
+            <p>Dois pacotes reivindicando o mesmo caminho é <em>doublethink</em>
+            e para a instalação. Artefato que diverge do hash pinado é
+            <em>crimestop</em>. A alternativa comum — avisar e seguir — produz
+            sistemas que ninguém consegue explicar depois.</p>
+          </article>
+          <article class="card">
+            <span class="number">D / MOTIVO</span>
+            <h3>Cada receita explica por quê</h3>
+            <p>As receitas viajam na mídia, e cada uma carrega em prosa a razão
+            de cada escolha, com o custo medido e dito: por que o navegador não
+            tocava vídeo, por que o compositor é este, o que se perde em cada
+            recusa. Ler o sistema é ler a decisão, não adivinhá-la.</p>
+          </article>
+          <article class="card">
+            <span class="number">E / FONTE</span>
+            <h3>Fonte correspondente é portão</h3>
+            <p>Publicar exige que <strong>todo</strong> pacote tenha texto de
+            licença e fonte correspondente conferida por hash — não é anexo de
+            boa vontade, é condição para a release sair. Esta versão só foi ao
+            ar depois de 199 de 199 pacotes passarem.</p>
+          </article>
+          <article class="card">
+            <span class="number">F / PREÇO</span>
+            <h3>O que falta é dito com o preço</h3>
+            <p>Sem systemd, sem X11, sem H.264. Não são omissões: são posições,
+            cada uma escrita com o que custa — uma página só com MP4 continua
+            muda, e está dito antes de você baixar, não depois de instalar.</p>
           </article>
         </div>
       </div>
