@@ -80,14 +80,27 @@ printf '# pacote\tcomponente\tsha256\tprimeira-linha\n' > "$INDICE"
 # Os nomes que carregam licença. Deliberadamente largo: é melhor recolher um
 # LICENSE_1_0.txt do Boost que ninguém esperava do que perder o aviso de um
 # componente que ninguém sabia estar ali.
-PADRAO='(^|/)(LICEN[SC]E|COPYING|NOTICE|COPYRIGHT|uganda)[^/]*$'
+# A alternativa com barra cobre a convenção REUSE, em que a raiz traz um
+# COPYING VAZIO e os textos moram em LICENSES/<SPDX>.txt — o json-glib é o
+# caso medido: COPYING de zero byte e o LGPL inteiro em
+# LICENSES/LGPL-2.1-or-later.txt. Sem ela, um projeto que segue o padrão
+# moderno de licenciamento aparece como se não tivesse licença nenhuma.
+PADRAO='(^|/)(LICEN[SC]E|COPYING|NOTICE|COPYRIGHT|uganda)[^/]*$|(^|/)LICEN[SC]ES/[^/]+$'
 
 # Alguns upstreams (libdrm e outros projetos antigos do X.org) não publicam
 # um COPYING separado: a concessão inteira mora no cabeçalho dos arquivos.
 # Isto é só um fallback, usado quando o tar NÃO tem nenhum nome casado acima.
 # Exigir uma concessão longa evita promover qualquer ocorrência solta de
 # "copyright" a texto de licença.
-PADRAO_CONCESSAO='Permission is hereby granted, free of charge|Redistribution and use in source and binary forms, with or without modification|GNU (LESSER |AFFERO )?GENERAL PUBLIC LICENSE|Mozilla Public License|Apache License, Version [0-9]|ISC License'
+#
+# O cabeçalho padrão da MPL-2.0 é QUEBRADO EM DUAS LINHAS pelo próprio texto
+# canônico da Mozilla — "...the terms of the Mozilla Public" / "License, v.
+# 2.0." —, e grep casa linha a linha: "Mozilla Public License" nunca casa no
+# certdata.txt, que é justamente a fonte correspondente do ca-certificates.
+# Medido: o pacote aparecia SEM EVIDÊNCIA ALGUMA com a concessão bem ali, na
+# quarta linha do arquivo. A frase de uma linha só resolve, e é literal do
+# boilerplate.
+PADRAO_CONCESSAO='Permission is hereby granted, free of charge|Redistribution and use in source and binary forms, with or without modification|GNU (LESSER |AFFERO )?GENERAL PUBLIC LICENSE|Mozilla Public License|This Source Code Form is subject to the terms of the Mozilla|Apache License, Version [0-9]|ISC License'
 
 sem_metadado=
 com_texto=
