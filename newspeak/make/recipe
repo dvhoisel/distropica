@@ -17,7 +17,14 @@ build() {
     tar -xzf "$DL" --strip-components=1
     # pré-E2: sem gettext (musl), e rastreio de dependências pressupõe um make
     # que ainda não existe (SPEC-0004 §3, verificado no spike de 2026-07-19)
-    ./configure --prefix=/usr --disable-nls --disable-dependency-tracking
+    # O AWK É NOMEADO, e não pode ser o gawk. O config.status do autoconf
+    # precisa de awk, e o /usr/bin/awk desta árvore pertence ao gawk desde que
+    # ele superseded o busybox — mas gawk se constrói COM make e binutils, e
+    # declará-lo aqui fecha o ciclo make -> gawk -> binutils -> make, que o
+    # resolvedor recusa (medido). O applet do busybox continua no binário: é
+    # ele que atende, chamado pelo nome do multi-call.
+    ./configure AWK="busybox awk" \
+        --prefix=/usr --disable-nls --disable-dependency-tracking
     ./build.sh
     ./make install DESTDIR="$STAGE"
 }
