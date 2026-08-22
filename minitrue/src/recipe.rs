@@ -120,7 +120,7 @@ pub const BUILD_FLAGS: &[(&str, &str)] = &[("CFLAGS", "-O2 -g0"), ("CXXFLAGS", "
 /// correspondente, para que um payload produzido pelo runner antigo não tenha
 /// a mesma identidade de um produzido pelo novo.
 pub const BUILD_RUNNER_FORMAT: &str = "1";
-pub const BUILD_VIEW_FORMAT: &str = "1";
+pub const BUILD_VIEW_FORMAT: &str = "2";
 pub const BUILD_SYSROOT_FORMAT: &str = "1";
 pub const BUILD_RUNNER_PACKAGE: &str = "busybox";
 /// O acelerador do caminho GCC (#68): cache de compilação montado na view,
@@ -129,14 +129,24 @@ pub const BUILD_RUNNER_PACKAGE: &str = "busybox";
 /// nenhuma: quando o portão abaixo liga, `ccache_build_deps()` o concede como
 /// aresta implícita a todo build nativo, como o runner concede o shell.
 pub const BUILD_CCACHE_PACKAGE: &str = "ccache";
-/// O PORTÃO. Nasce desligado porque ligá-lo muda o ambiente de build de todo
-/// Mundo B — o fingerprint ganha a aresta ccache e o material do runner ganha
-/// as linhas CCACHE_* — e uma mudança dessas não sai avulsa: ela espera o
-/// ponto de reconstrução total já devido (#50), junto com o bump de
-/// BUILD_VIEW_FORMAT. Há um teste que FALHA se alguém ligar isto sem o bump.
-/// A lição que motivou a regra custou horas: uma linha na receita do dbus
-/// invalidou 25 pacotes, e 15 dos 16 reconstruídos saíram bit a bit idênticos.
-pub const BUILD_CCACHE_VIEW: bool = false;
+/// O PORTÃO, ABERTO em 2026-08-22 com o bump de BUILD_VIEW_FORMAT para "2"
+/// que o tripwire exige. Ligá-lo muda o ambiente de build de todo o Mundo B —
+/// o fingerprint ganha a aresta ccache e o material do runner ganha as linhas
+/// CCACHE_* —, e por isso ele nasceu desligado esperando um ponto de
+/// reconstrução total.
+///
+/// O ponto chegou, e chegou pelo custo: uma linha de DEPS no libvpx, que não
+/// muda um byte do binário dele, propagou o fingerprint até o webkitgtk e
+/// recomeçou NOVE HORAS de C++ do zero (#67). A lição anterior era da mesma
+/// família e menor — uma linha no dbus invalidou 25 pacotes, e 15 dos 16
+/// reconstruídos saíram bit a bit idênticos. Enquanto #67 não separar
+/// propagação por interface de propagação por texto, o ccache é o que
+/// transforma essas reconstruções em minutos: o que não mudou de verdade sai
+/// do cache, porque a linha de compilação é a mesma.
+///
+/// O preço de abrir é UMA reconstrução completa, aqui e agora — o mesmo preço
+/// que se pagaria a cada correção trivial daqui em diante.
+pub const BUILD_CCACHE_VIEW: bool = true;
 
 /// Diretórios de executáveis que o bwrap substitui pela view filtrada. A lista
 /// é também serializada por [`build_runner_material`]; executor e identidade
@@ -2246,10 +2256,22 @@ mod tests {
     #[test]
     fn contrato_do_runner_serializa_toda_a_fronteira_versionada() {
         let material = build_runner_material();
+        // Os formatos vêm das CONSTANTES e não de literais: o que este teste
+        // guarda é que todo campo da fronteira versionada seja serializado —
+        // não o valor de cada um, que sobe quando a fronteira muda. Escrito
+        // com literais, ele reprovava o bump legítimo do view format que
+        // acompanhou a abertura do portão do ccache.
         for field in [
-            "BUILD_RUNNER_FORMAT=1",
-            "BUILD_VIEW_FORMAT=1",
-            "BUILD_SYSROOT_FORMAT=1",
+            format!("BUILD_RUNNER_FORMAT={BUILD_RUNNER_FORMAT}"),
+            format!("BUILD_VIEW_FORMAT={BUILD_VIEW_FORMAT}"),
+            format!("BUILD_SYSROOT_FORMAT={BUILD_SYSROOT_FORMAT}"),
+        ] {
+            assert!(
+                material.lines().any(|line| line.starts_with(&field)),
+                "{field}"
+            );
+        }
+        for field in [
             "RUNNER_PACKAGE=busybox",
             "SYSROOT_POLICY=empty+declared-closure+runner-shell+source-inputs",
             "VIEW_TIMESTAMPS=atime+mtime:SOURCE_DATE_EPOCH;ctime:kernel-maintained",
