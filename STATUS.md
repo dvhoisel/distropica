@@ -157,17 +157,22 @@ GSettings validado com `--strict` no build). Tudo fotografado em instalação
 limpa: QEMU/virtio (seis fotos, zero mortes de sessão no serial) e
 VirtualBox/VMSVGA. As seis correções da revisão anterior seguem a bordo.
 
-**Canal publicado sem divulgação** (2026-08-19): `distropica.com.br/canal/oficial/`
-serve o índice **v4** da 0.13, assinado pela chave de produção que as
-instalações pinam — `minitrue rectify gimp` funciona numa 0.13 instalada, e o
-índice legado v2 (que o `TRUST=oficial` recusava) ficou preservado em
-`canal/oficial-0.12/`. As **fontes correspondentes** (bundle de 1,7 GB, 182
-pacotes, amarrado ao índice `5a610251…` e à revisão `1b0f9d8`) estão em
-`fontes/canal-0.13/`, sem link no site. O bundle sai rotulado **diagnóstico**:
-o rótulo de release exige a formalização da raiz produtora (o nível de prova
-de #56, o receipt de #60/#61), e é ela que separa "publicado" de "divulgado".
-O site e a ISO para download continuam anunciando a **0.12**; a divulgação da
-0.13 espera o bundle certificado e a decisão do mantenedor.
+**PUBLICADA** (2026-08-22). `distropica.com.br` anuncia a 0.13: ISO
+`26fdd6d1`, bundle de fontes correspondentes `4ddc9055` (2,4 GB, 199 pacotes
+com texto de licença, `bootstrap/sbom --strict` aprovado), inventário e
+índice de licenças, todos com o sha256 conferido no próprio servidor. O canal
+público serve o **canal-013f** (191 pacotes, com a pilha de mídia livre); o
+013e e o índice legado v2 ficaram preservados em `canal/oficial-013e/` e
+`canal/oficial-0.12/`.
+
+O portão de release cobrou quatro barreiras antes de deixar publicar, e todas
+viraram conserto e não contorno: bundle sem as fontes correspondentes de
+busybox/jq/rust (baixadas do upstream e conferidas contra os hashes que a
+árvore declara), árvore com mudança não commitada, e dois pacotes sem
+evidência de licença que revelaram defeitos do próprio sbom — a convenção
+REUSE (`COPYING` vazio e os textos em `LICENSES/`, no json-glib) e o
+cabeçalho MPL-2.0, que o texto canônico da Mozilla quebra em duas linhas e o
+grep, casando linha a linha, nunca via (ca-certificates).
 
 **Três defeitos, e o padrão entre eles importa mais que cada um.**
 
