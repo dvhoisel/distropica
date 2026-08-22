@@ -133,14 +133,14 @@ prova, não o aceite: a distância entre "a mídia boota" e "a mídia instala" f
 onde moraram os três defeitos desta revisão, e nenhum deles falhava no build.
 
 ```text
-CANAL=182 pacotes Mundo B (canal-013e), CHANNEL_INDEX_FORMAT=4, assinado com a chave de produção
-CANAL_INDEX_SHA256=ff788248a766580d2ab6ad4a9382c7c772bf507f395007460a044ea777b0bc7e
+CANAL=191 pacotes Mundo B (canal-013f), CHANNEL_INDEX_FORMAT=4, assinado com a chave de produção
+CANAL_INDEX_SHA256=3421fbccae4f9d915cb95d196dedfc0477c4dd10185367c2eb79a12559f7f2d4
 POOL=918 MB · CACHE=1248 MB (19 sidecars de assinatura: .minisig, .openpgp-sig,
                              .openpgp-sums, .asc, .sig)
 EFI=target/release-0.13/BOOTX64-0.13.EFI                (22.1 MB)
 EFI_SHA256=9a4a9949da66dfac013e066e42dd00166df8afdb3552257dbfac7f2a2f161b5a
-ISO=target/release-0.13/distropica-0.13-x86_64.iso      (1402 MB)
-ISO_SHA256=bf321ab6f4a9ed787b5ae1fffa01781c40d2e10b5a68e7a7ed40242a4c258d94
+ISO=target/release-0.13/distropica-0.13-x86_64.iso      (1355 MB)
+ISO_SHA256=26fdd6d1183f8f5ddcc3b0b22d71626c68e9d607e2e67d510074572569723f0e
 RAIZ_PRODUTORA=target/rebuild-0.13-gimp-root
 ```
 
