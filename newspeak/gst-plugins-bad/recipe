@@ -2,7 +2,7 @@ NAME=gst-plugins-bad
 VERSION=1.28.6
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc glib gstreamer gst-plugins-base opus orc"
+DEPS="glibc glib gstreamer gst-plugins-base opus"
 BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc"
 ABOUT="UM PLUGIN, e um só: o opusparse. O nome do pacote engana e por isso vale dizer — 'bad' no vocabulário do GStreamer não é licença nem patente, é maturidade de código; quem carrega problema de licenciamento é o 'ugly', que esta árvore não traz. O que trouxe este pacote foi uma medição: o YouTube abriu com o player montado e recusou tocar, e a causa estava no GStreamerRegistryScanner.cpp:531 do WebKit — em modo Media Source, o Opus só é registrado como codec se existir um PARSER para audio/x-opus, e não basta o decodificador. O opusdec vem do gst-plugins-base; o opusparse mora aqui, em ext/opus, e em lugar nenhum mais das três coleções. Sem ele o navegador anuncia audio/webm e nega o codec opus, que é exatamente o que o YouTube pergunta antes de tocar. O build usa --auto-features=disabled: as quase duzentas features deste pacote ficam TODAS desligadas por construção, e só o opus é ligado explicitamente — o payload não varia com o que estiver instalado na raiz, e nada de H.264, HEVC ou os wrappers de codec proprietário entra pela porta dos fundos."
 LICENSE="LGPL-2.1-or-later"
@@ -28,6 +28,20 @@ build() {
     ninja -C build -j"$JOBS"
     DESTDIR="$STAGE" ninja -C build install
 
+    # SÓ O PLUGIN FICA. O --auto-features=disabled desliga os PLUGINS, mas as
+    # bibliotecas públicas deste pacote são construídas incondicionalmente:
+    # medido, 180 arquivos entraram — CUDA, WebRTC, mpegts, os parsers de
+    # H.264/H.265/H.266, câmera, analytics, transcoder. Nada disso tem
+    # consumidor nesta árvore, e a auditoria de ABI foi quem denunciou, ao
+    # cobrar libstdc++ para uma libgstcuda que ninguém pediu. O opusparse não
+    # liga nenhuma delas — conferido no NEEDED: só núcleo, base e opus.
+    #
+    # Payload sem consumidor é dívida de auditoria, e aqui seria dívida com
+    # superfície: cabeçalhos e .pc de codecs que esta distro recusou.
+    rm -rf "$STAGE/usr/include" "$STAGE/usr/lib/pkgconfig" \
+           "$STAGE/usr/share/gstreamer-1.0" "$STAGE/usr/share/locale"
+    find "$STAGE/usr/lib" -maxdepth 1 -name 'libgst*' -delete
+
     [ -e "$STAGE/usr/lib/gstreamer-1.0/libgstopusparse.so" ] || {
         echo "gst-plugins-bad: o opusparse não foi produzido — é o único motivo deste pacote" >&2
         ls "$STAGE/usr/lib/gstreamer-1.0" 2>/dev/null >&2
@@ -43,10 +57,13 @@ build() {
     # UM PLUGIN E MAIS NENHUM. O --auto-features=disabled é o que garante
     # isso, e esta guarda é quem cobra a garantia: qualquer plugin a mais
     # significa que uma feature voltou a ligar sozinha.
-    quantos=$(ls "$STAGE/usr/lib/gstreamer-1.0" 2>/dev/null | wc -l)
+    # A guarda conta o PAYLOAD INTEIRO e não só o diretório de plugins: a
+    # primeira versão contava plugins, viu "1" e deixou passar as 180
+    # bibliotecas ao lado. Um arquivo é o número certo.
+    quantos=$(find "$STAGE" -type f -o -type l | wc -l)
     [ "$quantos" -eq 1 ] || {
-        echo "gst-plugins-bad: $quantos plugins produzidos; era para ser só o opusparse" >&2
-        ls "$STAGE/usr/lib/gstreamer-1.0" >&2
+        echo "gst-plugins-bad: $quantos arquivos no payload; era para ser só o opusparse" >&2
+        find "$STAGE" -type f -o -type l | head -20 >&2
         exit 1
     }
     unset quantos
