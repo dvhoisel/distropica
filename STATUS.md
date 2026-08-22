@@ -1,8 +1,8 @@
 # STATUS — o que está feito, testado e futuro
 
 Fonte única da verdade sobre a maturidade. As `specs/` descrevem a **norma**;
-este arquivo descreve o **estado**. Atualizado à mão em 2026-08-17, depois que a
-mídia `0.13` passou a instalar e bootar num VirtualBox de verdade.
+este arquivo descreve o **estado**. Atualizado à mão em 2026-08-22, no dia em
+que a `0.13` foi **publicada** — site, ISO, canal e bundle de fontes no ar.
 
 O que mudou de natureza nesta revisão: **a instalação a partir do canal binário
 fechou**. Ela não fechava, e a causa era do resolvedor, não da mídia — o
@@ -14,9 +14,18 @@ navegador o **Epiphany** e o terminal o **foot**; o Firefox e o weston saíram d
 árvore. O canal saiu em **formato 4**, assinado com a chave de produção, e o
 registro fecha em `RECORD_FORMAT=4` com receipt do mundo completo.
 
-O que esta revisão **não** prova, e a distinção importa: a sessão gráfica da
-`0.13` ainda não foi vista de pé. O defeito que a derrubava está consertado e
-medido em teste, mas o boot que exercita o conserto ainda não aconteceu.
+A sessão gráfica **foi vista de pé**, e o que a derrubava eram seis defeitos
+empilhados — do fechamento do canal ao cursor de hardware do VirtualBox —,
+cada um capaz de matar a tela sozinho. Depois deles a sessão ganhou rosto:
+barra de tarefas, lançador, notificações, papel de parede com a logo, menu que
+lista o que está instalado, navegador maximizado no site da distro e **vídeo
+livre tocando** — WebM, VP9 e Opus, com Media Source, conferido no YouTube pelo
+mantenedor. O GIMP 3.2 instala do canal pela rede.
+
+O que esta revisão **não** prova: reprodutibilidade com dois construtores
+independentes, hardware físico, e o rótulo de *release* no bundle de fontes —
+a raiz produtora segue `STATUS=development`, e é isso que separa "publicada"
+de "estável".
 Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 
 ## Licenciamento e publicação
@@ -25,8 +34,8 @@ Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 |---|---|---|
 | Código e documentação próprios | ✅ | `GPL-3.0-or-later`; texto integral, escopo e regra de contribuição versionados |
 | Licença na base e no ambiente vivo | ✅ implementação + regressão focal; ⬜ mídia final | `base` instala GPL, NOTICE e `LICENSING.md` em `/usr/share/licenses/distropica/`; `build-efi` incorpora os mesmos bytes no initramfs. A mídia final posterior a essa mudança ainda precisa ser recomposta e aceita |
-| Inventário completo de terceiros | 🟡 gerador/parser interno; ⬜ vínculo ao plano e execução final | `bootstrap/sbom --strict` falha por qualquer `SEM EVIDÊNCIA` e produz `licenses.tar` determinístico com `PACOTES`, `INDICE`, `MANIFEST.sha256` e SHA externo; o parser recusa tipos/caminhos/modos/limites e divergência interna. Isso ainda não prova que um bundle autoconsistente corresponde ao conjunto realmente distribuído: a integração com profile/mídia aguarda `PLAN_LOCK_FORMAT=1`, que precisa fornecer nome, versão, fingerprint e hash de cada identidade material |
-| Bundle de fontes correspondentes | ✅ ferramenta e histórico `miniplenty-v2`; ⬜ artefatos novos | `bootstrap/source-bundle --artifact ARQ --minitrue-bin MINITRUE_PRODUTOR --strict` associa ISO, EFI, cache ou índice autenticado de canal pelo hash, recalcula a identidade com o executor produtor explícito e falha por fonte ou evidência de licença incompleta; em perfil `release`, o executor precisa conferir com `OFFICIAL_MINITRUE_SHA256`. EFI/ISO estritos exigem `--live-kernel-config` e o `--live-util-linux-tar` cotejado com os pinos do `build-efi`, registrado como `insumo-live`. `--media` mantém os campos legados. O bundle histórico foi publicado ao lado da ISO; cada artefato futuro continua sendo gate próprio |
+| Inventário completo de terceiros | ✅ publicado com a `0.13`: 199 pacotes, nenhum `NOASSERTION`, 5575 textos | `bootstrap/sbom --strict` falha por qualquer `SEM EVIDÊNCIA` e produz `licenses.tar` determinístico com `PACOTES`, `INDICE`, `MANIFEST.sha256` e SHA externo; o parser recusa tipos/caminhos/modos/limites e divergência interna. Isso ainda não prova que um bundle autoconsistente corresponde ao conjunto realmente distribuído: a integração com profile/mídia aguarda `PLAN_LOCK_FORMAT=1`, que precisa fornecer nome, versão, fingerprint e hash de cada identidade material |
+| Bundle de fontes correspondentes | ✅ gerado e publicado para a `0.13` (2,4 GB, 199 pacotes, gate estrito aprovado) | `bootstrap/source-bundle --artifact ARQ --minitrue-bin MINITRUE_PRODUTOR --strict` associa ISO, EFI, cache ou índice autenticado de canal pelo hash, recalcula a identidade com o executor produtor explícito e falha por fonte ou evidência de licença incompleta; em perfil `release`, o executor precisa conferir com `OFFICIAL_MINITRUE_SHA256`. EFI/ISO estritos exigem `--live-kernel-config` e o `--live-util-linux-tar` cotejado com os pinos do `build-efi`, registrado como `insumo-live`. `--media` mantém os campos legados. O bundle histórico foi publicado ao lado da ISO; cada artefato futuro continua sendo gate próprio |
 
 Os hashes QEMU final-v10 e VirtualBox network-v1 abaixo são evidência histórica
 anterior à mudança de licença do pacote `base` (revisão funcional `7148ebd`).
@@ -127,10 +136,12 @@ não havia motivo para ele não estar lá.
 
 ## Evidência integrada atual — `0.13`
 
-A mídia instala a partir do canal binário, reinicia sem ISO e chega ao login.
-Quem a bootou foi o Daniel, no VirtualBox, com disco de verdade — e é essa a
-prova, não o aceite: a distância entre "a mídia boota" e "a mídia instala" foi
-onde moraram os três defeitos desta revisão, e nenhum deles falhava no build.
+A mídia instala a partir do canal binário, reinicia sem ISO, sobe em modo
+gráfico e toca vídeo. Quem a bootou foi o Daniel, no VirtualBox, com disco de
+verdade — e é essa a prova, não o aceite: a distância entre "a mídia boota" e
+"a mídia instala e serve" foi onde moraram todos os defeitos desta revisão, e
+nenhum deles falhava no build. O que o aceite automatizado pega é a
+instalação; a tela, o clique e o vídeo dependeram de alguém olhar.
 
 ```text
 CANAL=191 pacotes Mundo B (canal-013f), CHANNEL_INDEX_FORMAT=4, assinado com a chave de produção

@@ -3,19 +3,19 @@
 > Uma distribuição Linux distópica. Não instala pacotes: **retifica registros**.
 
 **[Site oficial](https://distropica.com.br/)** ·
-**[Baixar a ISO 0.12 (999 MB)](https://distropica.com.br/releases/distropica-0.12-x86_64.iso)** ·
-**[SHA-256](https://distropica.com.br/releases/distropica-0.12-x86_64.iso.sha256)** ·
-**[Manifesto](https://distropica.com.br/releases/distropica-0.12-x86_64.iso.manifest)** ·
-**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.12-corresponding-sources.tar.zst)** ·
-**[SHA das fontes](https://distropica.com.br/releases/distropica-0.12-corresponding-sources.tar.zst.sha256)** ·
-**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.12-sources.tsv)** ·
-**[Índice de licenças](https://distropica.com.br/releases/distropica-0.12-licencas.tsv)**
+**[Baixar a ISO 0.13 (1355 MB)](https://distropica.com.br/releases/distropica-0.13-x86_64.iso)** ·
+**[SHA-256](https://distropica.com.br/releases/distropica-0.13-x86_64.iso.sha256)** ·
+**[Manifesto](https://distropica.com.br/releases/distropica-0.13-x86_64.iso.manifest)** ·
+**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.13-corresponding-sources.tar.zst)** ·
+**[SHA das fontes](https://distropica.com.br/releases/distropica-0.13-corresponding-sources.tar.zst.sha256)** ·
+**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.13-sources.tsv)** ·
+**[Índice de licenças](https://distropica.com.br/releases/distropica-0.13-licencas.tsv)**
 
-> **Atenção:** a `0.12` é uma **pré-release de desenvolvimento** para VM UEFI
+> **Atenção:** a `0.13` é uma **pré-release de desenvolvimento** para VM UEFI
 > **64 bits**, e a própria mídia declara isso de si: `PROFILE_CLASS=custom`.
 > O instalador apaga integralmente o dispositivo escolhido. Use um disco virtual
 > descartável e confira o SHA-256 antes do boot
-> (`b52843ceb592d16eef756fe22201b321c913177e6fdc20ab198b6f3c56aef250`).
+> (`26fdd6d1183f8f5ddcc3b0b22d71626c68e9d607e2e67d510074572569723f0e`).
 >
 > Ela pede a **senha de root antes do caminho do disco**: toda a interação
 > acontece antes de qualquer escrita, e a partir do disco escolhido a
@@ -30,8 +30,8 @@
 > instalação, o cache **vive no disco alvo ao mesmo tempo** que a árvore cresce,
 > e o pico é a soma dos dois, não o maior deles; o fator quatro em si saiu de
 > medição (um cache de 664 MiB produziu uma árvore de 2096 MiB, razão 3,16) e o
-> resto é margem. O `cache.tar` da `0.12` tem 868 MiB, o que dá cerca de
-> **4,7 GiB** de raiz mínima.
+> resto é margem. O `cache.tar` da `0.13` tem 1264 MiB, o que dá cerca de
+> **6,7 GiB** de raiz mínima.
 
 A Distrópica parte de uma observação desconfortável sobre o mundo atual: os
 projetos novos (Zig, Go, Rust, os aplicativos das corporações) distribuem
@@ -72,20 +72,19 @@ nas combinações efetivamente distribuídas.
 Cada ISO, EFI, cache ou canal binário publicado deve vir acompanhado de acesso
 equivalente ao seu bundle de fontes correspondentes: revisão da Distrópica,
 crates Rust vendorizadas, fontes upstream exatas, configurações, patches,
-scripts, licenças e inventário. A imagem custom `0.12` atende essa
-regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-0.12-corresponding-sources.tar.zst),
-preso à revisão `14cbbab` e ao SHA-256 da ISO, e acompanha um
-[índice de licenças](https://distropica.com.br/releases/distropica-0.12-licencas.tsv)
-com os 5450 textos extraídos de dentro dos próprios artefatos. Todos os 118
-pacotes do inventário declaram licença — não há nenhum
-`LICENSE=NOASSERTION`. Oito deles não carregam o texto da licença dentro do
-próprio artefato, e por dois motivos diferentes que vale separar. Três são
-**receitas de montagem da própria Distrópica** (`base`, `desktop`, `miniluv`):
-não têm SRC, geram arquivos legíveis, e a licença delas é a do repositório —
-`GPL-3.0-or-later`, em [LICENSE](LICENSE). Os outros cinco são de terceiros
-(`ca-certificates`, `libcap`, `libdrm`, `libxml2`, `ripgrep`) e simplesmente não
-embarcam o texto no artefato publicado; para esses a evidência está no bundle de
-fontes, e não na mídia. O índice diz de onde veio cada texto.
+scripts, licenças e inventário. A imagem custom `0.13` atende essa
+regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-0.13-corresponding-sources.tar.zst),
+preso à revisão `3a84811` e ao SHA-256 da ISO, e acompanha um
+[índice de licenças](https://distropica.com.br/releases/distropica-0.13-licencas.tsv)
+com os 5575 textos extraídos dos artefatos e das fontes correspondentes.
+Todos os 199 pacotes do inventário declaram licença — não há nenhum
+`LICENSE=NOASSERTION`. Três são **receitas de montagem da própria
+Distrópica** (`base`, `desktop`, `miniluv`): não têm SRC, geram arquivos
+legíveis, e a licença delas é a do repositório — `GPL-3.0-or-later`, em
+[LICENSE](LICENSE). Para os demais, a evidência vem do artefato ou da fonte
+correspondente, e o índice diz, pacote a pacote, de qual dos dois: o
+`ca-certificates` é o caso extremo — a concessão MPL mora no cabeçalho do
+`certdata.txt` da Mozilla, e não em arquivo de licença nenhum.
 O repositório público é a fonte
 do desenvolvimento, mas não substitui sozinho esse conjunto por artefato.
 Gerar uma imagem para uso privado não exige publicá-la; redistribuí-la
@@ -162,6 +161,14 @@ ideológica** — cada premissa existe por um fim prático, não por dogma, e a
 Um **protótipo sério de engenharia de sistemas** — ainda um laboratório, não
 uma distribuição pronta para usuários. A matriz precisa do que está feito,
 testado e futuro vive em **[STATUS.md](STATUS.md)**.
+
+A `0.13` está **publicada** em <https://distropica.com.br/> (2026-08-22): ISO
+instalável, canal binário assinado com 191 pacotes e bundle de fontes
+correspondentes aprovado no gate estrito. O sistema instalado sobe em modo
+gráfico — compositor **labwc**, navegador **Epiphany** com **vídeo livre**
+(WebM/VP9/Opus), terminal **foot**, barra de tarefas **yambar**, lançador
+**fuzzel** — e instala software do canal pela rede: o **GIMP 3.2** entra assim,
+com `minitrue rectify gimp`.
 
 A barreira técnica que justificava o projeto — compilar o "mundo antigo" a
 partir de nada além de binários upstream — foi **demonstrada**:
@@ -609,7 +616,12 @@ INCONSISTENT_PROFILE_LOCK_RESULT=refused-before-wipe
 
 Essa evidência continuará sendo de desenvolvimento. Ela não será pino de
 release nem substituirá um manifesto oficial assinado. Endpoint, chave e índice
-do canal já estão publicados; a mídia oficial e seu manifesto ainda não.
+do canal estão publicados, e desde 2026-08-22 a **mídia também**: a `0.13` está
+no ar com ISO, bundle de fontes correspondentes aprovado no gate estrito
+(`bootstrap/sbom --strict`, 199 de 199 pacotes com texto de licença),
+inventário e índice de licenças. O que ainda não existe é o *manifesto oficial
+assinado* no sentido da SPEC — a raiz produtora continua `STATUS=development`,
+e é isso que separa "publicada" de "release estável".
 
 O perfil `profiles/official` declara `INSTALL_READY=yes`, mas continua com
 `STATUS=development`. A prontidão significa que o world mínimo pode ser
