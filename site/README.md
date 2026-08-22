@@ -14,6 +14,25 @@ Página estática publicada em `https://distropica.com.br/`.
   certificado;
 - `nginx.conf`: configuração final HTTP→HTTPS e arquivos de release.
 
+## Publicação
+
+A fonte é **este diretório**, e não a cópia no servidor. Publicar é um comando:
+
+```sh
+site/publicar
+```
+
+Ele recusa árvore suja (publicar o que não está commitado é publicar o que
+ninguém pode auditar depois), valida o HTML antes de subir, guarda o
+`index.html` anterior como `index.html.before-<data>-<revisão>` e, no fim,
+confere o sha256 de cada arquivo **no ar** contra o do repositório — a prova é
+o que está publicado, não o que o transporte disse ter enviado.
+
+Editar direto no servidor cria duas fontes do mesmo fato, e já criou: em
+2026-08-22 a página do ar e a do repositório discordaram por algumas horas.
+Se acontecer de novo, o caminho de volta é `scp` do servidor para cá,
+conferir o diff e commitar.
+
 O diretório remoto é `/var/www/distropica.com.br`. ISOs e sidecars ficam em
 `/var/www/distropica.com.br/releases/`, junto dos bundles de fontes
 correspondentes e seus inventários. O certificado Let's Encrypt usa o webroot

@@ -181,14 +181,14 @@
             width="1280" height="341" fetchpriority="high" decoding="async"></h1>
         <p class="lead">Uma distribuição Linux distópica. Não instala pacotes: <strong>retifica registros</strong>. Binário do mantenedor primeiro; depois, binário da Distrópica; fonte quando ninguém publica um.</p>
         <div class="actions">
-          <a class="button primary" href="/releases/distropica-0.12-x86_64.iso">Baixar ISO · 999 MB</a>
-          <a class="button" href="/releases/distropica-0.12-corresponding-sources.tar.zst">Fontes correspondentes</a>
+          <a class="button primary" href="/releases/distropica-0.13-x86_64.iso">Baixar ISO · 1355 MB</a>
+          <a class="button" href="/releases/distropica-0.13-corresponding-sources.tar.zst">Fontes correspondentes</a>
           <a class="button" href="https://github.com/dvhoisel/distropica">Examinar o código</a>
         </div>
         <p class="warning compact"><strong>Antes de baixar:</strong> pré-release de desenvolvimento, não release estável. <strong>O instalador apaga integralmente o disco que você indicar.</strong> Wi-Fi, áudio e sessão gráfica de usuário comum. Nenhum pacote declara licença indefinida. <a href="#download">Aviso completo</a>.</p>
         <div class="facts" aria-label="Características da imagem">
-          <div class="fact"><b>0.12</b><small>pré-release de desenvolvimento</small></div>
-          <div class="fact"><b>Linux 7.1.4</b><small>kernel da mídia</small></div>
+          <div class="fact"><b>0.13</b><small>pré-release de desenvolvimento</small></div>
+          <div class="fact"><b>Linux 7.1.8</b><small>kernel da mídia</small></div>
           <div class="fact"><b>GCC 15.3</b><small>toolchain nativa</small></div>
           <div class="fact"><b>GPL-3.0+</b><small>código próprio</small></div>
         </div>
@@ -224,24 +224,24 @@
         <div class="download">
           <div>
             <h3>ISO UEFI para VirtualBox</h3>
-            <p>A imagem instala um sistema com <strong>modo gráfico</strong>: compositor Weston sobre KMS, Firefox 153 em português, terminal e rede por DHCP. A sessão gráfica roda como a conta comum <code>distropica</code>, não como root. A rede fica a cargo do <strong>ConnMan</strong>, que assume cabo e Wi-Fi com cliente DHCP próprio e comanda o iwd por D-Bus; quem opera é o <strong>miniluv</strong>, a interface gráfica escrita para esta distro, com edição de endereço, máscara, gateway e DNS. Há também <strong>áudio</strong>, com o mixer da ALSA. Junto vão Git, OpenSSH, tmux, strace, file, minicom, Vim, ripgrep, Make, GCC/G++, o Minitrue e o perfil de rede: nftables, WireGuard, nmap, mtr, tcpdump e bash. A raiz é ext4 em tabela GPT. A instalação é <strong>offline</strong>: a mídia carrega os 98 pacotes do canal e não busca nada na rede.</p>
+            <p>A imagem instala um sistema com <strong>modo gráfico</strong>: compositor <strong>labwc</strong> sobre wlroots, navegador <strong>Epiphany</strong> sobre WebKitGTK em português, terminal <strong>foot</strong> e rede por DHCP. O compositor tem barra de tarefas (<strong>yambar</strong>: janelas abertas, rede e relógio), lançador por teclado (<strong>fuzzel</strong>, W-d), notificações e papel de parede, e o menu do botão direito lista os aplicativos instalados. O navegador <strong>reproduz vídeo livre</strong> — WebM com VP9 e Opus, com Media Source, que é o que o streaming adaptativo exige; H.264 e AAC ficam de fora, e uma página que só os ofereça continua muda: é escolha de licenciamento, dita no LICENSING.md, não limitação técnica. O <strong>GIMP 3.2</strong> <strong>não vem na mídia</strong>: ele é instalado depois, <strong>pela rede</strong>, com <code>minitrue rectify gimp</code> — o canal oficial entrega os pacotes assinados e a máquina os retifica, com a closure inteira (GEGL, babl, libmypaint, Poppler e a pilha do GTK3) baixada e conferida na hora. A sessão gráfica roda como a conta comum <code>distropica</code>, não como root. A rede fica a cargo do <strong>ConnMan</strong>, que assume cabo e Wi-Fi com cliente DHCP próprio e comanda o iwd por D-Bus; quem opera é o <strong>miniluv</strong>, a interface gráfica escrita para esta distro, com edição de endereço, máscara, gateway e DNS. Há também <strong>áudio</strong>, com o mixer da ALSA. Junto vão Git, OpenSSH, tmux, strace, file, minicom, Vim, ripgrep, Make, GCC/G++, o Minitrue e o perfil de rede: nftables, WireGuard, nmap, mtr, tcpdump e bash. A raiz é ext4 em tabela GPT. A instalação é <strong>offline</strong>: a mídia carrega os 191 pacotes do canal e não busca nada na rede. Depois de instalado, o sistema fala com o canal oficial pela rede — é assim que o GIMP entra, e é assim que qualquer pacote do canal chega sem gravar mídia nova.</p>
             <div class="actions">
-              <a class="button primary" href="/releases/distropica-0.12-x86_64.iso">Baixar a ISO</a>
-              <a class="button" href="/releases/distropica-0.12-x86_64.iso.sha256">SHA-256</a>
-              <a class="button" href="/releases/distropica-0.12-x86_64.iso.manifest">Manifesto</a>
-              <a class="button" href="/releases/distropica-0.12-corresponding-sources.tar.zst">Fontes correspondentes</a>
-              <a class="button" href="/releases/distropica-0.12-corresponding-sources.tar.zst.sha256">SHA das fontes</a>
-              <a class="button" href="/releases/distropica-0.12-sources.tsv">Inventário</a>
-              <a class="button" href="/releases/distropica-0.12-licencas.tsv">Licenças</a>
+              <a class="button primary" href="/releases/distropica-0.13-x86_64.iso">Baixar a ISO</a>
+              <a class="button" href="/releases/distropica-0.13-x86_64.iso.sha256">SHA-256</a>
+              <a class="button" href="/releases/distropica-0.13-x86_64.iso.manifest">Manifesto</a>
+              <a class="button" href="/releases/distropica-0.13-corresponding-sources.tar.zst">Fontes correspondentes</a>
+              <a class="button" href="/releases/distropica-0.13-corresponding-sources.tar.zst.sha256">SHA das fontes</a>
+              <a class="button" href="/releases/distropica-0.13-sources.tsv">Inventário</a>
+              <a class="button" href="/releases/distropica-0.13-licencas.tsv">Licenças</a>
             </div>
-            <p class="hash"><strong>SHA-256</strong><br>b52843ceb592d16eef756fe22201b321c913177e6fdc20ab198b6f3c56aef250</p>
-            <p class="hash"><strong>SHA-256 das fontes</strong><br>7d0bb29a974b344bb7c6377a180ffcdb9bf824fc77c769b0203de1473e722bd2</p>
+            <p class="hash"><strong>SHA-256</strong><br>26fdd6d1183f8f5ddcc3b0b22d71626c68e9d607e2e67d510074572569723f0e</p>
+            <p class="hash"><strong>SHA-256 das fontes</strong><br>4ddc905574d6fc4954783e3e7462f3c49f57ddaefd7e31a3c81c0192b561c73a</p>
           </div>
           <div>
             <h3>Primeiro boot</h3>
             <ol>
               <li>Grave a ISO num pendrive com <code>dd</code>, ou monte-a como unidade óptica numa VM x86_64 com UEFI.</li>
-              <li>Use um disco descartável. O instalador exige <strong>raiz de 5,1 GB</strong> e recusa disco menor, dizendo o número.</li>
+              <li>Use um disco descartável. O instalador exige <strong>raiz de 6,7 GB</strong> e recusa disco menor, dizendo o número.</li>
               <li>Um <strong>instalador de texto</strong> lista os discos com caminho, tamanho e modelo, e mostra o que há em cada um. A mídia nunca aparece na lista.</li>
               <li>Duas rotas: apagar o disco inteiro, ou particionar você mesmo no <code>cfdisk</code> e dizer qual partição é qual. Na rota manual a tabela precisa ser <strong>GPT</strong>.</li>
               <li>Esc e a seta para a esquerda voltam uma tela. Desistir é uma tela à parte, que pergunta.</li>
@@ -255,8 +255,8 @@ minitrue verify</code></pre>
           </div>
         </div>
         <p class="warning"><strong>Aviso:</strong> esta é uma pré-release de desenvolvimento, não um release estável — e a própria mídia declara isso de si: <code>PROFILE_CLASS=custom</code>. O instalador apaga integralmente o dispositivo escolhido.</p>
-        <p class="warning"><strong>O que foi verificado, e o que não foi.</strong> Este arquivo, o publicado, foi instalado duas vezes em máquina virtual: pela rota automática e pela rota manual, com o <code>cfdisk</code>, e nas duas a mídia foi ligada <em>depois</em> do arranque, como um pendrive que o kernel ainda não enumerou. O arranque pelo firmware foi verificado numa mídia construída da mesma árvore e do mesmo cache, que difere desta apenas na linha de comando do kernel — a de teste autoriza instalação automática, para que a verificação possa ser automatizada. <strong>Nada disto aconteceu em hardware físico.</strong> O Wi-Fi foi exercitado em máquina virtual, que não emula rádio: a janela abre e lista vazio; ninguém associou esta imagem a uma rede sem fio real ainda. A <strong>0.11 não instala a partir de pendrive</strong> — dois defeitos, um de tempo e um de onde se procura a mídia; esta versão conserta os dois, e é a razão principal de ela existir.</p>
-        <p class="warning"><strong>Licenças:</strong> os 108 pacotes do inventário declaram licença — não há nenhum <code>NOASSERTION</code>. Quatro pacotes que a mídia distribui como binário do upstream (busybox, firefox, jq, rust) não carregam a fonte dentro do próprio artefato; para esses a fonte correspondente da versão exata está declarada na árvore e viaja no bundle, com o sha256 conferido contra o que o upstream publica. Cinco pacotes (ca-certificates, libcap, libdrm, libxml2, ripgrep) não trazem um arquivo de licença identificável nem no artefato nem na fonte: a licença deles está declarada na receita e no inventário, e a fonte está no bundle para conferência. O <code>ripgrep</code> é caso à parte — o upstream não publica tarball de fonte, só binários por plataforma. O índice de licenças acima diz, pacote a pacote, de onde veio cada texto.</p>
+        <p class="warning"><strong>O que foi verificado, e o que não foi.</strong> Este arquivo, o publicado, foi instalado duas vezes em máquina virtual: pela rota automática e pela rota manual, com o <code>cfdisk</code>, e nas duas a mídia foi ligada <em>depois</em> do arranque, como um pendrive que o kernel ainda não enumerou. O arranque pelo firmware foi verificado numa mídia construída da mesma árvore e do mesmo cache, que difere desta apenas na linha de comando do kernel — a de teste autoriza instalação automática, para que a verificação possa ser automatizada. <strong>Nada disto aconteceu em hardware físico.</strong> O Wi-Fi foi exercitado em máquina virtual, que não emula rádio: a janela abre e lista vazio; ninguém associou esta imagem a uma rede sem fio real ainda. A <strong>0.12 subia e a sessão gráfica morria calada</strong> — seis defeitos empilhados, do fechamento do canal ao cursor de hardware do VirtualBox, cada um capaz de derrubar a tela sozinho; esta versão conserta os seis, troca o compositor e o navegador, e traz vídeo, barra de tarefas e GIMP. O vídeo foi verificado tocando de fato, e não só compilado.</p>
+        <p class="warning"><strong>Licenças:</strong> os pacotes do inventário declaram licença — não há nenhum <code>NOASSERTION</code>. Quatro pacotes que a mídia distribui como binário do upstream (busybox, jq, rust, zig) não carregam a fonte dentro do próprio artefato; para esses a fonte correspondente da versão exata está declarada na árvore e viaja no bundle, com o sha256 conferido contra o que o upstream publica. Cinco pacotes (ca-certificates, libcap, libdrm, libxml2, ripgrep) não trazem um arquivo de licença identificável nem no artefato nem na fonte: a licença deles está declarada na receita e no inventário, e a fonte está no bundle para conferência. O <code>ripgrep</code> é caso à parte — o upstream não publica tarball de fonte, só binários por plataforma. O índice de licenças acima diz, pacote a pacote, de onde veio cada texto.</p>
       </div>
     </section>
   </main>

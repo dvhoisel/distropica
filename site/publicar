@@ -1,0 +1,77 @@
+#!/bin/sh
+# Publica o site a partir do REPOSITÓRIO, que é a fonte.
+#
+# Este script existe por causa de um erro real: em 2026-08-22 a página foi
+# editada direto no servidor, e por um tempo a cópia do repositório e a do ar
+# discordaram — a mesma patologia de "duas fontes do mesmo fato" que esta
+# árvore combate em todo lugar. Com um comando publicando, a divergência não
+# tem por onde nascer.
+#
+# uso: site/publicar [--host USUARIO@HOST]
+set -eu
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+HOST=root@72.60.49.50
+REMOTO=/var/www/distropica.com.br
+
+while [ $# -gt 0 ]; do
+    case $1 in
+        --host) HOST=${2:?}; shift 2 ;;
+        -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+        *) echo "erro: opção desconhecida: $1" >&2; exit 1 ;;
+    esac
+done
+
+cd "$REPO"
+
+# A ÁRVORE LIMPA É PRÉ-REQUISITO, pelo mesmo motivo do source-bundle: publicar
+# um arquivo que não está commitado é publicar algo que ninguém pode
+# reconstruir nem auditar depois.
+sujo=$(git status --porcelain -- site/ | grep -v '^??' || true)
+[ -z "$sujo" ] || {
+    echo "erro: site/ tem mudança não commitada; commite antes de publicar" >&2
+    printf '%s\n' "$sujo" >&2
+    exit 1
+}
+
+# HTML QUEBRADO NÃO SOBE. O parser da biblioteca padrão do Python basta para
+# pegar tag não fechada e atributo malformado, que é o que o erro de edição
+# manual produz.
+python3 - "$REPO/site/index.html" <<'PY'
+import html.parser, sys
+class Estrito(html.parser.HTMLParser):
+    def error(self, mensagem):
+        raise SystemExit(f"HTML inválido: {mensagem}")
+Estrito().feed(open(sys.argv[1], encoding="utf-8").read())
+PY
+
+revisao=$(git rev-parse --short HEAD)
+carimbo=$(date +%Y%m%d)
+
+# O backup datado é a convenção que o servidor já usava antes deste script, e
+# continua valendo: com ele, voltar é um `mv` e não um deploy.
+ssh "$HOST" "set -e
+    cd $REMOTO
+    cp index.html index.html.before-$carimbo-$revisao"
+
+for arquivo in index.html favicon.ico logo.png \
+               distropica-logo-grande-v1.png distropica-logo-v1.png \
+               distropica-icone-v1.png distropica-social-v1.png; do
+    scp -q "$REPO/site/$arquivo" "$HOST:/tmp/publicar-$arquivo"
+    ssh "$HOST" "install -m 0644 -o debian -g debian \
+        /tmp/publicar-$arquivo $REMOTO/$arquivo && rm -f /tmp/publicar-$arquivo"
+done
+
+# A PROVA É O QUE ESTÁ NO AR, e não o que o rsync disse ter enviado.
+for arquivo in index.html favicon.ico logo.png \
+               distropica-logo-grande-v1.png distropica-logo-v1.png \
+               distropica-icone-v1.png distropica-social-v1.png; do
+    local_sha=$(sha256sum "$REPO/site/$arquivo" | cut -d' ' -f1)
+    remoto_sha=$(ssh "$HOST" "sha256sum $REMOTO/$arquivo | cut -d' ' -f1")
+    [ "$local_sha" = "$remoto_sha" ] || {
+        echo "erro: $arquivo no ar diverge do repositório" >&2
+        exit 1
+    }
+done
+
+echo "site publicado de $revisao; backup em index.html.before-$carimbo-$revisao"
