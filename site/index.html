@@ -135,6 +135,13 @@
       margin-top: 1rem; padding: 1rem; border: 1px solid #705329;
       color: #e8c98f; background: #211b11;
     }
+    .credo {
+      margin: 1.6rem 0 2.2rem; padding: 1.1rem 1.4rem;
+      border-left: 3px solid var(--red-dark); background: var(--panel);
+    }
+    .credo p { margin: 0 0 .55rem; max-width: 62ch; }
+    .credo p:last-child { margin-bottom: 0; }
+    .credo b { color: var(--ink); }
     .warning.compact {
       margin-top: .85rem; padding: .7rem .9rem; font-size: .85rem; line-height: 1.5;
       max-width: 46rem;
@@ -199,12 +206,23 @@
       <div class="wrap">
         <span class="stamp">Ministério da Verdade</span>
         <h2>O sistema é o registro.</h2>
-        <p class="lead">A pergunta que a Distrópica responde não é
-        &ldquo;como instalo software?&rdquo;, e sim <strong>&ldquo;como sei o que está
-        instalado, de onde veio e por que está assim?&rdquo;</strong>. Não há solver
-        nem banco de dados opaco: o estado é o filesystem, e o registro de cada
-        pacote é um texto legível com o hash do que entrou. O gerenciador cabe
-        numa leitura; o sistema inteiro se explica em uma página.</p>
+        <p class="lead">O Ministério da Verdade de Orwell reescrevia o registro
+        para que o passado coubesse no presente. Aqui é ao contrário: <strong>o
+        registro manda, e é o sistema que tem de coincidir com ele</strong>. O
+        nome é a advertência virada do avesso — e dessa inversão sai todo o
+        resto.</p>
+        <div class="credo">
+          <p><b>Nada entra por confiança.</b> Só por prova: hash pinado na
+          receita, evidência conferida, registro legível do que entrou.</p>
+          <p><b>Nada degrada em silêncio.</b> Diante da dúvida, recusa-se em
+          voz alta — porque o defeito que só aparece meses depois já custou
+          mais caro do que a falha que impediria a instalação.</p>
+          <p><b>Toda escolha traz o preço escrito.</b> O que a distro não faz é
+          dito antes, com o que custa: custo escondido é mentira lenta.</p>
+          <p><b>O que não cabe numa leitura não pode ser auditado.</b>
+          Simplicidade aqui não é estética — é a condição de alguém poder
+          conferir. Sem solver, sem banco opaco: o estado é o filesystem.</p>
+        </div>
         <div class="grid">
           <article class="card">
             <span class="number">01 / ORIGEM</span>
