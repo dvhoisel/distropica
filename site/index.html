@@ -187,7 +187,7 @@
         <div class="eyebrow">protótipo instalável · x86_64 · UEFI</div>
         <h1><img src="/distropica-logo-grande-v1.png" alt="Distrópica"
             width="1280" height="341" fetchpriority="high" decoding="async"></h1>
-        <p class="lead">Uma distribuição Linux distópica em que <strong>instalar é provar</strong>. Ela não instala pacotes: <strong>retifica registros</strong>. Cada arquivo do sistema tem um dono declarado, cada artefato tem seu hash pinado na receita, e o que o binário de fato exige é conferido contra o que a receita promete — antes de tocar no seu disco.</p>
+        <p class="lead">Uma distribuição Linux distópica em que <strong>instalar é provar</strong>. Todo programa é conferido contra a impressão digital que o próprio autor publicou, todo arquivo do sistema tem dono declarado, e nada entra sem passar. Quando algo não bate, ela recusa — em vez de fingir que deu certo.</p>
         <div class="actions">
           <a class="button primary" href="/releases/distropica-0.13-x86_64.iso">Baixar ISO · 1355 MB</a>
           <a class="button" href="/releases/distropica-0.13-corresponding-sources.tar.zst">Fontes correspondentes</a>
@@ -208,20 +208,29 @@
         <h2>O sistema é o registro.</h2>
         <p class="lead">O Ministério da Verdade de Orwell reescrevia o registro
         para que o passado coubesse no presente. Aqui é ao contrário: <strong>o
-        registro manda, e é o sistema que tem de coincidir com ele</strong>. O
+        registro manda, e é o sistema que tem de coincidir com ele</strong> —
+        registro, aqui, é a ficha que diz o que deveria estar instalado, de
+        onde veio e com que aparência. O
         nome é a advertência virada do avesso — e dessa inversão sai todo o
         resto.</p>
         <div class="credo">
-          <p><b>Nada entra por confiança.</b> Só por prova: hash pinado na
-          receita, evidência conferida, registro legível do que entrou.</p>
-          <p><b>Nada degrada em silêncio.</b> Diante da dúvida, recusa-se em
-          voz alta — porque o defeito que só aparece meses depois já custou
-          mais caro do que a falha que impediria a instalação.</p>
-          <p><b>Toda escolha traz o preço escrito.</b> O que a distro não faz é
-          dito antes, com o que custa: custo escondido é mentira lenta.</p>
-          <p><b>O que não cabe numa leitura não pode ser auditado.</b>
-          Simplicidade aqui não é estética — é a condição de alguém poder
-          conferir. Sem solver, sem banco opaco: o estado é o filesystem.</p>
+          <p><b>Confere antes de instalar.</b> Todo programa tem uma
+          impressão digital publicada por quem o escreveu. A Distrópica confere
+          essa impressão antes de instalar; se não bater, não instala. Você não
+          precisa confiar nem em nós, nem em quem hospedou o download.</p>
+          <p><b>Se algo não bate, ela para.</b> Não instala &ldquo;quase
+          certo&rdquo; para você descobrir o problema meses depois. Prefere
+          falhar na hora e dizer o que houve — defeito silencioso sai mais caro
+          que instalação recusada.</p>
+          <p><b>O que ela não faz está dito antes.</b> Sem letra miúda: vídeos
+          em WebM tocam, os em H.264 (um formato comum na web) não, porque ele
+          cobra patentes
+          que a distro não quis pagar. Está escrito aqui, na página de
+          download, antes de você baixar.</p>
+          <p><b>É pequena o bastante para ser lida.</b> O programa que instala
+          tudo cabe numa sentada de leitura, e cada peça do sistema explica por
+          escrito por que está ali. Quem quiser conferir, consegue — e é para
+          isso que ela é pequena.</p>
         </div>
         <div class="grid">
           <article class="card">
@@ -253,24 +262,25 @@
             compila tudo na sua máquina. Aqui a ordem é declarada e visível
             pacote a pacote: <strong>binário oficial do mantenedor</strong>,
             depois binário assinado da Distrópica, e fonte só quando ninguém
-            publica um. Cada registro diz qual dos três aconteceu.</p>
+            publica um. E a ficha de cada programa instalado diz qual dos três
+            caminhos aconteceu com ele.</p>
           </article>
           <article class="card">
             <span class="number">B / PROVA</span>
             <h3>O que o binário pede é conferido</h3>
-            <p>A auditoria lê os ELF com <code>readelf</code> — sem executar
-            nada — e cobra que <em>todo</em> requisito observado tenha provedor
-            declarado. Dependência esquecida vira erro de construção, não uma
-            tela preta meses depois. Foi assim que o VP9 revelou um C++
-            escondido dentro de si.</p>
+            <p>Antes de aceitar um programa, ela o abre e lê a lista de peças
+            de que ele precisa para funcionar — sem executá-lo — e exige que
+            cada peça esteja declarada e presente. Peça esquecida vira erro na
+            hora de construir, e não uma tela preta meses depois na sua
+            máquina.</p>
           </article>
           <article class="card">
             <span class="number">C / RECUSA</span>
             <h3>Recusar em vez de degradar</h3>
-            <p>Dois pacotes reivindicando o mesmo caminho é <em>doublethink</em>
-            e para a instalação. Artefato que diverge do hash pinado é
-            <em>crimestop</em>. A alternativa comum — avisar e seguir — produz
-            sistemas que ninguém consegue explicar depois.</p>
+            <p>Se dois programas tentam ser donos do mesmo arquivo, a
+            instalação para. Se um download não corresponde à impressão digital
+            esperada, também para. O caminho comum — avisar e seguir mesmo
+            assim — produz máquinas que ninguém consegue mais explicar.</p>
           </article>
           <article class="card">
             <span class="number">D / MOTIVO</span>
@@ -283,10 +293,11 @@
           <article class="card">
             <span class="number">E / FONTE</span>
             <h3>Fonte correspondente é portão</h3>
-            <p>Publicar exige que <strong>todo</strong> pacote tenha texto de
-            licença e fonte correspondente conferida por hash — não é anexo de
-            boa vontade, é condição para a release sair. Esta versão só foi ao
-            ar depois de 199 de 199 pacotes passarem.</p>
+            <p>Software livre obriga quem distribui um programa pronto a
+            oferecer também o código que o originou. Aqui isso é condição para
+            a versão sair: <strong>todo</strong> programa precisa ter sua
+            licença e seu código, conferidos um a um. Esta versão só foi ao ar
+            depois que os 199 passaram.</p>
           </article>
           <article class="card">
             <span class="number">F / PREÇO</span>
