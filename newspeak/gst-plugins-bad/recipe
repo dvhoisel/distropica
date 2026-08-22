@@ -1,0 +1,54 @@
+NAME=gst-plugins-bad
+VERSION=1.28.6
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib gstreamer gst-plugins-base opus orc"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc"
+ABOUT="UM PLUGIN, e um só: o opusparse. O nome do pacote engana e por isso vale dizer — 'bad' no vocabulário do GStreamer não é licença nem patente, é maturidade de código; quem carrega problema de licenciamento é o 'ugly', que esta árvore não traz. O que trouxe este pacote foi uma medição: o YouTube abriu com o player montado e recusou tocar, e a causa estava no GStreamerRegistryScanner.cpp:531 do WebKit — em modo Media Source, o Opus só é registrado como codec se existir um PARSER para audio/x-opus, e não basta o decodificador. O opusdec vem do gst-plugins-base; o opusparse mora aqui, em ext/opus, e em lugar nenhum mais das três coleções. Sem ele o navegador anuncia audio/webm e nega o codec opus, que é exatamente o que o YouTube pergunta antes de tocar. O build usa --auto-features=disabled: as quase duzentas features deste pacote ficam TODAS desligadas por construção, e só o opus é ligado explicitamente — o payload não varia com o que estiver instalado na raiz, e nada de H.264, HEVC ou os wrappers de codec proprietário entra pela porta dos fundos."
+LICENSE="LGPL-2.1-or-later"
+SRC="https://gstreamer.freedesktop.org/src/gst-plugins-bad/gst-plugins-bad-$VERSION.tar.xz"
+SHA256="6636f2c2289ceda52c4aba971338c81e2b5780d3381bd3673c1c116ec87587c3"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        --wrap-mode=nodownload \
+        --auto-features=disabled \
+        -Dopus=enabled \
+        -Dgpl=disabled \
+        -Dintrospection=disabled \
+        -Dexamples=disabled \
+        -Dtests=disabled \
+        -Dnls=disabled \
+        -Ddoc=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    [ -e "$STAGE/usr/lib/gstreamer-1.0/libgstopusparse.so" ] || {
+        echo "gst-plugins-bad: o opusparse não foi produzido — é o único motivo deste pacote" >&2
+        ls "$STAGE/usr/lib/gstreamer-1.0" 2>/dev/null >&2
+        exit 1
+    }
+    # O elemento tem de existir com esse nome: é por ele que o WebKit procura
+    # um parser de audio/x-opus, e é a ausência dele que fazia o YouTube
+    # recusar o codec com o player já montado.
+    strings -a "$STAGE/usr/lib/gstreamer-1.0/libgstopusparse.so" | grep -qx 'opusparse' || {
+        echo "gst-plugins-bad: o plugin não registra o elemento opusparse" >&2
+        exit 1
+    }
+    # UM PLUGIN E MAIS NENHUM. O --auto-features=disabled é o que garante
+    # isso, e esta guarda é quem cobra a garantia: qualquer plugin a mais
+    # significa que uma feature voltou a ligar sozinha.
+    quantos=$(ls "$STAGE/usr/lib/gstreamer-1.0" 2>/dev/null | wc -l)
+    [ "$quantos" -eq 1 ] || {
+        echo "gst-plugins-bad: $quantos plugins produzidos; era para ser só o opusparse" >&2
+        ls "$STAGE/usr/lib/gstreamer-1.0" >&2
+        exit 1
+    }
+    unset quantos
+    find "$STAGE" -type d -empty -delete
+}
