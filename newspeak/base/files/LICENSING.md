@@ -34,6 +34,31 @@ O pacote `base`, por conter payload escrito para a própria Distrópica, passa a
 declarar `GPL-3.0-or-later` nesta revisão. Cópias anteriores disponibilizadas
 como `MIT-0` não perdem retroativamente essa permissão.
 
+### Codecs de mídia: a fronteira é deliberada
+
+Desde a 0.14 a árvore reproduz vídeo, e reproduz **só o formato livre**. O
+WebKit é construído com GStreamer e a pilha vai até o `gst-plugins-good`:
+WebM (matroska), VP8/VP9 (`libvpx`, BSD com concessão de patente explícita do
+Google), Opus (BSD, RFC 6716, com promessa irrevogável de patente) e Vorbis
+(BSD). O `gst-plugins-base` e o `gst-plugins-good` são LGPL-2.1-or-later.
+
+Do `gst-plugins-bad` entra **um único elemento**, o `opusparse`
+(LGPL-2.1-or-later), e ele existe por uma exigência do WebKit: o Media Source
+Extensions recusa um fluxo `audio/x-opus` sem um parser de áudio registrado, e
+sem ele o áudio de página nenhuma toca. O pacote é construído com
+`--auto-features=disabled` e o payload instalado é literalmente um arquivo —
+`libgstopusparse.so` —, conferido por guarda na própria receita. Opus é BSD,
+RFC 6716, com promessa irrevogável de patente: nenhum formato onerado entra de
+carona.
+
+O `gst-plugins-ugly` **não entra**, e o resto do `gst-plugins-bad` também não.
+Com eles ficam de fora H.264, HEVC, AAC e MP3 — formatos cuja distribuição em
+binário envolve licenciamento de patente que esta distro não contratou. A
+consequência prática é dita em voz alta em vez de descoberta pelo usuário: uma
+página que ofereça apenas MP4/H.264 não toca. Não é limitação técnica; é a
+mesma fronteira que mantém o `linux-firmware` como exceção declarada e nada
+além dela.
+
 ## Binários e fontes correspondentes
 
 Publicar o repositório de fontes não equivale, sozinho, a publicar uma release
