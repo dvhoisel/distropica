@@ -61,7 +61,7 @@ build() {
     # de cada modulo. A chave RSA usada uma vez para gerar o bundle foi criada
     # fora do worktree/rootfs e destruida antes da publicacao destes arquivos.
     module_cert_sha256=935d49c7e9012fc92c13f19ca99862dd118589afd27cdbc19e6ca82c3e2834ed
-    module_manifest_sha256=30742e62dbb3ed046b65ffb600afb7c06876936011f31848e6222ee484fbb52c
+    module_manifest_sha256=28ac1d1c263e99fde6d40c7d2e3d698d85c8dee08b1696b8ace2dbdd8585b02e
     module_bundle=../module-signing/bundle
     module_apply=../module-signing/apply-signatures
     # SEM `awk`, e pelo mesmo motivo que o dbus e o meson já registraram: a view
@@ -158,6 +158,16 @@ CONFIG_IPV6_MULTIPLE_TABLES=y
 # Modulo nao serve AQUI: quem registra a entrada e o init da midia viva, que
 # roda antes de qualquer troca de raiz e nunca carregou modulo nenhum. Como
 # modulo o gancho simplesmente nao encontra o efivarfs e cai no aviso.
+#
+# TIRAR UM SIMBOLO DE =m PARA =y MEXE NO BUNDLE DE ASSINATURA. O
+# apply-signatures compara o conjunto de .ko construidos com o manifesto por
+# igualdade ESTRITA nos dois sentidos, e o conjunto de arquivos do bundle
+# tambem; virar builtin deixa de produzir o .ko e a construcao morre em
+# "cobertura incompleta". Junto com esta linha sairam a entrada do
+# efivarfs.ko no manifesto, a assinatura orfa dele e o pino
+# module_manifest_sha256 acima, que foi recalculado. O caminho contrario
+# — transformar builtin em modulo — NAO e possivel sem gerar bundle novo: a
+# chave RSA que assinou este foi destruida depois de usada uma vez.
 CONFIG_EFIVAR_FS=y
 # --- Wi-Fi -----------------------------------------------------------------
 # Pilha 802.11 e o interruptor de radio. O iwd le rfkill diretamente.
