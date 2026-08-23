@@ -9,7 +9,11 @@ DEPS="glibc curl openssl zlib expat pcre2 perl busybox"
 # correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
 # está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
 # vir antes dele e dispensa a declaração.
-BUILD_DEPS="gcc-pass2 binutils-glibc make gettext gawk"
+# findutils porque as guardas abaixo usam find, e o find desta arvore e o do
+# GNU: o findutils supersede o applet do busybox (SPEC-0003 §7). Enquanto o
+# git era construido ANTES dele a busca caia no applet e passava; isso e
+# ordem, nao contrato, e o `minitrue lint` sempre apontou a aresta faltante.
+BUILD_DEPS="gcc-pass2 binutils-glibc make gettext gawk findutils"
 ABOUT="Controle de versão. Faltava, e a falta era gritante: esta distro se apresenta como pronta para compilar, embarca gcc, make, vim e ripgrep, e o site convida a examinar o código — sem nenhuma forma de obter esse código versionado ou registrar uma alteração. A libcurl em DEPS é o que torna clone por https:// possível; sem ela sobrariam ssh:// e git://, e o primeiro repositório que alguém tentasse buscar falharia. O expat é para push por HTTP; o pcre2 dá ao git grep as mesmas expressões que o ripgrep desta árvore já usa, em vez de duas sintaxes diferentes na mesma máquina. Perl entra porque partes do git são scripts Perl e sem ele add -p, rebase -i e send-email não funcionam — não é opcional, é o que o upstream assume. Sem Tcl/Tk: gitk e git-gui exigiriam uma terceira pilha gráfica numa árvore que já carrega GTK3 por causa do Firefox e GTK4 como toolkit próprio."
 LICENSE="GPL-2.0-only AND LGPL-2.1-or-later AND BSD-3-Clause AND MIT"
 SRC="https://mirrors.edge.kernel.org/pub/software/scm/git/git-$VERSION.tar.xz"

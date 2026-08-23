@@ -39,5 +39,9 @@ build() {
           "$STAGE/usr/share/man/man1/updatedb.1" \
           "$STAGE/usr/share/man/man5/locatedb.5"
     rm -rf "$STAGE/usr/lib/findutils" "$STAGE/var"
-    find "$STAGE" -type d -empty -delete
+    # O FIND QUE LIMPA O FIND. Este pacote e quem passa a ser dono de
+    # /usr/bin/find, entao pedir o find aqui seria pedir a si mesmo. O applet
+    # do busybox atende, chamado pelo nome do multi-call — mesmo motivo e
+    # mesmo remedio do AWK="busybox awk" no make, no binutils e no gawk.
+    busybox find "$STAGE" -type d -empty -delete
 }
