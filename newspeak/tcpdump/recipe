@@ -9,7 +9,7 @@ DEPS="glibc libpcap openssl"
 # correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
 # está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
 # vir antes dele e dispensa a declaração.
-BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf gawk"
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf gawk findutils"
 ABOUT="Captura e leitura de pacote na linha de comando, do mesmo projeto da libpcap. Entra porque o tshark ainda não é alcançável: o Wireshark exige CMake, GLib e libgcrypt, e a GLib se constrói com Meson — nove receitas de corrente. O tcpdump usa a libpcap que já está aqui e o openssl para descriptografar ESP; nada de novo no ferramental de build. Grava .pcap para analisar noutro lugar, que é o fluxo que este perfil escolheu quando recusou arrastar Qt para dentro da distro. Sem cap_net_raw ele exige root, como qualquer captura."
 LICENSE=BSD-3-Clause
 SRC="https://www.tcpdump.org/release/tcpdump-$VERSION.tar.xz"

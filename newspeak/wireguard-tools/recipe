@@ -3,7 +3,7 @@ VERSION=1.0.20260223
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc bash busybox nftables"
-BUILD_DEPS="make gcc-pass2 binutils-glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc findutils"
 ABOUT="Espaço de usuário do WireGuard: wg e wg-quick. O datapath NÃO está aqui — é o kernel (CONFIG_WIREGUARD), que traz Curve25519 e ChaCha20Poly1305 por conta própria. DEPS parece grande para dois programas porque o wg-quick é um script que chama outros: bash (é '#!/bin/bash' e a base usa ash), ip do busybox, e nft para a regra por marca de 'Table = auto' — o §4.1 exige aresta explícita para helper executado em runtime, que análise estática não enxerga. Sem unidades systemd e sem completions."
 LICENSE=GPL-2.0-only
 SRC="https://git.zx2c4.com/wireguard-tools/snapshot/wireguard-tools-$VERSION.tar.xz"

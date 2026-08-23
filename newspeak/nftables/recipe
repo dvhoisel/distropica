@@ -9,7 +9,7 @@ DEPS="glibc libmnl libnftnl mathlibs-glibc"
 # correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
 # está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
 # vir antes dele e dispensa a declaração.
-BUILD_DEPS="make gcc-pass2 binutils-glibc flex bison pkgconf bash gawk"
+BUILD_DEPS="make gcc-pass2 binutils-glibc flex bison pkgconf bash gawk findutils"
 ABOUT="Ferramenta de espaço de usuário do netfilter: é ela que carrega regra no kernel. Sem nftables a distro não tem filtragem de pacote nenhuma, e o wg-quick com 'Table = auto' não consegue instalar a regra por marca de que depende. Compilado sem CLI interativa e sem página de manual, para não arrastar readline e a cadeia docbook; o JSON já é opt-in no upstream e fica de fora. Usa libgmp, fornecida por mathlibs-glibc."
 LICENSE=GPL-2.0-only
 SRC="https://ftp.netfilter.org/pub/nftables/nftables-$VERSION.tar.xz"

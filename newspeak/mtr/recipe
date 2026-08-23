@@ -9,7 +9,7 @@ DEPS="glibc ncurses libcap"
 # correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
 # está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
 # vir antes dele e dispensa a declaração.
-BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf gawk"
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf gawk findutils"
 ABOUT="traceroute e ping contínuos numa tela só, em curses. Separa o privilégio num auxiliar (mtr-packet), que é quem abre o socket cru: com o pack v2 esse auxiliar pode receber cap_net_raw de verdade, em vez de SUID root. Sem a interface GTK — este perfil não tem GTK, e a versão de terminal é a útil num instalador."
 LICENSE=GPL-2.0-only
 SRC="https://www.bitwizard.nl/mtr/files/mtr-$VERSION.tar.gz"

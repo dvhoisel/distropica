@@ -20,7 +20,7 @@ TOOLCHAIN=native
 # objcopy, readelf e nm estão presentes; rsync, pahole, zstd e lz4 NÃO existem na
 # árvore e não fazem falta, porque a config não liga DEBUG_INFO_BTF nem compressão
 # zstd/lz4. Conferido antes de acrescentar, para não descobrir uma por hora.
-BUILD_DEPS="gcc-pass2 binutils-glibc flex bison elfutils perl openssl make gawk"
+BUILD_DEPS="gcc-pass2 binutils-glibc flex bison elfutils perl openssl make gawk findutils"
 ABOUT="O kernel. Mundo B por necessidade: o kernel.org só publica FONTE — não há binário oficial (um kernel é sempre específico de um .config), e binários de distro são inelegíveis (SPEC-0001 §2, SPEC-0007). Edge (P7): acompanha o stable mais recente do kernel.org, não um LTS congelado. Compilado com o gcc NATIVO do E2. MÓDULOS ASSINADOS REPRODUTÍVEIS: MODULE_SIG_FORCE confia em certificado público fixo; o build produz .ko unsigned determinístico, confere hash/cobertura e reaplica com sign-file -s um CMS público pinado por módulo. Nenhuma chave privada entra no worktree, rootfs ou build. HOSTLDFLAGS -rpath-link permite a extract-cert/sign-file/objtool resolver libcrypto/libelf e libz transitiva."
 LICENSE="GPL-2.0-only"
 SRC="https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$VERSION.tar.xz"
