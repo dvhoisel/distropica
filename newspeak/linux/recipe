@@ -148,6 +148,17 @@ CONFIG_NFT_FIB_IPV6=y
 # Table=auto depende para instalar a regra por marca no lado v6.
 CONFIG_IPV6=y
 CONFIG_IPV6_MULTIPLE_TABLES=y
+# --- Variaveis UEFI --------------------------------------------------------
+# EFIVAR_FS BUILTIN, e nao modulo como o defconfig deixa. E por ele que o
+# instalador registra a entrada de arranque na NVRAM do firmware; sem a
+# entrada, firmware de disco fixo nao e obrigado a procurar o caminho de
+# reserva EFI/BOOT/BOOTX64.EFI, e nao procura — medido em maquina real, que
+# instalou bem e caiu na ROM de PXE legada no reboot.
+#
+# Modulo nao serve AQUI: quem registra a entrada e o init da midia viva, que
+# roda antes de qualquer troca de raiz e nunca carregou modulo nenhum. Como
+# modulo o gancho simplesmente nao encontra o efivarfs e cai no aviso.
+CONFIG_EFIVAR_FS=y
 # --- Wi-Fi -----------------------------------------------------------------
 # Pilha 802.11 e o interruptor de radio. O iwd le rfkill diretamente.
 CONFIG_WLAN=y
