@@ -15,6 +15,8 @@ uso:
   minipax install-media --source DIR --target DIR [opções]
   minipax partition --disk DISPOSITIVO [--esp-mib N] [--swap-mib N]
       [--logical-sector N]
+  minipax efi-boot --esp DISPOSITIVO [--rotulo TEXTO] [--carregador CAMINHO]
+      [--sysfs DIR] [--efivars DIR]
   minipax install-disk --saida ARQ [--sysfs DIR] [--midia DISPOSITIVO]
       [--efi-bytes N] [--esp-mib N] [--raiz-minima-bytes N] [--cfdisk ARQ]
   minipax media build --profile DIR --mode online|offline \
@@ -42,6 +44,18 @@ opções de install-disk (o instalador de texto da mídia viva):
   --cfdisk ARQ      default: /bin/cfdisk
 
 Sai 0 com a decisão gravada, 2 quando o operador desiste, 1 em erro.
+
+opções de efi-boot (registra o arranque na NVRAM do firmware):
+  --esp DISPOSITIVO  partição ESP já instalada, ex.: /dev/sda1
+  --rotulo TEXTO     nome da entrada no menu do firmware (default: Distrópica)
+  --carregador CAM   caminho DENTRO da ESP, com barra invertida
+                     (default: \EFI\BOOT\BOOTX64.EFI)
+  --sysfs DIR        default: /sys/class/block
+  --efivars DIR      default: /sys/firmware/efi/efivars
+
+O caminho de reserva EFI/BOOT/BOOTX64.EFI continua obrigatório e é gravado
+pelo instalador; esta entrada existe porque firmware de disco fixo não é
+obrigado a procurar por ele.
 
 opções de instalação:
   --minitrue ARQ    binário minitrue (ou MINITRUE)
@@ -98,6 +112,7 @@ fn run() -> Result<()> {
         // O instalador de texto. Ele NÃO escreve em disco: decide e grava a
         // decisão num arquivo, e quem apaga continua sendo o caminho auditado.
         "install-disk" => run_install_disk(args),
+        "efi-boot" => run_efi_boot(args),
         other => bail!("comando desconhecido {other:?}\n\n{USAGE}"),
     }
 }
@@ -317,6 +332,50 @@ fn run_media(args: Vec<String>) -> Result<()> {
             minitrue: text("--minitrue").map(PathBuf::from),
         },
     )
+}
+
+/// `minipax efi-boot --esp /dev/sda1`
+///
+/// Registra a entrada de arranque UEFI na NVRAM. Sai 1 quando não consegue —
+/// e o chamador (o `bootstrap/live/init`) trata isso como AVISO, não como
+/// falha de instalação: o caminho de reserva já está no disco, e há máquina
+/// em que ele basta. Abortar uma instalação inteira por causa da NVRAM seria
+/// pior que avisar.
+fn run_efi_boot(args: Vec<String>) -> Result<()> {
+    let mut esp: Option<PathBuf> = None;
+    let mut rotulo = "Distrópica".to_string();
+    let mut carregador = "\\EFI\\BOOT\\BOOTX64.EFI".to_string();
+    let mut sysfs = PathBuf::from("/sys/class/block");
+    let mut efivars = PathBuf::from(minipax::efi_boot::EFIVARS);
+    let mut index = 0;
+    while index < args.len() {
+        let option = args[index].clone();
+        match option.as_str() {
+            "--esp" => esp = Some(take_value(&args, &mut index, &option)?.into()),
+            "--rotulo" => rotulo = take_value(&args, &mut index, &option)?,
+            "--carregador" => carregador = take_value(&args, &mut index, &option)?,
+            "--sysfs" => sysfs = take_value(&args, &mut index, &option)?.into(),
+            "--efivars" => efivars = take_value(&args, &mut index, &option)?.into(),
+            other => bail!("opção desconhecida {other:?}"),
+        }
+        index += 1;
+    }
+    let esp = esp.ok_or_else(|| anyhow::anyhow!("efi-boot exige --esp"))?;
+    // A barra do UEFI é a invertida. Aceitar a normal e converter em silêncio
+    // esconderia o erro de quem chama; recusar diz onde consertar.
+    if carregador.contains('/') {
+        bail!("--carregador usa barra invertida: \\EFI\\BOOT\\BOOTX64.EFI");
+    }
+    let (disco, numero) = minipax::efi_boot::disco_da_particao(&sysfs, &esp)?;
+    let setor = minipax::efi_boot::setor_logico(&sysfs, &disco);
+    let alvo = minipax::efi_boot::le_esp(&disco, numero, setor)?;
+    let registro = minipax::efi_boot::registra(&efivars, &rotulo, &alvo, &carregador)?;
+    // Saída legível por script, no mesmo estilo do `partition`.
+    println!("BOOT_ENTRY={}", registro.nome());
+    println!("BOOT_ENTRY_REUSED={}", registro.reaproveitada);
+    println!("ESP_DISK={}", disco.display());
+    println!("ESP_PARTITION={numero}");
+    Ok(())
 }
 
 /// `minipax partition --disk /dev/sda [--esp-mib 64]`

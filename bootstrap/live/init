@@ -877,6 +877,36 @@ install_system() {
         rescue "BOOTX64.EFI instalado diverge do exportado pelo Minipax"
     rm -f -- /run/distropica-BOOTX64.EFI
 
+    # A ENTRADA DE ARRANQUE NA NVRAM. O caminho de reserva gravado acima é o
+    # que a norma UEFI obriga o firmware a procurar em mídia REMOVÍVEL; em
+    # disco fixo procurar por ele é opcional, e firmware da era CSM não
+    # procura. Medido em máquina real: a instalação termina dizendo que deu
+    # certo, e no reboot o firmware esgota a lista, cai na ROM de PXE legada e
+    # pede "Reboot and Select proper Boot device". Registrar Boot####/BootOrder
+    # é o que faz o firmware SABER que o carregador existe.
+    #
+    # FALHA AQUI É AVISO, NÃO RESGATE. O disco está correto, e há máquina que
+    # arranca só pelo caminho de reserva; abortar a instalação inteira por
+    # causa de NVRAM cheia, somente-leitura ou ausente trocaria um sistema que
+    # talvez arranque por nenhum sistema. O que não se admite é o silêncio: sem
+    # a mensagem, a descoberta fica para o reboot.
+    mkdir -p /sys/firmware/efi/efivars 2>/dev/null || true
+    mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null || true
+    if [ -d /sys/firmware/efi/efivars ] &&
+        /bin/minipax efi-boot --esp "$esp" >/run/efi-boot.log 2>&1; then
+        say "entrada de arranque registrada no firmware: \
+$(sed -n 's/^BOOT_ENTRY=//p' /run/efi-boot.log)"
+    else
+        say "AVISO: não registrei a entrada de arranque na NVRAM"
+        say "       ($(tail -1 /run/efi-boot.log 2>/dev/null))"
+        say "       O carregador ESTÁ no disco, em EFI/BOOT/BOOTX64.EFI, mas"
+        say "       nem todo firmware procura por ele em disco fixo. Se a"
+        say "       máquina não arrancar, entre no setup e acrescente uma"
+        say "       entrada apontando para \\EFI\\BOOT\\BOOTX64.EFI."
+    fi
+    rm -f -- /run/efi-boot.log
+    umount /sys/firmware/efi/efivars 2>/dev/null || true
+
     # O sync paga de uma vez todo o cache de página que a instalação deixou —
     # dezenas de segundos num disco virtual. Mesmo remédio do verify acima.
     say "descarregando os caches no disco"

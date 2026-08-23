@@ -1,4 +1,5 @@
 pub mod disco;
+pub mod efi_boot;
 pub mod install;
 pub mod install_disk;
 pub mod licenses;
