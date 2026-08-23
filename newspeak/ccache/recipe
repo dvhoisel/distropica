@@ -30,4 +30,26 @@ install_pkg() {
         echo "ccache: o tarball nao carrega GPL-3.0.txt e LICENSE.md" >&2
         exit 1
     }
+    # FORA O ANDAIME DE EMPACOTAMENTO DO UPSTREAM. O tarball traz a cadeia
+    # Makefile -> install.sh -> patch-binary.py, que existe para quem instala
+    # o tarball a mao em /usr/local: ela reescreve os caminhos libexec e
+    # sysconfdir gravados no binario. Aqui quem instala e o minitrue, em /opt
+    # com link em /usr/bin, e essa cadeia nunca roda. Ficar no payload nao e
+    # so lixo: o patch-binary.py e `#!/usr/bin/env python3`, e a auditoria
+    # recusa — com razao — um pacote que EXIGE python3 sem declara-lo.
+    # Declarar seria pior: o ccache e concedido por aresta implicita a toda
+    # receita KIND=source TOOLCHAIN=native, e arrastaria o python para dentro
+    # de cada view de build do Mundo B.
+    rm -f "$PREFIX/patch-binary.py" "$PREFIX/install.sh" "$PREFIX/Makefile"
+    # O QUE FICA NAO PODE PRECISAR DE INTERPRETADOR. Remover os tres arquivos
+    # de hoje conserta a versao de hoje; esta guarda conserta a proxima, em
+    # que o upstream acrescente outro script ao tarball. Um pacote do Mundo A
+    # que se anuncia como binario estatico nao pode ter shebang nenhum.
+    achados=$(find "$PREFIX" -type f -perm -u+x -exec sh -c \
+        'head -c 2 "$1" | grep -q "^#!" && echo "$1"' _ {} \; )
+    [ -z "$achados" ] || {
+        echo "ccache: sobrou script interpretado no payload:" >&2
+        echo "$achados" >&2
+        exit 1
+    }
 }
