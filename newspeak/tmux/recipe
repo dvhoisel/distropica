@@ -19,7 +19,7 @@ DEPS="glibc ncurses libevent"
 # O candidato que o autoconf procura é `'bison -y' byacc`, com aspas e argumento,
 # e é por isso que grep ingênuo não encontra: quem varrer atrás desta classe tem
 # de partir o candidato antes do espaço.
-BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf gawk bison"
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf gawk bison findutils"
 ABOUT="Multiplexador de terminal, e ele ganhou razão de existir junto com o openssh e o minicom que entraram na mesma leva: uma sessão que sobrevive à queda da conexão deixa de ser conforto quando o acesso à máquina é por SSH numa rede ruim ou por serial numa placa que reinicia. Sem ele, ligação caída é trabalho perdido. Também é o que torna o console serial utilizável para mais de uma coisa ao mesmo tempo, num sistema cujo modo gráfico pode nem ter subido. Depende da libevent, que entrou nesta árvore exclusivamente por causa dele."
 LICENSE="ISC AND BSD-2-Clause AND BSD-3-Clause"
 SRC="https://github.com/tmux/tmux/releases/download/$VERSION/tmux-$VERSION.tar.gz"

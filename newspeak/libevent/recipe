@@ -9,7 +9,7 @@ DEPS="glibc openssl"
 # correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
 # está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
 # vir antes dele e dispensa a declaração.
-BUILD_DEPS="gcc-pass2 binutils-glibc make gawk"
+BUILD_DEPS="gcc-pass2 binutils-glibc make gawk findutils"
 ABOUT="Laço de eventos. Está aqui por UM consumidor — o tmux — e por nada mais, o que é o suficiente: sem ela o tmux não constrói. Ele usa a libevent para multiplexar as janelas, os clientes e os pseudo-terminais num processo só, que é o que permite a sessão sobreviver ao cliente que a abriu. Com openssl, porque o bufferevent_openssl faz parte da biblioteca e desacoplá-lo exigiria --disable-openssl, o que deixaria um pedaço da API faltando para qualquer consumidor futuro por economia de nada — o openssl já está na árvore. Sem os testes e sem o benchmark, que não são payload."
 LICENSE="BSD-3-Clause AND ISC"
 SRC="https://github.com/libevent/libevent/releases/download/release-$VERSION-stable/libevent-$VERSION-stable.tar.gz"

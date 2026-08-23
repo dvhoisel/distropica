@@ -9,7 +9,7 @@ DEPS="glibc openssl zlib busybox"
 # correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
 # está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
 # vir antes dele e dispensa a declaração.
-BUILD_DEPS="gcc-pass2 binutils-glibc make gawk"
+BUILD_DEPS="gcc-pass2 binutils-glibc make gawk findutils"
 ABOUT="O servidor e o cliente SSH. Entra porque o BusyBox desta árvore não traz applet de ssh nem de sshd — só telnetd, que manda senha em claro e não é opção. SEM PAM, e isso é escolha e não omissão: o PAM traria uma pilha de módulos configuráveis para autenticar contra um /etc/passwd que tem exatamente uma conta; o OpenSSH sem PAM usa o crypt da glibc direto, que é o que o instalador já escreveu com chpasswd -c sha512. TRÊS COISAS QUE NÃO PODEM ESTAR NO PAYLOAD e por isso são geradas no primeiro boot pelo drop-in 20-sshd.sh: as chaves de host, que precisam ser ÚNICAS por instalação — se viessem no pacote, toda máquina instalada da mesma mídia teria a mesma identidade SSH, e a impressão digital que o cliente confere deixaria de significar qualquer coisa; a conta 'sshd' da separação de privilégio, porque contas são estado do admin (o base é explícito) e nenhum pacote as reivindica no manifesto; e o /var/empty, que o daemon exige vazio e de dono root. PermitRootLogin: esta distro tem UMA conta, e o instalador OBRIGA a definir a senha dela antes de tocar no disco — então login de root por senha fica ligado, porque a alternativa é embarcar um servidor no qual ninguém consegue entrar. O preço está escrito no sshd_config e é revisável em uma linha."
 LICENSE="BSD-2-Clause AND BSD-3-Clause AND ISC AND MIT AND SSH-OpenSSH"
 SRC="https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-$VERSION.tar.gz"

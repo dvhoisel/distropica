@@ -3,7 +3,7 @@ VERSION=3.24.52
 KIND=source
 TOOLCHAIN=native
 DEPS="gtk3 glib-introspection gobject-introspection harfbuzz-introspection pango-introspection gdk-pixbuf-introspection at-spi2-core-introspection"
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools gettext wayland-protocols glib glib-introspection gobject-introspection harfbuzz harfbuzz-introspection pango pango-introspection gdk-pixbuf gdk-pixbuf-introspection at-spi2-core at-spi2-core-introspection cairo libepoxy fribidi libxkbcommon mesa fontconfig freetype"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools gettext wayland-protocols glib glib-introspection gobject-introspection harfbuzz harfbuzz-introspection pango pango-introspection gdk-pixbuf gdk-pixbuf-introspection at-spi2-core at-spi2-core-introspection cairo libepoxy fribidi libxkbcommon mesa fontconfig freetype findutils"
 ABOUT="Overlay de canal com Gdk-3.0 e Gtk-3.0. Encadeia explicitamente todos os overlays que seus includes exigem — GLib, HarfBuzz/Pango, GdkPixbuf e Atk — e passa os MESMOS backends da receita-base, que hoje é só Wayland; o stage fechado contém quatro arquivos GIR/typelib. O GdkX11-3.0 saiu junto com o X11 da árvore: a receita-base passa -Dx11_backend=false, esta passa o mesmo, e o alvo do typelib nem existe no ninja. A versão anterior deste texto prometia backends Wayland/X11 e três namespaces, e a promessa envelheceu sem que ninguém percebesse, porque esta receita só é exercitada na closure do GIMP."
 LICENSE=LGPL-2.0-or-later
 SRC="https://download.gnome.org/sources/gtk/3.24/gtk-$VERSION.tar.xz"

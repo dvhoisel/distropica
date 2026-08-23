@@ -4,7 +4,7 @@ KIND=source
 TOOLCHAIN=native
 SUPERSEDES="busybox"
 DEPS="glibc ncurses busybox"
-BUILD_DEPS="make gcc-pass2 binutils-glibc ncurses gawk perl"
+BUILD_DEPS="make gcc-pass2 binutils-glibc ncurses gawk perl findutils"
 ABOUT="Vim de terminal com edição multibyte, syntax, eval e cores verdadeiras; compilado uma vez pela Distrópica a partir da tag estável assinada do upstream e entregue pronto pelo canal binário"
 # Escopo conferido no manifesto do registro (2061 entradas), e não na árvore
 # de fontes: este configure usa --disable-terminal e --without-x, então o

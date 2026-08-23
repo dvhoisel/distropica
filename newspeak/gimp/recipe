@@ -10,7 +10,7 @@ DEPS="glibc gcc-pass2 busybox gtk3 gtk3-introspection at-spi2-core at-spi2-core-
 # renderproto`. Sem o xorgproto na view, o pkg-config falha ao gerar os cflags do
 # cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
 # subprojeto. Conferido nos .pc instalados, não suposto.
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc perl gettext libxslt gobject-introspection glib-introspection harfbuzz-introspection pango-introspection gdk-pixbuf-introspection at-spi2-core-introspection gtk3-introspection"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc perl gettext libxslt gobject-introspection glib-introspection harfbuzz-introspection pango-introspection gdk-pixbuf-introspection at-spi2-core-introspection gtk3-introspection findutils"
 ABOUT="GIMP 3.2, editor de imagens entregue como Mundo B pelo canal e deliberadamente fora da mídia. A closure mantém gestão de cor e metadados, SVG com loader, HTTPS, pincéis MyPaint, PDF/CJK, impressão em arquivo, Python, Script-Fu, entrada Linux/tablet, Xcursor, JPEG, PNG, TIFF e OpenRaster; formatos que exigiriam pilhas próprias (HEIF/JXL/OpenEXR/JPEG2000/WebP/MNG/FITS) ficam explicitamente fora desta primeira receita auditável. Importação e exportação OpenEXR estão indisponíveis; a entrada PDB de exportação registrada pelo GIMP não tem a operação GEGL correspondente e não produz arquivo."
 LICENSE="GPL-3.0-or-later AND LGPL-3.0-or-later AND CC-BY-SA-3.0 AND CC-BY-SA-4.0 AND CC0-1.0 AND LicenseRef-GIMP-legacy-data"
 SRC="https://download.gimp.org/gimp/v3.2/gimp-$VERSION.tar.xz"

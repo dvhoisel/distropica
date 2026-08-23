@@ -8,7 +8,7 @@ DEPS=""
 # /usr/bin/awk embora. A falta só aparece quando o gawk já foi construído no
 # mesmo plano, então a quebra é sensível à ordem. Conferido no próprio
 # configure da fonte pinada, não suposto.
-BUILD_DEPS="make busybox gawk"
+BUILD_DEPS="make busybox gawk findutils"
 ABOUT="Coleção oficial de pincéis v2 que acompanha a libmypaint. É dado independente de arquitetura e fornece o pacote mypaint-brushes-2.0 procurado de forma obrigatória pelo GIMP; aplica a mesma migração surfacemap→gridmap usada pelo manifesto oficial do GIMP 3.2."
 LICENSE=CC0-1.0
 SRC="https://github.com/mypaint/mypaint-brushes/releases/download/v$VERSION/mypaint-brushes-$VERSION.tar.xz"

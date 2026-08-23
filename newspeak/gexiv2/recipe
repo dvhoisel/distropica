@@ -3,7 +3,7 @@ VERSION=0.14.7
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc gcc-pass2 exiv2 glib glib-introspection python-glibc pygobject"
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc exiv2 glib glib-introspection pygobject gobject-introspection"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc exiv2 glib glib-introspection pygobject gobject-introspection findutils"
 ABOUT="API GObject sobre Exiv2 e seu override Python. A série 0.14 é mantida deliberadamente porque o GIMP 3.2.4 declara >=0.14 e <0.15; a série 0.16 atual é incompatível com esse contrato."
 LICENSE=GPL-2.0-or-later
 SRC="https://download.gnome.org/sources/gexiv2/0.14/gexiv2-$VERSION.tar.xz"

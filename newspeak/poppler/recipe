@@ -10,7 +10,7 @@ DEPS="glibc gcc-pass2 freetype fontconfig zlib libpng libjpeg-turbo lcms2 cairo 
 # renderproto`. Sem o xorgproto na view, o pkg-config falha ao gerar os cflags do
 # cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
 # subprojeto. Conferido nos .pc instalados, não suposto.
-BUILD_DEPS="gcc-pass2 binutils-glibc cmake ninja pkgconf freetype fontconfig zlib libpng libjpeg-turbo lcms2 cairo glib poppler-data"
+BUILD_DEPS="gcc-pass2 binutils-glibc cmake ninja pkgconf freetype fontconfig zlib libpng libjpeg-turbo lcms2 cairo glib poppler-data findutils"
 ABOUT="Renderizador PDF com o wrapper GLib/Cairo exigido pelo importador PDF do GIMP. Mantém JPEG, PNG, ICC e dados CJK; Qt, API C++, utilitários, TIFF, OpenJPEG, Boost, rede e assinaturas são componentes opcionais desligados."
 LICENSE=GPL-2.0-or-later
 SRC="https://poppler.freedesktop.org/poppler-$VERSION.tar.xz"
