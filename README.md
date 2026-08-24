@@ -3,15 +3,15 @@
 > Uma distribuição Linux distópica. Não instala pacotes: **retifica registros**.
 
 **[Site oficial](https://distropica.com.br/)** ·
-**[Baixar a ISO 0.13 (1355 MB)](https://distropica.com.br/releases/distropica-0.13-x86_64.iso)** ·
-**[SHA-256](https://distropica.com.br/releases/distropica-0.13-x86_64.iso.sha256)** ·
-**[Manifesto](https://distropica.com.br/releases/distropica-0.13-x86_64.iso.manifest)** ·
-**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.13-corresponding-sources.tar.zst)** ·
-**[SHA das fontes](https://distropica.com.br/releases/distropica-0.13-corresponding-sources.tar.zst.sha256)** ·
-**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.13-sources.tsv)** ·
-**[Índice de licenças](https://distropica.com.br/releases/distropica-0.13-licencas.tsv)**
+**[Baixar a ISO 0.14 (1355 MB)](https://distropica.com.br/releases/distropica-0.14-x86_64.iso)** ·
+**[SHA-256](https://distropica.com.br/releases/distropica-0.14-x86_64.iso.sha256)** ·
+**[Manifesto](https://distropica.com.br/releases/distropica-0.14-x86_64.iso.manifest)** ·
+**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.14-corresponding-sources.tar.zst)** ·
+**[SHA das fontes](https://distropica.com.br/releases/distropica-0.14-corresponding-sources.tar.zst.sha256)** ·
+**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.14-sources.tsv)** ·
+**[Índice de licenças](https://distropica.com.br/releases/distropica-0.14-licencas.tsv)**
 
-> **Atenção:** a `0.13` é uma **pré-release de desenvolvimento** para VM UEFI
+> **Atenção:** a `0.14` é uma **pré-release de desenvolvimento** para VM UEFI
 > **64 bits**, e a própria mídia declara isso de si: `PROFILE_CLASS=custom`.
 > O instalador apaga integralmente o dispositivo escolhido. Use um disco virtual
 > descartável e confira o SHA-256 antes do boot
@@ -30,7 +30,7 @@
 > instalação, o cache **vive no disco alvo ao mesmo tempo** que a árvore cresce,
 > e o pico é a soma dos dois, não o maior deles; o fator quatro em si saiu de
 > medição (um cache de 664 MiB produziu uma árvore de 2096 MiB, razão 3,16) e o
-> resto é margem. O `cache.tar` da `0.13` tem 1264 MiB, o que dá cerca de
+> resto é margem. O `cache.tar` da `0.14` tem 1264 MiB, o que dá cerca de
 > **6,7 GiB** de raiz mínima.
 
 A Distrópica parte de uma observação desconfortável sobre o mundo atual: os
@@ -72,10 +72,10 @@ nas combinações efetivamente distribuídas.
 Cada ISO, EFI, cache ou canal binário publicado deve vir acompanhado de acesso
 equivalente ao seu bundle de fontes correspondentes: revisão da Distrópica,
 crates Rust vendorizadas, fontes upstream exatas, configurações, patches,
-scripts, licenças e inventário. A imagem custom `0.13` atende essa
-regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-0.13-corresponding-sources.tar.zst),
+scripts, licenças e inventário. A imagem custom `0.14` atende essa
+regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-0.14-corresponding-sources.tar.zst),
 preso à revisão `3a84811` e ao SHA-256 da ISO, e acompanha um
-[índice de licenças](https://distropica.com.br/releases/distropica-0.13-licencas.tsv)
+[índice de licenças](https://distropica.com.br/releases/distropica-0.14-licencas.tsv)
 com os 5575 textos extraídos dos artefatos e das fontes correspondentes.
 Todos os 199 pacotes do inventário declaram licença — não há nenhum
 `LICENSE=NOASSERTION`. Três são **receitas de montagem da própria
@@ -162,13 +162,25 @@ Um **protótipo sério de engenharia de sistemas** — ainda um laboratório, n�
 uma distribuição pronta para usuários. A matriz precisa do que está feito,
 testado e futuro vive em **[STATUS.md](STATUS.md)**.
 
-A `0.13` está **publicada** em <https://distropica.com.br/> (2026-08-22): ISO
-instalável, canal binário assinado com 191 pacotes e bundle de fontes
+A `0.14` está **publicada** em <https://distropica.com.br/> (2026-08-24): ISO
+instalável, canal binário assinado com 192 pacotes e bundle de fontes
 correspondentes aprovado no gate estrito. O sistema instalado sobe em modo
 gráfico — compositor **labwc**, navegador **Epiphany** com **vídeo livre**
 (WebM/VP9/Opus), terminal **foot**, barra de tarefas **yambar**, lançador
 **fuzzel** — e instala software do canal pela rede: o **GIMP 3.2** entra assim,
 com `minitrue rectify gimp`.
+
+Duas correções da `0.14` valem menção porque a `0.13` falhava nelas, e as duas
+saíram de máquina real, não de suposição. O instalador passou a **registrar a
+entrada de arranque na NVRAM do firmware** (`minipax efi-boot`, escrevendo
+`Boot####`/`BootOrder` direto no efivarfs): antes, o carregador ficava só no
+caminho de reserva `\EFI\BOOT\BOOTX64.EFI`, que a norma obriga o firmware a
+procurar em mídia removível mas não em disco fixo — o resultado era instalar
+bem e cair na ROM de PXE no reboot. E a interface gráfica passou a desenhar
+por **Cairo** em vez de OpenGL: esta árvore constrói a Mesa só com o softpipe,
+que interpreta shaders, e o próprio GTK já recusa GL sobre rasterizador de
+software — só que a detecção dele é por nome e não reconhecia "softpipe". A
+digitação no navegador deixou de engasgar.
 
 A barreira técnica que justificava o projeto — compilar o "mundo antigo" a
 partir de nada além de binários upstream — foi **demonstrada**:
@@ -616,9 +628,9 @@ INCONSISTENT_PROFILE_LOCK_RESULT=refused-before-wipe
 
 Essa evidência continuará sendo de desenvolvimento. Ela não será pino de
 release nem substituirá um manifesto oficial assinado. Endpoint, chave e índice
-do canal estão publicados, e desde 2026-08-22 a **mídia também**: a `0.13` está
+do canal estão publicados, e desde 2026-08-22 a **mídia também**: a `0.14` está
 no ar com ISO, bundle de fontes correspondentes aprovado no gate estrito
-(`bootstrap/sbom --strict`, 199 de 199 pacotes com texto de licença),
+(`bootstrap/sbom --strict`, todos os pacotes com texto de licença),
 inventário e índice de licenças. O que ainda não existe é o *manifesto oficial
 assinado* no sentido da SPEC — a raiz produtora continua `STATUS=development`,
 e é isso que separa "publicada" de "release estável".

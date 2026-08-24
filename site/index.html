@@ -189,13 +189,13 @@
             width="1280" height="341" fetchpriority="high" decoding="async"></h1>
         <p class="lead">Uma distribuição Linux distópica em que <strong>instalar é provar</strong>. Todo programa é conferido contra a impressão digital que o próprio autor publicou, todo arquivo do sistema tem dono declarado, e nada entra sem passar. Quando algo não bate, ela recusa — em vez de fingir que deu certo.</p>
         <div class="actions">
-          <a class="button primary" href="/releases/distropica-0.13-x86_64.iso">Baixar ISO · 1355 MB</a>
-          <a class="button" href="/releases/distropica-0.13-corresponding-sources.tar.zst">Fontes correspondentes</a>
+          <a class="button primary" href="/releases/distropica-0.14-x86_64.iso">Baixar ISO · 1355 MB</a>
+          <a class="button" href="/releases/distropica-0.14-corresponding-sources.tar.zst">Fontes correspondentes</a>
           <a class="button" href="https://github.com/dvhoisel/distropica">Examinar o código</a>
         </div>
         <p class="warning compact"><strong>Antes de baixar:</strong> pré-release de desenvolvimento, não release estável. <strong>O instalador apaga integralmente o disco que você indicar.</strong> Wi-Fi, áudio e sessão gráfica de usuário comum. Nenhum pacote declara licença indefinida. <a href="#download">Aviso completo</a>.</p>
         <div class="facts" aria-label="Características da imagem">
-          <div class="fact"><b>0.13</b><small>pré-release de desenvolvimento</small></div>
+          <div class="fact"><b>0.14</b><small>pré-release de desenvolvimento</small></div>
           <div class="fact"><b>Linux 7.1.8</b><small>kernel da mídia</small></div>
           <div class="fact"><b>GCC 15.3</b><small>toolchain nativa</small></div>
           <div class="fact"><b>GPL-3.0+</b><small>código próprio</small></div>
@@ -316,18 +316,18 @@
         <div class="download">
           <div>
             <h3>ISO UEFI para VirtualBox</h3>
-            <p>A imagem instala um sistema com <strong>modo gráfico</strong>: compositor <strong>labwc</strong> sobre wlroots, navegador <strong>Epiphany</strong> sobre WebKitGTK em português, terminal <strong>foot</strong> e rede por DHCP. O compositor tem barra de tarefas (<strong>yambar</strong>: janelas abertas, rede e relógio), lançador por teclado (<strong>fuzzel</strong>, W-d), notificações e papel de parede, e o menu do botão direito lista os aplicativos instalados. O navegador <strong>reproduz vídeo livre</strong> — WebM com VP9 e Opus, com Media Source, que é o que o streaming adaptativo exige; H.264 e AAC ficam de fora, e uma página que só os ofereça continua muda: é escolha de licenciamento, dita no LICENSING.md, não limitação técnica. O <strong>GIMP 3.2</strong> <strong>não vem na mídia</strong>: ele é instalado depois, <strong>pela rede</strong>, com <code>minitrue rectify gimp</code> — o canal oficial entrega os pacotes assinados e a máquina os retifica, com a closure inteira (GEGL, babl, libmypaint, Poppler e a pilha do GTK3) baixada e conferida na hora. A sessão gráfica roda como a conta comum <code>distropica</code>, não como root. A rede fica a cargo do <strong>ConnMan</strong>, que assume cabo e Wi-Fi com cliente DHCP próprio e comanda o iwd por D-Bus; quem opera é o <strong>miniluv</strong>, a interface gráfica escrita para esta distro, com edição de endereço, máscara, gateway e DNS. Há também <strong>áudio</strong>, com o mixer da ALSA. Junto vão Git, OpenSSH, tmux, strace, file, minicom, Vim, ripgrep, Make, GCC/G++, o Minitrue e o perfil de rede: nftables, WireGuard, nmap, mtr, tcpdump e bash. A raiz é ext4 em tabela GPT. A instalação é <strong>offline</strong>: a mídia carrega os 191 pacotes do canal e não busca nada na rede. Depois de instalado, o sistema fala com o canal oficial pela rede — é assim que o GIMP entra, e é assim que qualquer pacote do canal chega sem gravar mídia nova.</p>
+            <p>A imagem instala um sistema com <strong>modo gráfico</strong>: compositor <strong>labwc</strong> sobre wlroots, navegador <strong>Epiphany</strong> sobre WebKitGTK em português, terminal <strong>foot</strong> e rede por DHCP. O compositor tem barra de tarefas (<strong>yambar</strong>: janelas abertas, rede e relógio), lançador por teclado (<strong>fuzzel</strong>, W-d), notificações e papel de parede, e o menu do botão direito lista os aplicativos instalados. O navegador <strong>reproduz vídeo livre</strong> — WebM com VP9 e Opus, com Media Source, que é o que o streaming adaptativo exige; H.264 e AAC ficam de fora, e uma página que só os ofereça continua muda: é escolha de licenciamento, dita no LICENSING.md, não limitação técnica. O <strong>GIMP 3.2</strong> <strong>não vem na mídia</strong>: ele é instalado depois, <strong>pela rede</strong>, com <code>minitrue rectify gimp</code> — o canal oficial entrega os pacotes assinados e a máquina os retifica, com a closure inteira (GEGL, babl, libmypaint, Poppler e a pilha do GTK3) baixada e conferida na hora. A sessão gráfica roda como a conta comum <code>distropica</code>, não como root. A rede fica a cargo do <strong>ConnMan</strong>, que assume cabo e Wi-Fi com cliente DHCP próprio e comanda o iwd por D-Bus; quem opera é o <strong>miniluv</strong>, a interface gráfica escrita para esta distro, com edição de endereço, máscara, gateway e DNS. Há também <strong>áudio</strong>, com o mixer da ALSA. Junto vão Git, OpenSSH, tmux, strace, file, minicom, Vim, ripgrep, Make, GCC/G++, o Minitrue e o perfil de rede: nftables, WireGuard, nmap, mtr, tcpdump e bash. A raiz é ext4 em tabela GPT. A instalação é <strong>offline</strong>: a mídia carrega os 192 pacotes do canal e não busca nada na rede. Depois de instalado, o sistema fala com o canal oficial pela rede — é assim que o GIMP entra, e é assim que qualquer pacote do canal chega sem gravar mídia nova. Duas correções desta versão valem menção porque a 0.13 falhava nelas: o instalador agora <strong>registra a entrada de arranque na NVRAM do firmware</strong>, sem o que máquinas reais instalavam bem e não bootavam — o carregador ficava no caminho de reserva, que firmware de disco fixo não é obrigado a procurar; e a interface gráfica passou a desenhar por <strong>Cairo</strong> em vez de OpenGL, porque esta árvore só constrói rasterizador de software e o caminho GL saía mais caro que desenhar direto — o navegador responde à digitação.</p>
             <div class="actions">
-              <a class="button primary" href="/releases/distropica-0.13-x86_64.iso">Baixar a ISO</a>
-              <a class="button" href="/releases/distropica-0.13-x86_64.iso.sha256">SHA-256</a>
-              <a class="button" href="/releases/distropica-0.13-x86_64.iso.manifest">Manifesto</a>
-              <a class="button" href="/releases/distropica-0.13-corresponding-sources.tar.zst">Fontes correspondentes</a>
-              <a class="button" href="/releases/distropica-0.13-corresponding-sources.tar.zst.sha256">SHA das fontes</a>
-              <a class="button" href="/releases/distropica-0.13-sources.tsv">Inventário</a>
-              <a class="button" href="/releases/distropica-0.13-licencas.tsv">Licenças</a>
+              <a class="button primary" href="/releases/distropica-0.14-x86_64.iso">Baixar a ISO</a>
+              <a class="button" href="/releases/distropica-0.14-x86_64.iso.sha256">SHA-256</a>
+              <a class="button" href="/releases/distropica-0.14-x86_64.iso.manifest">Manifesto</a>
+              <a class="button" href="/releases/distropica-0.14-corresponding-sources.tar.zst">Fontes correspondentes</a>
+              <a class="button" href="/releases/distropica-0.14-corresponding-sources.tar.zst.sha256">SHA das fontes</a>
+              <a class="button" href="/releases/distropica-0.14-sources.tsv">Inventário</a>
+              <a class="button" href="/releases/distropica-0.14-licencas.tsv">Licenças</a>
             </div>
-            <p class="hash"><strong>SHA-256</strong><br>26fdd6d1183f8f5ddcc3b0b22d71626c68e9d607e2e67d510074572569723f0e</p>
-            <p class="hash"><strong>SHA-256 das fontes</strong><br>4ddc905574d6fc4954783e3e7462f3c49f57ddaefd7e31a3c81c0192b561c73a</p>
+            <p class="hash"><strong>SHA-256</strong><br>0286c175a371ec18d3549be0af31dcded47f2c9de572233c88adcfb1c3e2a191</p>
+            <p class="hash"><strong>SHA-256 das fontes</strong><br>e4bf4e4a562c97740a94e3b4b47d55a26eae9f206de369c55a2f70d77d4170c8</p>
           </div>
           <div>
             <h3>Primeiro boot</h3>

@@ -1,8 +1,8 @@
 # STATUS — o que está feito, testado e futuro
 
 Fonte única da verdade sobre a maturidade. As `specs/` descrevem a **norma**;
-este arquivo descreve o **estado**. Atualizado à mão em 2026-08-22, no dia em
-que a `0.13` foi **publicada** — site, ISO, canal e bundle de fontes no ar.
+este arquivo descreve o **estado**. Atualizado à mão em 2026-08-24, no dia em
+que a `0.14` foi **publicada** — site, ISO, canal e bundle de fontes no ar.
 
 O que mudou de natureza nesta revisão: **a instalação a partir do canal binário
 fechou**. Ela não fechava, e a causa era do resolvedor, não da mídia — o
@@ -34,8 +34,8 @@ Legenda: ✅ feito · 🟡 parcial · ⬜ design/futuro.
 |---|---|---|
 | Código e documentação próprios | ✅ | `GPL-3.0-or-later`; texto integral, escopo e regra de contribuição versionados |
 | Licença na base e no ambiente vivo | ✅ implementação + regressão focal; ⬜ mídia final | `base` instala GPL, NOTICE e `LICENSING.md` em `/usr/share/licenses/distropica/`; `build-efi` incorpora os mesmos bytes no initramfs. A mídia final posterior a essa mudança ainda precisa ser recomposta e aceita |
-| Inventário completo de terceiros | ✅ publicado com a `0.13`: 199 pacotes, nenhum `NOASSERTION`, 5575 textos | `bootstrap/sbom --strict` falha por qualquer `SEM EVIDÊNCIA` e produz `licenses.tar` determinístico com `PACOTES`, `INDICE`, `MANIFEST.sha256` e SHA externo; o parser recusa tipos/caminhos/modos/limites e divergência interna. Isso ainda não prova que um bundle autoconsistente corresponde ao conjunto realmente distribuído: a integração com profile/mídia aguarda `PLAN_LOCK_FORMAT=1`, que precisa fornecer nome, versão, fingerprint e hash de cada identidade material |
-| Bundle de fontes correspondentes | ✅ gerado e publicado para a `0.13` (2,4 GB, 199 pacotes, gate estrito aprovado) | `bootstrap/source-bundle --artifact ARQ --minitrue-bin MINITRUE_PRODUTOR --strict` associa ISO, EFI, cache ou índice autenticado de canal pelo hash, recalcula a identidade com o executor produtor explícito e falha por fonte ou evidência de licença incompleta; em perfil `release`, o executor precisa conferir com `OFFICIAL_MINITRUE_SHA256`. EFI/ISO estritos exigem `--live-kernel-config` e o `--live-util-linux-tar` cotejado com os pinos do `build-efi`, registrado como `insumo-live`. `--media` mantém os campos legados. O bundle histórico foi publicado ao lado da ISO; cada artefato futuro continua sendo gate próprio |
+| Inventário completo de terceiros | ✅ publicado com a `0.14`: nenhum `NOASSERTION`, gate estrito aprovado | `bootstrap/sbom --strict` falha por qualquer `SEM EVIDÊNCIA` e produz `licenses.tar` determinístico com `PACOTES`, `INDICE`, `MANIFEST.sha256` e SHA externo; o parser recusa tipos/caminhos/modos/limites e divergência interna. Isso ainda não prova que um bundle autoconsistente corresponde ao conjunto realmente distribuído: a integração com profile/mídia aguarda `PLAN_LOCK_FORMAT=1`, que precisa fornecer nome, versão, fingerprint e hash de cada identidade material |
+| Bundle de fontes correspondentes | ✅ gerado e publicado para a `0.14` (2,3 GB, gate estrito aprovado) | `bootstrap/source-bundle --artifact ARQ --minitrue-bin MINITRUE_PRODUTOR --strict` associa ISO, EFI, cache ou índice autenticado de canal pelo hash, recalcula a identidade com o executor produtor explícito e falha por fonte ou evidência de licença incompleta; em perfil `release`, o executor precisa conferir com `OFFICIAL_MINITRUE_SHA256`. EFI/ISO estritos exigem `--live-kernel-config` e o `--live-util-linux-tar` cotejado com os pinos do `build-efi`, registrado como `insumo-live`. `--media` mantém os campos legados. O bundle histórico foi publicado ao lado da ISO; cada artefato futuro continua sendo gate próprio |
 
 Os hashes QEMU final-v10 e VirtualBox network-v1 abaixo são evidência histórica
 anterior à mudança de licença do pacote `base` (revisão funcional `7148ebd`).
@@ -134,7 +134,7 @@ O aviso que a receita já tinha detecta o estrago **depois de feito**. O `sync`
 fecha a janela, custa uma fração de segundo uma vez na vida da instalação, e
 não havia motivo para ele não estar lá.
 
-## Evidência integrada atual — `0.13`
+## Evidência integrada atual — `0.14`
 
 A mídia instala a partir do canal binário, reinicia sem ISO, sobe em modo
 gráfico e toca vídeo. Quem a bootou foi o Daniel, no VirtualBox, com disco de
@@ -144,16 +144,55 @@ nenhum deles falhava no build. O que o aceite automatizado pega é a
 instalação; a tela, o clique e o vídeo dependeram de alguém olhar.
 
 ```text
-CANAL=191 pacotes Mundo B (canal-013f), CHANNEL_INDEX_FORMAT=4, assinado com a chave de produção
-CANAL_INDEX_SHA256=3421fbccae4f9d915cb95d196dedfc0477c4dd10185367c2eb79a12559f7f2d4
-POOL=918 MB · CACHE=1248 MB (19 sidecars de assinatura: .minisig, .openpgp-sig,
-                             .openpgp-sums, .asc, .sig)
-EFI=target/release-0.13/BOOTX64-0.13.EFI                (22.1 MB)
-EFI_SHA256=9a4a9949da66dfac013e066e42dd00166df8afdb3552257dbfac7f2a2f161b5a
-ISO=target/release-0.13/distropica-0.13-x86_64.iso      (1355 MB)
-ISO_SHA256=26fdd6d1183f8f5ddcc3b0b22d71626c68e9d607e2e67d510074572569723f0e
-RAIZ_PRODUTORA=target/rebuild-0.13-gimp-root
+CANAL=192 pacotes Mundo B (canal-014), CHANNEL_INDEX_FORMAT=4, assinado com a chave de produção
+CANAL_INDEX_SHA256=4bacf5fea9be69ee04d6e6fb074ae1cea393e21e5f2c8d5bf5f239a5e03291d9
+POOL=937 MB · CACHE=1,3 GB
+EFI=target/release-0.14/BOOTX64-0.14.EFI                (22.1 MB)
+EFI_SHA256=1932918a74366296f7f6a18c52d29095258e8eead949dae14cd4bd47f6ce1bcb
+ISO=target/release-0.14/distropica-0.14-x86_64.iso      (1355 MB)
+ISO_SHA256=0286c175a371ec18d3549be0af31dcded47f2c9de572233c88adcfb1c3e2a191
+RAIZ_PRODUTORA=target/rebuild-0.13-v48-root
 ```
+
+**O que a 0.14 muda, e de onde saiu.** Duas correções, ambas vindas de
+hardware e não de suposição, mais a limpeza que elas destaparam.
+
+O instalador **registra a entrada de arranque na NVRAM** (`minipax efi-boot`,
+`Boot####` + `BootOrder` escritos direto no efivarfs, sem `efibootmgr`). A
+0.13 gravava só o caminho de reserva `\EFI\BOOT\BOOTX64.EFI`, que a norma
+UEFI obriga o firmware a procurar em mídia **removível** e não em disco fixo:
+a instalação terminava dizendo que deu certo e a máquina caía na ROM de PXE
+legada no reboot. Descartei o disco como causa medindo — GUID de tipo da ESP
+correto, FAT32 (o `mkfs.vfat` do BusyBox só faz FAT32), `BOOTX64.EFI`
+conferido por sha256 — e a máquina tem UEFI porque a ISO só tem a plataforma
+0xEF no catálogo El Torito e o MBR dela está zerado. O kernel ganhou
+`CONFIG_EFIVAR_FS=y` para que o registro tenha onde ser escrito; como módulo
+não serviria, porque quem registra é o init da mídia viva, que roda antes de
+qualquer troca de raiz e nunca carregou módulo.
+
+A interface gráfica desenha por **Cairo** (`GSK_RENDERER=cairo`) em vez de
+OpenGL. A Mesa desta árvore é só softpipe, que **interpreta** shaders, e o
+próprio GTK4 já recusa o caminho GL sobre rasterizador de software — o
+binário carrega a mensagem `Not using GL: renderer is llvmpipe`. A detecção
+dele é por nome, e o nosso rasterizador se anuncia como `softpipe`: a
+proteção existia e passava ao largo por uma diferença de string. Sintoma:
+digitar na barra de endereços do Epiphany engasgava.
+
+O **ccache entrou** (#68, portão aberto com bump de `BUILD_VIEW_FORMAT` para
+2). Medido na reconstrução total: 50.562 chamadas cacheáveis, 15.428 acertos
+(30,5%), 35.134 objetos gravados. Provado também que o cache **atravessa
+raízes** — 77 acertos diretos vindos de uma raiz de nome diferente, porque o
+`CCACHE_BASEDIR` neutraliza o caminho do work antes de hashear.
+
+E uma classe de defeito ficou **destapada, não fechada**: o `findutils`
+supersede o applet `find` do BusyBox, e quem não o declara quebra ao ser
+construído **depois** dele. Derrubou `git`, `libevent`, `linux` e `desktop` —
+neste último com mensagem mentirosa, acusando fonte ausente quando o que
+faltava era o `find`. As receitas que a cadeia ainda ia construir foram
+corrigidas, e o `minitrue lint` virou portão da cadeia; mas ~140 receitas
+continuam corretas **por ordem de construção**, não por contrato, e o lint é
+cego para o que o Makefile do upstream chama. O conserto de verdade é de
+arquitetura e está em aberto.
 
 Os cinco pacotes além da revisão anterior são a **família do foot** completa:
 **yambar** (barra de tarefas: janelas — minimizadas continuam listadas —,
@@ -168,12 +207,12 @@ GSettings validado com `--strict` no build). Tudo fotografado em instalação
 limpa: QEMU/virtio (seis fotos, zero mortes de sessão no serial) e
 VirtualBox/VMSVGA. As seis correções da revisão anterior seguem a bordo.
 
-**PUBLICADA** (2026-08-22). `distropica.com.br` anuncia a 0.13: ISO
-`26fdd6d1`, bundle de fontes correspondentes `4ddc9055` (2,4 GB, 199 pacotes
-com texto de licença, `bootstrap/sbom --strict` aprovado), inventário e
-índice de licenças, todos com o sha256 conferido no próprio servidor. O canal
-público serve o **canal-013f** (191 pacotes, com a pilha de mídia livre); o
-013e e o índice legado v2 ficaram preservados em `canal/oficial-013e/` e
+**PUBLICADA** (2026-08-24). `distropica.com.br` anuncia a 0.14: ISO
+`0286c175`, bundle de fontes correspondentes `e4bf4e4a` (2,3 GB,
+`bootstrap/sbom --strict` aprovado), inventário e índice de licenças, todos
+com o sha256 conferido no próprio servidor. O canal público serve o
+**canal-014** (192 pacotes); o 013f ficou preservado em `canal/oficial-013f/`,
+e o 013e e o índice legado v2 seguem em `canal/oficial-013e/` e
 `canal/oficial-0.12/`.
 
 O portão de release cobrou quatro barreiras antes de deixar publicar, e todas
