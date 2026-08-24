@@ -728,6 +728,32 @@ WLR_RENDERER=pixman
 # de hardware em todo lugar e o cursor viajar composto no frame, que numa
 # arvore de renderizacao por software ja e o regime de tudo o mais.
 WLR_NO_HARDWARE_CURSORS=1
+
+# O GTK4 DESENHA PELO CAIRO, e nao pelo OpenGL. A razao esta na propria
+# receita da Mesa: esta arvore constroi so o softpipe, com llvm=disabled, e o
+# softpipe INTERPRETA os shaders em vez de compila-los. Deixar o GTK4 no
+# renderizador OpenGL faz cada quadro da interface — inclusive cada tecla
+# digitada na barra de enderecos do Epiphany — atravessar uma implementacao de
+# GL interpretada na CPU.
+#
+# O argumento nao e meu, e do GTK. O libgtk-4.so desta arvore carrega a
+# mensagem "Not using GL: renderer is llvmpipe": ele JA recusa o caminho GL
+# quando detecta rasterizacao por software, porque GL na CPU sai mais caro que
+# desenhar direto. So que a deteccao e por NOME, e o nosso rasterizador se
+# anuncia como "softpipe" — conferido nas strings do libgallium. A protecao
+# existe e passa ao largo por uma diferenca de string; nomear o renderizador
+# aqui faz o que o GTK faria sozinho se reconhecesse este caso.
+#
+# `cairo` e um nome que o GTK 4.22 aceita e tem compilado: o proprio
+# GSK_RENDERER=help lista "cairo - Use the Cairo fallback renderer", enquanto
+# vulkan e broadway aparecem como "Disabled during GTK build".
+#
+# UM KNOB SO. O WebKit tem os seus proprios — WEBKIT_DISABLE_COMPOSITING_MODE
+# e WEBKIT_DISABLE_DMABUF_RENDERER, ambos presentes no libwebkitgtk desta
+# arvore —, e eles mexem no desenho da PAGINA, nao da interface. Ficam de fora
+# ate serem medidos separadamente: desligar a composicao do WebKit tambem mexe
+# no caminho do video, que acabou de entrar.
+GSK_RENDERER=cairo
 ENVIRONMENT
     chmod 0644 "$STAGE/etc/xdg/labwc/environment"
 
@@ -1048,6 +1074,11 @@ THEMERC
     grep -q '^WLR_RENDERER=pixman$' "$STAGE/etc/xdg/labwc/environment" || {
         echo "desktop: o environment nao nomeia o renderizador pixman; o" \
              "automatico nao acha nenhum numa maquina com render node" >&2
+        exit 1
+    }
+    grep -q '^GSK_RENDERER=cairo$' "$STAGE/etc/xdg/labwc/environment" || {
+        echo "desktop: o environment nao poe o GTK4 no cairo; com a Mesa em" \
+             "softpipe a interface inteira desenha por GL interpretado na CPU" >&2
         exit 1
     }
 
