@@ -150,7 +150,7 @@ POOL=937 MB · CACHE=1,3 GB
 EFI=target/release-0.14/BOOTX64-0.14.EFI                (22.1 MB)
 EFI_SHA256=1932918a74366296f7f6a18c52d29095258e8eead949dae14cd4bd47f6ce1bcb
 ISO=target/release-0.14/distropica-0.14-x86_64.iso      (1355 MB)
-ISO_SHA256=0286c175a371ec18d3549be0af31dcded47f2c9de572233c88adcfb1c3e2a191
+ISO_SHA256=27f4aaee136af84e39d81d58378d3fb72dd97c84838f7064d8191183906dee8e
 RAIZ_PRODUTORA=target/rebuild-0.13-v48-root
 ```
 
@@ -170,13 +170,18 @@ conferido por sha256 — e a máquina tem UEFI porque a ISO só tem a plataforma
 não serviria, porque quem registra é o init da mídia viva, que roda antes de
 qualquer troca de raiz e nunca carregou módulo.
 
-A interface gráfica desenha por **Cairo** (`GSK_RENDERER=cairo`) em vez de
-OpenGL. A Mesa desta árvore é só softpipe, que **interpreta** shaders, e o
-próprio GTK4 já recusa o caminho GL sobre rasterizador de software — o
-binário carrega a mensagem `Not using GL: renderer is llvmpipe`. A detecção
-dele é por nome, e o nosso rasterizador se anuncia como `softpipe`: a
-proteção existia e passava ao largo por uma diferença de string. Sintoma:
-digitar na barra de endereços do Epiphany engasgava.
+A renderização saiu inteira do caminho OpenGL, em duas camadas. A casca
+desenha por **Cairo** (`GSK_RENDERER=cairo`): o GTK4 já recusa GL sobre
+rasterizador de software — `Not using GL: renderer is llvmpipe` está no
+binário —, mas a detecção é por nome e não reconhecia `softpipe`. E a página
+é pintada pelo **Skia em CPU** (`WEBKIT_SKIA_ENABLE_CPU_RENDERING=1`,
+republicação de 2026-08-25): o `SkiaPaintingEngine` do WebProcess pergunta
+apenas "existe contexto GL?", o softpipe responde que sim, e cada tile
+atravessava o Ganesh sobre GL interpretado e single-thread. Provado em A/B
+fotografado no QEMU (4 vCPUs, mesma imagem, uma linha de diferença): sem a
+variável, 2,5 s depois de rolar a viewport estava em branco; com ela, a
+página estava pintada. O empate da primeira medição, com 1 vCPU, era vício
+do arnês — o pool de pintura degenera para 1 thread.
 
 O **ccache entrou** (#68, portão aberto com bump de `BUILD_VIEW_FORMAT` para
 2). Medido na reconstrução total: 50.562 chamadas cacheáveis, 15.428 acertos
@@ -207,11 +212,12 @@ GSettings validado com `--strict` no build). Tudo fotografado em instalação
 limpa: QEMU/virtio (seis fotos, zero mortes de sessão no serial) e
 VirtualBox/VMSVGA. As seis correções da revisão anterior seguem a bordo.
 
-**PUBLICADA** (2026-08-24). `distropica.com.br` anuncia a 0.14: ISO
-`0286c175`, bundle de fontes correspondentes `e4bf4e4a` (2,3 GB,
+**PUBLICADA** (2026-08-24; republicada em 2026-08-25 com o conserto do
+Skia). `distropica.com.br` anuncia a 0.14: ISO `27f4aaee`, bundle de fontes
+correspondentes `9d2b6150` (2,3 GB,
 `bootstrap/sbom --strict` aprovado), inventário e índice de licenças, todos
 com o sha256 conferido no próprio servidor. O canal público serve o
-**canal-014** (192 pacotes); o 013f ficou preservado em `canal/oficial-013f/`,
+**canal-014** (192 pacotes); o canal pré-conserto ficou em `canal/oficial-014-pre-skia/`, o 013f em `canal/oficial-013f/`,
 e o 013e e o índice legado v2 seguem em `canal/oficial-013e/` e
 `canal/oficial-0.12/`.
 

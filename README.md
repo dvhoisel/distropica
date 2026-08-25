@@ -176,11 +176,15 @@ entrada de arranque na NVRAM do firmware** (`minipax efi-boot`, escrevendo
 `Boot####`/`BootOrder` direto no efivarfs): antes, o carregador ficava só no
 caminho de reserva `\EFI\BOOT\BOOTX64.EFI`, que a norma obriga o firmware a
 procurar em mídia removível mas não em disco fixo — o resultado era instalar
-bem e cair na ROM de PXE no reboot. E a interface gráfica passou a desenhar
-por **Cairo** em vez de OpenGL: esta árvore constrói a Mesa só com o softpipe,
-que interpreta shaders, e o próprio GTK já recusa GL sobre rasterizador de
-software — só que a detecção dele é por nome e não reconhecia "softpipe". A
-digitação no navegador deixou de engasgar.
+bem e cair na ROM de PXE no reboot. E a renderização inteira saiu do
+caminho OpenGL: a casca desenha por **Cairo** (o próprio GTK já recusa GL
+sobre rasterizador de software — a detecção dele é por nome e não reconhecia
+"softpipe") e a página é pintada pelo **Skia em CPU**
+(`WEBKIT_SKIA_ENABLE_CPU_RENDERING=1`) — o WebProcess perguntava só "existe
+contexto GL?" e o softpipe respondia que sim, então cada tile atravessava o
+Ganesh sobre GL interpretado e single-thread. Provado em A/B fotografado:
+sem a variável, rolar deixava a viewport em branco por segundos; com ela, a
+página está pintada no mesmo instante.
 
 A barreira técnica que justificava o projeto — compilar o "mundo antigo" a
 partir de nada além de binários upstream — foi **demonstrada**:
