@@ -758,6 +758,22 @@ WLR_NO_HARDWARE_CURSORS=1
 # ate serem medidos separadamente: desligar a composicao do WebKit tambem mexe
 # no caminho do video, que acabou de entrar.
 GSK_RENDERER=cairo
+
+# O WEBKIT PINTA A PAGINA PELO SKIA EM CPU, e nao pelo Ganesh sobre GL. A
+# variavel anterior consertou so a CASCA do navegador: o conteudo e pintado
+# pelo WebProcess, e a escolha dele esta em SkiaPaintingEngine.cpp do fonte
+# pinado — canPerformAcceleratedRendering() pergunta apenas "existe contexto
+# GL?", e a Mesa softpipe RESPONDE QUE SIM. Resultado medido no beta: com a
+# 0.14, digitar e rolar continuavam lentos, porque cada tile da pagina
+# atravessava o Ganesh sobre um GL interpretado e single-thread — o softpipe
+# nem sequer e paralelo como o llvmpipe.
+#
+# Com WEBKIT_SKIA_ENABLE_CPU_RENDERING=1 o proprio upstream troca o pool:
+# Skia raster puro, SIMD, com metade dos nucleos ate o teto de 8
+# (numberOfCPUPaintingThreads, mesma fonte). Numa arvore SEM driver de GPU
+# nenhum — softpipe e a unica Mesa que existe aqui —, o caminho "acelerado"
+# nunca acelera nada; ele so esconde a CPU atras de uma API de GPU.
+WEBKIT_SKIA_ENABLE_CPU_RENDERING=1
 ENVIRONMENT
     chmod 0644 "$STAGE/etc/xdg/labwc/environment"
 
@@ -1083,6 +1099,11 @@ THEMERC
     grep -q '^GSK_RENDERER=cairo$' "$STAGE/etc/xdg/labwc/environment" || {
         echo "desktop: o environment nao poe o GTK4 no cairo; com a Mesa em" \
              "softpipe a interface inteira desenha por GL interpretado na CPU" >&2
+        exit 1
+    }
+    grep -q '^WEBKIT_SKIA_ENABLE_CPU_RENDERING=1$' "$STAGE/etc/xdg/labwc/environment" || {
+        echo "desktop: o environment nao poe o Skia do WebKit em CPU; a pagina" \
+             "inteira pintaria por Ganesh sobre o GL interpretado do softpipe" >&2
         exit 1
     }
 
