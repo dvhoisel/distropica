@@ -774,6 +774,47 @@ GSK_RENDERER=cairo
 # nenhum — softpipe e a unica Mesa que existe aqui —, o caminho "acelerado"
 # nunca acelera nada; ele so esconde a CPU atras de uma API de GPU.
 WEBKIT_SKIA_ENABLE_CPU_RENDERING=1
+
+# E A COMPOSICAO ACELERADA SAI, que e a terceira e ultima camada em que uma
+# API de GPU escondia a CPU nesta arvore. As duas variaveis acima consertam a
+# PINTURA — casca e conteudo —, mas um elemento <video> nao e pintado: ele
+# vira camada composta, e o quadro decodificado sobe pelo caminho acelerado.
+# Sobre softpipe isso custa o mundo.
+#
+# MEDIDO, nao suposto. Prova A/B/C em QEMU (4 vCPUs, mesma imagem instalada,
+# uma linha de diferenca), com um VP9/Opus de 150s servido ao vivo e a pagina
+# contando as proprias repinturas por requestAnimationFrame:
+#
+#   sem esta linha ............ 116 repinturas em 105,7s =  1,1 fps
+#   com esta linha ........... 2388 repinturas em 107,4s = 22,2 fps
+#   WEBKIT_DISABLE_DMABUF_RENDERER=1 ..... 20,9 e 22,6 fps (duas corridas)
+#
+# Nos tres casos o decodificador entregou ~3000 quadros com ZERO descartes: o
+# libvpx desta arvore tem 762 rotinas SIMD e nunca foi o gargalo. O que
+# faltava era APRESENTAR o quadro. E o sintoma relatado pelo beta tester —
+# audio fluido, imagem pulando a cada tres segundos — e exatamente isso: o
+# relogio do audio corre, e a imagem so aparece quando a composicao consegue.
+#
+# POR QUE ESTA VARIAVEL E NAO A DO DMABUF, se as duas medem igual: elas caem
+# no MESMO ponto do AcceleratedBackingStore.cpp, cuja condicao e
+# `!canUseHardwareAcceleration() || !checkRequirements()`. A do dmabuf entra
+# pela segunda clausula, esvaziando o transporte ate o checkRequirements()
+# virar falso; esta entra pela primeira, zerando o
+# m_canUseHardwareAcceleration do HardwareAccelerationManager. O efeito e o
+# mesmo e o SENTIDO nao e: aqui a frase verdadeira e "esta maquina nao tem
+# aceleracao de hardware", nao "o transporte de buffer esta desligado".
+# Declarar o fato sobrevive a uma refatoracao do transporte; obte-lo por
+# efeito colateral, nao.
+#
+# WEBKIT_DMABUF_RENDERER_FORCE_SHM=1 foi testado e REPROVADO: com ele o
+# Epiphany nem abre — a foto do teste mostra a area de trabalho vazia.
+#
+# O PRECO, dito em voz alta: o requestVideoFrameCallback para de disparar
+# (medido: rVFC=0), porque essa API depende da composicao acelerada. Perde-se
+# uma API que serve para sincronizar efeitos a quadros de video; ganha-se o
+# video. Numa arvore sem driver de GPU nenhum, a composicao "acelerada" nunca
+# acelerou nada — ela so cobrava.
+WEBKIT_DISABLE_COMPOSITING_MODE=1
 ENVIRONMENT
     chmod 0644 "$STAGE/etc/xdg/labwc/environment"
 
@@ -1104,6 +1145,11 @@ THEMERC
     grep -q '^WEBKIT_SKIA_ENABLE_CPU_RENDERING=1$' "$STAGE/etc/xdg/labwc/environment" || {
         echo "desktop: o environment nao poe o Skia do WebKit em CPU; a pagina" \
              "inteira pintaria por Ganesh sobre o GL interpretado do softpipe" >&2
+        exit 1
+    }
+    grep -q '^WEBKIT_DISABLE_COMPOSITING_MODE=1$' "$STAGE/etc/xdg/labwc/environment" || {
+        echo "desktop: o environment nao desliga a composicao acelerada; o" \
+             "video cai de 22 fps para 1 fps, medido em A/B" >&2
         exit 1
     }
 
