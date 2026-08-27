@@ -150,7 +150,7 @@ POOL=937 MB · CACHE=1,3 GB
 EFI=target/release-0.14/BOOTX64-0.14.EFI                (22.1 MB)
 EFI_SHA256=1932918a74366296f7f6a18c52d29095258e8eead949dae14cd4bd47f6ce1bcb
 ISO=target/release-0.14/distropica-0.14-x86_64.iso      (1355 MB)
-ISO_SHA256=27f4aaee136af84e39d81d58378d3fb72dd97c84838f7064d8191183906dee8e
+ISO_SHA256=abc528d0ca0045eb2704e0ead73a9032d0901a0709428a054750c6039ff23656
 RAIZ_PRODUTORA=target/rebuild-0.13-v48-root
 ```
 
@@ -183,6 +183,30 @@ variável, 2,5 s depois de rolar a viewport estava em branco; com ela, a
 página estava pintada. O empate da primeira medição, com 1 vCPU, era vício
 do arnês — o pool de pintura degenera para 1 thread.
 
+E a COMPOSIÇÃO ACELERADA saiu (`WEBKIT_DISABLE_COMPOSITING_MODE=1`,
+republicação de 2026-08-27), que é a terceira camada e a que o beta tester
+sentia: as duas anteriores consertam a PINTURA, e um `<video>` não é pintado
+— vira camada composta, e o quadro sobe pelo caminho acelerado. Medido com um
+VP9/Opus de 150 s e a página contando as próprias repinturas por
+requestAnimationFrame: **1,1 fps sem a variável, 22,2 fps com ela**; o
+`WEBKIT_DISABLE_DMABUF_RENDERER=1` mede o mesmo (20,9 e 22,6) porque cai no
+mesmo `!canUseHardwareAcceleration() || !checkRequirements()`, por outra
+cláusula, e o `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` foi reprovado — com ele o
+Epiphany nem abre. Nos três casos o decodificador entregou ~3000 quadros com
+ZERO descartes: o libvpx tem 762 rotinas SIMD e nunca foi o gargalo. Preço
+declarado: o `requestVideoFrameCallback` para de disparar, porque depende da
+composição acelerada.
+
+A BASE DE TIPOS MIME passou a existir. A receita do `shared-mime-info`
+prometia o drop-in de primeiro boot "como o gschemas.compiled e o hwdb.bin", e
+ele nunca foi escrito — `/usr/share/mime` tinha `packages/` e não tinha
+`mime.cache` em máquina nenhuma desta distro. Sem base, o
+`g_content_type_guess` não classifica: `.html` do disco abria como
+código-fonte, o diálogo de abrir do GTK ficava sem tipos e o `mimeapps.list`
+não tinha a que associar. Só o que vem do disco adoecia — por http quem diz o
+tipo é o Content-Type. Provado no mesmo boot do vídeo: `mime.cache` com
+192784 bytes e a página local renderizando.
+
 O **ccache entrou** (#68, portão aberto com bump de `BUILD_VIEW_FORMAT` para
 2). Medido na reconstrução total: 50.562 chamadas cacheáveis, 15.428 acertos
 (30,5%), 35.134 objetos gravados. Provado também que o cache **atravessa
@@ -212,12 +236,13 @@ GSettings validado com `--strict` no build). Tudo fotografado em instalação
 limpa: QEMU/virtio (seis fotos, zero mortes de sessão no serial) e
 VirtualBox/VMSVGA. As seis correções da revisão anterior seguem a bordo.
 
-**PUBLICADA** (2026-08-24; republicada em 2026-08-25 com o conserto do
-Skia). `distropica.com.br` anuncia a 0.14: ISO `27f4aaee`, bundle de fontes
-correspondentes `9d2b6150` (2,3 GB,
+**PUBLICADA** (2026-08-24; republicada em 2026-08-25 com o conserto do Skia e
+em 2026-08-27 com o da composição e o da base MIME). `distropica.com.br`
+anuncia a 0.14: ISO `abc528d0`, bundle de fontes correspondentes
+`8a49f442` (2,3 GB,
 `bootstrap/sbom --strict` aprovado), inventário e índice de licenças, todos
 com o sha256 conferido no próprio servidor. O canal público serve o
-**canal-014** (192 pacotes); o canal pré-conserto ficou em `canal/oficial-014-pre-skia/`, o 013f em `canal/oficial-013f/`,
+**canal-014** (192 pacotes); os canais pré-conserto ficaram em `canal/oficial-014-pre-video/` e `canal/oficial-014-pre-skia/`, o 013f em `canal/oficial-013f/`,
 e o 013e e o índice legado v2 seguem em `canal/oficial-013e/` e
 `canal/oficial-0.12/`.
 

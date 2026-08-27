@@ -177,14 +177,23 @@ entrada de arranque na NVRAM do firmware** (`minipax efi-boot`, escrevendo
 caminho de reserva `\EFI\BOOT\BOOTX64.EFI`, que a norma obriga o firmware a
 procurar em mídia removível mas não em disco fixo — o resultado era instalar
 bem e cair na ROM de PXE no reboot. E a renderização inteira saiu do
-caminho OpenGL: a casca desenha por **Cairo** (o próprio GTK já recusa GL
-sobre rasterizador de software — a detecção dele é por nome e não reconhecia
-"softpipe") e a página é pintada pelo **Skia em CPU**
-(`WEBKIT_SKIA_ENABLE_CPU_RENDERING=1`) — o WebProcess perguntava só "existe
-contexto GL?" e o softpipe respondia que sim, então cada tile atravessava o
-Ganesh sobre GL interpretado e single-thread. Provado em A/B fotografado:
-sem a variável, rolar deixava a viewport em branco por segundos; com ela, a
-página está pintada no mesmo instante.
+caminho OpenGL, em três camadas. A casca desenha por **Cairo** (o próprio GTK
+já recusa GL sobre rasterizador de software — a detecção dele é por nome e não
+reconhecia "softpipe"); a página é pintada pelo **Skia em CPU**
+(`WEBKIT_SKIA_ENABLE_CPU_RENDERING=1`), porque o WebProcess perguntava só
+"existe contexto GL?" e o softpipe respondia que sim; e a **composição
+acelerada foi desligada** (`WEBKIT_DISABLE_COMPOSITING_MODE=1`), sem o que um
+elemento `<video>` — que não é pintado, e sim composto — continuava subindo
+cada quadro pelo caminho acelerado. As três foram provadas em A/B fotografado:
+rolagem deixava a viewport em branco por segundos, e o vídeo saiu de **1,1
+para 22 quadros por segundo** num VP9 de 150 s, com o decodificador entregando
+~3000 quadros e zero descartes nos dois casos — o gargalo nunca foi decodificar,
+foi apresentar.
+
+A base de tipos MIME também passou a ser compilada no primeiro boot. Ela nunca
+foi: a receita do `shared-mime-info` prometia o drop-in e ele não existia, de
+modo que `g_content_type_guess` ficava sem base — abrir um `.html` do disco
+mostrava o código-fonte, e o diálogo de abrir do GTK não classificava nada.
 
 A barreira técnica que justificava o projeto — compilar o "mundo antigo" a
 partir de nada além de binários upstream — foi **demonstrada**:
