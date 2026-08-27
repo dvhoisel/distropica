@@ -261,6 +261,66 @@ fi
 GSCHEMAS
     chmod 0644 "$STAGE/etc/rc.d/rcS.d/02-gschemas.sh"
 
+    cat > "$STAGE/etc/rc.d/rcS.d/03-mime.sh" <<'MIME'
+# Drop-in de inicializacao: a base compilada de tipos MIME.
+#
+# ELE FALTAVA, e a propria receita do shared-mime-info ja dizia que deveria
+# existir: "quem o gera no primeiro boot e o drop-in, como o gschemas.compiled
+# e o hwdb.bin". O gschemas tinha o dele; este nunca foi escrito. Resultado
+# medido em instalacao limpa: /usr/share/mime tem packages/ e NAO tem
+# mime.cache, entao a base compilada nunca existiu em maquina nenhuma desta
+# distro.
+#
+# O QUE ISSO QUEBRA. Quem responde "que tipo de arquivo e este?" na GLib e o
+# g_content_type_guess, e ele le esta base em tempo de execucao. Sem ela:
+#
+#   - o dialogo de abrir arquivo do GTK nao classifica nada, e os filtros por
+#     tipo ficam vazios;
+#   - abrir um .html local no navegador mostra o CODIGO-FONTE como texto puro
+#     em vez da pagina — medido, com file:///... numa sessao instalada;
+#   - o mimeapps.list de /etc/xdg, que declara o Epiphany como navegador
+#     padrao, associa por TIPO: sem base, nao ha tipo para associar.
+#
+# O sintoma engana porque a navegacao por http continua certa: ali quem diz o
+# tipo e o cabecalho Content-Type do servidor, e a base local nao e
+# consultada. So o que vem do DISCO adoece.
+#
+# Gerado no boot e nao no pacote pelo mesmo argumento do gschemas: o arquivo e
+# funcao do conjunto de TODOS os pacotes instalados e portanto nao pode
+# pertencer a nenhum. A receita do shared-mime-info registra a segunda metade
+# do motivo — rodar o update-mime-database no fim do build reescreveria a base
+# do SISTEMA DE BUILD, fora do STAGE.
+#
+# Refaz quando falta ou quando algum .xml de packages/ e mais novo que a base,
+# que e a mesma condicao do gschemas: pacote novo instalado depois do primeiro
+# boot traz tipos novos, e uma base velha os ignoraria em silencio.
+if [ -x /usr/bin/update-mime-database ] && [ -d /usr/share/mime/packages ]; then
+    mime_refazer=nao
+    if [ ! -s /usr/share/mime/mime.cache ]; then
+        mime_refazer=sim
+    else
+        for mime_xml in /usr/share/mime/packages/*.xml; do
+            [ -e "$mime_xml" ] || break
+            if [ "$mime_xml" -nt /usr/share/mime/mime.cache ]; then
+                mime_refazer=sim
+                break
+            fi
+        done
+    fi
+    if [ "$mime_refazer" = sim ]; then
+        if /usr/bin/update-mime-database /usr/share/mime >/dev/null 2>&1; then
+            echo "distropica: base de tipos MIME compilada"
+        else
+            echo "distropica: FALHA ao compilar a base de tipos MIME;" \
+                 "arquivo local abre como texto e o dialogo de abrir nao" \
+                 "classifica nada" >&2
+        fi
+    fi
+    unset mime_refazer mime_xml
+fi
+MIME
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/03-mime.sh"
+
     cat > "$STAGE/etc/rc.d/rcS.d/05-udevd.sh" <<'UDEVD'
 # Drop-in de inicializacao: o udevd. Sourced pelo rcS do base, ANTES do seatd.
 #
