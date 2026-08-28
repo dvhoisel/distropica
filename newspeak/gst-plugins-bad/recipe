@@ -41,7 +41,13 @@ build() {
     # superfície: cabeçalhos e .pc de codecs que esta distro recusou.
     rm -rf "$STAGE/usr/include" "$STAGE/usr/lib/pkgconfig" \
            "$STAGE/usr/share/gstreamer-1.0" "$STAGE/usr/share/locale"
-    find "$STAGE/usr/lib" -maxdepth 1 -name 'libgst*' -delete
+    # A codecparsers FICA: o videoparsersbad liga nela (NEEDED
+    # libgstcodecparsers-1.0.so.0 — a auditoria de ABI recusou o payload sem
+    # ela, "sem provedor na closure"). E o parser de bitstream compartilhado
+    # que os elementos usam; LGPL como o resto. So o SONAME e o real ficam —
+    # o symlink de desenvolvimento .so vai embora com os demais.
+    find "$STAGE/usr/lib" -maxdepth 1 -name 'libgst*' \
+        ! -name 'libgstcodecparsers-1.0.so.0*' -delete
 
     [ -e "$STAGE/usr/lib/gstreamer-1.0/libgstopusparse.so" ] || {
         echo "gst-plugins-bad: o opusparse não foi produzido — é o único motivo deste pacote" >&2
@@ -82,8 +88,9 @@ build() {
     # primeira versão contava plugins, viu "1" e deixou passar as 180
     # bibliotecas ao lado. Dois arquivos é o número certo.
     quantos=$(find "$STAGE" -type f -o -type l | wc -l)
-    [ "$quantos" -eq 2 ] || {
-        echo "gst-plugins-bad: $quantos arquivos no payload; era para ser opusparse + videoparsersbad" >&2
+    [ "$quantos" -eq 4 ] || {
+        echo "gst-plugins-bad: $quantos arquivos no payload; era para ser" \
+             "opusparse + videoparsersbad + codecparsers (real e SONAME)" >&2
         find "$STAGE" -type f -o -type l | head -20 >&2
         exit 1
     }
