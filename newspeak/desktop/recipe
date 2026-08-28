@@ -413,6 +413,21 @@ MIMEAPPS
     cat > "$STAGE/usr/share/glib-2.0/schemas/90_distropica.gschema.override" <<'OVERRIDE'
 [org.gnome.Epiphany]
 homepage-url='https://distropica.com.br/'
+
+[org.gnome.Epiphany.web]
+# A POLITICA DE ACELERACAO E 'never' PORQUE O CRASH MORA NO 'always'. O
+# default do Epiphany poe o WebKit em ALWAYS; com os knobs de software desta
+# sessao, o AcceleratedBackingStore::create() do UI devolve nullptr — e o
+# player do YouTube FORCA modo composto pelo conteudo, o WebProcess manda
+# EnterAcceleratedCompositingMode, e o UI chama update() num objeto que nunca
+# nasceu, protegido so por ASSERT que nao existe em Release. Medido: segfault
+# em AcceleratedBackingStore::update (dmesg ip->simbolo), navegador morto na
+# largada da watch page. Com 'never' o proprio WebProcess desliga o
+# compositor de camadas (setAcceleratedCompositingEnabled(false), lido no
+# WebKitSettings.cpp do fonte pinado): a entrada nunca e enviada e o nullptr
+# fica inalcancavel — o conserto e na origem, nao no sintoma. Num sistema cuja
+# Mesa e softpipe, 'never' tambem e a verdade: nao ha aceleracao a ligar.
+hardware-acceleration-policy='never'
 OVERRIDE
     chmod 0644 "$STAGE/usr/share/glib-2.0/schemas/90_distropica.gschema.override"
 
