@@ -884,12 +884,21 @@ WEBKIT_SKIA_ENABLE_CPU_RENDERING=1
 # WEBKIT_DMABUF_RENDERER_FORCE_SHM=1 foi testado e REPROVADO: com ele o
 # Epiphany nem abre — a foto do teste mostra a area de trabalho vazia.
 #
-# O PRECO, dito em voz alta: o requestVideoFrameCallback para de disparar
-# (medido: rVFC=0), porque essa API depende da composicao acelerada. Perde-se
-# uma API que serve para sincronizar efeitos a quadros de video; ganha-se o
-# video. Numa arvore sem driver de GPU nenhum, a composicao "acelerada" nunca
-# acelerou nada — ela so cobrava.
-WEBKIT_DISABLE_COMPOSITING_MODE=1
+# E WEBKIT_DISABLE_COMPOSITING_MODE=1, que morou aqui por uma republicacao,
+# SAIU DEPOIS DE MORDER: ele faz AcceleratedBackingStore::create() devolver
+# nullptr, e quando um conteudo FORCA modo composto — o player do YouTube
+# forca — o WebProcess manda EnterAcceleratedCompositingMode e o UI chama
+# update() no objeto que nao existe, atras de um ASSERT que Release nao tem.
+# Segfault medido duas vezes no mesmo simbolo, dmesg ip->offset->funcao. O
+# desligamento da composicao continua acontecendo, mas pela politica do
+# proprio navegador (hardware-acceleration-policy='never' no override de
+# GSettings; o schema web e relocavel e o glib-compile-schemas 2.88 aplica o
+# override ao DEFAULT do schema quando a secao vem SEM path — medido no host
+# com gsettings get na instancia: sem path devolve 'never', e com o path
+# explicito a chave fica em 'always', que e o contrario do que a intuicao
+# diz): com a politica, o WebProcess nem
+# entra em modo composto; e se alguma view escapar, o backing store EXISTE e
+# o pior caso volta a ser lentidao, nunca queda.
 ENVIRONMENT
     chmod 0644 "$STAGE/etc/xdg/labwc/environment"
 
@@ -1222,11 +1231,48 @@ THEMERC
              "inteira pintaria por Ganesh sobre o GL interpretado do softpipe" >&2
         exit 1
     }
-    grep -q '^WEBKIT_DISABLE_COMPOSITING_MODE=1$' "$STAGE/etc/xdg/labwc/environment" || {
-        echo "desktop: o environment nao desliga a composicao acelerada; o" \
-             "video cai de 22 fps para 1 fps, medido em A/B" >&2
+    ! grep -q 'WEBKIT_DISABLE_COMPOSITING_MODE' "$STAGE/etc/xdg/labwc/environment" || {
+        echo "desktop: WEBKIT_DISABLE_COMPOSITING_MODE voltou ao environment;" \
+             "ele cria o nullptr do AcceleratedBackingStore e o YouTube derruba" \
+             "o navegador — quem desliga a composicao e a politica do Epiphany" >&2
         exit 1
     }
+    grep -q "hardware-acceleration-policy='never'" \
+        "$STAGE/usr/share/glib-2.0/schemas/90_distropica.gschema.override" || {
+        echo "desktop: o override nao poe a politica de aceleracao em never" >&2
+        exit 1
+    }
+    ! grep -q "org.gnome.Epiphany.web:" \
+        "$STAGE/usr/share/glib-2.0/schemas/90_distropica.gschema.override" || {
+        echo "desktop: o override do schema web esta COM path de instancia;" \
+             "medido: com path o glib-compile-schemas 2.88 NAO aplica o valor" \
+             "(gsettings devolve always) — a secao tem de ser so o id" >&2
+        exit 1
+    }
+    # E a prova de VALOR, nao so de texto: compila a base como o boot compila
+    # e pergunta ao gsettings o que a instancia do navegador vai ler. Guarda
+    # de texto ja deixou um no-op passar; guarda de valor nao tem como.
+    if command -v gsettings >/dev/null 2>&1; then
+        rm -rf ./gtest-hw; mkdir -p ./gtest-hw
+        cp /usr/share/glib-2.0/schemas/*.gschema.xml ./gtest-hw/ 2>/dev/null || true
+        for gs_enum in /usr/share/glib-2.0/schemas/*.enums.xml; do
+            [ -e "$gs_enum" ] || break
+            cp "$gs_enum" ./gtest-hw/
+        done
+        unset gs_enum
+        cp "$STAGE/usr/share/glib-2.0/schemas/90_distropica.gschema.override" ./gtest-hw/
+        /usr/bin/glib-compile-schemas ./gtest-hw >/dev/null 2>&1
+        politica=$(GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR=./gtest-hw \
+            gsettings get org.gnome.Epiphany.web:/org/gnome/epiphany/web/ \
+            hardware-acceleration-policy 2>/dev/null || echo indisponivel)
+        [ "$politica" = "'never'" ] || {
+            echo "desktop: a politica efetiva na instancia do navegador e" \
+                 "$politica, e nao 'never' — o override nao esta valendo" >&2
+            exit 1
+        }
+        unset politica
+        rm -rf ./gtest-hw
+    fi
 
     # <name> VAZIO NAO E <name> AUSENTE. O labwc recusa string vazia com
     # "Empty string is not allowed for name.theme" e ignora a diretiva; a forma
