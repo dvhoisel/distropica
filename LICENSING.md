@@ -42,14 +42,18 @@ WebM (matroska), VP8/VP9 (`libvpx`, BSD com concessão de patente explícita do
 Google), Opus (BSD, RFC 6716, com promessa irrevogável de patente) e Vorbis
 (BSD). O `gst-plugins-base` e o `gst-plugins-good` são LGPL-2.1-or-later.
 
-Do `gst-plugins-bad` entra **um único elemento**, o `opusparse`
-(LGPL-2.1-or-later), e ele existe por uma exigência do WebKit: o Media Source
-Extensions recusa um fluxo `audio/x-opus` sem um parser de áudio registrado, e
-sem ele o áudio de página nenhuma toca. O pacote é construído com
-`--auto-features=disabled` e o payload instalado é literalmente um arquivo —
-`libgstopusparse.so` —, conferido por guarda na própria receita. Opus é BSD,
-RFC 6716, com promessa irrevogável de patente: nenhum formato onerado entra de
-carona.
+Do `gst-plugins-bad` entram **dois plugins**, ambos LGPL-2.1-or-later, e os
+dois pela mesma exigência do WebKit: o Media Source Extensions recusa um fluxo
+sem parser registrado — `audio/x-opus` pede o `opusparse`, e `video/x-vp9`
+pede o `vp9parse`, que mora no plugin `videoparsersbad`. O pacote é construído
+com `--auto-features=disabled` e o payload instalado são literalmente dois
+arquivos — `libgstopusparse.so` e `libgstvideoparsersbad.so` —, conferidos por
+guarda na própria receita. O plugin de parsers é um `.so` único e traz também
+`h264parse` e `h265parse`; **isso não move a fronteira de patente**, porque
+parser analisa bitstream e não decodifica — quem oneraria é o decodificador,
+e nenhum decodificador de formato onerado existe nesta árvore. Opus é BSD, RFC
+6716, com promessa irrevogável de patente; VP9 tem a concessão explícita do
+Google: nenhum formato onerado entra de carona.
 
 O `gst-plugins-ugly` **não entra**, e o resto do `gst-plugins-bad` também não.
 Com eles ficam de fora H.264, HEVC, AAC e MP3 — formatos cuja distribuição em
