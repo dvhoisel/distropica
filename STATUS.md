@@ -150,7 +150,7 @@ POOL=937 MB · CACHE=1,3 GB
 EFI=target/release-0.14/BOOTX64-0.14.EFI                (22.1 MB)
 EFI_SHA256=1932918a74366296f7f6a18c52d29095258e8eead949dae14cd4bd47f6ce1bcb
 ISO=target/release-0.14/distropica-0.14-x86_64.iso      (1355 MB)
-ISO_SHA256=abc528d0ca0045eb2704e0ead73a9032d0901a0709428a054750c6039ff23656
+ISO_SHA256=f3c628ddcf46126c5e91e66d077a61fb26f7cd892a41133a9d2abf8c06372f06
 RAIZ_PRODUTORA=target/rebuild-0.13-v48-root
 ```
 
@@ -236,13 +236,20 @@ GSettings validado com `--strict` no build). Tudo fotografado em instalação
 limpa: QEMU/virtio (seis fotos, zero mortes de sessão no serial) e
 VirtualBox/VMSVGA. As seis correções da revisão anterior seguem a bordo.
 
-**PUBLICADA** (2026-08-24; republicada em 2026-08-25 com o conserto do Skia e
-em 2026-08-27 com o da composição e o da base MIME). `distropica.com.br`
-anuncia a 0.14: ISO `abc528d0`, bundle de fontes correspondentes
-`8a49f442` (2,3 GB,
+**PUBLICADA** (2026-08-24; republicada em 25, 27 e 28 de agosto — Skia,
+composição+MIME, e por fim vp9parse+crash). A última rodada matou o defeito
+que a anterior criou: o env `WEBKIT_DISABLE_COMPOSITING_MODE=1` fazia o
+`AcceleratedBackingStore::create()` devolver nullptr e o player do YouTube,
+forçando composição, derrubava o navegador — segfault reproduzido duas vezes
+no mesmo símbolo, morto no build final e provado sob anúncios, pop-ups e
+quatro abas em 2 vCPU/2 GB. O MSE ganhou o `vp9parse` (com a `codecparsers`
+que a auditoria de ABI cobrou), e a política `never` do Epiphany é conferida
+por VALOR no build (`gsettings` na instância), porque o schema é relocável e
+override com path é no-op silencioso. `distropica.com.br` anuncia a 0.14:
+ISO `f3c628dd`, bundle de fontes correspondentes `bd0178ac` (2,3 GB,
 `bootstrap/sbom --strict` aprovado), inventário e índice de licenças, todos
 com o sha256 conferido no próprio servidor. O canal público serve o
-**canal-014** (192 pacotes); os canais pré-conserto ficaram em `canal/oficial-014-pre-video/` e `canal/oficial-014-pre-skia/`, o 013f em `canal/oficial-013f/`,
+**canal-014** (192 pacotes); os canais pré-conserto ficaram em `canal/oficial-014-pre-vp9/`, `canal/oficial-014-pre-video/` e `canal/oficial-014-pre-skia/`, o 013f em `canal/oficial-013f/`,
 e o 013e e o índice legado v2 seguem em `canal/oficial-013e/` e
 `canal/oficial-0.12/`.
 

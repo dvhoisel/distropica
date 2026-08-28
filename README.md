@@ -195,6 +195,19 @@ foi: a receita do `shared-mime-info` prometia o drop-in e ele não existia, de
 modo que `g_content_type_guess` ficava sem base — abrir um `.html` do disco
 mostrava o código-fonte, e o diálogo de abrir do GTK não classificava nada.
 
+O vídeo por Media Source — o caminho do YouTube — completou-se em seguida: o
+`vp9parse` entrou no `gst-plugins-bad` (o MSE exige parser registrado para
+`video/x-vp9`, como exigia o `opusparse` para o áudio), e um crash que
+derrubava o navegador ao abrir páginas de vídeo foi eliminado. A causa era o
+próprio `WEBKIT_DISABLE_COMPOSITING_MODE=1` da rodada anterior: ele faz o
+`AcceleratedBackingStore::create()` devolver nullptr, e conteúdo que força
+composição — o player do YouTube força — leva o UI a chamar método em objeto
+inexistente. A variável saiu; quem desliga a composição é a política do
+próprio navegador (`hardware-acceleration-policy='never'`), e a guarda do
+build confere o **valor efetivo** da chave com `gsettings`, não o texto —
+porque o schema é relocável e um override com path é aceito em silêncio e
+ignorado.
+
 A barreira técnica que justificava o projeto — compilar o "mundo antigo" a
 partir de nada além de binários upstream — foi **demonstrada**:
 
