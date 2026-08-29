@@ -1,0 +1,18 @@
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp	2026-08-29 18:22:32.882607171 -0300
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp	2026-08-29 18:22:32.893394103 -0300
+@@ -314,6 +314,15 @@
+ 
+ GraphicsLayerFactory* DrawingAreaCoordinatedGraphics::graphicsLayerFactory()
+ {
++    // Distropica: with accelerated compositing disabled in the settings there is
++    // no compositor to build. Handing out a factory here used to enter
++    // accelerated compositing mode with a null root layer: WebCore creates no
++    // layers, the LayerTreeHost composites an empty scene, and the page turns
++    // blank (measured on youtube.com, whose page overlays request a factory
++    // before any video plays). A null factory is safe: GraphicsLayer::create
++    // then builds a standalone layer that nothing composites.
++    if (!m_webPage->corePage()->settings().acceleratedCompositingEnabled())
++        return nullptr;
+     if (!m_layerTreeHost)
+         enterAcceleratedCompositingMode(nullptr);
+     return m_layerTreeHost ? m_layerTreeHost->graphicsLayerFactory() : nullptr;

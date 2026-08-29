@@ -29,6 +29,26 @@ SHA256="8a531a9abd2215936e8a8a914c077b586c0228b31d652f205286a8ec90f3364b"
 
 build() {
     tar -xJf "$DL" --strip-components=1
+    # NÃO COMPOR SEM ACELERAÇÃO. Com hardware-acceleration-policy=never, o
+    # WebProcess recebe acceleratedCompositingEnabled=false e o WebCore não
+    # cria camada nenhuma — mas DrawingAreaCoordinatedGraphics::
+    # graphicsLayerFactory() entrava em modo composto assim mesmo quando
+    # alguém pedia uma fábrica de camadas (os page overlays pedem, e o
+    # youtube.com os instala antes de qualquer vídeo). Resultado medido: o
+    # LayerTreeHost compõe uma árvore VAZIA e a página fica branca do
+    # carregamento em diante; com o env WEBKIT_DISABLE_COMPOSITING_MODE, que
+    # deixa o backing store do UI nulo, a mesma entrada virava segfault em
+    # AcceleratedBackingStore::update — os dois sintomas do beta tester, com a
+    # mesma causa. O patch devolve fábrica nula quando a aceleração está
+    # desligada; GraphicsLayer::create trata fábrica nula criando camada
+    # avulsa que nada compõe (lido no GraphicsLayerCoordinated.cpp). Sem a
+    # política never nada muda: o WebKitSettings padrão continua em always.
+    patch -p1 < "$WORK/nao-compor-sem-aceleracao.patch"
+    grep -q 'acceleratedCompositingEnabled()) *$' \
+        Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp || {
+        echo "webkitgtk: o patch nao-compor-sem-aceleracao nao aplicou" >&2
+        exit 1
+    }
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
     # USE_SYSPROF_CAPTURE=OFF, e aqui a escolha é o OPOSTO da do unifdef, de
     # propósito. O CMake oferece dois caminhos — usar a libsysprof-capture-4 do
