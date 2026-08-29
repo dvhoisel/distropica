@@ -52,7 +52,7 @@ build() {
     # O sha do patch fica aqui para que a impressão digital da receita mude
     # com ele — a impressão vem do texto da receita, não de files/.
     echo "26619849dca1754276d09fc68def06f3876c31cb7dcbba05e03f6f6d45d1aca8  $WORK/nao-compor-sem-aceleracao.patch" \
-        | sha256sum -c --quiet || { echo "webkitgtk: o patch nao e o esperado" >&2; exit 1; }
+        | sha256sum -c > /dev/null || { echo "webkitgtk: o patch nao e o esperado" >&2; exit 1; }
     patch -p1 < "$WORK/nao-compor-sem-aceleracao.patch"
     [ "$(grep -c 'corePage()->settings().acceleratedCompositingEnabled())$' \
         Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp)" = 2 ] || {
