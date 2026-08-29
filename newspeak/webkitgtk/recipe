@@ -44,7 +44,7 @@ build() {
     # avulsa que nada compõe (lido no GraphicsLayerCoordinated.cpp). Sem a
     # política never nada muda: o WebKitSettings padrão continua em always.
     patch -p1 < "$WORK/nao-compor-sem-aceleracao.patch"
-    grep -q 'acceleratedCompositingEnabled()) *$' \
+    grep -q 'corePage()->settings().acceleratedCompositingEnabled())$' \
         Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp || {
         echo "webkitgtk: o patch nao-compor-sem-aceleracao nao aplicou" >&2
         exit 1
