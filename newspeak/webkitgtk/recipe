@@ -31,22 +31,37 @@ build() {
     tar -xJf "$DL" --strip-components=1
     # NÃO COMPOR SEM ACELERAÇÃO. Com hardware-acceleration-policy=never, o
     # WebProcess recebe acceleratedCompositingEnabled=false e o WebCore não
-    # cria camada nenhuma — mas DrawingAreaCoordinatedGraphics::
-    # graphicsLayerFactory() entrava em modo composto assim mesmo quando
-    # alguém pedia uma fábrica de camadas (os page overlays pedem, e o
-    # youtube.com os instala antes de qualquer vídeo). Resultado medido: o
-    # LayerTreeHost compõe uma árvore VAZIA e a página fica branca do
-    # carregamento em diante; com o env WEBKIT_DISABLE_COMPOSITING_MODE, que
-    # deixa o backing store do UI nulo, a mesma entrada virava segfault em
-    # AcceleratedBackingStore::update — os dois sintomas do beta tester, com a
-    # mesma causa. O patch devolve fábrica nula quando a aceleração está
-    # desligada; GraphicsLayer::create trata fábrica nula criando camada
-    # avulsa que nada compõe (lido no GraphicsLayerCoordinated.cpp). Sem a
-    # política never nada muda: o WebKitSettings padrão continua em always.
+    # cria camada nenhuma — mas havia DUAS portas para o modo composto que
+    # ignoravam isso, medidas uma de cada vez no youtube.com (o Wikipedia e
+    # páginas locais nunca as cruzam, e por isso renderizavam):
+    #  1. DrawingAreaCoordinatedGraphics::graphicsLayerFactory() entrava no
+    #     modo quando alguém pedia uma fábrica de camadas;
+    #  2. RenderLayerCompositor::updateCompositingLayers() liga o modo composto
+    #     ao ver um page overlay, sem olhar se há aceleração, e a raiz que ele
+    #     anexa chega a setRootCompositingLayer() → enterAcceleratedCompositingMode(),
+    #     que no GTK é irreversível (m_alwaysUseCompositing).
+    # Nos dois casos o LayerTreeHost compõe uma árvore VAZIA e a página fica
+    # branca do carregamento em diante, recarregar incluído; com o env
+    # WEBKIT_DISABLE_COMPOSITING_MODE, que deixa o backing store do UI nulo, a
+    # mesma entrada virava segfault em AcceleratedBackingStore::update — os
+    # dois sintomas do beta tester, com a mesma causa. O patch fecha a porta 1
+    # (fábrica nula; GraphicsLayer::create cria camada avulsa que nada compõe),
+    # a porta 2 no WebCore (overlay não liga composição sem aceleração) e, por
+    # garantia, a própria enterAcceleratedCompositingMode() recusa sob never.
+    # Sem a política never nada muda: o WebKitSettings padrão segue em always.
+    # O sha do patch fica aqui para que a impressão digital da receita mude
+    # com ele — a impressão vem do texto da receita, não de files/.
+    echo "26619849dca1754276d09fc68def06f3876c31cb7dcbba05e03f6f6d45d1aca8  $WORK/nao-compor-sem-aceleracao.patch" \
+        | sha256sum -c --quiet || { echo "webkitgtk: o patch nao e o esperado" >&2; exit 1; }
     patch -p1 < "$WORK/nao-compor-sem-aceleracao.patch"
-    grep -q 'corePage()->settings().acceleratedCompositingEnabled())$' \
-        Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp || {
-        echo "webkitgtk: o patch nao-compor-sem-aceleracao nao aplicou" >&2
+    [ "$(grep -c 'corePage()->settings().acceleratedCompositingEnabled())$' \
+        Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp)" = 2 ] || {
+        echo "webkitgtk: o patch nao-compor-sem-aceleracao nao aplicou na DrawingArea" >&2
+        exit 1
+    }
+    grep -q '!m_compositing && m_hasAcceleratedCompositing && (m_forceCompositingMode' \
+        Source/WebCore/rendering/RenderLayerCompositor.cpp || {
+        echo "webkitgtk: o patch nao-compor-sem-aceleracao nao aplicou no RenderLayerCompositor" >&2
         exit 1
     }
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"

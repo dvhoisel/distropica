@@ -1,5 +1,5 @@
---- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp	2026-08-29 18:22:32.882607171 -0300
-+++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp	2026-08-29 18:22:32.893394103 -0300
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp	2026-08-29 20:09:40.668352658 -0300
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp	2026-08-29 20:09:40.688194042 -0300
 @@ -314,6 +314,15 @@
  
  GraphicsLayerFactory* DrawingAreaCoordinatedGraphics::graphicsLayerFactory()
@@ -16,3 +16,36 @@
      if (!m_layerTreeHost)
          enterAcceleratedCompositingMode(nullptr);
      return m_layerTreeHost ? m_layerTreeHost->graphicsLayerFactory() : nullptr;
+@@ -563,6 +572,16 @@
+ 
+ void DrawingAreaCoordinatedGraphics::enterAcceleratedCompositingMode(GraphicsLayer* graphicsLayer)
+ {
++    // Distropica: the hardware-acceleration policy 'never' disables accelerated
++    // compositing in the settings, and every caller of this function must obey
++    // it. On GTK entering the mode is irreversible (m_alwaysUseCompositing,
++    // below), and the LayerTreeHost would then composite a tree WebCore never
++    // populates: the UI process leaves the software path and the page goes
++    // blank for good, reload included. The root layer WebCore attached (for a
++    // page overlay, measured on youtube.com) stays a standalone layer; the page
++    // keeps painting through the bitmap path.
++    if (!m_webPage->corePage()->settings().acceleratedCompositingEnabled())
++        return;
+ #if PLATFORM(GTK)
+     if (!m_alwaysUseCompositing) {
+         m_webPage->corePage()->settings().setForceCompositingMode(true);
+--- a/Source/WebCore/rendering/RenderLayerCompositor.cpp	2026-08-29 20:09:40.676391461 -0300
++++ b/Source/WebCore/rendering/RenderLayerCompositor.cpp	2026-08-29 20:09:40.688757812 -0300
+@@ -1083,7 +1083,12 @@
+         return false;
+     }
+ 
+-    if (!m_compositing && (m_forceCompositingMode || (isRootFrameCompositor() && page().pageOverlayController().overlayCount())))
++    // Distropica: page overlays are drawn through GraphicsLayers, which need a
++    // compositor. Without accelerated compositing there is none: enabling the
++    // compositing mode here would attach a root layer that nothing composites
++    // and drag the drawing area out of the software path (blank page, measured
++    // on youtube.com under the 'never' policy). The overlay simply is not drawn.
++    if (!m_compositing && m_hasAcceleratedCompositing && (m_forceCompositingMode || (isRootFrameCompositor() && page().pageOverlayController().overlayCount())))
+         enableCompositingMode(true);
+ 
+     bool isPageScroll = !updateRoot || updateRoot == &rootRenderLayer();
