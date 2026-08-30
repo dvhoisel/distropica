@@ -15,11 +15,19 @@
 > **64 bits**, e a própria mídia declara isso de si: `PROFILE_CLASS=custom`.
 > O instalador apaga integralmente o dispositivo escolhido. Use um disco virtual
 > descartável e confira o SHA-256 antes do boot
-> (`26fdd6d1183f8f5ddcc3b0b22d71626c68e9d607e2e67d510074572569723f0e`).
+> (`907aa8b4d7d8afd0bdc6aef1b5126fa1baf59010a406751146d2953086b96d42`).
 >
 > Ela pede a **senha de root antes do caminho do disco**: toda a interação
 > acontece antes de qualquer escrita, e a partir do disco escolhido a
 > instalação corre sozinha.
+>
+> **Problema conhecido — VirtualBox:** a janela do navegador pode piscar ou
+> congelar no primeiro quadro (testado no 7.2.6, com VMSVGA e com VBoxSVGA; o
+> próprio kernel marca o `vmwgfx` como não suportado nesse hipervisor). É
+> vício da apresentação da emulação, não do navegador: medido com o vídeo
+> tocando e o `requestAnimationFrame` a ~81/s enquanto a tela ficava parada.
+> Prefira **QEMU/KVM**, onde a reprodução foi provada em tempo real, sem
+> flashes e sem quadros perdidos.
 >
 > Requisitos da VM: firmware **EFI de 64 bits** (no VirtualBox, `--firmware efi64`;
 > o EFI de 32 bits não carrega o `BOOTX64.EFI` e reporta "no bootable medium").
