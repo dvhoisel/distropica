@@ -3,7 +3,7 @@
 > Uma distribuição Linux distópica. Não instala pacotes: **retifica registros**.
 
 **[Site oficial](https://distropica.com.br/)** ·
-**[Baixar a ISO 0.14 (1355 MB)](https://distropica.com.br/releases/distropica-0.14-x86_64.iso)** ·
+**[Baixar a ISO 0.14 (1421 MB)](https://distropica.com.br/releases/distropica-0.14-x86_64.iso)** ·
 **[SHA-256](https://distropica.com.br/releases/distropica-0.14-x86_64.iso.sha256)** ·
 **[Manifesto](https://distropica.com.br/releases/distropica-0.14-x86_64.iso.manifest)** ·
 **[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.14-corresponding-sources.tar.zst)** ·
@@ -207,6 +207,23 @@ próprio navegador (`hardware-acceleration-policy='never'`), e a guarda do
 build confere o **valor efetivo** da chave com `gsettings`, não o texto —
 porque o schema é relocável e um override com path é aceito em silêncio e
 ignorado.
+
+A política `never`, porém, deixava o YouTube **branco** — só o título chegava,
+e recarregar não ajudava — enquanto Wikipedia e páginas locais renderizavam
+sob a mesma política. Medido de dentro da página (uma sonda injetada por
+`user-javascript.js` que pinta em toda página e nunca apareceu no YouTube), o
+caminho por bitmap havia sido abandonado: o WebKit tem **duas portas** para o
+modo composto que ignoram `acceleratedCompositingEnabled=false`. A
+`graphicsLayerFactory()` da área de desenho entrava no modo quando alguém
+pedia uma fábrica de camadas; e o `RenderLayerCompositor` liga a composição
+ao ver um *page overlay* sem olhar se há aceleração — a raiz que ele anexa
+chega a `enterAcceleratedCompositingMode()`, que no GTK é irreversível. Nos
+dois casos o compositor compõe uma árvore vazia e a página fica branca. O
+patch (três trechos, `newspeak/webkitgtk/files/`) fecha as duas portas e faz
+a própria `enterAcceleratedCompositingMode()` recusar sob `never`. Prova
+fotografada em 2 vCPU/2 GB: o YouTube sob `never` rende com 7,9–8,5% de
+viewport em branco (era 98–100%), sem segfault no dmesg; o VP9 local toca os
+90 s em tempo real, 2696 quadros decodificados e zero descartados.
 
 A barreira técnica que justificava o projeto — compilar o "mundo antigo" a
 partir de nada além de binários upstream — foi **demonstrada**:

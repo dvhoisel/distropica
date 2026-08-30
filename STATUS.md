@@ -145,12 +145,12 @@ instalação; a tela, o clique e o vídeo dependeram de alguém olhar.
 
 ```text
 CANAL=192 pacotes Mundo B (canal-014), CHANNEL_INDEX_FORMAT=4, assinado com a chave de produção
-CANAL_INDEX_SHA256=4bacf5fea9be69ee04d6e6fb074ae1cea393e21e5f2c8d5bf5f239a5e03291d9
+CANAL_INDEX_SHA256=67dbadb07c1a4b3f78b3914959d28557213c6dfa0244eaf13f8b313acde055a1
 POOL=937 MB · CACHE=1,3 GB
 EFI=target/release-0.14/BOOTX64-0.14.EFI                (22.1 MB)
 EFI_SHA256=1932918a74366296f7f6a18c52d29095258e8eead949dae14cd4bd47f6ce1bcb
-ISO=target/release-0.14/distropica-0.14-x86_64.iso      (1355 MB)
-ISO_SHA256=f3c628ddcf46126c5e91e66d077a61fb26f7cd892a41133a9d2abf8c06372f06
+ISO=target/release-0.14/distropica-0.14-x86_64.iso      (1421 MB)
+ISO_SHA256=907aa8b4d7d8afd0bdc6aef1b5126fa1baf59010a406751146d2953086b96d42
 RAIZ_PRODUTORA=target/rebuild-0.13-v48-root
 ```
 
@@ -236,8 +236,8 @@ GSettings validado com `--strict` no build). Tudo fotografado em instalação
 limpa: QEMU/virtio (seis fotos, zero mortes de sessão no serial) e
 VirtualBox/VMSVGA. As seis correções da revisão anterior seguem a bordo.
 
-**PUBLICADA** (2026-08-24; republicada em 25, 27 e 28 de agosto — Skia,
-composição+MIME, e por fim vp9parse+crash). A última rodada matou o defeito
+**PUBLICADA** (2026-08-24; republicada em 25, 27, 28 e 29 de agosto — Skia,
+composição+MIME, vp9parse+crash, e por fim o modo composto sob `never`). A última rodada matou o defeito
 que a anterior criou: o env `WEBKIT_DISABLE_COMPOSITING_MODE=1` fazia o
 `AcceleratedBackingStore::create()` devolver nullptr e o player do YouTube,
 forçando composição, derrubava o navegador — segfault reproduzido duas vezes
@@ -246,12 +246,32 @@ quatro abas em 2 vCPU/2 GB. O MSE ganhou o `vp9parse` (com a `codecparsers`
 que a auditoria de ABI cobrou), e a política `never` do Epiphany é conferida
 por VALOR no build (`gsettings` na instância), porque o schema é relocável e
 override com path é no-op silencioso. `distropica.com.br` anuncia a 0.14:
-ISO `f3c628dd`, bundle de fontes correspondentes `bd0178ac` (2,3 GB,
+ISO `907aa8b4`, bundle de fontes correspondentes `58667dbe` (2,3 GB,
 `bootstrap/sbom --strict` aprovado), inventário e índice de licenças, todos
 com o sha256 conferido no próprio servidor. O canal público serve o
-**canal-014** (192 pacotes); os canais pré-conserto ficaram em `canal/oficial-014-pre-vp9/`, `canal/oficial-014-pre-video/` e `canal/oficial-014-pre-skia/`, o 013f em `canal/oficial-013f/`,
+**canal-014** (192 pacotes); os canais pré-conserto ficaram em `canal/oficial-014-pre-wkpatch/`, `canal/oficial-014-pre-vp9/`, `canal/oficial-014-pre-video/` e `canal/oficial-014-pre-skia/`, o 013f em `canal/oficial-013f/`,
 e o 013e e o índice legado v2 seguem em `canal/oficial-013e/` e
 `canal/oficial-0.12/`.
+
+A quinta rodada (29 de agosto) fechou o que a quarta deixou aberto: sob
+`never` o YouTube ficava **branco** — título carregado, viewport 98–100%
+branca, recarregar sem efeito — enquanto Wikipedia e páginas locais
+renderizavam na mesma sessão. A bissecção por conteúdo descartou o aperto de
+mão `Update`/`DisplayDidRefresh` e o `requestAnimationFrame` (70/s numa
+página nova); uma sonda injetada por `user-javascript.js` (que exige
+`enable-user-js=true`) pintou na página local e nunca apareceu no YouTube:
+a área de desenho tinha saído do caminho por bitmap. Lido no 2.52.5, o WebKit
+tem duas portas para o modo composto que ignoram
+`acceleratedCompositingEnabled=false` — `DrawingAreaCoordinatedGraphics::
+graphicsLayerFactory()` e `RenderLayerCompositor::updateCompositingLayers()`,
+que liga a composição ao ver um page overlay e anexa uma raiz que chega a
+`enterAcceleratedCompositingMode()`, irreversível no GTK
+(`m_alwaysUseCompositing`). O patch de três trechos fecha as duas e faz a
+própria entrada recusar sob `never`; o sha do patch está na receita, porque a
+impressão digital vem do texto dela. Provado em 2 vCPU/2 GB sobre disco
+instalado pelo cenário 1: YouTube sob `never` com 7,9–8,5% de branco na
+viewport e zero segfault; VP9 local em tempo real, 2696 decodificados e
+zero descartados. Ferramentas da prova em `target/ferramentas-prova/`.
 
 O portão de release cobrou quatro barreiras antes de deixar publicar, e todas
 viraram conserto e não contorno: bundle sem as fontes correspondentes de
