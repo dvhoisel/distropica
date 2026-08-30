@@ -66,18 +66,22 @@ struct ArtifactFile {
     hash: String,
     file: fs::File,
     snapshot: FileSnapshot,
+    /// true quando o open LEU os bytes; false quando o hash veio do memo de
+    /// processo (fatia 4 do #74). O anúncio na tela segue este campo.
+    medido_agora: bool,
 }
 
 impl ArtifactFile {
     fn open(path: PathBuf) -> Result<Self> {
         let mut file = open_regular_nofollow(&path, MAX_PINNED_OBJECT_BYTES, "artefato no cache")?;
-        let (hash, snapshot) =
+        let (hash, snapshot, medido_agora) =
             sha256_fd_stable(&mut file, MAX_PINNED_OBJECT_BYTES, "artefato no cache")?;
         let result = Self {
             path,
             hash,
             file,
             snapshot,
+            medido_agora,
         };
         result.ensure_stable()?;
         Ok(result)
@@ -128,7 +132,7 @@ impl ArtifactFile {
     }
 
     fn rehash_same_fd(&mut self) -> Result<()> {
-        let (hash, snapshot) = sha256_fd_stable(
+        let (hash, snapshot, _) = sha256_fd_stable(
             &mut self.file,
             MAX_PINNED_OBJECT_BYTES,
             "artefato autenticado por SIGSUMS",
@@ -850,7 +854,13 @@ pub(crate) fn ensure_artifacts_authenticated(
                 }
             }
         };
-        eprintln!("  {} — sha256 confere", short(url));
+        // O anúncio pertence à medição. Quando o hash veio do memo de processo,
+        // a conferência JÁ foi anunciada por esta execução quando foi feita —
+        // repetir a linha no fechamento do plano era só redundância na tela
+        // (a de trabalho a fatia 4 do #74 já tinha matado).
+        if artifact.medido_agora {
+            eprintln!("  {} — sha256 confere", short(url));
+        }
         artifacts.push(artifact);
     }
 
@@ -913,11 +923,16 @@ fn open_regular_nofollow(path: &Path, max_bytes: u64, label: &str) -> Result<fs:
     Ok(file)
 }
 
+/// O terceiro campo diz se esta chamada LEU o arquivo (true) ou reaproveitou
+/// a medida do memo de processo da fatia 4 (false). Quem anuncia "sha256
+/// confere" na tela deve anunciar a medição, não a lembrança dela: sem essa
+/// distinção, o fechamento do plano repetia palavra por palavra os anúncios
+/// do apply — trabalho já deduplicado pelo memo, tela ainda redundante.
 fn sha256_fd_stable(
     file: &mut fs::File,
     max_bytes: u64,
     label: &str,
-) -> Result<(String, FileSnapshot)> {
+) -> Result<(String, FileSnapshot, bool)> {
     let before = validate_regular_metadata(&file.metadata()?, max_bytes, label)?;
     // Fatia 4 do #74: dentro de UM processo, artefato já medido com este
     // EXATO snapshot — dev, inode, nlink, tamanho, mtime e ctime em
@@ -940,7 +955,7 @@ fn sha256_fd_stable(
         .get(&before)
         .cloned()
     {
-        return Ok((hash, before));
+        return Ok((hash, before, false));
     }
     file.seek(SeekFrom::Start(0))?;
     let mut hasher = Sha256::new();
@@ -968,7 +983,16 @@ fn sha256_fd_stable(
     if before != after || total != before.len {
         anyhow::bail!("{label} mudou durante a leitura");
     }
-    Ok((hex::encode(hasher.finalize()), after))
+    let hash = hex::encode(hasher.finalize());
+    // A GRAVAÇÃO que faltava: a fatia 4 consultava o memo e nunca o
+    // preenchia, então ele jamais acertou — cada passada re-hasheava tudo e
+    // re-anunciava tudo. A chave é o snapshot estável (before == after,
+    // recém-provado acima); o dado é o hash que acabou de ser medido.
+    medidos
+        .lock()
+        .expect("memo de artefatos medidos envenenado")
+        .insert(after, hash.clone());
+    Ok((hash, after, true))
 }
 
 fn read_small_fd_stable(
@@ -2227,7 +2251,7 @@ fn download_temp_bounded(
 
 pub fn sha256_file(p: &Path) -> Result<String> {
     let mut file = open_regular_nofollow(p, MAX_PINNED_OBJECT_BYTES, "objeto para SHA-256")?;
-    let (hash, _) = sha256_fd_stable(&mut file, MAX_PINNED_OBJECT_BYTES, "objeto para SHA-256")?;
+    let (hash, _, _) = sha256_fd_stable(&mut file, MAX_PINNED_OBJECT_BYTES, "objeto para SHA-256")?;
     Ok(hash)
 }
 
@@ -2411,6 +2435,33 @@ mod tests {
         );
         assert_ne!(base, signature_cache_name("hash", "key-b", "https://a/sig"));
         assert_ne!(base, signature_cache_name("hash", "key-a", "https://b/sig"));
+    }
+
+    #[test]
+    fn memo_do_processo_cala_a_reconferencia_e_leitura_nova_anuncia() {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-fetch-memo-{}-{n}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let alvo = root.join("artefato");
+        fs::write(&alvo, b"conteudo estavel").unwrap();
+        let mut file = open_regular_nofollow(&alvo, 1024, "teste").unwrap();
+        let (h1, s1, medido1) = sha256_fd_stable(&mut file, 1024, "teste").unwrap();
+        assert!(medido1, "primeira leitura mede de verdade");
+        let (h2, s2, medido2) = sha256_fd_stable(&mut file, 1024, "teste").unwrap();
+        assert_eq!(h1, h2);
+        assert!(s1 == s2, "mesmo arquivo, mesmo snapshot");
+        assert!(
+            !medido2,
+            "mesmo snapshot no mesmo processo vem do memo — e não re-anuncia"
+        );
+        // Conteúdo trocado => snapshot novo => medição de verdade outra vez.
+        drop(file);
+        fs::write(&alvo, b"conteudo trocado, tamanho outro").unwrap();
+        let mut file = open_regular_nofollow(&alvo, 1024, "teste").unwrap();
+        let (h3, _, medido3) = sha256_fd_stable(&mut file, 1024, "teste").unwrap();
+        assert_ne!(h1, h3);
+        assert!(medido3, "arquivo mudado é lido e anunciado de novo");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
