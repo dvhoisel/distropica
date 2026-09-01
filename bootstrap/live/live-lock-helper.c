@@ -1061,6 +1061,8 @@ static const struct component_descriptor component_descriptors[] = {
     {"e2fsprogs-source", "identity-only", "identity-only", "source"},
     {"e2fsprogs-static", "material", "runtime", "payload"},
     {"linux-config", "identity-only", "identity-only", "config"},
+    {"linux-firmware-radeon", "material", "runtime", "payload"},
+    {"linux-firmware-source", "identity-only", "identity-only", "source"},
     {"linux-source", "identity-only", "identity-only", "source"},
     {"live-lock-helper-source", "identity-only", "identity-only", "source"},
     {"live-lock-helper-static", "identity-only", "identity-only", "tool"},
