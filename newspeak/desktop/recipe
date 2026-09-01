@@ -415,19 +415,19 @@ MIMEAPPS
 homepage-url='https://distropica.com.br/'
 
 [org.gnome.Epiphany.web]
-# A POLITICA DE ACELERACAO E 'never' PORQUE O CRASH MORA NO 'always'. O
-# default do Epiphany poe o WebKit em ALWAYS; com os knobs de software desta
-# sessao, o AcceleratedBackingStore::create() do UI devolve nullptr — e o
-# player do YouTube FORCA modo composto pelo conteudo, o WebProcess manda
-# EnterAcceleratedCompositingMode, e o UI chama update() num objeto que nunca
-# nasceu, protegido so por ASSERT que nao existe em Release. Medido: segfault
-# em AcceleratedBackingStore::update (dmesg ip->simbolo), navegador morto na
-# largada da watch page. Com 'never' o proprio WebProcess desliga o
-# compositor de camadas (setAcceleratedCompositingEnabled(false), lido no
-# WebKitSettings.cpp do fonte pinado): a entrada nunca e enviada e o nullptr
-# fica inalcancavel — o conserto e na origem, nao no sintoma. Num sistema cuja
-# Mesa e softpipe, 'never' tambem e a verdade: nao ha aceleracao a ligar.
-hardware-acceleration-policy='never'
+# A POLITICA DE ACELERACAO VOLTA A 'always' EM 01/09/2026, com a Mesa desta
+# arvore trazendo llvmpipe e r600 — e a historia merece as datas. O 'always'
+# original crashava porque o env WEBKIT_DISABLE_COMPOSITING_MODE anulava o
+# backing store e o player do YouTube derrubava o UI (segfault medido). O
+# conserto foi 'never' + o patch das tres portas no webkitgtk — tirou o
+# branco e o crash, ao preco medido de pintar video na thread principal do
+# WebProcess: rAF de 62/s para 4/s no arnes, com o decodificador entregando
+# tudo. Com llvmpipe (shaders em JIT, rasterizacao multithread) o compositor
+# de camadas volta a valer a pena SEM GPU, e com r600 ele e aceleracao de
+# verdade na Radeon do beta tester. O patch das tres portas CONTINUA no
+# webkitgtk: 'never' segue existindo como modo de emergencia, e segue
+# correto quando alguem o escolher.
+hardware-acceleration-policy='always'
 OVERRIDE
     chmod 0644 "$STAGE/usr/share/glib-2.0/schemas/90_distropica.gschema.override"
 
@@ -776,25 +776,16 @@ MENUXML
 # compositor morre antes de desenhar.
 XKB_DEFAULT_LAYOUT=br
 
-# O RENDERIZADOR E ESCOLHIDO AQUI, e nao pelo automatico, porque o automatico
-# escolhe errado nesta arvore. O wlroots e construido com -Drenderers=[]: sem
-# GLES2 e sem Vulkan, de proposito, porque com Mesa softpipe o GL nao acelera
-# nada. Sobra o pixman, que e compilado INCONDICIONALMENTE — mas compilado nao
-# e escolhido. Em wlr_renderer_autocreate:
-#
-#   if ((is_auto && !has_render_node(backend)) || strcmp(renderer_name, "pixman") == 0)
-#
-# no modo automatico o pixman so entra quando o backend NAO tem render node. Uma
-# VM com /dev/dri/renderD128 tem, entao o automatico pula o pixman, os outros
-# dois nao existem, e o labwc morre com "Could not initialize renderer" seguido
-# de "unable to create renderer". A sessao encerra e a tela vira console — sem
-# nada apontar para renderizador, e num sistema que instalou e bootou inteiro.
-#
-# Nomear o renderizador satisfaz o segundo ramo da condicao e torna a escolha
-# independente do hardware. Esta e a UNICA declaracao dela: o lancador nao
-# repete, porque dois lugares guardando o mesmo fato foi o defeito do log e o do
-# barramento nesta mesma sessao.
-WLR_RENDERER=pixman
+# O RENDERIZADOR DEIXOU DE SER FIXADO AQUI em 01/09/2026. A linha
+# WLR_RENDERER=pixman existia porque o wlroots era construido SEM GLES2 e o
+# automatico, ao ver um render node, pulava o pixman e morria sem renderer
+# nenhum ("Could not initialize renderer", tela em console). Com o wlroots
+# construido com gles2+gbm e a Mesa com r600 e llvmpipe, o automatico do
+# wlr_renderer_autocreate passa a ser a escolha certa por maquina: com
+# render node (r600 no notebook real; llvmpipe atras do virtio em VM) entra
+# o gles2; sem render node (simpledrm puro) o mesmo automatico cai no pixman
+# — os dois ramos lidos no fonte pinado. Fixar aqui de novo seria decidir
+# por TODAS as maquinas o que so cada uma sabe.
 
 # O CURSOR E COMPOSTO POR SOFTWARE, e a linha existe por causa de um
 # travamento medido, nao de gosto. No VirtualBox com VMSVGA — a controladora
@@ -890,7 +881,7 @@ WEBKIT_SKIA_ENABLE_CPU_RENDERING=1
 # forca — o WebProcess manda EnterAcceleratedCompositingMode e o UI chama
 # update() no objeto que nao existe, atras de um ASSERT que Release nao tem.
 # Segfault medido duas vezes no mesmo simbolo, dmesg ip->offset->funcao. O
-# desligamento da composicao continua acontecendo, mas pela politica do
+# desligamento da composicao passou entao a acontecer pela politica do
 # proprio navegador (hardware-acceleration-policy='never' no override de
 # GSettings; o schema web e relocavel e o glib-compile-schemas 2.88 aplica o
 # override ao DEFAULT do schema quando a secao vem SEM path — medido no host
@@ -1216,9 +1207,10 @@ THEMERC
              "vmwgfx e a sessao congela a tela inteira" >&2
         exit 1
     }
-    grep -q '^WLR_RENDERER=pixman$' "$STAGE/etc/xdg/labwc/environment" || {
-        echo "desktop: o environment nao nomeia o renderizador pixman; o" \
-             "automatico nao acha nenhum numa maquina com render node" >&2
+    ! grep -q '^WLR_RENDERER=' "$STAGE/etc/xdg/labwc/environment" || {
+        echo "desktop: o environment voltou a fixar WLR_RENDERER; a escolha" \
+             "e do autocreate por maquina desde que o wlroots tem gles2 —" \
+             "fixar pixman mataria o r600 do notebook real" >&2
         exit 1
     }
     grep -q '^GSK_RENDERER=cairo$' "$STAGE/etc/xdg/labwc/environment" || {
@@ -1237,9 +1229,9 @@ THEMERC
              "o navegador — quem desliga a composicao e a politica do Epiphany" >&2
         exit 1
     }
-    grep -q "hardware-acceleration-policy='never'" \
+    grep -q "hardware-acceleration-policy='always'" \
         "$STAGE/usr/share/glib-2.0/schemas/90_distropica.gschema.override" || {
-        echo "desktop: o override nao poe a politica de aceleracao em never" >&2
+        echo "desktop: o override nao poe a politica de aceleracao em always" >&2
         exit 1
     }
     ! grep -q "org.gnome.Epiphany.web:" \
@@ -1265,9 +1257,9 @@ THEMERC
         politica=$(GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR=./gtest-hw \
             gsettings get org.gnome.Epiphany.web:/org/gnome/epiphany/web/ \
             hardware-acceleration-policy 2>/dev/null || echo indisponivel)
-        [ "$politica" = "'never'" ] || {
+        [ "$politica" = "'always'" ] || {
             echo "desktop: a politica efetiva na instancia do navegador e" \
-                 "$politica, e nao 'never' — o override nao esta valendo" >&2
+                 "$politica, e nao 'always' — o override nao esta valendo" >&2
             exit 1
         }
         unset politica
