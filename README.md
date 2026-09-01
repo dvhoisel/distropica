@@ -3,19 +3,19 @@
 > Uma distribuição Linux distópica. Não instala pacotes: **retifica registros**.
 
 **[Site oficial](https://distropica.com.br/)** ·
-**[Baixar a ISO 0.14 (1421 MB)](https://distropica.com.br/releases/distropica-0.14-x86_64.iso)** ·
-**[SHA-256](https://distropica.com.br/releases/distropica-0.14-x86_64.iso.sha256)** ·
-**[Manifesto](https://distropica.com.br/releases/distropica-0.14-x86_64.iso.manifest)** ·
-**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.14-corresponding-sources.tar.zst)** ·
-**[SHA das fontes](https://distropica.com.br/releases/distropica-0.14-corresponding-sources.tar.zst.sha256)** ·
-**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.14-sources.tsv)** ·
-**[Índice de licenças](https://distropica.com.br/releases/distropica-0.14-licencas.tsv)**
+**[Baixar a ISO 0.15 (1487 MB)](https://distropica.com.br/releases/distropica-0.15-x86_64.iso)** ·
+**[SHA-256](https://distropica.com.br/releases/distropica-0.15-x86_64.iso.sha256)** ·
+**[Manifesto](https://distropica.com.br/releases/distropica-0.15-x86_64.iso.manifest)** ·
+**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.15-corresponding-sources.tar.zst)** ·
+**[SHA das fontes](https://distropica.com.br/releases/distropica-0.15-corresponding-sources.tar.zst.sha256)** ·
+**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.15-sources.tsv)** ·
+**[Índice de licenças](https://distropica.com.br/releases/distropica-0.15-licencas.tsv)**
 
-> **Atenção:** a `0.14` é uma **pré-release de desenvolvimento** para VM UEFI
+> **Atenção:** a `0.15` é uma **pré-release de desenvolvimento** para VM UEFI
 > **64 bits**, e a própria mídia declara isso de si: `PROFILE_CLASS=custom`.
 > O instalador apaga integralmente o dispositivo escolhido. Use um disco virtual
 > descartável e confira o SHA-256 antes do boot
-> (`907aa8b4d7d8afd0bdc6aef1b5126fa1baf59010a406751146d2953086b96d42`).
+> (`f09c843014c88a92a2f91943f8f590b8acff8402fff97d9cfa28351e20711bd5`).
 >
 > Ela pede a **senha de root antes do caminho do disco**: toda a interação
 > acontece antes de qualquer escrita, e a partir do disco escolhido a
@@ -38,8 +38,8 @@
 > instalação, o cache **vive no disco alvo ao mesmo tempo** que a árvore cresce,
 > e o pico é a soma dos dois, não o maior deles; o fator quatro em si saiu de
 > medição (um cache de 664 MiB produziu uma árvore de 2096 MiB, razão 3,16) e o
-> resto é margem. O `cache.tar` da `0.14` tem 1264 MiB, o que dá cerca de
-> **6,7 GiB** de raiz mínima.
+> resto é margem. O `cache.tar` da `0.15` tem 1326 MiB, o que dá cerca de
+> **7,0 GiB** de raiz mínima.
 
 A Distrópica parte de uma observação desconfortável sobre o mundo atual: os
 projetos novos (Zig, Go, Rust, os aplicativos das corporações) distribuem
@@ -80,10 +80,10 @@ nas combinações efetivamente distribuídas.
 Cada ISO, EFI, cache ou canal binário publicado deve vir acompanhado de acesso
 equivalente ao seu bundle de fontes correspondentes: revisão da Distrópica,
 crates Rust vendorizadas, fontes upstream exatas, configurações, patches,
-scripts, licenças e inventário. A imagem custom `0.14` atende essa
-regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-0.14-corresponding-sources.tar.zst),
+scripts, licenças e inventário. A imagem custom `0.15` atende essa
+regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-0.15-corresponding-sources.tar.zst),
 preso à revisão `3a84811` e ao SHA-256 da ISO, e acompanha um
-[índice de licenças](https://distropica.com.br/releases/distropica-0.14-licencas.tsv)
+[índice de licenças](https://distropica.com.br/releases/distropica-0.15-licencas.tsv)
 com os 5575 textos extraídos dos artefatos e das fontes correspondentes.
 Todos os 199 pacotes do inventário declaram licença — não há nenhum
 `LICENSE=NOASSERTION`. Três são **receitas de montagem da própria
@@ -699,7 +699,7 @@ INCONSISTENT_PROFILE_LOCK_RESULT=refused-before-wipe
 
 Essa evidência continuará sendo de desenvolvimento. Ela não será pino de
 release nem substituirá um manifesto oficial assinado. Endpoint, chave e índice
-do canal estão publicados, e desde 2026-08-22 a **mídia também**: a `0.14` está
+do canal estão publicados, e desde 2026-08-22 a **mídia também**: a `0.15` está
 no ar com ISO, bundle de fontes correspondentes aprovado no gate estrito
 (`bootstrap/sbom --strict`, todos os pacotes com texto de licença),
 inventário e índice de licenças. O que ainda não existe é o *manifesto oficial

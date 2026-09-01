@@ -144,13 +144,13 @@ nenhum deles falhava no build. O que o aceite automatizado pega é a
 instalação; a tela, o clique e o vídeo dependeram de alguém olhar.
 
 ```text
-CANAL=192 pacotes Mundo B (canal-014), CHANNEL_INDEX_FORMAT=4, assinado com a chave de produção
-CANAL_INDEX_SHA256=67dbadb07c1a4b3f78b3914959d28557213c6dfa0244eaf13f8b313acde055a1
-POOL=937 MB · CACHE=1,3 GB
-EFI=target/release-0.14/BOOTX64-0.14.EFI                (22.1 MB)
-EFI_SHA256=1932918a74366296f7f6a18c52d29095258e8eead949dae14cd4bd47f6ce1bcb
-ISO=target/release-0.14/distropica-0.14-x86_64.iso      (1421 MB)
-ISO_SHA256=907aa8b4d7d8afd0bdc6aef1b5126fa1baf59010a406751146d2953086b96d42
+CANAL=193 pacotes Mundo B (canal-015), CHANNEL_INDEX_FORMAT=4, assinado com a chave de produção
+CANAL_INDEX_SHA256=8a706b867eef9090e1896407c0b9d1b0b6716740476b4a6da31b7620bbf9b26b
+POOL=999 MB · CACHE=1,3 GB
+EFI=target/release-0.15/BOOTX64-0.15.EFI                (23.0 MB)
+EFI_SHA256=f74cda44c6cc1ed34977f72c671ea35ffe5f359888ec55b0116cf2cc2946e349
+ISO=target/release-0.15/distropica-0.15-x86_64.iso      (1487 MB)
+ISO_SHA256=f09c843014c88a92a2f91943f8f590b8acff8402fff97d9cfa28351e20711bd5
 RAIZ_PRODUTORA=target/rebuild-0.13-v48-root
 ```
 
@@ -247,11 +247,12 @@ no mesmo símbolo, morto no build final e provado sob anúncios, pop-ups e
 quatro abas em 2 vCPU/2 GB. O MSE ganhou o `vp9parse` (com a `codecparsers`
 que a auditoria de ABI cobrou), e a política `never` do Epiphany é conferida
 por VALOR no build (`gsettings` na instância), porque o schema é relocável e
-override com path é no-op silencioso. `distropica.com.br` anuncia a 0.14:
-ISO `907aa8b4`, bundle de fontes correspondentes `58667dbe` (2,3 GB,
+override com path é no-op silencioso. `distropica.com.br` anuncia a 0.15:
+ISO `f09c8430`, bundle de fontes correspondentes `1f66b774` (2,5 GB,
 `bootstrap/sbom --strict` aprovado), inventário e índice de licenças, todos
 com o sha256 conferido no próprio servidor. O canal público serve o
-**canal-014** (192 pacotes); os canais pré-conserto ficaram em `canal/oficial-014-pre-wkpatch/`, `canal/oficial-014-pre-vp9/`, `canal/oficial-014-pre-video/` e `canal/oficial-014-pre-skia/`, o 013f em `canal/oficial-013f/`,
+**canal-015** (193 pacotes); a linhagem anterior ficou inteira em
+`canal/oficial-014/` (o canal-014f final), com os pré-consertos em `canal/oficial-014-pre-wkpatch/`, `canal/oficial-014-pre-vp9/`, `canal/oficial-014-pre-video/` e `canal/oficial-014-pre-skia/`, o 013f em `canal/oficial-013f/`,
 e o 013e e o índice legado v2 seguem em `canal/oficial-013e/` e
 `canal/oficial-0.12/`.
 

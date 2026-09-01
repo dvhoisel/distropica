@@ -189,13 +189,13 @@
             width="1280" height="341" fetchpriority="high" decoding="async"></h1>
         <p class="lead">Uma distribuição Linux distópica em que <strong>instalar é provar</strong>. Todo programa é conferido contra a impressão digital que o próprio autor publicou, todo arquivo do sistema tem dono declarado, e nada entra sem passar. Quando algo não bate, ela recusa — em vez de fingir que deu certo.</p>
         <div class="actions">
-          <a class="button primary" href="/releases/distropica-0.14-x86_64.iso">Baixar ISO · 1421 MB</a>
-          <a class="button" href="/releases/distropica-0.14-corresponding-sources.tar.zst">Fontes correspondentes</a>
+          <a class="button primary" href="/releases/distropica-0.15-x86_64.iso">Baixar ISO · 1487 MB</a>
+          <a class="button" href="/releases/distropica-0.15-corresponding-sources.tar.zst">Fontes correspondentes</a>
           <a class="button" href="https://github.com/dvhoisel/distropica">Examinar o código</a>
         </div>
         <p class="warning compact"><strong>Antes de baixar:</strong> pré-release de desenvolvimento, não release estável. <strong>O instalador apaga integralmente o disco que você indicar.</strong> Wi-Fi, áudio e sessão gráfica de usuário comum. Nenhum pacote declara licença indefinida. <a href="#download">Aviso completo</a>.</p>
         <div class="facts" aria-label="Características da imagem">
-          <div class="fact"><b>0.14</b><small>pré-release de desenvolvimento</small></div>
+          <div class="fact"><b>0.15</b><small>pré-release de desenvolvimento</small></div>
           <div class="fact"><b>Linux 7.1.8</b><small>kernel da mídia</small></div>
           <div class="fact"><b>GCC 15.3</b><small>toolchain nativa</small></div>
           <div class="fact"><b>GPL-3.0+</b><small>código próprio</small></div>
@@ -318,16 +318,16 @@
             <h3>ISO UEFI para VirtualBox</h3>
             <p>A imagem instala um sistema com <strong>modo gráfico</strong>: compositor <strong>labwc</strong> sobre wlroots, navegador <strong>Epiphany</strong> sobre WebKitGTK em português, terminal <strong>foot</strong> e rede por DHCP. O compositor tem barra de tarefas (<strong>yambar</strong>: janelas abertas, rede e relógio), lançador por teclado (<strong>fuzzel</strong>, W-d), notificações e papel de parede, e o menu do botão direito lista os aplicativos instalados. O navegador <strong>reproduz vídeo livre</strong> — WebM com VP9 e Opus, com Media Source, que é o que o streaming adaptativo exige; H.264 e AAC ficam de fora, e uma página que só os ofereça continua muda: é escolha de licenciamento, dita no LICENSING.md, não limitação técnica. O <strong>GIMP 3.2</strong> <strong>não vem na mídia</strong>: ele é instalado depois, <strong>pela rede</strong>, com <code>minitrue rectify gimp</code> — o canal oficial entrega os pacotes assinados e a máquina os retifica, com a closure inteira (GEGL, babl, libmypaint, Poppler e a pilha do GTK3) baixada e conferida na hora. A sessão gráfica roda como a conta comum <code>distropica</code>, não como root. A rede fica a cargo do <strong>ConnMan</strong>, que assume cabo e Wi-Fi com cliente DHCP próprio e comanda o iwd por D-Bus; quem opera é o <strong>miniluv</strong>, a interface gráfica escrita para esta distro, com edição de endereço, máscara, gateway e DNS. Há também <strong>áudio</strong>, com o mixer da ALSA. Junto vão Git, OpenSSH, tmux, strace, file, minicom, Vim, ripgrep, Make, GCC/G++, o Minitrue e o perfil de rede: nftables, WireGuard, nmap, mtr, tcpdump e bash. A raiz é ext4 em tabela GPT. A instalação é <strong>offline</strong>: a mídia carrega os 192 pacotes do canal e não busca nada na rede. Depois de instalado, o sistema fala com o canal oficial pela rede — é assim que o GIMP entra, e é assim que qualquer pacote do canal chega sem gravar mídia nova. Duas correções desta versão valem menção porque a 0.13 falhava nelas: o instalador agora <strong>registra a entrada de arranque na NVRAM do firmware</strong>, sem o que máquinas reais instalavam bem e não bootavam — o carregador ficava no caminho de reserva, que firmware de disco fixo não é obrigado a procurar; e a renderização inteira saiu do caminho OpenGL. Esta árvore só constrói rasterizador de software, e uma API de GPU sobre ele cobra sem acelerar: a interface passou a desenhar por <strong>Cairo</strong>, a página é pintada pelo <strong>Skia em CPU</strong> e a composição acelerada foi desligada. Medido em vídeo VP9 de 150 s: <strong>de 1,1 para 22 quadros por segundo</strong>, e a reprodução corre em tempo real com zero quadros descartados mesmo em 2 núcleos e 2 GB. O vídeo por Media Source — o do YouTube — ganhou o parser de VP9 que faltava, e um defeito que derrubava o navegador ao abrir páginas de vídeo foi eliminado e provado morto sob o pior caso: anúncios, pop-ups e quatro abas. Rolagem e digitação respondem; antes, rolar deixava a página em branco por segundos.</p>
             <div class="actions">
-              <a class="button primary" href="/releases/distropica-0.14-x86_64.iso">Baixar a ISO</a>
-              <a class="button" href="/releases/distropica-0.14-x86_64.iso.sha256">SHA-256</a>
-              <a class="button" href="/releases/distropica-0.14-x86_64.iso.manifest">Manifesto</a>
-              <a class="button" href="/releases/distropica-0.14-corresponding-sources.tar.zst">Fontes correspondentes</a>
-              <a class="button" href="/releases/distropica-0.14-corresponding-sources.tar.zst.sha256">SHA das fontes</a>
-              <a class="button" href="/releases/distropica-0.14-sources.tsv">Inventário</a>
-              <a class="button" href="/releases/distropica-0.14-licencas.tsv">Licenças</a>
+              <a class="button primary" href="/releases/distropica-0.15-x86_64.iso">Baixar a ISO</a>
+              <a class="button" href="/releases/distropica-0.15-x86_64.iso.sha256">SHA-256</a>
+              <a class="button" href="/releases/distropica-0.15-x86_64.iso.manifest">Manifesto</a>
+              <a class="button" href="/releases/distropica-0.15-corresponding-sources.tar.zst">Fontes correspondentes</a>
+              <a class="button" href="/releases/distropica-0.15-corresponding-sources.tar.zst.sha256">SHA das fontes</a>
+              <a class="button" href="/releases/distropica-0.15-sources.tsv">Inventário</a>
+              <a class="button" href="/releases/distropica-0.15-licencas.tsv">Licenças</a>
             </div>
-            <p class="hash"><strong>SHA-256</strong><br>907aa8b4d7d8afd0bdc6aef1b5126fa1baf59010a406751146d2953086b96d42</p>
-            <p class="hash"><strong>SHA-256 das fontes</strong><br>58667dbe9336d01e98aa0f23a6a8716a6ae4103cda932d621267c8486e93b240</p>
+            <p class="hash"><strong>SHA-256</strong><br>f09c843014c88a92a2f91943f8f590b8acff8402fff97d9cfa28351e20711bd5</p>
+            <p class="hash"><strong>SHA-256 das fontes</strong><br>1f66b774315566cd22503066abaf94d028e80e45dae5425cf746495e8488307e</p>
           </div>
           <div>
             <h3>Primeiro boot</h3>
