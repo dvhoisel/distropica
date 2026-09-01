@@ -59,11 +59,6 @@ build() {
         echo "wlroots: a biblioteca não foi produzida" >&2
         exit 1
     }
-    # gles2 pedido tem de virar link de verdade: EGL no NEEDED é o fato.
-    readelf -d "$STAGE/usr/lib/libwlroots-0.20.so" | grep -q 'libEGL' || {
-        echo "wlroots: gles2 pedido e libEGL fora do NEEDED — o renderer não entrou" >&2
-        exit 1
-    }
     # O labwc não consulta a biblioteca: consulta o .pc, e dele lê variáveis.
     # Se o arquivo não sair no lugar, o meson do labwc cai no SUBPROJETO — que
     # esta árvore não tem e não quer, porque seria uma segunda cópia do wlroots
@@ -84,15 +79,17 @@ build() {
             exit 1
         }
     done
-    # A guarda que vale por toda a decisão acima: se um dia 'auto' voltar por
-    # descuido, a biblioteca passa a ligar EGL/GLES/GBM e a promessa de
-    # renderização por software cai sem ninguém perceber. Conferido no ELF, que
-    # é onde a verdade está, e não na linha de comando do meson.
+    # A guarda inverteu de sentido em 01/09/2026, e o rigor é o mesmo: antes
+    # ela caía se EGL/GLES/GBM APARECESSEM (a promessa era software puro);
+    # agora cai se algum FALTAR, porque o gles2+gbm são pedidos nomeados e o
+    # r600 do notebook real depende deles. Conferido no ELF, que é onde a
+    # verdade está, e não na linha de comando do meson — a primeira versão
+    # desta rodada morreu exatamente nesta guarda apontando para o lado velho.
     for lib in libEGL libGLESv2 libgbm; do
-        if readelf -d "$STAGE/usr/lib/libwlroots-0.20.so" | grep -q "$lib"; then
-            echo "wlroots: a biblioteca ligou $lib — o caminho GL voltou" >&2
+        readelf -d "$STAGE/usr/lib/libwlroots-0.20.so" | grep -q "$lib" || {
+            echo "wlroots: $lib fora do NEEDED — o renderer gles2 não entrou" >&2
             exit 1
-        fi
+        }
     done
 
     find "$STAGE" -type d -empty -delete
