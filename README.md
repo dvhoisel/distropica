@@ -170,8 +170,8 @@ Um **protótipo sério de engenharia de sistemas** — ainda um laboratório, n�
 uma distribuição pronta para usuários. A matriz precisa do que está feito,
 testado e futuro vive em **[STATUS.md](STATUS.md)**.
 
-A `0.14` está **publicada** em <https://distropica.com.br/> (2026-08-24): ISO
-instalável, canal binário assinado com 192 pacotes e bundle de fontes
+A `0.15` está **publicada** em <https://distropica.com.br/> (2026-09-01): ISO
+instalável, canal binário assinado com 193 pacotes e bundle de fontes
 correspondentes aprovado no gate estrito. O sistema instalado sobe em modo
 gráfico — compositor **labwc**, navegador **Epiphany** com **vídeo livre**
 (WebM/VP9/Opus), terminal **foot**, barra de tarefas **yambar**, lançador
@@ -232,6 +232,26 @@ a própria `enterAcceleratedCompositingMode()` recusar sob `never`. Prova
 fotografada em 2 vCPU/2 GB: o YouTube sob `never` rende com 7,9–8,5% de
 viewport em branco (era 98–100%), sem segfault no dmesg; o VP9 local toca os
 90 s em tempo real, 2696 quadros decodificados e zero descartados.
+
+A `0.15` fecha essa conta pela raiz: **LLVM e llvmpipe entram na árvore, e o
+driver r600 junto** — a decisão central da receita da Mesa, revertida pela
+régua que a criou. Sob `never` cada quadro de vídeo era pintado na thread
+principal do WebProcess, e o custo tinha número: rAF de 62/s para **3,4/s**
+durante a reprodução. Com o llvmpipe (shaders compilados em runtime,
+rasterização multithread) a política volta a **`always`** e a composição sai
+da thread principal — medido no mesmo arnês, mesma coreografia: **rAF ~60/s**
+tocando em janela, e em tela cheia o relógio de mídia exato (Δt=4,0 s por
+4,0 s de parede), sem um travamento e sem um crash. O renderizador do
+compositor deixou de ser fixado: com render node o wlroots escolhe GLES2
+(r600 em máquina real; llvmpipe atrás do virtio em VM), sem ele cai no
+pixman sozinho. E o kernel vivo — o que de fato boota o sistema instalado —
+sobe com **`CONFIG_DRM_RADEON=y` e o firmware da Radeon HD 6310 embutido na
+imagem** (quatro blobs da família Palm, a mesma exceção declarada e
+redistribuível do firmware de Wi-Fi, agora estendida à GPU e selada no lock
+do EFI como componente com proveniência e licença). Quem instala num
+notebook com essa Radeon ganha aceleração de verdade; quem está em VM ganha
+o llvmpipe. Instalações da 0.14 precisam **reinstalar** para receber o
+driver: é o EFI da ESP que o carrega.
 
 A barreira técnica que justificava o projeto — compilar o "mundo antigo" a
 partir de nada além de binários upstream — foi **demonstrada**:

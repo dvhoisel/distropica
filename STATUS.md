@@ -134,7 +134,7 @@ O aviso que a receita já tinha detecta o estrago **depois de feito**. O `sync`
 fecha a janela, custa uma fração de segundo uma vez na vida da instalação, e
 não havia motivo para ele não estar lá.
 
-## Evidência integrada atual — `0.14`
+## Evidência integrada atual — `0.15`
 
 A mídia instala a partir do canal binário, reinicia sem ISO, sobe em modo
 gráfico e toca vídeo. Quem a bootou foi o Daniel, no VirtualBox, com disco de
@@ -236,8 +236,10 @@ GSettings validado com `--strict` no build). Tudo fotografado em instalação
 limpa: QEMU/virtio (seis fotos, zero mortes de sessão no serial) e
 VirtualBox/VMSVGA. As seis correções da revisão anterior seguem a bordo.
 
-**PUBLICADA** (2026-08-24; republicada em 25, 27, 28 e 29 de agosto — Skia,
-composição+MIME, vp9parse+crash, e por fim o modo composto sob `never`). A última rodada matou o defeito
+**PUBLICADA como 0.15** (2026-09-01). A linhagem 0.14 saiu em 24 de agosto e
+foi republicada em 25, 27, 28 e 29 — Skia, composição+MIME, vp9parse+crash,
+e o modo composto sob `never`; o canal dela ficou preservado em
+`canal/oficial-014/`. A última rodada matou o defeito
 que a anterior criou: o env `WEBKIT_DISABLE_COMPOSITING_MODE=1` fazia o
 `AcceleratedBackingStore::create()` devolver nullptr e o player do YouTube,
 forçando composição, derrubava o navegador — segfault reproduzido duas vezes
@@ -272,6 +274,24 @@ impressão digital vem do texto dela. Provado em 2 vCPU/2 GB sobre disco
 instalado pelo cenário 1: YouTube sob `never` com 7,9–8,5% de branco na
 viewport e zero segfault; VP9 local em tempo real, 2696 decodificados e
 zero descartados. Ferramentas da prova em `target/ferramentas-prova/`.
+
+A sexta rodada virou **0.15** porque muda a base, não só o conserto: LLVM
+22.1.8 e llvmpipe entram na árvore (o maior pacote dela, pago
+conscientemente — a receita diz o preço e a razão), o r600 entra na Mesa com
+libdrm_radeon, o wlroots ganha GLES2+GBM com o renderizador decidido por
+máquina pelo autocreate, e a política de aceleração volta a `always` — o
+patch das três portas fica, e `never` vira modo de emergência. O kernel vivo
+sobe com `DRM_RADEON=y` e os quatro blobs da Palm EMBUTIDOS na imagem
+(EXTRA_FIRMWARE): a exceção declarada do linux-firmware-wifi, estendida à
+GPU, com WHENCE e LICENSE.radeon viajando como evidência e o tarball
+afirmado por pino triplo — build-efi, receita wifi, receita radeon — no
+source-bundle; o lock do EFI passa a 27 componentes. O A/B, mesma
+coreografia a teclado com sonda https no access log do próprio servidor:
+reprodução em janela com rAF de **3,4/s para ~60/s**; tela cheia com o
+relógio exato (Δt=4,0/4,0 s) e zero crash. O canal cresce para **193**
+pacotes (+llvm). Primeira instalação da mídia final fotografada em virtio e
+bochs, journal limpo. Quem veio da 0.14 **reinstala** para ganhar o driver —
+o EFI da ESP é quem o carrega.
 
 O portão de release cobrou quatro barreiras antes de deixar publicar, e todas
 viraram conserto e não contorno: bundle sem as fontes correspondentes de
