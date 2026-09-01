@@ -2,7 +2,9 @@ NAME=pciutils
 VERSION=3.15.0
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc hwdata"
+DEPS="glibc hwdata busybox"
+# Toma o applet homônimo do busybox (lspci) — SPEC-0003 §7.
+SUPERSEDES="busybox"
 BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf busybox findutils"
 ABOUT="O lspci de verdade, e a razão de o hwdata finalmente valer. O applet do BusyBox imprime só 'Class xxxx: vvvv:dddd' — lido no util-linux/lspci.c da fonte pinada: o único fopen dele é o uevent, e não há uma linha que consulte tabela — de modo que o pci.ids embarcado viajava morto e a pergunta 'qual é a minha placa?' ficava sem resposta (a foto do beta tester que diagnosticou a Radeon era exatamente essa saída numérica). Este pacote instala em /usr/bin de propósito (SBINDIR=/usr/bin), para ASSUMIR o caminho do applet, e é compilado com IDSDIR=/usr/share/hwdata — o pci.ids que a árvore já traz, agora com consumidor. ZLIB=no porque a tabela vai plana; DNS=no porque resolver nome de dispositivo na rede é vazamento, não conveniência; HWDB=no e LIBKMOD=no porque nome vem da tabela pinada, não do udev. O update-pciids sai do payload: ele baixa tabela da internet por conta própria, e nesta árvore tabela se atualiza por receita, com sha."
 LICENSE="GPL-2.0-or-later"
