@@ -55,6 +55,11 @@ build() {
         echo "llvm: componente mcjit ausente — o llvmpipe não vai lincar" >&2; exit 1; }
     sobras=$(find "$STAGE/usr/lib" -name '*.a' | wc -l)
     [ "$sobras" -eq 0 ] || { echo "llvm: $sobras estática(s) sobraram" >&2; exit 1; }
+    # O recorte deixa diretórios vazios (usr/share, depois do opt-viewer), e
+    # diretório NU no manifesto colide com os compartilhados de outros
+    # pacotes — o doublethink do /usr/share contra o hicolor foi medido na
+    # primeira construção desta receita. Vazio não é payload.
+    find "$STAGE" -type d -empty -delete
     mb=$(du -sm "$STAGE" | cut -f1)
     echo "llvm: payload ${mb} MB"
 }
