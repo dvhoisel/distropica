@@ -1691,6 +1691,55 @@ elif [ "$LIVE_CONTEXT" = yes ] || [ -n "$LIVE_UTIL_LINUX_TAR" ]; then
     fi
 fi
 
+# O firmware da radeon que o kernel vivo EMBUTE (EXTRA_FIRMWARE) vem do MESMO
+# tarball linux-firmware que a árvore materializa como fonte do
+# linux-firmware-wifi. Aqui se afirma coerência e presença: os TRÊS lugares
+# que declaram o pino concordam — build-efi e as duas receitas — e o tarball
+# está no bundle. Se um dia o perfil sair sem o wifi, esta guarda é quem vai
+# gritar, e a solução será materializar por aqui, pela via do util-linux.
+LINUX_FIRMWARE_SHA256_PIN=$(pin_build_efi LINUX_FIRMWARE_SHA256) || LINUX_FIRMWARE_SHA256_PIN=
+LINUX_FIRMWARE_VERSION_PIN=$(pin_build_efi LINUX_FIRMWARE_VERSION) || LINUX_FIRMWARE_VERSION_PIN=
+LINUX_FIRMWARE_URL_PIN=$(pin_build_efi LINUX_FIRMWARE_URL) || LINUX_FIRMWARE_URL_PIN=
+if [ "$LIVE_CONTEXT" = yes ]; then
+    if [ -z "$LINUX_FIRMWARE_SHA256_PIN" ]; then
+        if [ "$STRICT" = yes ]; then
+            echo "erro: pino LINUX_FIRMWARE_SHA256 ausente/duplicado em $BUILD_EFI" >&2
+            exit 1
+        fi
+        echo "aviso: build-efi sem pino de linux-firmware; sem linha viva no inventário" >&2
+    else
+        for fw_rec in newspeak/linux-firmware-wifi/recipe newspeak/linux-firmware-radeon/recipe; do
+            fw_rsha=$(awk -F'"' '/^SHA256=/{print $2}' "$REPO/$fw_rec")
+            [ "$fw_rsha" = "$LINUX_FIRMWARE_SHA256_PIN" ] || {
+                echo "erro: pino do linux-firmware diverge entre build-efi e $fw_rec" >&2
+                echo "      build-efi: $LINUX_FIRMWARE_SHA256_PIN" >&2
+                echo "      receita:   $fw_rsha" >&2
+                exit 1
+            }
+        done
+        unset fw_rec fw_rsha
+        fw_destino=$OUTPUT/upstream/$LINUX_FIRMWARE_SHA256_PIN
+        if [ -f "$fw_destino" ] && [ ! -L "$fw_destino" ] &&
+           [ "$(sha256sum "$fw_destino" | cut -d' ' -f1)" = "$LINUX_FIRMWARE_SHA256_PIN" ]; then
+            fw_arquivo=upstream/$LINUX_FIRMWARE_SHA256_PIN
+        else
+            if [ "$STRICT" = yes ]; then
+                echo "erro: o tarball linux-firmware ($LINUX_FIRMWARE_SHA256_PIN)" >&2
+                echo "      não está materializado no bundle — esperado via linux-firmware-wifi" >&2
+                exit 1
+            fi
+            faltando="$faltando linux-firmware-live"
+            fw_arquivo='(AUSENTE ou divergente)'
+        fi
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            linux-firmware-live "$LINUX_FIRMWARE_VERSION_PIN" LIVE \
+            'linux-firmware (ver WHENCE; blobs proprietários redistribuíveis)' \
+            "$LINUX_FIRMWARE_SHA256_PIN" "$LINUX_FIRMWARE_URL_PIN" \
+            "$fw_arquivo" insumo-live >> "$inventario"
+        unset fw_destino fw_arquivo
+    fi
+fi
+
 # ---- o kernel, que o §8 nomeia expressamente -----------------------------
 estado_configs_root() {
     boot_root=$MINITRUE_ROOT/boot

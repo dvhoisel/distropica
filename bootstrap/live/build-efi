@@ -26,7 +26,7 @@ if [ "$live_outer_mode" = release ] && [ "$live_outer_inner" = no ]; then
     set -eu
     live_output= live_work= live_rootfs= live_runner= live_runner_sha=
     live_proof= live_proof_sha= live_snapshot= live_snapshot_sha=
-    live_linux= live_busybox= live_e2fs= live_ncurses= live_util=
+    live_linux= live_busybox= live_e2fs= live_ncurses= live_util= live_fw=
     live_minipax= live_minitrue= live_minipax_sha= live_minitrue_sha=
     live_zig= live_zig_tar_sha= live_zig_sha= live_musl_sha=
     live_builder_lock= live_builder_lock_sha= live_builder_id=
@@ -49,6 +49,7 @@ if [ "$live_outer_mode" = release ] && [ "$live_outer_inner" = no ]; then
             --e2fsprogs-tar) live_e2fs=${2:?}; shift 2 ;;
             --ncurses-tar) live_ncurses=${2:?}; shift 2 ;;
             --util-linux-tar) live_util=${2:?}; shift 2 ;;
+            --firmware-tar) live_fw=${2:?}; shift 2 ;;
             --minipax) live_minipax=${2:?}; shift 2 ;;
             --minitrue) live_minitrue=${2:?}; shift 2 ;;
             --minipax-sha256) live_minipax_sha=${2:?}; shift 2 ;;
@@ -74,7 +75,7 @@ if [ "$live_outer_mode" = release ] && [ "$live_outer_inner" = no ]; then
     for live_required in "$live_output" "$live_work" "$live_rootfs" \
         "$live_runner" "$live_runner_sha" "$live_proof" "$live_proof_sha" \
         "$live_snapshot" "$live_snapshot_sha" "$live_linux" "$live_busybox" \
-        "$live_e2fs" "$live_ncurses" "$live_util" "$live_minipax" \
+        "$live_e2fs" "$live_ncurses" "$live_util" "$live_fw" "$live_minipax" \
         "$live_minitrue" "$live_minipax_sha" "$live_minitrue_sha" \
         "$live_zig" "$live_zig_tar_sha" "$live_zig_sha" "$live_musl_sha" \
         "$live_builder_lock" "$live_builder_lock_sha" "$live_builder_id" \
@@ -84,7 +85,7 @@ if [ "$live_outer_mode" = release ] && [ "$live_outer_inner" = no ]; then
     done
     for live_path in "$live_output" "$live_work" "$live_rootfs" "$live_runner" \
         "$live_proof" "$live_snapshot" "$live_linux" "$live_busybox" \
-        "$live_e2fs" "$live_ncurses" "$live_util" "$live_minipax" \
+        "$live_e2fs" "$live_ncurses" "$live_util" "$live_fw" "$live_minipax" \
         "$live_minitrue" "$live_zig" "$live_builder_lock" "$live_license" \
         "$live_helper" "$0"; do
         case "$live_path" in /*) ;; *) printf 'erro: release exige caminho absoluto: %s\n' "$live_path" >&2; exit 1 ;; esac
@@ -252,6 +253,7 @@ EOF
         --ro-bind "$live_e2fs" /run/live/e2fsprogs.tar.xz \
         --ro-bind "$live_ncurses" /run/live/ncurses.tar.gz \
         --ro-bind "$live_util" /run/live/util-linux.tar.xz \
+        --ro-bind "$live_fw" /run/live/linux-firmware.tar.xz \
         --ro-bind "$live_minipax" /run/live/minipax \
         --ro-bind "$live_minitrue" /run/live/minitrue \
         --ro-bind "$live_zig" /run/live/zig.tar.xz \
@@ -277,6 +279,7 @@ EOF
         --e2fsprogs-tar /run/live/e2fsprogs.tar.xz \
         --ncurses-tar /run/live/ncurses.tar.gz \
         --util-linux-tar /run/live/util-linux.tar.xz \
+        --firmware-tar /run/live/linux-firmware.tar.xz \
         --minipax /run/live/minipax --minitrue /run/live/minitrue \
         --minipax-sha256 "$live_minipax_sha" --minitrue-sha256 "$live_minitrue_sha" \
         --zig-tar /run/live/zig.tar.xz --zig-tar-sha256 "$live_zig_tar_sha" \
@@ -387,6 +390,13 @@ NCURSES_SHA256=355b4cbbed880b0381a04c46617b7656e362585d52e9cf84a67e2009b749ff11
 UTIL_LINUX_VERSION=2.42.2
 UTIL_LINUX_URL=https://mirrors.edge.kernel.org/pub/linux/utils/util-linux/v2.42/util-linux-${UTIL_LINUX_VERSION}.tar.xz
 UTIL_LINUX_SHA256=03a05d3adf9602ef128f2da05b84b3205ce60c351e5737c0370f74000679ce8a
+# O firmware da Radeon Palm embutido no kernel vivo (EXTRA_FIRMWARE): mesmo
+# tarball e mesmo sha do linux-firmware-wifi da arvore — um pino, duas
+# receitas, zero divergencia. Os quatro nomes sairam do radeon/*.c da fonte.
+LINUX_FIRMWARE_VERSION=20260810
+LINUX_FIRMWARE_URL=https://mirrors.edge.kernel.org/pub/linux/kernel/firmware/linux-firmware-${LINUX_FIRMWARE_VERSION}.tar.xz
+LINUX_FIRMWARE_SHA256=ac17c34fe73756926a961fbafadf8d8f07a3bd2dd2f4ea31a0fb5d50c714a49a
+RADEON_FW_FILES='radeon/PALM_pfp.bin radeon/PALM_me.bin radeon/SUMO_rlc.bin radeon/SUMO_uvd.bin'
 ZIG_VERSION=0.16.0
 ZIG_TAR_SHA256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
 EMPTY_SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
@@ -418,6 +428,7 @@ MINITRUE_BIN=${MINITRUE:-}
 E2FSPROGS_TAR=${DISTROPICA_E2FSPROGS_TAR:-}
 NCURSES_TAR=${DISTROPICA_NCURSES_TAR:-}
 UTIL_LINUX_TAR=${DISTROPICA_UTIL_LINUX_TAR:-}
+FIRMWARE_TAR=${DISTROPICA_LINUX_FIRMWARE_TAR:-}
 MINIPAX_SHA256=
 MINITRUE_SHA256=
 ZIG_TAR=
@@ -434,6 +445,7 @@ BUSYBOX_TAR_WAS_EXPLICIT=no
 E2FSPROGS_TAR_WAS_EXPLICIT=no
 NCURSES_TAR_WAS_EXPLICIT=no
 UTIL_LINUX_TAR_WAS_EXPLICIT=no
+FIRMWARE_TAR_WAS_EXPLICIT=no
 MINIPAX_WAS_EXPLICIT=no
 MINITRUE_WAS_EXPLICIT=no
 EPOCH_WAS_EXPLICIT=no
@@ -465,6 +477,7 @@ uso: bootstrap/live/build-efi --output BOOTX64.EFI [opções]
   --e2fsprogs-tar ARQ e2fsprogs já baixado (mke2fs/e2fsck estáticos)
   --ncurses-tar ARQ   ncurses já baixado (a interface do cfdisk)
   --util-linux-tar ARQ util-linux já baixado (cfdisk e sfdisk estáticos)
+  --firmware-tar ARQ  linux-firmware já baixado (blobs radeon do EXTRA_FIRMWARE)
   --minipax ARQ       Minipax x86_64-musl estático já compilado
   --minitrue ARQ      Minitrue x86_64-musl estático já compilado
   --minipax-sha256 H  pin exato do Minipax (obrigatório em release)
@@ -529,6 +542,7 @@ while [ "$#" -gt 0 ]; do
         --e2fsprogs-tar) E2FSPROGS_TAR=${2:?}; E2FSPROGS_TAR_WAS_EXPLICIT=yes; shift 2 ;;
         --ncurses-tar) NCURSES_TAR=${2:?}; NCURSES_TAR_WAS_EXPLICIT=yes; shift 2 ;;
         --util-linux-tar) UTIL_LINUX_TAR=${2:?}; UTIL_LINUX_TAR_WAS_EXPLICIT=yes; shift 2 ;;
+        --firmware-tar) FIRMWARE_TAR=${2:?}; FIRMWARE_TAR_WAS_EXPLICIT=yes; shift 2 ;;
         --minipax) MINIPAX_BIN=${2:?}; MINIPAX_WAS_EXPLICIT=yes; shift 2 ;;
         --minitrue) MINITRUE_BIN=${2:?}; MINITRUE_WAS_EXPLICIT=yes; shift 2 ;;
         --minipax-sha256) MINIPAX_SHA256=${2:?}; shift 2 ;;
@@ -725,7 +739,8 @@ if [ "$MODE" = release ]; then
     fi
     for explicit_marker in LINUX_TAR_WAS_EXPLICIT BUSYBOX_TAR_WAS_EXPLICIT \
         E2FSPROGS_TAR_WAS_EXPLICIT NCURSES_TAR_WAS_EXPLICIT \
-        UTIL_LINUX_TAR_WAS_EXPLICIT MINIPAX_WAS_EXPLICIT \
+        UTIL_LINUX_TAR_WAS_EXPLICIT FIRMWARE_TAR_WAS_EXPLICIT \
+        MINIPAX_WAS_EXPLICIT \
         MINITRUE_WAS_EXPLICIT; do
         eval "explicit_value=\${$explicit_marker}"
         [ "$explicit_value" = yes ] || {
@@ -733,7 +748,7 @@ if [ "$MODE" = release ]; then
         }
     done
     for required in LINUX_TAR BUSYBOX_TAR E2FSPROGS_TAR NCURSES_TAR \
-        UTIL_LINUX_TAR MINIPAX_BIN MINITRUE_BIN MINIPAX_SHA256 \
+        UTIL_LINUX_TAR FIRMWARE_TAR MINIPAX_BIN MINITRUE_BIN MINIPAX_SHA256 \
         MINITRUE_SHA256 ZIG_TAR ZIG_TAR_EXPECTED ZIG_BIN_SHA256 \
         MUSL_TREE_SHA256 BUILDER_LOCK BUILDER_LOCK_SHA256 BUILDER_ID \
         RUNNER_PROOF RUNNER_PROOF_SHA256 SOURCE_SNAPSHOT \
@@ -1927,6 +1942,47 @@ for symbol in EFI EFI_STUB BLK_DEV_INITRD DEVTMPFS DEVTMPFS_MOUNT TMPFS \
     VGA_CONSOLE FONT_SUPPORT FONT_8x16; do
     set_config --enable "$symbol"
 done
+# O FIRMWARE DA RADEON entra ANTES da configuração porque o kernel vai
+# embutí-lo (EXTRA_FIRMWARE): este kernel é monolítico e sem carregador de
+# módulos, então firmware fora da imagem não existe para ele. A extração tira
+# do tarball pinado SÓ os quatro blobs da Palm (a HD 6310 do notebook do beta
+# tester, lspci 1002:9802) e as evidências WHENCE/LICENSE.radeon — a mesma
+# exceção declarada do linux-firmware-wifi, estendida à GPU em 01/09/2026.
+prepare_radeon_firmware() {
+    FIRMWARE_TAR=${FIRMWARE_TAR:-$WORK/linux-firmware-${LINUX_FIRMWARE_VERSION}.tar.xz}
+    [ -f "$FIRMWARE_TAR" ] || fetch "$LINUX_FIRMWARE_URL" "$FIRMWARE_TAR"
+    if [ "$MODE" = release ]; then
+        release_regular "$FIRMWARE_TAR" "$LINUX_FIRMWARE_SHA256" 'tar linux-firmware'
+    else
+        check_hash "$LINUX_FIRMWARE_SHA256" "$FIRMWARE_TAR"
+    fi
+    validate_tar_members "$FIRMWARE_TAR" -tJf
+    rm -rf -- "$WORK/firmware" "$WORK/firmware-licenses"
+    mkdir -p "$WORK/firmware" "$WORK/firmware-licenses"
+    fw_prefix=linux-firmware-${LINUX_FIRMWARE_VERSION}
+    set -- ; for f in $RADEON_FW_FILES; do set -- "$@" "$fw_prefix/$f"; done
+    tar -xJf "$FIRMWARE_TAR" --strip-components=1 -C "$WORK/firmware" "$@" || {
+        echo "erro: blobs radeon não vieram do linux-firmware" >&2; exit 1; }
+    tar -xJf "$FIRMWARE_TAR" --strip-components=1 -C "$WORK/firmware-licenses" \
+        "$fw_prefix/WHENCE" "$fw_prefix/LICENSE.radeon" 2>/dev/null ||
+        tar -xJf "$FIRMWARE_TAR" --strip-components=1 -C "$WORK/firmware-licenses" \
+            "$fw_prefix/WHENCE" "$fw_prefix/LICENSES/LICENSE.radeon" || {
+            echo "erro: WHENCE/LICENSE.radeon não vieram do linux-firmware" >&2; exit 1; }
+    [ -f "$WORK/firmware-licenses/LICENSE.radeon" ] ||
+        mv "$WORK/firmware-licenses/LICENSES/LICENSE.radeon" \
+           "$WORK/firmware-licenses/LICENSE.radeon"
+    for f in $RADEON_FW_FILES; do
+        [ -s "$WORK/firmware/$f" ] || {
+            echo "erro: $f vazio ou ausente após extração" >&2; exit 1; }
+    done
+    [ -s "$WORK/firmware-licenses/WHENCE" ] || {
+        echo "erro: WHENCE vazio" >&2; exit 1; }
+    [ -s "$WORK/firmware-licenses/LICENSE.radeon" ] || {
+        echo "erro: LICENSE.radeon vazia" >&2; exit 1; }
+    unset fw_prefix
+}
+prepare_radeon_firmware
+
 # Drivers de KMS por hardware, espelhando newspeak/linux pelo mesmo motivo do
 # bloco de rede acima: quem boota o sistema INSTALADO é este kernel, o
 # instalador exporta este EFI para a ESP, e por isso ligar os knobs lá não
@@ -1940,15 +1996,28 @@ done
 # cobre uma máquina real: vmwgfx é a VMSVGA do VirtualBox e do VMware,
 # vboxvideo é a placa legada do VirtualBox, bochs é a '-vga std' do QEMU e
 # virtio_gpu é a '-device virtio-gpu-pci'.
-for symbol in DRM_VMWGFX DRM_VBOXVIDEO DRM_BOCHS DRM_VIRTIO_GPU; do
+for symbol in DRM_VMWGFX DRM_VBOXVIDEO DRM_BOCHS DRM_VIRTIO_GPU DRM_RADEON; do
     set_config --enable "$symbol"
 done
+# A Radeon precisa do firmware DENTRO da imagem (kernel monolítico): o
+# caminho é o de DENTRO do sandbox de build, por isso WORK_INNER e não WORK.
+set_config --set-str EXTRA_FIRMWARE "$RADEON_FW_FILES"
+set_config --set-str EXTRA_FIRMWARE_DIR "$WORK_INNER/firmware"
 kmake olddefconfig
 grep -q '^CONFIG_CMDLINE_BOOL=y$' "$SOURCE/.config" || {
     echo "erro: kernel descartou CONFIG_CMDLINE_BOOL=y" >&2; exit 1;
 }
 grep -q '^# CONFIG_MODULES is not set$' "$SOURCE/.config" || {
     echo "erro: kernel vivo nao fixou CONFIG_MODULES=n" >&2; exit 1;
+}
+grep -q '^CONFIG_DRM_RADEON=y$' "$SOURCE/.config" || {
+    echo "erro: kernel descartou CONFIG_DRM_RADEON=y" >&2; exit 1;
+}
+grep -Fq "CONFIG_EXTRA_FIRMWARE=\"$RADEON_FW_FILES\"" "$SOURCE/.config" || {
+    echo "erro: kernel descartou o EXTRA_FIRMWARE da radeon" >&2; exit 1;
+}
+grep -Fq "CONFIG_EXTRA_FIRMWARE_DIR=\"$WORK_INNER/firmware\"" "$SOURCE/.config" || {
+    echo "erro: kernel descartou o EXTRA_FIRMWARE_DIR" >&2; exit 1;
 }
 grep -q '^CONFIG_LOCALVERSION="-distropica-live"$' "$SOURCE/.config" || {
     echo "erro: kernel descartou o release isolado da mídia" >&2; exit 1;
@@ -2185,6 +2254,7 @@ HELPER_SOURCE_SHA256=$(sha_path "$LIVE_LOCK_HELPER_SOURCE")
 HELPER_BINARY_SHA256=$(sha_path "$LIVE_LOCK_TOOL")
 LIVE_LOCK_SOURCE_SHA256=$(sha_path "$LIVE_LOCK_SOURCE")
 NCURSES_PAYLOAD_SHA256=$(sha_path "$NCURSESW_PREFIX/lib/libncursesw.a")
+RADEON_FW_PAYLOAD_SHA256=$("$LIVE_LOCK_TOOL" tree-hash "$WORK/firmware")
 MUSL_RUNTIME_PAYLOAD_SHA256=$({
     printf '%s\n' "$BUSYBOX_BINARY_SHA256" "$E2FS_PAYLOAD_SHA256" \
         "$MINIPAX_SHA256" "$MINITRUE_SHA256" "$UTIL_LINUX_PAYLOAD_SHA256"
@@ -2217,6 +2287,8 @@ else
         sha_path "$REPO/LICENSING.md"
         sha_path "$REPO/minipax/Cargo.lock"
         sha_path "$REPO/minitrue/Cargo.lock"
+        sha_path "$WORK/firmware-licenses/WHENCE"
+        sha_path "$WORK/firmware-licenses/LICENSE.radeon"
     } > "$LICENSE_EVIDENCE"
     chmod 0600 "$LICENSE_EVIDENCE"
     MATERIAL_LICENSE_EVIDENCE_SHA256=$(sha_path "$LICENSE_EVIDENCE")
@@ -2317,7 +2389,7 @@ RELEASE_INPUTS_COMPLETE=$([ "$MODE" = release ] && echo yes || echo no)
 SOURCE_DATE_EPOCH=$EPOCH
 RUNNER_PROOF_SHA256=$RUNNER_PROOF_SHA256
 BUILD_CONTRACT_SHA256=$BUILD_CONTRACT_SHA256
-ENTRY_COUNT=25
+ENTRY_COUNT=27
 ENTRY_SCHEMA=id|variant|status|materiality|role|artifact_kind|origin_kind|source_id|provenance|license|license_evidence_sha256|input_sha256|payload_sha256|config_sha256|contract_sha256|toolchain_id|toolchain_sha256
 ENTRY=busybox-config|live-efi|consumed|identity-only|identity-only|config|repo|repo:bootstrap/live/busybox-1.35.0.config|config:busybox-1.35.0|-|$EMPTY_SHA256|$BUSYBOX_CONFIG_SHA256|$BUSYBOX_CONFIG_SHA256|$BUSYBOX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
 ENTRY=busybox-source|live-efi|$busybox_source_status|identity-only|identity-only|source|official-tar|official:busybox-1.35.0|sha256:$BUSYBOX_SHA256|-|$EMPTY_SHA256|$BUSYBOX_SHA256|$BUSYBOX_SHA256|$BUSYBOX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
@@ -2326,6 +2398,8 @@ ENTRY=cargo-locks|live-efi|measured|identity-only|identity-only|provenance|repo|
 ENTRY=e2fsprogs-source|live-efi|consumed|identity-only|identity-only|source|official-tar|official:e2fsprogs-1.47.4|sha256:$E2FSPROGS_SHA256|-|$EMPTY_SHA256|$E2FSPROGS_SHA256|$E2FSPROGS_SHA256|$E2FS_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
 ENTRY=e2fsprogs-static|live-efi|produced|material|runtime|payload|built-from-source|initramfs:mke2fs+e2fsck+mke2fs.conf|source:e2fsprogs-1.47.4|GPL-2.0-only AND LGPL-2.0-only AND BSD-3-Clause AND MIT|$MATERIAL_LICENSE_EVIDENCE_SHA256|$E2FSPROGS_SHA256|$E2FS_PAYLOAD_SHA256|$E2FS_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
 ENTRY=linux-config|live-efi|consumed|identity-only|identity-only|config|generated|kernel:.config|olddefconfig:live-efi|-|$EMPTY_SHA256|$LINUX_CONFIG_SHA256|$LINUX_CONFIG_SHA256|$LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
+ENTRY=linux-firmware-radeon|live-efi|produced|material|runtime|payload|official-tar|kernel:EXTRA_FIRMWARE|sha256:$LINUX_FIRMWARE_SHA256|LicenseRef-linux-firmware-redistributable|$MATERIAL_LICENSE_EVIDENCE_SHA256|$LINUX_FIRMWARE_SHA256|$RADEON_FW_PAYLOAD_SHA256|$LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=linux-firmware-source|live-efi|consumed|identity-only|identity-only|source|official-tar|official:linux-firmware-$LINUX_FIRMWARE_VERSION|sha256:$LINUX_FIRMWARE_SHA256|-|$EMPTY_SHA256|$LINUX_FIRMWARE_SHA256|$LINUX_FIRMWARE_SHA256|$LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
 ENTRY=linux-source|live-efi|consumed|identity-only|identity-only|source|official-tar|official:linux-7.1.8|sha256:$LINUX_SHA256|-|$EMPTY_SHA256|$LINUX_SHA256|$LINUX_SHA256|$LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
 ENTRY=live-lock-helper-source|live-efi|consumed|identity-only|identity-only|source|repo|repo:bootstrap/live/live-lock-helper.c|source:runner-proof|-|$EMPTY_SHA256|$HELPER_SOURCE_SHA256|$HELPER_SOURCE_SHA256|$HELPER_SOURCE_SHA256|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
 ENTRY=live-lock-helper-static|live-efi|produced|identity-only|identity-only|tool|built-from-source|builder:live-lock-helper|source:$HELPER_SOURCE_SHA256|-|$EMPTY_SHA256|$HELPER_SOURCE_SHA256|$HELPER_BINARY_SHA256|$HELPER_SOURCE_SHA256|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
