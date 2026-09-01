@@ -24,7 +24,9 @@ build() {
     # O pci.ids acima sai do STAGE porque o DONO dele é o hwdata: dois
     # pacotes com o mesmo arquivo é doublethink esperando vez.
     [ -e "$STAGE/usr/bin/lspci" ] || { echo "pciutils: sem lspci" >&2; exit 1; }
-    v=$("$STAGE/usr/bin/lspci" --version 2>&1) && echo "$v" | grep -q "$VERSION" || {
+    # O binário do STAGE precisa da libpci do STAGE: sem o LD_LIBRARY_PATH a
+    # guarda reprovava um pacote correto (medido na primeira construção).
+    v=$(LD_LIBRARY_PATH="$STAGE/usr/lib" "$STAGE/usr/bin/lspci" --version 2>&1) &&         echo "$v" | grep -q "$VERSION" || {
         echo "pciutils: lspci não executa ou versão errada: $v" >&2; exit 1; }
     ls "$STAGE"/usr/lib/libpci.so.3* >/dev/null 2>&1 || {
         echo "pciutils: libpci.so.3 não foi produzida" >&2; exit 1; }
