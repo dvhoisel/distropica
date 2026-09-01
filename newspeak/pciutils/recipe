@@ -1,0 +1,41 @@
+NAME=pciutils
+VERSION=3.15.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc hwdata"
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf busybox findutils"
+ABOUT="O lspci de verdade, e a razão de o hwdata finalmente valer. O applet do BusyBox imprime só 'Class xxxx: vvvv:dddd' — lido no util-linux/lspci.c da fonte pinada: o único fopen dele é o uevent, e não há uma linha que consulte tabela — de modo que o pci.ids embarcado viajava morto e a pergunta 'qual é a minha placa?' ficava sem resposta (a foto do beta tester que diagnosticou a Radeon era exatamente essa saída numérica). Este pacote instala em /usr/bin de propósito (SBINDIR=/usr/bin), para ASSUMIR o caminho do applet, e é compilado com IDSDIR=/usr/share/hwdata — o pci.ids que a árvore já traz, agora com consumidor. ZLIB=no porque a tabela vai plana; DNS=no porque resolver nome de dispositivo na rede é vazamento, não conveniência; HWDB=no e LIBKMOD=no porque nome vem da tabela pinada, não do udev. O update-pciids sai do payload: ele baixa tabela da internet por conta própria, e nesta árvore tabela se atualiza por receita, com sha."
+LICENSE="GPL-2.0-or-later"
+SRC="https://mirrors.edge.kernel.org/pub/software/utils/pciutils/pciutils-$VERSION.tar.xz"
+SHA256="c02940f430841ecf158d5d9a50007afc4d5353c8678a2455003ca0b2c4e9f5ff"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    make -j"$JOBS" \
+        PREFIX=/usr SBINDIR=/usr/bin SHAREDIR=/usr/share/hwdata \
+        ZLIB=no DNS=no SHARED=yes HWDB=no LIBKMOD=no \
+        OPT="-O2" all
+    make PREFIX=/usr SBINDIR=/usr/bin SHAREDIR=/usr/share/hwdata \
+        ZLIB=no DNS=no SHARED=yes HWDB=no LIBKMOD=no \
+        DESTDIR="$STAGE" install install-lib
+    rm -f "$STAGE/usr/bin/update-pciids" "$STAGE/usr/share/hwdata/pci.ids" \
+        "$STAGE/usr/share/man/man8/update-pciids.8"
+    # O pci.ids acima sai do STAGE porque o DONO dele é o hwdata: dois
+    # pacotes com o mesmo arquivo é doublethink esperando vez.
+    [ -e "$STAGE/usr/bin/lspci" ] || { echo "pciutils: sem lspci" >&2; exit 1; }
+    v=$("$STAGE/usr/bin/lspci" --version 2>&1) && echo "$v" | grep -q "$VERSION" || {
+        echo "pciutils: lspci não executa ou versão errada: $v" >&2; exit 1; }
+    ls "$STAGE"/usr/lib/libpci.so.3* >/dev/null 2>&1 || {
+        echo "pciutils: libpci.so.3 não foi produzida" >&2; exit 1; }
+    # O caminho da tabela é conferido por VALOR dentro do binário: opção de
+    # make aceita não prova nada.
+    strings "$STAGE"/usr/lib/libpci.so.3* "$STAGE/usr/bin/lspci" 2>/dev/null \
+        | grep -qx '/usr/share/hwdata/pci.ids' || {
+        echo "pciutils: o binário não aponta para /usr/share/hwdata/pci.ids" >&2
+        exit 1
+    }
+    [ ! -e "$STAGE/usr/bin/update-pciids" ] || {
+        echo "pciutils: update-pciids sobrou no payload" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

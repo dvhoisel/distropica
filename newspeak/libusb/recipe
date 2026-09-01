@@ -1,0 +1,31 @@
+NAME=libusb
+VERSION=1.0.30
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc eudev"
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf busybox findutils"
+ABOUT="A biblioteca de acesso a dispositivos USB em espaço de usuário — entra em 01/09/2026 porque o lsusb do usbutils a exige (>=1.0.22 no meson dele), e não por si: nenhum outro pacote da árvore fala USB direto. Com o backend de udev LIGADO, de propósito: é ele que dá enumeração por hotplug em vez de varredura, e o eudev já é morador. O consumidor imediato é o usbutils; qualquer futuro (impressão, câmera) passa por aqui."
+LICENSE=LGPL-2.1-or-later
+SRC="https://github.com/libusb/libusb/releases/download/v$VERSION/libusb-$VERSION.tar.bz2"
+SHA256="fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf"
+
+build() {
+    tar -xjf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-static \
+        --enable-udev
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    # O que o usbutils vai procurar, por existência e por fato de link: a
+    # opção aceita não prova o backend dentro do binário.
+    [ -e "$STAGE/usr/lib/libusb-1.0.so.0" ] || {
+        echo "libusb: libusb-1.0.so.0 não foi produzida" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/pkgconfig/libusb-1.0.pc" ] || {
+        echo "libusb: libusb-1.0.pc não foi produzido" >&2; exit 1; }
+    readelf -d "$STAGE/usr/lib/libusb-1.0.so.0" | grep -q libudev || {
+        echo "libusb: o backend de udev não entrou no link" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

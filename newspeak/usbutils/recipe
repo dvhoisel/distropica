@@ -1,0 +1,36 @@
+NAME=usbutils
+VERSION=019
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libusb eudev"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox findutils"
+ABOUT="O lsusb de verdade, no lugar do applet numérico do BusyBox (assume /usr/bin, como o pciutils). ATENÇÃO À FONTE DOS NOMES, que não é a que a intuição diz: o names.c desta versão pergunta tudo ao HWDB DO UDEV (ID_VENDOR_FROM_DATABASE e afins via libudev) — o usb.ids do hwdata NÃO é lido por ninguém aqui, e por isso saiu daquele pacote com a explicação lá. Quem materializa os nomes é o par eudev: os fragmentos de /etc/udev/hwdb.d que ele instala e o drop-in 04-hwdb.sh que compila o hwdb.bin no primeiro boot — promessa que a receita do eudev fazia desde sempre e que só agora tem gancho. O lsusb.py sai do payload: arrastaria o python para a closure de uma ferramenta de diagnóstico, e a versão em C responde o mesmo."
+LICENSE="GPL-2.0-only AND GPL-2.0-or-later AND GPL-3.0-or-later"
+SRC="https://mirrors.edge.kernel.org/pub/linux/utils/usb/usbutils/usbutils-$VERSION.tar.xz"
+SHA256="659f40c440e31ba865c52c818a33d3ba6a97349e3353f8b1985179cb2aa71ec5"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    rm -f "$STAGE/usr/bin/lsusb.py" "$STAGE/usr/share/man/man1/lsusb.py.1"
+    [ -e "$STAGE/usr/bin/lsusb" ] || { echo "usbutils: sem lsusb" >&2; exit 1; }
+    "$STAGE/usr/bin/lsusb" --version >/dev/null 2>&1 || {
+        echo "usbutils: lsusb não executa" >&2; exit 1; }
+    # Os dois canos dos nomes, por fato de link: libusb enumera, libudev
+    # traduz pelo hwdb.
+    for lib in libusb-1.0 libudev; do
+        readelf -d "$STAGE/usr/bin/lsusb" | grep -q "$lib" || {
+            echo "usbutils: lsusb sem $lib no NEEDED" >&2; exit 1; }
+    done
+    [ -e "$STAGE/usr/bin/usb-devices" ] || {
+        echo "usbutils: usb-devices não veio" >&2; exit 1; }
+    [ ! -e "$STAGE/usr/bin/lsusb.py" ] || {
+        echo "usbutils: lsusb.py sobrou e arrasta python" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

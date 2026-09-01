@@ -9,7 +9,7 @@ DEPS="glibc"
 # correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
 # está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
 # vir antes dele e dispensa a declaração.
-BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf gperf gawk"
+BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf gperf gawk findutils"
 ABOUT="Gerenciador de dispositivos e a libudev. Entra porque o libinput descobre teclado, mouse e touchpad perguntando ao udev quais dispositivos existem e que capacidades têm — sem isso o compositor não encontra entrada nenhuma. É o eudev, fork independente mantido pelo Gentoo, e não o udev do systemd: esta distro não tem systemd nem pretende ter, e o udev de lá não se desacopla. O mdev do BusyBox, que hoje cria os nós de dispositivo no boot, resolve o /dev mas não oferece a libudev que o libinput consulta. Precisa de gperf, como o fontconfig."
 LICENSE="GPL-2.0-or-later AND LGPL-2.1-or-later"
 SRC="https://github.com/eudev-project/eudev/releases/download/v$VERSION/eudev-$VERSION.tar.gz"
@@ -31,8 +31,51 @@ build() {
         --enable-hwdb
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
-    # A base de hardware é gerada por `udevadm hwdb --update` no primeiro boot;
-    # é estado de máquina, não payload, e não pode entrar no manifesto.
+    # A base de hardware é gerada por `udevadm hwdb --update` no primeiro
+    # boot; é estado de máquina, não payload, e não pode entrar no manifesto.
+    # A PROMESSA ACIMA FICOU SEM GANCHO POR TRÊS VERSÕES — o comentário do
+    # 03-mime.sh até a citava como exemplo — e foi medida em 01/09/2026:
+    # instalação limpa da 0.15 sem /etc/udev/hwdb.bin nenhum. Sem ele o
+    # lsusb do usbutils (que traduz nomes pelo hwdb, via libudev) imprime
+    # números, calado. O drop-in abaixo é o gancho, no padrão do 03-mime:
+    # refaz quando falta ou quando algum fragmento de hwdb.d é mais novo.
     rm -rf "$STAGE/etc/udev/hwdb.bin" "$STAGE/var"
+    install -d "$STAGE/etc/rc.d/rcS.d"
+    cat > "$STAGE/etc/rc.d/rcS.d/04-hwdb.sh" <<'DROPIN'
+# Drop-in de inicializacao: a base compilada de hardware do udev.
+#
+# Quem traduz numero USB em nome e o hwdb: o lsusb pergunta a libudev por
+# ID_VENDOR_FROM_DATABASE e afins, e a resposta vem do /etc/udev/hwdb.bin,
+# compilado dos fragmentos de /etc/udev/hwdb.d. E estado derivado do conjunto
+# instalado, como o mime.cache e o gschemas.compiled — por isso nasce aqui e
+# nao no pacote. Refaz quando falta ou quando um fragmento e mais novo.
+if [ -x /usr/bin/udevadm ] && [ -d /etc/udev/hwdb.d ]; then
+    hwdb_refazer=nao
+    if [ ! -s /etc/udev/hwdb.bin ]; then
+        hwdb_refazer=sim
+    else
+        for hwdb_frag in /etc/udev/hwdb.d/*.hwdb; do
+            [ -e "$hwdb_frag" ] || break
+            if [ "$hwdb_frag" -nt /etc/udev/hwdb.bin ]; then
+                hwdb_refazer=sim
+                break
+            fi
+        done
+    fi
+    if [ "$hwdb_refazer" = sim ]; then
+        if /usr/bin/udevadm hwdb --update >/dev/null 2>&1; then
+            echo "distropica: base de hardware do udev compilada"
+        else
+            echo "distropica: FALHA ao compilar o hwdb do udev; lsusb"                  "responde numeros em vez de nomes" >&2
+        fi
+    fi
+    unset hwdb_refazer hwdb_frag
+fi
+DROPIN
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/04-hwdb.sh"
+    sh -n "$STAGE/etc/rc.d/rcS.d/04-hwdb.sh" || {
+        echo "eudev: o drop-in 04-hwdb.sh nao passa no sh -n" >&2
+        exit 1
+    }
     find "$STAGE" -type d -empty -delete
 }

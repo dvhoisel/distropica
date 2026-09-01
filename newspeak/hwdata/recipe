@@ -4,7 +4,7 @@ KIND=source
 TOOLCHAIN=none
 DEPS=""
 BUILD_DEPS=busybox
-ABOUT="As tabelas que traduzem número de fabricante em nome: pci.ids e usb.ids. O BusyBox JÁ traz lspci e lsusb — o que falta não é o comando, é a base que ele consulta. Sem ela os dois imprimem só identificadores hexadecimais, e a pergunta que a pessoa realmente tem, 'qual é a minha placa de som?', não é respondida. Isso deixou de ser detalhe quando esta árvore passou a escolher drivers de vídeo, som e wi-fi por hipótese sobre que hardware existe do outro lado: lspci com nomes é como quem recebe a distro descobre se o driver que embarcamos serve para a máquina dela. Complementa o hwdata-pnp, que recortou de propósito só a tabela de monitores e explica ali o porquê do recorte; este pacote traz as duas tabelas grandes e deixa oui.txt e iab.txt de fora, que são registro de MAC e não têm consumidor nesta árvore."
+ABOUT="A tabela que traduz número PCI em nome: pci.ids, e desde 01/09/2026 SÓ ela — com consumidor de verdade. A primeira escrita deste pacote dizia que o BusyBox 'já traz lspci e lsusb e o que falta é a base que ele consulta', e a premissa era FALSA: o applet do BusyBox não consulta base nenhuma (lido no util-linux/lspci.c pinado — o único fopen é o uevent), então as duas tabelas viajaram mortas na mídia da 0.14 e da 0.15. Quem consulta o pci.ids agora é o lspci do pciutils, compilado com IDSDIR apontando para cá e declarando este pacote como dependência de runtime. O usb.ids SAI pelo mesmo recorte honesto do hwdata-pnp: o lsusb do usbutils desta era tira nomes do HWDB do udev (via libudev), cujos fragmentos o eudev instala e cujo hwdb.bin o drop-in 04-hwdb.sh compila no primeiro boot — uma segunda cópia da tabela USB aqui seria peso sem leitor. oui.txt e iab.txt continuam fora, sem consumidor."
 LICENSE="GPL-2.0-or-later OR XFree86-1.1"
 SRC="https://github.com/vcrhonek/hwdata/archive/refs/tags/v$VERSION.tar.gz"
 SHA256="2864b061b179b8ad8cb6a7339ca07678240a183d9cedce8677a4950acaf798e0"
@@ -17,11 +17,10 @@ build() {
     # regras de udev que esta arvore nao usa; copiar o que se quer e mais
     # honesto que instalar tudo e apagar depois.
     install -m 0644 pci.ids "$STAGE/usr/share/hwdata/pci.ids"
-    install -m 0644 usb.ids "$STAGE/usr/share/hwdata/usb.ids"
 
     # Guarda: tabela existe e tem conteudo. Um arquivo truncado responde a
     # consulta com silencio, que e indistinguivel de tabela ausente.
-    for tabela in pci.ids usb.ids; do
+    for tabela in pci.ids; do
         linhas=$(grep -c . "$STAGE/usr/share/hwdata/$tabela" || echo 0)
         [ "$linhas" -ge 1000 ] || {
             echo "hwdata: $tabela tem so $linhas linhas" >&2
