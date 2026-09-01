@@ -3,8 +3,8 @@ VERSION=2.4.134
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
-BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf"
-ABOUT="Camada fina sobre os ioctl do Direct Rendering Manager do kernel. É por aqui que Mesa e compositor falam com o dispositivo gráfico — mesmo sem aceleração, o KMS (modeset, framebuffer, page flip) passa por ela. Sem os drivers de fabricante (intel, amdgpu, nouveau): este perfil pretende usar Mesa com softpipe, que rasteriza na CPU e não precisa deles; ligá-los seria compilar suporte a hardware que a distro não sabe usar. É o tarball de archive do GitLab do freedesktop, que é o que o Alpine pina — o diretório dri.freedesktop.org/libdrm ainda existe mas responde HTML para esta versão."
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf findutils"
+ABOUT="Camada fina sobre os ioctl do Direct Rendering Manager do kernel. É por aqui que Mesa e compositor falam com o dispositivo gráfico — mesmo sem aceleração, o KMS (modeset, framebuffer, page flip) passa por ela. Com o driver radeon LIGADO desde 01/09/2026: a Mesa ganhou o r600 para a Radeon HD 6310 (Wrestler/Palm) do notebook do beta tester — lspci 1002:9802, foto — e o r600 fala com o kernel por libdrm_radeon. Os demais fabricantes (intel, amdgpu, nouveau, vmwgfx) continuam fora: nenhum hardware deles está em uso medido, e cada um voltaria pelo mesmo caminho que o radeon veio — com a máquina real na mão. É o tarball de archive do GitLab do freedesktop, que é o que o Alpine pina — o diretório dri.freedesktop.org/libdrm ainda existe mas responde HTML para esta versão."
 LICENSE=MIT
 SRC="https://gitlab.freedesktop.org/mesa/libdrm/-/archive/libdrm-$VERSION/libdrm-libdrm-$VERSION.tar.gz"
 SHA256=28af861f62e7a2c3a48c5ff2ad4d01cf440a419f7f877de5caa7f73d3afa5367
@@ -17,7 +17,7 @@ build() {
         --libdir=lib \
         --buildtype=release \
         -Dintel=disabled \
-        -Dradeon=disabled \
+        -Dradeon=enabled \
         -Damdgpu=disabled \
         -Dnouveau=disabled \
         -Dvmwgfx=disabled \
@@ -25,5 +25,15 @@ build() {
         -Dtests=false
     ninja -C build -j"$JOBS"
     DESTDIR="$STAGE" ninja -C build install
+    # O que o r600 da Mesa vai procurar, conferido por existência e não por
+    # intenção da opção — lição da própria Mesa nesta árvore.
+    [ -e "$STAGE/usr/lib/libdrm_radeon.so.1" ] || {
+        echo "libdrm: libdrm_radeon.so.1 não foi produzida" >&2
+        exit 1
+    }
+    [ -e "$STAGE/usr/lib/pkgconfig/libdrm_radeon.pc" ] || {
+        echo "libdrm: libdrm_radeon.pc não foi produzido" >&2
+        exit 1
+    }
     find "$STAGE" -type d -empty -delete
 }

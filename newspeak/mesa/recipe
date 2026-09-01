@@ -2,9 +2,9 @@ NAME=mesa
 VERSION=26.2.0
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc gcc-pass2 libdrm wayland expat zlib"
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf flex bison wayland-protocols python-glibc python-mako python-markupsafe python-packaging python-yaml"
-ABOUT="A implementação de OpenGL e EGL da árvore, e a razão de existir da camada gráfica: sem ela não há GTK e não há Firefox. Construída SÓ com o softpipe, o rasterizador por software mais simples do Gallium, e com llvm=disabled. Essa é a decisão central da receita e vale explicá-la: o llvmpipe é várias vezes mais rápido porque compila os shaders em tempo de execução, mas para isso arrasta o LLVM inteiro — sozinho maior que tudo o que esta distro construiu até aqui somado, e com um build que se mede em horas. O softpipe interpreta os shaders em vez de compilá-los; é lento, e é honesto quanto a isso. Numa distro sem driver de GPU nenhum, o que se ganharia com o LLVM seria velocidade de software rendering, não aceleração — e o preço não paga. Sem Rust: ele só seria exigido pelo rusticl, pelo Vulkan do nouveau e pelo virtgpu, todos fora. Sem GLX e sem glvnd, porque não há X11 aqui — o que significa que NÃO existe libGL.so nesta árvore. O OpenGL de mesa continua inteiro e disponível, mas por eglBindAPI(EGL_OPENGL_API), não pela ABI do GLX; software que linke libGL diretamente não roda, software que fale EGL roda. É isso que Wayland-only quer dizer quando se desce ao nível da biblioteca. Uma não-hermeticidade conhecida e sem conserto limpo: a Mesa detecta libelf, libudev e OpenMP sozinha e não expõe chave para nenhuma das três, então define USE_LIBELF, HAVE_LIBUDEV e HAVE_OPENMP porque elfutils, eudev e libgomp existem nesta árvore. Nenhuma delas entra no link com estas opções — conferido no build.ninja — de modo que DEPS não muda; mas o binário seria diferente numa árvore sem elas, com a MESMA receita e o mesmo fingerprint. Quem for auditar isso deve olhar o link, não os defines. O DEPS saiu do que os binários prontos exigem, medido pela auditoria, e não do que a receita parecia precisar: a primeira escrita declarava libstdcxx e mathlibs-glibc, e ambos estavam errados — nesta árvore libstdc++.so.6 e libgcc_s.so.1 pertencem ao gcc-pass2, e libm.so.6 ao próprio glibc."
+DEPS="glibc gcc-pass2 libdrm wayland expat zlib llvm"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf flex bison wayland-protocols python-glibc python-mako python-markupsafe python-packaging python-yaml findutils"
+ABOUT="A implementação de OpenGL e EGL da árvore, e a razão de existir da camada gráfica: sem ela não há GTK e não há Firefox. Construída com TRÊS drivers Gallium desde 01/09/2026, e a mudança reverte a decisão central da primeira escrita com medição e não com gosto. O llvmpipe entra porque o argumento antigo — 'velocidade de software rendering não paga o LLVM' — caiu diante do arnês de fps: com softpipe a composição do navegador teve de ser desligada (política never) e cada quadro de vídeo passou a ser pintado na thread principal do WebProcess, medido em rAF de 62/s para 4/s durante reprodução com o decodificador entregando tudo; o llvmpipe compila shaders em runtime, rasteriza multithread, e devolve a composição ('always') para fora da thread principal — a arquitetura que faz navegador tocar vídeo em máquina sem GPU. O r600 entra porque a máquina do beta tester tem uma Radeon HD 6310 (Wrestler/Palm, lspci 1002:9802, foto) e o kernel dela agora sobe com o driver radeon e o firmware embutido; é aceleração de verdade onde houver a placa. O softpipe FICA, como fallback selecionável por GALLIUM_DRIVER e como o rasterizador de referência que não depende do LLVM. O custo que a primeira escrita descrevia continua verdadeiro — o LLVM é o maior pacote da árvore e o build se mede em horas — e agora é pago conscientemente, na receita llvm, com o recorte declarado lá. gallium-va segue disabled: o UVD3 da Palm decodificaria H.264 por VA-API, mas o caminho do YouTube é VP9, que ele não decodifica; ligar VA-API é decisão separada, com libva e medição próprias. Sem Rust: ele só seria exigido pelo rusticl, pelo Vulkan do nouveau e pelo virtgpu, todos fora. Sem GLX e sem glvnd, porque não há X11 aqui — o que significa que NÃO existe libGL.so nesta árvore. O OpenGL de mesa continua inteiro e disponível, mas por eglBindAPI(EGL_OPENGL_API), não pela ABI do GLX; software que linke libGL diretamente não roda, software que fale EGL roda. É isso que Wayland-only quer dizer quando se desce ao nível da biblioteca. Uma não-hermeticidade conhecida e sem conserto limpo: a Mesa detecta libelf, libudev e OpenMP sozinha e não expõe chave para nenhuma das três, então define USE_LIBELF, HAVE_LIBUDEV e HAVE_OPENMP porque elfutils, eudev e libgomp existem nesta árvore. Nenhuma delas entra no link com estas opções — conferido no build.ninja — de modo que DEPS não muda; mas o binário seria diferente numa árvore sem elas, com a MESMA receita e o mesmo fingerprint. Quem for auditar isso deve olhar o link, não os defines. O DEPS saiu do que os binários prontos exigem, medido pela auditoria, e não do que a receita parecia precisar: a primeira escrita declarava libstdcxx e mathlibs-glibc, e ambos estavam errados — nesta árvore libstdc++.so.6 e libgcc_s.so.1 pertencem ao gcc-pass2, e libm.so.6 ao próprio glibc."
 LICENSE=MIT
 SRC="https://archive.mesa3d.org/mesa-$VERSION.tar.xz"
 SHA256="efd4bb08cdb7c365a812cd4e6c9202ab55b2f22cdcd13c7d6c4f9647b799a4ef"
@@ -20,11 +20,13 @@ build() {
         --prefix=/usr \
         --libdir=lib \
         --buildtype=release \
-        -Dgallium-drivers=softpipe \
+        -Dgallium-drivers=r600,llvmpipe,softpipe \
         -Dvulkan-drivers= \
         -Dplatforms=wayland \
         -Dvideo-codecs= \
-        -Dllvm=disabled \
+        -Dllvm=enabled \
+        -Dshared-llvm=enabled \
+        -Ddraw-use-llvm=true \
         -Dglx=disabled \
         -Dglvnd=disabled \
         -Degl=enabled \
@@ -72,6 +74,20 @@ build() {
     }
     [ -e "$STAGE/usr/lib/gbm/dri_gbm.so" ] || {
         echo "mesa: backend gbm dri_gbm.so não foi produzido" >&2
+        exit 1
+    }
+    # Os três drivers pedidos têm de estar DENTRO da libgallium unificada, e o
+    # LLVM tem de ter sido lincado de fato — opção aceita não prova biblioteca
+    # produzida. O nome do driver nas strings é grosseiro mas honesto; o
+    # NEEDED é o fato do link.
+    for drv in llvmpipe r600 softpipe; do
+        strings "$STAGE/usr/lib/libgallium-$VERSION.so" | grep -q "$drv" || {
+            echo "mesa: driver $drv não aparece na libgallium" >&2
+            exit 1
+        }
+    done
+    readelf -d "$STAGE/usr/lib/libgallium-$VERSION.so" | grep -q 'libLLVM' || {
+        echo "mesa: libgallium não lincou a libLLVM — o llvmpipe ficou sem JIT" >&2
         exit 1
     }
     find "$STAGE" -type d -empty -delete
