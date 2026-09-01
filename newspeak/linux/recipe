@@ -20,7 +20,7 @@ TOOLCHAIN=native
 # objcopy, readelf e nm estão presentes; rsync, pahole, zstd e lz4 NÃO existem na
 # árvore e não fazem falta, porque a config não liga DEBUG_INFO_BTF nem compressão
 # zstd/lz4. Conferido antes de acrescentar, para não descobrir uma por hora.
-BUILD_DEPS="gcc-pass2 binutils-glibc flex bison elfutils perl openssl make gawk findutils"
+BUILD_DEPS="gcc-pass2 binutils-glibc flex bison elfutils perl openssl make gawk findutils linux-firmware-radeon"
 ABOUT="O kernel. Mundo B por necessidade: o kernel.org só publica FONTE — não há binário oficial (um kernel é sempre específico de um .config), e binários de distro são inelegíveis (SPEC-0001 §2, SPEC-0007). Edge (P7): acompanha o stable mais recente do kernel.org, não um LTS congelado. Compilado com o gcc NATIVO do E2. MÓDULOS ASSINADOS REPRODUTÍVEIS: MODULE_SIG_FORCE confia em certificado público fixo; o build produz .ko unsigned determinístico, confere hash/cobertura e reaplica com sign-file -s um CMS público pinado por módulo. Nenhuma chave privada entra no worktree, rootfs ou build. HOSTLDFLAGS -rpath-link permite a extract-cert/sign-file/objtool resolver libcrypto/libelf e libz transitiva."
 LICENSE="GPL-2.0-only"
 SRC="https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$VERSION.tar.xz"
@@ -262,6 +262,15 @@ CONFIG_DRM_BOCHS=y
 # quem testar vai ter. O vboxvideo cobre o VBoxSVGA/VBoxVGA legado.
 CONFIG_DRM_VMWGFX=y
 CONFIG_DRM_VBOXVIDEO=y
+# A Radeon HD 6310 (Wrestler/Palm) do notebook do beta tester — lspci
+# 1002:9802, foto de 31/08/2026. Embutido (=y) e nao modulo porque a chave do
+# bundle de assinatura foi destruida; e com driver embutido o firmware tem de
+# vir DENTRO da imagem, porque request_firmware roda antes de existir rootfs.
+# Os quatro nomes sairam do drivers/gpu/drm/radeon/*.c DESTA fonte, e os
+# arquivos vem do pacote linux-firmware-radeon, presente na visao de build.
+CONFIG_DRM_RADEON=y
+CONFIG_EXTRA_FIRMWARE="radeon/PALM_pfp.bin radeon/PALM_me.bin radeon/SUMO_rlc.bin radeon/SUMO_uvd.bin"
+CONFIG_EXTRA_FIRMWARE_DIR="/usr/lib/firmware"
 # Audio, espelhando o build-efi pelo mesmo motivo do bloco de video: quem
 # boota o sistema instalado e o kernel do live, e este aqui so passa a valer
 # quando essa divergencia acabar. Tres controladoras porque tres e o que se
@@ -295,6 +304,19 @@ CONFIG_SND_ENS1371=y
 CONFIG_SND_USB_AUDIO=y
 KCONFIG
     make olddefconfig
+    # O olddefconfig descarta em silencio o que dependa de simbolo ausente;
+    # as duas strings do firmware embutido se conferem por valor, e os blobs
+    # por existencia na visao de build — imagem sem eles compila e a GPU
+    # morre em silencio no probe.
+    grep -q '^CONFIG_EXTRA_FIRMWARE="radeon/PALM_pfp.bin radeon/PALM_me.bin radeon/SUMO_rlc.bin radeon/SUMO_uvd.bin"$' .config || {
+        echo "linux: CONFIG_EXTRA_FIRMWARE caiu do .config" >&2; exit 1; }
+    grep -q '^CONFIG_EXTRA_FIRMWARE_DIR="/usr/lib/firmware"$' .config || {
+        echo "linux: CONFIG_EXTRA_FIRMWARE_DIR caiu do .config" >&2; exit 1; }
+    for fwb in radeon/PALM_pfp.bin radeon/PALM_me.bin radeon/SUMO_rlc.bin radeon/SUMO_uvd.bin; do
+        [ -s "/usr/lib/firmware/$fwb" ] || {
+            echo "linux: $fwb ausente na visao de build (linux-firmware-radeon)" >&2; exit 1; }
+    done
+    unset fwb
     # Guarda: o Ministerio EXIGE assinatura, mas proibe chave privada no build.
     # Aborta aqui se FORCE/certificado cair ou a assinatura automatica voltar.
     for s in MODULE_SIG MODULE_SIG_FORCE MODULE_SIG_SHA512 SYSTEM_TRUSTED_KEYRING \
@@ -305,7 +327,7 @@ KCONFIG
         CRYPTO_CTR CRYPTO_MD5 CRYPTO_SHA512 KEY_DH_OPERATIONS \
         CRYPTO_DES CRYPTO_CBC CRYPTO_ECB \
         FRAMEBUFFER_CONSOLE SYSFB_SIMPLEFB DRM_SIMPLEDRM DRM_BOCHS \
-        DRM_VMWGFX DRM_VBOXVIDEO \
+        DRM_VMWGFX DRM_VBOXVIDEO DRM_RADEON \
         SOUND SND SND_PCM SND_HDA SND_HDA_INTEL SND_HDA_GENERIC \
         SND_HDA_CODEC_REALTEK SND_HDA_CODEC_HDMI SND_HDA_CODEC_CIRRUS \
         SND_HDA_CODEC_CS8409 SND_HDA_CODEC_ANALOG SND_HDA_CODEC_SIGMATEL \
