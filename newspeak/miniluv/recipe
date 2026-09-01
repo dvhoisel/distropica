@@ -15,7 +15,7 @@ DEPS="glibc glib gtk4 connman adwaita-icon-theme"
 # para impedir; e a guarda falhou por isto, não por defeito próprio: o tema não
 # estava na view porque a receita não o pedia. Conferido que $ROOT vale "/"
 # dentro da view (install.rs:3583), então o caminho que ela monta está certo.
-BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf"
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf findutils"
 ABOUT="O Ministério do Amor: a interface gráfica de rede da Distrópica, cabo e Wi-Fi na mesma janela. Escrita aqui porque NÃO EXISTE uma, e isso foi medido antes de decidir: o connman-gtk está arquivado desde 2021 com último release em 2015; o connman-ui é GTK3 com systray; o cmst é Qt; os clientes GTK4 modernos de rede — nm-sidebar, wifi-manager — exigem wlr-layer-shell, que o weston desta árvore não implementa (ele publica apenas xdg_wm_base, conferido no binário instalado). Fala com o connmand pelo barramento de sistema usando o GDBus que já vem no glib, de modo que não custa nenhuma dependência além do que o iwgtk já obriga a ter — e o iwgtk, com seus 6348 linhas de C, é o molde estrutural desta ferramenta. Implementa o agente do ConnMan, que é a parte espinhosa: o RequestInput pede o campo que a rede exigir (Passphrase, Identity, Username), o Cancel pode chegar com o diálogo aberto, e o ReportError chega DEPOIS de o Connect ter devolvido sucesso — é ali que senha errada aparece, e uma interface que não o implementa deixa o usuário achando que conectou. Substitui o iwgtk quando o connman entra: dois clientes comandando o mesmo iwd disputariam o rádio. O nome fecha o conjunto dos ministérios — minitrue retifica registros, minipax instala, miniluv decide quem fala com quem."
 LICENSE="GPL-3.0-or-later"
 
