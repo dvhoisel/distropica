@@ -1,0 +1,60 @@
+NAME=llvm
+VERSION=22.1.8
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2 zlib"
+BUILD_DEPS="make gcc-pass2 binutils-glibc cmake ninja python-glibc busybox findutils"
+ABOUT="O motor JIT do llvmpipe, e nada além disso. Entra na árvore em 01/09/2026 revertendo a decisão central da receita da Mesa, e a reversão é medida e não gosto: com softpipe (shaders interpretados, uma thread), a política de composição do navegador teve de cair para 'never', que pinta cada quadro de vídeo na thread principal do WebProcess — medido no arnês de fps: rAF de 62/s para 4/s durante reprodução, com o decodificador entregando tudo. O llvmpipe compila os shaders em tempo de execução e rasteriza em múltiplas threads; com ele a composição volta para 'always' e sai da thread principal — a mesma arquitetura que faz o binário da Mozilla tocar vídeo em máquina sem GPU. O preço que a receita da Mesa descrevia continua verdadeiro e agora é pago conscientemente: build na escala de horas e o maior pacote da árvore. Por isso o recorte é agressivo: SÓ o alvo X86, SÓ a libLLVM dinâmica (os .a são apagados do payload — quem linca é a Mesa, via llvm-config --link-shared), SÓ o llvm-config e os headers como interface de build; sem clang, sem lld, sem ferramentas, sem bindings, sem testes. VERSÃO 22.1.8 e não a 23.1.0: a 23 saiu em 25/08/2026, DEPOIS da Mesa 26.2.0 pinada — a série 22 é a que esta Mesa conheceu em desenvolvimento; subir o LLVM é decisão para quando a Mesa subir junto. O exports de cmake sai do payload porque referenciaria arquivos apagados; consumidor desta biblioteca fala llvm-config."
+LICENSE="Apache-2.0 WITH LLVM-exception"
+SRC="https://github.com/llvm/llvm-project/releases/download/llvmorg-$VERSION/llvm-project-$VERSION.src.tar.xz"
+SHA256="922f1817a0df7b1489272d18134ee0087a8b068828f87ac63b9861b1a9965888"
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    cmake -S llvm -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DLLVM_TARGETS_TO_BUILD=X86 \
+        -DLLVM_BUILD_LLVM_DYLIB=ON \
+        -DLLVM_LINK_LLVM_DYLIB=ON \
+        -DLLVM_ENABLE_RTTI=ON \
+        -DLLVM_ENABLE_ZLIB=FORCE_ON \
+        -DLLVM_ENABLE_ZSTD=OFF \
+        -DLLVM_ENABLE_LIBXML2=OFF \
+        -DLLVM_ENABLE_CURL=OFF \
+        -DLLVM_ENABLE_LIBEDIT=OFF \
+        -DLLVM_ENABLE_LIBPFM=OFF \
+        -DLLVM_ENABLE_FFI=OFF \
+        -DLLVM_ENABLE_BINDINGS=OFF \
+        -DLLVM_ENABLE_ASSERTIONS=OFF \
+        -DLLVM_APPEND_VC_REV=OFF \
+        -DLLVM_INCLUDE_TESTS=OFF \
+        -DLLVM_INCLUDE_EXAMPLES=OFF \
+        -DLLVM_INCLUDE_BENCHMARKS=OFF \
+        -DLLVM_INCLUDE_DOCS=OFF
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+
+    # O RECORTE DO PAYLOAD, na ordem: estáticas fora (a Mesa linca a dylib),
+    # ferramentas fora exceto o llvm-config (é a interface de build), exports
+    # de cmake fora (referenciariam os .a apagados).
+    find "$STAGE/usr/lib" -maxdepth 1 -name '*.a' -delete
+    find "$STAGE/usr/bin" -maxdepth 1 -type f ! -name 'llvm-config' -delete
+    find "$STAGE/usr/bin" -maxdepth 1 -type l ! -name 'llvm-config' -delete
+    rm -rf "$STAGE/usr/lib/cmake" "$STAGE/usr/share/opt-viewer"
+
+    # Guardas por valor, não por intenção: a dylib existe, o llvm-config
+    # responde a versão pinada e declara o mcjit que a Mesa vai pedir, e
+    # nenhuma estática sobrou para inflar a mídia em silêncio.
+    [ -e "$STAGE/usr/lib/libLLVM.so" ] || {
+        echo "llvm: libLLVM.so não foi produzida" >&2; exit 1; }
+    v=$("$STAGE/usr/bin/llvm-config" --version) && [ "$v" = "$VERSION" ] || {
+        echo "llvm: llvm-config responde '$v', esperado $VERSION" >&2; exit 1; }
+    "$STAGE/usr/bin/llvm-config" --components | tr ' ' '\n' | grep -qx mcjit || {
+        echo "llvm: componente mcjit ausente — o llvmpipe não vai lincar" >&2; exit 1; }
+    sobras=$(find "$STAGE/usr/lib" -name '*.a' | wc -l)
+    [ "$sobras" -eq 0 ] || { echo "llvm: $sobras estática(s) sobraram" >&2; exit 1; }
+    mb=$(du -sm "$STAGE" | cut -f1)
+    echo "llvm: payload ${mb} MB"
+}
