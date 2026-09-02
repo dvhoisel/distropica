@@ -1,0 +1,28 @@
+NAME=zathura-pdf-poppler
+VERSION=2026.07.18
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc zathura girara glib poppler cairo"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox findutils"
+ABOUT="O plugin que faz o zathura abrir PDF. Renderiza pela poppler-glib — a mesma biblioteca, já instalada, que o importador de PDF do GIMP usa —, então o custo é um .so de poucas dezenas de kilobytes em /usr/lib/zathura e um .desktop que associa application/pdf ao zathura. Sem ele o zathura abre e diz que não conhece o formato; com ele a sessão ganha o leitor de PDF que faltava desde a primeira ISO."
+LICENSE=Zlib
+SRC="https://pwmt.org/projects/zathura-pdf-poppler/download/zathura-pdf-poppler-$VERSION.tar.xz"
+SHA256=605d3f2c2e90efbc0434bb7206f013dc8ff99d8b679c6b519e13543777635bf1
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    plugin=$(ls "$STAGE"/usr/lib/zathura/*.so 2>/dev/null | head -n 1)
+    [ -n "$plugin" ] || { echo "zathura-pdf-poppler: o plugin não foi produzido em /usr/lib/zathura" >&2; find "$STAGE" -name '*.so' >&2; exit 1; }
+    readelf -d "$plugin" | grep -q libpoppler-glib || {
+        echo "zathura-pdf-poppler: libpoppler-glib ausente do NEEDED" >&2; exit 1; }
+    ls "$STAGE"/usr/share/applications/*.desktop >/dev/null 2>&1 || {
+        echo "zathura-pdf-poppler: o .desktop da associação MIME não veio" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

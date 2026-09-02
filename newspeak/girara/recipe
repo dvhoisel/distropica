@@ -1,0 +1,30 @@
+NAME=girara
+VERSION=2026.07.18
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc glib"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf gettext busybox findutils"
+ABOUT="A biblioteca de configuração, comandos e atalhos do zathura. Nasceu como toolkit de interface minimalista sobre GTK, mas a versão-calendário de 2026 — o projeto abandonou a numeração 0.4.x — já não liga a toolkit nenhum: o meson pinado declara só glib, gobject e gio (lido, não suposto), e a interface passou a viver no próprio zathura, sobre GTK4. O que sobra aqui é o motor de opções, o parser de configuração e os comandos de dois-pontos que dão ao zathura o jeito do vim. Documentação desligada (doxygen não mora aqui)."
+LICENSE=Zlib
+SRC="https://pwmt.org/projects/girara/download/girara-$VERSION.tar.xz"
+SHA256=d7255635776a45d42d1e555aa425ab96caf23755442474cf240cbac966d8502f
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Ddocs=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    ls "$STAGE"/usr/lib/pkgconfig/girara*.pc >/dev/null 2>&1 || {
+        echo "girara: nenhum .pc instalado" >&2; ls "$STAGE/usr/lib/pkgconfig" >&2; exit 1; }
+    lib=$(ls "$STAGE"/usr/lib/libgirara*.so.* 2>/dev/null | head -n 1)
+    [ -n "$lib" ] || { echo "girara: biblioteca compartilhada ausente" >&2; exit 1; }
+    # A premissa da receita, provada no binário: sem GTK no NEEDED.
+    ! readelf -d "$lib" | grep -qE 'libgtk|libgdk' || {
+        echo "girara: liga a GTK, ao contrário do que o meson pinado diz" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

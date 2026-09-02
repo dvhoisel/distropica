@@ -1,0 +1,55 @@
+NAME=zathura
+VERSION=2026.07.18
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc girara glib gtk4 json-glib cairo file sqlite3 xxhash libseccomp hicolor-icon-theme pango graphene"
+# pango e graphene: vêm com o GTK4, e o binário do zathura os exige
+# diretamente no NEEDED; declarados porque a auditoria os cobra dele.
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf gettext busybox findutils"
+ABOUT="Leitor de documentos — a peça central da 0.16, porque PDF era a maior lacuna do desktop: uma sessão com navegador, editor de imagem e terminal não abria um PDF. O zathura é o leitor de teclado: abre em uma janela, rola e amplia com atalhos do vim, busca, índice, modo apresentação, e ocupa uma fração do que um leitor de toolkit pesado custaria. O tarball de 2026 é GTK4 (dependency gtk4 >= 4.12, lido no meson; o GTK4 desta árvore é 4.22) e exige o xxhash, que entra na mesma rodada. Ele não sabe abrir formato nenhum sozinho: os formatos são plugins, e o PDF vem do zathura-pdf-poppler, sobre a poppler-glib que o GIMP já trouxe. DOIS EXECUTÁVEIS, e a distinção não é cosmética: o meson desta versão compila o MESMO main.c duas vezes e instala zathura e zathura-sandbox — só o segundo tem o confinamento, seccomp (pela libseccomp, que mora aqui) e landlock (detectado nos cabeçalhos do kernel desta árvore). O .desktop do upstream lança o zathura simples, e é ele que o menu do labwc mostra; quem abre um PDF de origem duvidosa deve chamar o zathura-sandbox pelo nome. A guarda desta receita confere os dois: que o sandbox existe E que a libseccomp está no NEEDED dele — a primeira escrita cobrava isso no binário errado, e a cadeia denunciou. SyncTeX desligado: pede uma biblioteca do TeX Live que não existe aqui. Páginas de manual desligadas: o upstream as gera com o Sphinx, que não mora na árvore; o --help e a configuração comentada cobrem. As completions de bash, zsh e fish saem do payload porque nenhum desses shells está instalado; o .desktop e o ícone (no hicolor, cujo dono é o hicolor-icon-theme) ficam, e é por eles que o menu do labwc o lista."
+LICENSE=Zlib
+SRC="https://pwmt.org/projects/zathura/download/zathura-$VERSION.tar.xz"
+SHA256=9efc4a92f8b2d03e5a1b80756d3ae4249d8d6efdb10e311795e8cdd8e35a9f87
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dsynctex=disabled \
+        -Dseccomp=enabled \
+        -Dlandlock=auto \
+        -Dmanpages=disabled \
+        -Dtests-x11=disabled \
+        -Dtests-wayland=disabled \
+        -Dconvert-icon=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    rm -rf "$STAGE/usr/share/bash-completion" "$STAGE/usr/share/zsh" "$STAGE/usr/share/fish"
+    for bin in zathura zathura-sandbox; do
+        [ -x "$STAGE/usr/bin/$bin" ] || { echo "zathura: $bin não foi produzido" >&2; exit 1; }
+    done
+    for lib in libgtk-4 libgirara libmagic libsqlite3 libxxhash libjson-glib; do
+        readelf -d "$STAGE/usr/bin/zathura" | grep -q "$lib" || {
+            echo "zathura: $lib ausente do NEEDED" >&2; exit 1; }
+    done
+    # O confinamento vive SÓ no zathura-sandbox: é lá que a libseccomp aparece,
+    # e é isso que separa "o meson achou a libseccomp" de "o binário a usa".
+    readelf -d "$STAGE/usr/bin/zathura-sandbox" | grep -q libseccomp || {
+        echo "zathura: o zathura-sandbox não liga a libseccomp" >&2; exit 1; }
+    ! readelf -d "$STAGE/usr/bin/zathura" | grep -q libseccomp || {
+        echo "zathura: o binário sem sandbox ligou a libseccomp; os dois deixaram de ser distintos" >&2; exit 1; }
+    ! readelf -d "$STAGE/usr/bin/zathura" | grep -q libsynctex || {
+        echo "zathura: libsynctex entrou no NEEDED sem ser declarada" >&2; exit 1; }
+    # Quem consome o .pc é o plugin de PDF: sem plugindir nele o plugin cai
+    # em diretório inventado.
+    grep -q '^plugindir=' "$STAGE/usr/lib/pkgconfig/zathura.pc" || {
+        echo "zathura: zathura.pc sem plugindir" >&2; exit 1; }
+    [ -e "$STAGE/usr/share/applications/org.pwmt.zathura.desktop" ] || {
+        echo "zathura: .desktop não veio" >&2; exit 1; }
+    [ -e "$STAGE/usr/share/icons/hicolor/scalable/apps/org.pwmt.zathura.svg" ] || {
+        echo "zathura: ícone não veio" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}
