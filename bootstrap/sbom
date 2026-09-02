@@ -274,6 +274,48 @@ while IFS="$(printf '\t')" read -r pacote versao mundo licenca hash origem arqui
                 fi
                 rm -rf "$bruto"
             fi
+    elif unzip -l "$fonte" > "$lista" 2>/dev/null; then
+            # ZIP, e não tar. Três pacotes desta árvore chegam assim e todos
+            # os três apareceram SEM EVIDÊNCIA ALGUMA no gate estrito da 0.16,
+            # com o texto de licença bem ali dentro: o inter-fonts, cujo
+            # upstream publica um .zip, e as rodas oficiais de lxml e numpy,
+            # que são zip por definição do formato wheel — e carregam a
+            # licença em <dist-info>/licenses/. O `tar -tf` acima falha em
+            # silêncio nesses arquivos, e falhar em silêncio era exatamente o
+            # que este programa existe para não deixar acontecer.
+            #
+            # A listagem do unzip vem em colunas; o nome é o que sobra depois
+            # do quarto campo, e as duas linhas de cabeçalho e as três de
+            # rodapé saem por não conterem barra nem casarem o padrão.
+            alvos=$(awk 'NF >= 4 { $1=""; $2=""; $3=""; sub(/^ +/, "");                          sub(/^[^ ]+ +/, ""); print }' "$lista" |
+                    grep -Ei "$PADRAO" || true)
+            if [ -n "$alvos" ]; then
+                mkdir -p "$destino"
+                bruto=$(mktemp -d "$SAIDA/.extraindo-$pacote.XXXXXX")
+                # -j não: o nome achatado precisa da hierarquia inteira, pela
+                # mesma razão do ramo do tar — dois componentes com LICENSE
+                # sobrescreveriam um ao outro.
+                printf '%s\n' "$alvos" | while IFS= read -r alvo; do
+                    [ -n "$alvo" ] || continue
+                    unzip -qq -o "$fonte" "$alvo" -d "$bruto" >/dev/null 2>&1 || continue
+                    [ -f "$bruto/$alvo" ] && [ ! -L "$bruto/$alvo" ] || continue
+                    plano=$(printf '%s' "$alvo" | sed 's|/|__|g')
+                    [ -n "$plano" ] || continue
+                    cp "$bruto/$alvo" "$destino/$plano" 2>/dev/null || continue
+                    [ -s "$destino/$plano" ] || { rm -f "$destino/$plano"; continue; }
+                    hash=$(sha256sum "$destino/$plano" | cut -d' ' -f1)
+                    componente=$(ascii_hex "$alvo")
+                    primeira=$(preview_hex "$destino/$plano")
+                    printf '%s\t%s\t%s\t%s\n' "$pacote" "$componente" "$hash" \
+                        "$primeira" >> "$INDICE"
+                done
+                rm -rf "$bruto"
+                if [ -n "$(ls -A "$destino" 2>/dev/null)" ]; then
+                    achou=sim
+                else
+                    rmdir "$destino" 2>/dev/null || true
+                fi
+            fi
     else
         case "$tipo" in
             *ELF*)
