@@ -277,6 +277,11 @@ instalado pelo cenário 1: YouTube sob `never` com 7,9–8,5% de branco na
 viewport e zero segfault; VP9 local em tempo real, 2696 decodificados e
 zero descartados. Ferramentas da prova em `target/ferramentas-prova/`.
 
+**PUBLICADA como 0.16** (2026-09-02): ISO `0d7b549d` (1568 MB), canal-016
+com 229 pacotes e índice `e57af616`, bundle de fontes correspondentes
+`d4e956e9` (2,8 GB, `bootstrap/sbom --strict` aprovado), inventário e índice
+de licenças. O canal-015 ficou preservado em `canal/oficial-015/`.
+
 A sétima rodada virou **0.16** e não muda a base: muda o que o sistema
 INSTALADO oferece. Trinta e três receitas novas, e cada uma entrou por uma
 falta observada em uso. As ferramentas da sessão: `grim` e `slurp` (o relato do
