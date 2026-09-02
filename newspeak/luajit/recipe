@@ -1,0 +1,28 @@
+NAME=luajit
+VERSION=2.1.1787165859
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2"
+BUILD_DEPS="gcc-pass2 binutils-glibc make busybox findutils"
+ABOUT="O interpretador Lua com JIT que o swayimg 5 exige por nome (dependency('luajit') no meson dele, obrigatório, sem alternativa em Lua puro). A VERSÃO PEDE EXPLICAÇÃO: o LuaJIT faz rolling release e o próprio site diz que não há tarball de versão — o que se pina aqui é um COMMIT do ramo v2.1 (1ee778a4e37122d8ca7d5733c590a47dafd6b15c, de 19/08/2026) via arquivo do GitHub, e o número 2.1.1787165859 é o que o upstream imprime: o sufixo é o carimbo de tempo do .relver que viaja no arquivo, lido pelo Makefile quando não há .git (src/Makefile, regra GIT_RELVER). Compilado como amalgamação (make amalg), que é o modo que o upstream recomenda. Só a biblioteca compartilhada e o executável; a estática sai. O gcc-pass2 está em DEPS porque o interpretador e a biblioteca exigem a libgcc_s para desenrolar pilha — fato de link cobrado pela auditoria de fechamento, não suposição."
+LICENSE=MIT
+SRC="https://github.com/LuaJIT/LuaJIT/archive/1ee778a4e37122d8ca7d5733c590a47dafd6b15c.tar.gz"
+SHA256=512cdb23dafa39c6247763ae15f29341734b1596067b067db0c0387bbebc7c55
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    make -j"$JOBS" amalg PREFIX=/usr
+    make install PREFIX=/usr DESTDIR="$STAGE"
+    rm -f "$STAGE/usr/lib/libluajit-5.1.a"
+    [ -x "$STAGE/usr/bin/luajit-$VERSION" ] || {
+        echo "luajit: o executável versionado não foi produzido (o .relver não foi lido?)" >&2
+        ls "$STAGE/usr/bin" >&2; exit 1; }
+    [ -L "$STAGE/usr/bin/luajit" ] || { echo "luajit: falta o link luajit" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/libluajit-5.1.so.2" ] || { echo "luajit: biblioteca compartilhada ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/pkgconfig/luajit.pc" ] || { echo "luajit: luajit.pc ausente" >&2; exit 1; }
+    # O executável diz a própria versão; ela tem de ser a que a receita declara.
+    LD_LIBRARY_PATH="$STAGE/usr/lib" "$STAGE/usr/bin/luajit" -v 2>&1 | grep -q "LuaJIT $VERSION" || {
+        echo "luajit: 'luajit -v' não diz $VERSION" >&2
+        LD_LIBRARY_PATH="$STAGE/usr/lib" "$STAGE/usr/bin/luajit" -v >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

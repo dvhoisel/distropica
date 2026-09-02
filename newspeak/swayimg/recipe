@@ -1,0 +1,50 @@
+NAME=swayimg
+VERSION=5.5
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2 wayland libxkbcommon fontconfig freetype luajit libjpeg-turbo libpng librsvg libtiff libwebp exiv2 hicolor-icon-theme glib cairo"
+# glib e cairo: chegam pela librsvg, que o swayimg usa para SVG, mas quem
+# os exige no NEEDED é o próprio binário — a auditoria não aceita herança.
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf wayland-protocols busybox findutils"
+ABOUT="Visualizador de imagens. Até aqui VER um PNG significava abrir o GIMP — um editor de centenas de megabytes de closure para olhar uma captura de tela. A escolha entre swayimg e imv foi decidida por evidência, não por gosto: o imv desenha com OpenGL de função fixa e exige libGL, e a Mesa desta árvore, construída sem GLX, não entrega libGL; o swayimg pinta em wl_shm e roda em qualquer compositor wlroots. A partir da série 5 ele é C++ com configuração e scripts em Lua, e o LuaJIT é obrigatório — é a única dependência nova que ele trouxe. Formatos: JPEG, PNG, SVG (pela librsvg), TIFF e WebP, que já moram aqui; EXIF pela exiv2, também moradora. GIF, EXR, HEIF, AVIF, JPEG 2000, JPEG XL, Sixel e RAW ficam desligados por nome, porque cada um pediria uma biblioteca que a árvore não tem. Sem modo DRM (é ferramenta de sessão gráfica) e sem a integração com o IPC do sway, que o labwc não fala."
+LICENSE=MIT
+SRC="https://github.com/artemsen/swayimg/archive/refs/tags/v$VERSION.tar.gz"
+SHA256=f84fec722cd0b4cfd86d0a8a820b15a95bbdb1d2cfcded7f67446a7a0c1d1c09
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # -Dversion: o arquivo do GitHub não carrega a versão, e o meson gravaria
+    # 0.0.0 no binário e no .desktop.
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dversion="$VERSION" \
+        -Dwayland=enabled -Ddrm=disabled -Dcompositor=disabled \
+        -Djpeg=enabled -Dpng=enabled -Dsvg=enabled -Dtiff=enabled -Dwebp=enabled -Dexif=enabled \
+        -Dgif=disabled -Dexr=disabled -Dheif=disabled -Davif=disabled -Djp2=disabled \
+        -Djxl=disabled -Dsixel=disabled -Draw=disabled \
+        -Dbash=disabled -Dzsh=disabled \
+        -Ddesktop=true -Dlicense=true -Ddoc=false -Dluameta=true -Dman=true \
+        -Dtests=disabled
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -x "$STAGE/usr/bin/swayimg" ] || { echo "swayimg: o binário não foi produzido" >&2; exit 1; }
+    # Cada formato ligado é um fato de link; cada um desligado também.
+    for lib in libluajit-5.1 librsvg-2 libexiv2 libjpeg libpng16 libtiff libwebp libwayland-client; do
+        readelf -d "$STAGE/usr/bin/swayimg" | grep -q "$lib" || {
+            echo "swayimg: $lib ausente do NEEDED" >&2; exit 1; }
+    done
+    for lib in libgif libdrm libjxl libheif libavif libsixel libraw libopenjp2; do
+        ! readelf -d "$STAGE/usr/bin/swayimg" | grep -q "$lib" || {
+            echo "swayimg: $lib entrou no NEEDED sem ser declarado" >&2; exit 1; }
+    done
+    [ -e "$STAGE/usr/share/applications/swayimg.desktop" ] || {
+        echo "swayimg: .desktop não veio; o menu do labwc não o listaria" >&2; exit 1; }
+    ls "$STAGE"/usr/share/icons/hicolor/*/apps/swayimg.* >/dev/null 2>&1 || {
+        echo "swayimg: ícone não veio" >&2; exit 1; }
+    "$STAGE/usr/bin/swayimg" --version 2>/dev/null | grep -q "$VERSION" || {
+        echo "swayimg: --version não diz $VERSION" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}
