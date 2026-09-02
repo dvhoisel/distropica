@@ -1,0 +1,37 @@
+NAME=glibmm
+VERSION=2.66.10
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2 glib libsigcxx"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox findutils"
+ABOUT="glibmm e giomm: a GLib e a GIO em C++ (API glibmm-2.4), degrau do gtkmm 3 que o Inkscape exige. A série 2.66 é a última da API 2.4; a 2.7x/2.8x é a API 2.68, do GTK4, e não serve ao gtkmm 3.24. O tarball traz o código gerado e é construído fora do modo de mantenedor; o gmmproc — o gerador de wrappers, em Perl, que o upstream instala em /usr/lib/glibmm-2.4/proc para quem constrói as bibliotecas irmãs a partir do git — sai do payload: nenhum tarball desta árvore o chama, e mantê-lo arrastaria o perl para a closure do Inkscape por um script que nunca roda. O cabeçalho de configuração em /usr/lib/glibmm-2.4/include fica, que é dele que o .pc depende."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/glibmm/2.66/glibmm-$VERSION.tar.xz"
+SHA256=2b61780203aed98e701d3ea57c8f353e7c8ada9706a79be782f6c5153dd035c0
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dmaintainer-mode=false \
+        -Dbuild-documentation=false \
+        -Dbuild-examples=false \
+        -Dbuild-deprecated-api=true
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    rm -rf "$STAGE/usr/lib/glibmm-2.4/proc"
+    for pc in glibmm-2.4 giomm-2.4; do
+        [ -e "$STAGE/usr/lib/pkgconfig/$pc.pc" ] || { echo "glibmm: $pc.pc ausente" >&2; exit 1; }
+    done
+    for lib in libglibmm-2.4.so.1 libgiomm-2.4.so.1; do
+        [ -e "$STAGE/usr/lib/$lib" ] || { echo "glibmm: $lib ausente" >&2; exit 1; }
+    done
+    [ -e "$STAGE/usr/lib/glibmm-2.4/include/glibmmconfig.h" ] || { echo "glibmm: glibmmconfig.h ausente" >&2; exit 1; }
+    # Nenhum script Perl pode ter sobrado: seria dependência escondida.
+    ! grep -rl '^#!.*perl' "$STAGE/usr" >/dev/null 2>&1 || {
+        echo "glibmm: sobrou script Perl no payload:" >&2; grep -rl '^#!.*perl' "$STAGE/usr" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

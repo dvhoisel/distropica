@@ -1,0 +1,572 @@
+Importar PDF na poppler 26.6/26.7 — a porta que o Inkscape 1.4.4 não tem
+
+O Inkscape importa PDF pela API interna (instável) da poppler, e o 1.4.4 —
+último estável, de 05/05/2026 — conhece essa API até a 26.2. A árvore usa a
+26.08, e o build morre com 49 erros nos cinco arquivos de src/extension/
+internal/pdfinput. Duas versões da poppler mudaram o que ele usa:
+
+  26.5  GfxFont::getEncoding() devolve std::array<const char*,256>, não char**
+  26.6  cor e estado gráfico passam por REFERÊNCIA: setFillColor/setStrokeColor,
+        GfxColorSpace::getGray/getRGB/getCMYK, o construtor de GfxState e as
+        caixas da página (getCropBox e irmãs)
+  26.7  GooString herda de std::string em PRIVADO; Catalog::indexToLabel toma
+        std::string*; Dict::getKey devolve std::string
+  (e, sem número de versão, Object perdeu streamGetDict/arrayGetNF/dictGetKey/
+   dictGetValNF, que viraram getStream()->getDict(), getArray()->getNF() e os
+   equivalentes em Dict; OptionalContent.h deixou de vir por transitividade)
+
+O upstream JÁ fez esta porta no master (1.5-dev), com macros no
+poppler-transition-api.h; o ramo estável 1.4.x não a recebeu. Este patch traz
+as macros do master VERBATIM e aplica-as aos sítios do 1.4.4, mais as
+substituições mecânicas que o master faz no próprio código — inclusive o
+'const char *name' do poppler-cairo-font-engine.cpp, que o master também tem.
+Segue a forma condicionada por versão do upstream: compila igual com poppler
+anterior.
+
+Duas peças não vêm do master, porque lá a assinatura do PdfParser mudou
+(std::optional<PDFRectangle>) e aqui não: o par getBoxPtr() do pdf-utils.h,
+que aceita ponteiro ou referência, e a inclusão desse cabeçalho no
+pdf-input.cpp. A sobrecarga getRect(const PDFRectangle&) o master também tem.
+
+Origem das macros: gitlab.com/inkscape/inkscape, master, arquivo
+src/extension/internal/pdfinput/poppler-transition-api.h.
+diff -Nur a/src/extension/internal/pdfinput/pdf-input.cpp b/src/extension/internal/pdfinput/pdf-input.cpp
+--- a/src/extension/internal/pdfinput/pdf-input.cpp	2026-09-02 04:42:05.299046072 -0300
++++ b/src/extension/internal/pdfinput/pdf-input.cpp	2026-09-02 04:54:17.866593245 -0300
+@@ -62,6 +62,7 @@
+ #include "inkscape.h"
+ #include "object/sp-root.h"
+ #include "pdf-parser.h"
++#include "pdf-utils.h"
+ #include "preferences.h"
+ #include "ui/builder-utils.h"
+ #include "ui/dialog-events.h"
+@@ -811,15 +812,15 @@
+     _POPPLER_CONST PDFRectangle *clipToBox = nullptr;
+ 
+     if (crop_to == "media-box") {
+-        clipToBox = page->getMediaBox();
++        clipToBox = getBoxPtr(page->getMediaBox());
+     } else if (crop_to == "crop-box") {
+-        clipToBox = page->getCropBox();
++        clipToBox = getBoxPtr(page->getCropBox());
+     } else if (crop_to == "trim-box") {
+-        clipToBox = page->getTrimBox();
++        clipToBox = getBoxPtr(page->getTrimBox());
+     } else if (crop_to == "bleed-box") {
+-        clipToBox = page->getBleedBox();
++        clipToBox = getBoxPtr(page->getBleedBox());
+     } else if (crop_to == "art-box") {
+-        clipToBox = page->getArtBox();
++        clipToBox = getBoxPtr(page->getArtBox());
+     }
+ 
+     // Create parser  (extension/internal/pdfinput/pdf-parser.h)
+diff -Nur a/src/extension/internal/pdfinput/pdf-parser.cpp b/src/extension/internal/pdfinput/pdf-parser.cpp
+--- a/src/extension/internal/pdfinput/pdf-parser.cpp	2026-09-02 04:42:05.299071459 -0300
++++ b/src/extension/internal/pdfinput/pdf-parser.cpp	2026-09-02 04:42:48.435531941 -0300
+@@ -43,6 +43,7 @@
+ #include <poppler/GlobalParams.h>
+ #include <poppler/Lexer.h>
+ #include <poppler/Object.h>
++#include <poppler/OptionalContent.h>
+ #include <poppler/OutputDev.h>
+ #include <poppler/PDFDoc.h>
+ #include <poppler/Page.h>
+@@ -292,8 +293,8 @@
+     if (page) {
+         // Increment the page building here and set page label
+         Catalog *catalog = pdf_doc->getCatalog();
+-        GooString *label = new GooString("");
+-        catalog->indexToLabel(page->getNum() - 1, label);
++        _POPPLER_STRING_26_7 label;
++        catalog->indexToLabel(page->getNum() - 1, &label);
+         builder->pushPage(getString(label), state);
+     }
+ 
+@@ -307,8 +308,8 @@
+     builder->setMargins(getRect(page->getTrimBox()) * scale,
+                         getRect(page->getArtBox()) * scale,
+                         getRect(page->getBleedBox()) * scale);
+-    if (cropBox && getRect(cropBox) != page_box) {
+-        builder->cropPage(getRect(cropBox) * scale);
++    if (cropBox && getRect(*cropBox) != page_box) {
++        builder->cropPage(getRect(*cropBox) * scale);
+     }
+ 
+     saveState();
+@@ -325,7 +326,7 @@
+     , printCommands(false)
+     , res(new GfxResources(xref, resDict, nullptr))
+     , // start the resource stack
+-    state(new GfxState(72, 72, box, 0, false))
++    state(new _POPPLER_GFX_STATE(72, 72, *box, 0, false))
+     , fontChanged(gFalse)
+     , clip(clipNone)
+     , ignoreUndef(0)
+@@ -817,7 +818,7 @@
+             }
+             _POPPLER_FREE(obj3);
+             if (_POPPLER_CALL_ARGS_DEREF(obj3, obj2.dictLookup, "G").isStream()) {
+-                if (_POPPLER_CALL_ARGS_DEREF(obj4, obj3.streamGetDict()->lookup, "Group").isDict()) {
++                if (_POPPLER_CALL_ARGS_DEREF(obj4, obj3.getStream()->getDict()->lookup, "Group").isDict()) {
+                     std::unique_ptr<GfxColorSpace> blendingColorSpace;
+                     GBool isolated = gFalse;
+                     GBool knockout = gFalse;
+@@ -880,7 +881,7 @@
+   }
+ 
+   // get stream dict
+-  dict = str->streamGetDict();
++  dict = str->getStream()->getDict();
+ 
+   // check form type
+   _POPPLER_CALL_ARGS(obj1, dict->lookup, "FormType");
+@@ -992,7 +993,7 @@
+   state->setFillPattern(nullptr);
+   state->setFillColorSpace(_POPPLER_CONSUME_UNIQPTR_ARG(std::make_unique<GfxDeviceGrayColorSpace>()));
+   color.c[0] = dblToCol(args[0].getNum());
+-  state->setFillColor(&color);
++  state->_POPPLER_SET_FILL_COLOR(color);
+   builder->updateStyle(state);
+ }
+ 
+@@ -1004,7 +1005,7 @@
+   state->setStrokePattern(nullptr);
+   state->setStrokeColorSpace(_POPPLER_CONSUME_UNIQPTR_ARG(std::make_unique<GfxDeviceGrayColorSpace>()));
+   color.c[0] = dblToCol(args[0].getNum());
+-  state->setStrokeColor(&color);
++  state->_POPPLER_SET_STROKE_COLOR(color);
+   builder->updateStyle(state);
+ }
+ 
+@@ -1019,7 +1020,7 @@
+   for (i = 0; i < 4; ++i) {
+     color.c[i] = dblToCol(args[i].getNum());
+   }
+-  state->setFillColor(&color);
++  state->_POPPLER_SET_FILL_COLOR(color);
+   builder->updateStyle(state);
+ }
+ 
+@@ -1033,7 +1034,7 @@
+   for (int i = 0; i < 4; ++i) {
+     color.c[i] = dblToCol(args[i].getNum());
+   }
+-  state->setStrokeColor(&color);
++  state->_POPPLER_SET_STROKE_COLOR(color);
+   builder->updateStyle(state);
+ }
+ 
+@@ -1047,7 +1048,7 @@
+   for (int i = 0; i < 3; ++i) {
+     color.c[i] = dblToCol(args[i].getNum());
+   }
+-  state->setFillColor(&color);
++  state->_POPPLER_SET_FILL_COLOR(color);
+   builder->updateStyle(state);
+ }
+ 
+@@ -1060,7 +1061,7 @@
+   for (int i = 0; i < 3; ++i) {
+     color.c[i] = dblToCol(args[i].getNum());
+   }
+-  state->setStrokeColor(&color);
++  state->_POPPLER_SET_STROKE_COLOR(color);
+   builder->updateStyle(state);
+ }
+ 
+@@ -1076,7 +1077,7 @@
+     GfxColor color;
+     colorSpace->getDefaultColor(&color);
+     state->setFillColorSpace(_POPPLER_CONSUME_UNIQPTR_ARG(colorSpace));
+-    state->setFillColor(&color);
++    state->_POPPLER_SET_FILL_COLOR(color);
+     builder->updateStyle(state);
+   } else {
+     error(errSyntaxError, getPos(), "Bad color space (fill)");
+@@ -1097,7 +1098,7 @@
+     GfxColor color;
+     colorSpace->getDefaultColor(&color);
+     state->setStrokeColorSpace(_POPPLER_CONSUME_UNIQPTR_ARG(colorSpace));
+-    state->setStrokeColor(&color);
++    state->_POPPLER_SET_STROKE_COLOR(color);
+     builder->updateStyle(state);
+   } else {
+     error(errSyntaxError, getPos(), "Bad color space (stroke)");
+@@ -1117,7 +1118,7 @@
+   for (i = 0; i < numArgs; ++i) {
+     color.c[i] = dblToCol(args[i].getNum());
+   }
+-  state->setFillColor(&color);
++  state->_POPPLER_SET_FILL_COLOR(color);
+   builder->updateStyle(state);
+ }
+ 
+@@ -1134,7 +1135,7 @@
+   for (i = 0; i < numArgs; ++i) {
+     color.c[i] = dblToCol(args[i].getNum());
+   }
+-  state->setStrokeColor(&color);
++  state->_POPPLER_SET_STROKE_COLOR(color);
+   builder->updateStyle(state);
+ }
+ 
+@@ -1155,7 +1156,7 @@
+ 	  color.c[i] = dblToCol(args[i].getNum());
+ 	}
+       }
+-      state->setFillColor(&color);
++      state->_POPPLER_SET_FILL_COLOR(color);
+       builder->updateStyle(state);
+     }
+     if (auto pattern = lookupPattern(&(args[numArgs - 1]), state)) {
+@@ -1174,7 +1175,7 @@
+ 	color.c[i] = dblToCol(args[i].getNum());
+       }
+     }
+-    state->setFillColor(&color);
++    state->_POPPLER_SET_FILL_COLOR(color);
+     builder->updateStyle(state);
+   }
+ }
+@@ -1198,7 +1199,7 @@
+ 	  color.c[i] = dblToCol(args[i].getNum());
+ 	}
+       }
+-      state->setStrokeColor(&color);
++      state->_POPPLER_SET_STROKE_COLOR(color);
+       builder->updateStyle(state);
+     }
+     if (auto pattern = lookupPattern(&(args[numArgs - 1]), state)) {
+@@ -1217,7 +1218,7 @@
+ 	color.c[i] = dblToCol(args[i].getNum());
+       }
+     }
+-    state->setStrokeColor(&color);
++    state->_POPPLER_SET_STROKE_COLOR(color);
+     builder->updateStyle(state);
+   }
+ }
+@@ -1700,7 +1701,7 @@
+ 
+     // use the center color
+     shading->getColor(xM, yM, &fillColor);
+-    state->setFillColor(&fillColor);
++    state->_POPPLER_SET_FILL_COLOR(fillColor);
+ 
+     // fill the rectangle
+     state->moveTo(x0 * matrix[0] + y0 * matrix[2] + matrix[4],
+@@ -1799,7 +1800,7 @@
+     }
+   }
+   if (i == nComps || depth == maxDepths[pdfGouraudTriangleShading-1]) {
+-    state->setFillColor(color0);
++    state->_POPPLER_SET_FILL_COLOR(*color0);
+     state->moveTo(x0, y0);
+     state->lineTo(x1, y1);
+     state->lineTo(x2, y2);
+@@ -1877,7 +1878,7 @@
+     color.c[i] = GfxColorComp(patch->color[0][0].c[i]);
+   }
+   if (i == nComps || depth == maxDepths[pdfPatchMeshShading-1]) {
+-    state->setFillColor(&color);
++    state->_POPPLER_SET_FILL_COLOR(color);
+     state->moveTo(patch->x[0][0], patch->y[0][0]);
+     state->curveTo(patch->x[0][1], patch->y[0][1],
+ 		   patch->x[0][2], patch->y[0][2],
+@@ -2377,7 +2378,7 @@
+     }
+ 
+ //add layer at root if xObject has type OCG
+-    _POPPLER_CALL_ARGS(obj2, obj1.streamGetDict()->lookup, "OC");
++    _POPPLER_CALL_ARGS(obj2, obj1.getStream()->getDict()->lookup, "OC");
+     if(obj2.isDict()){
+         auto type_dict = obj2.getDict();
+         if (type_dict->lookup("Type").isName("OCG")) {
+@@ -2395,7 +2396,7 @@
+         }
+     }
+ 
+-    _POPPLER_CALL_ARGS(obj2, obj1.streamGetDict()->lookup, "Subtype");
++    _POPPLER_CALL_ARGS(obj2, obj1.getStream()->getDict()->lookup, "Subtype");
+     if (obj2.isName(const_cast<char*>("Image"))) {
+         _POPPLER_CALL_ARGS(refObj, res->lookupXObjectNF, name);
+         doImage(&refObj, obj1.getStream(), gFalse);
+@@ -2403,7 +2404,7 @@
+     } else if (obj2.isName(const_cast<char*>("Form"))) {
+         doForm(&obj1);
+     } else if (obj2.isName(const_cast<char*>("PS"))) {
+-        _POPPLER_CALL_ARGS(obj3, obj1.streamGetDict()->lookup, "Level1");
++        _POPPLER_CALL_ARGS(obj3, obj1.getStream()->getDict()->lookup, "Level1");
+     } else if (obj2.isName()) {
+         error(errSyntaxError, getPos(), "Unknown XObject subtype '{0:s}'", obj2.getName());
+     } else {
+@@ -2596,7 +2597,7 @@
+ 	            goto err1;
+             }
+             maskStr = smaskObj.getStream();
+-            maskDict = smaskObj.streamGetDict();
++            maskDict = smaskObj.getStream()->getDict();
+             _POPPLER_CALL_ARGS(obj1, maskDict->lookup, "Width");
+             if (obj1.isNull()) {
+                     _POPPLER_FREE(obj1);
+@@ -2674,7 +2675,7 @@
+                 goto err1;
+             }
+             maskStr = maskObj.getStream();
+-            maskDict = maskObj.streamGetDict();
++            maskDict = maskObj.getStream()->getDict();
+             _POPPLER_CALL_ARGS(obj1, maskDict->lookup, "Width");
+             if (obj1.isNull()) {
+                 _POPPLER_FREE(obj1);
+@@ -2774,7 +2775,7 @@
+     }
+ 
+     // get stream dict
+-    dict = str->streamGetDict();
++    dict = str->getStream()->getDict();
+ 
+     // check form type
+     _POPPLER_CALL_ARGS(obj1, dict->lookup, "FormType");
+diff -Nur a/src/extension/internal/pdfinput/pdf-utils.cpp b/src/extension/internal/pdfinput/pdf-utils.cpp
+--- a/src/extension/internal/pdfinput/pdf-utils.cpp	2026-09-02 04:42:05.299116337 -0300
++++ b/src/extension/internal/pdfinput/pdf-utils.cpp	2026-09-02 04:42:48.434742181 -0300
+@@ -133,6 +133,11 @@
+     return Geom::Rect(box->x1, box->y1, box->x2, box->y2);
+ }
+ 
++Geom::Rect getRect(_POPPLER_CONST PDFRectangle &box)
++{
++    return Geom::Rect(box.x1, box.y1, box.x2, box.y2);
++}
++
+ Geom::PathVector getPathV(GfxPath *path) 
+ {
+     if (!path) {
+diff -Nur a/src/extension/internal/pdfinput/pdf-utils.h b/src/extension/internal/pdfinput/pdf-utils.h
+--- a/src/extension/internal/pdfinput/pdf-utils.h	2026-09-02 04:42:05.298961605 -0300
++++ b/src/extension/internal/pdfinput/pdf-utils.h	2026-09-02 04:42:48.434696001 -0300
+@@ -59,6 +59,13 @@
+ };
+ 
+ Geom::Rect getRect(_POPPLER_CONST PDFRectangle *box);
++Geom::Rect getRect(_POPPLER_CONST PDFRectangle &box);
++
++/* A poppler 26.6 passou a devolver as caixas da pagina por REFERENCIA; antes,
++   por ponteiro. Estes dois recebem qualquer uma das formas e devolvem sempre o
++   ponteiro que o PdfParser desta versao espera, sem espalhar #if pelo codigo. */
++inline _POPPLER_CONST PDFRectangle *getBoxPtr(_POPPLER_CONST PDFRectangle *box) { return box; }
++inline _POPPLER_CONST PDFRectangle *getBoxPtr(_POPPLER_CONST PDFRectangle &box) { return &box; }
+ Geom::PathVector getPathV(GfxPath *gPath);
+ 
+ #endif /* PDF_UTILS_H */
+diff -Nur a/src/extension/internal/pdfinput/poppler-cairo-font-engine.cpp b/src/extension/internal/pdfinput/poppler-cairo-font-engine.cpp
+--- a/src/extension/internal/pdfinput/poppler-cairo-font-engine.cpp	2026-09-02 04:42:05.299133999 -0300
++++ b/src/extension/internal/pdfinput/poppler-cairo-font-engine.cpp	2026-09-02 04:54:17.866721123 -0300
+@@ -42,6 +42,7 @@
+ //========================================================================
+ 
+ #include "poppler-cairo-font-engine.h"
++#include "poppler-transition-api.h"
+ 
+ #include <config.h>
+ #include <cstring>
+@@ -313,7 +314,11 @@
+ #else
+     GfxFontLoc *fontLoc;
+ #endif
++#if POPPLER_CHECK_VERSION(26, 5, 0)
++    const char *const *enc;
++#else
+     char **enc;
++#endif
+     const char *name;
+ #if POPPLER_CHECK_VERSION(25, 7, 0)
+     std::unique_ptr<FoFiType1C> ff1c;
+@@ -385,7 +390,11 @@
+                 goto err2;
+             }
+ 
++#if POPPLER_CHECK_VERSION(26, 5, 0)
++            enc = gfx8bit->getEncoding().data();
++#else
+             enc = gfx8bit->getEncoding();
++#endif
+ 
+             codeToGID.resize(256);
+             for (i = 0; i < 256; ++i) {
+@@ -677,7 +686,7 @@
+ #endif
+ 
+     std::vector<int> codeToGID;
+-    char *name;
++    const char *name;
+ 
+     Dict *charProcs = gfx8bit->getCharProcs();
+     Ref ref = *gfxFont->getID();
+@@ -694,13 +703,17 @@
+ 
+     cairo_font_face_set_user_data(font_face, &type3_font_key, (void *)info, _free_type3_font_info);
+ 
++#if POPPLER_CHECK_VERSION(26, 5, 0)
++    const char *const *enc = gfx8bit->getEncoding().data();
++#else
+     char **enc = gfx8bit->getEncoding();
++#endif
+     codeToGID.resize(256);
+     for (int i = 0; i < 256; ++i) {
+         codeToGID[i] = 0;
+         if (charProcs && (name = enc[i])) {
+             for (int j = 0; j < charProcs->getLength(); j++) {
+-                if (strcmp(name, charProcs->getKey(j)) == 0) {
++                if (std::string(charProcs->getKey(j)).compare(name) == 0) {
+                     codeToGID[i] = j;
+                 }
+             }
+diff -Nur a/src/extension/internal/pdfinput/poppler-transition-api.h b/src/extension/internal/pdfinput/poppler-transition-api.h
+--- a/src/extension/internal/pdfinput/poppler-transition-api.h	2026-09-02 04:42:05.298994614 -0300
++++ b/src/extension/internal/pdfinput/poppler-transition-api.h	2026-09-02 04:42:48.434649059 -0300
+@@ -15,6 +15,28 @@
+ #include <glib/poppler-features.h>
+ #include <poppler/UTF.h>
+ 
++#if POPPLER_CHECK_VERSION(26, 7, 0)
++#define _POPPLER_STRING_26_7 std::string
++#else
++#define _POPPLER_STRING_26_7 GooString
++#endif
++
++#if POPPLER_CHECK_VERSION(26, 6, 0)
++#define _POPPLER_GET_GRAY(color, gray) getGray(color, gray)
++#define _POPPLER_GET_RGB(color, rgb) getRGB(color, rgb)
++#define _POPPLER_GET_CMYK(color, cmyk) getCMYK(color, cmyk)
++#define _POPPLER_SET_FILL_COLOR(color) setFillColor(color)
++#define _POPPLER_SET_STROKE_COLOR(color) setStrokeColor(color)
++#define _POPPLER_GFX_STATE(h, v, Rect, rotateA, upsideDown) GfxState(h, v, Rect, rotateA, upsideDown)
++#else
++#define _POPPLER_GET_GRAY(color, gray) getGray(&color, gray)
++#define _POPPLER_GET_RGB(color, rgb) getRGB(&color, rgb)
++#define _POPPLER_GET_CMYK(color, cmyk) getCMYK(&color, cmyk)
++#define _POPPLER_SET_FILL_COLOR(color) setFillColor(&color)
++#define _POPPLER_SET_STROKE_COLOR(color) setStrokeColor(&color)
++#define _POPPLER_GFX_STATE(h, v, Rect, rotateA, upsideDown) GfxState(h, v, &Rect, rotateA, upsideDown)
++#endif
++
+ #if POPPLER_CHECK_VERSION(26, 2, 0)
+ #define _POPPLER_WMODE GfxFont::WritingMode
+ #define _POPPLER_WMODE_HORIZONTAL GfxFont::WritingMode::Horizontal
+diff -Nur a/src/extension/internal/pdfinput/poppler-utils.cpp b/src/extension/internal/pdfinput/poppler-utils.cpp
+--- a/src/extension/internal/pdfinput/poppler-utils.cpp	2026-09-02 04:42:05.299156011 -0300
++++ b/src/extension/internal/pdfinput/poppler-utils.cpp	2026-09-02 04:42:48.436217360 -0300
+@@ -186,26 +186,28 @@
+         case objNull:
+             h->hash('z');
+             break;
+-        case objArray:
++        case objArray: {
+             h->hash('a');
+-            n = obj->arrayGetLength();
++            const Array *objArray = obj->getArray();
++            n = objArray->getLength();
+             h->hash((char *)&n, sizeof(int));
+             for (i = 0; i < n; ++i) {
+-                const Object &obj2 = obj->arrayGetNF(i);
++                const Object &obj2 = objArray->getNF(i);
+                 hashFontObject1(&obj2, h);
+             }
+-            break;
+-        case objDict:
++        } break;
++        case objDict: {
+             h->hash('d');
+-            n = obj->dictGetLength();
++            const Dict *objDict = obj->getDict();
++            n = objDict->getLength();
+             h->hash((char *)&n, sizeof(int));
+             for (i = 0; i < n; ++i) {
+-                p = obj->dictGetKey(i);
+-                h->hash(p, (int)strlen(p));
+-                const Object &obj2 = obj->dictGetValNF(i);
++                const std::string key = objDict->getKey(i);
++                h->hash(key.c_str(), (int)key.length());
++                const Object &obj2 = objDict->getValNF(i);
+                 hashFontObject1(&obj2, h);
+             }
+-            break;
++        } break;
+         case objStream:
+             // this should never happen - streams must be indirect refs
+             break;
+@@ -543,7 +545,7 @@
+                 continue;
+ 
+             Ref resourcesRef;
+-            const Object resObj = obj2.streamGetDict()->lookup("Resources", &resourcesRef);
++            const Object resObj = obj2.getStream()->getDict()->lookup("Resources", &resourcesRef);
+             if (resourcesRef != Ref::INVALID() && !visitedObjects.insert(resourcesRef.num).second)
+                 continue;
+ 
+diff -Nur a/src/extension/internal/pdfinput/poppler-utils.h b/src/extension/internal/pdfinput/poppler-utils.h
+--- a/src/extension/internal/pdfinput/poppler-utils.h	2026-09-02 04:42:05.299010874 -0300
++++ b/src/extension/internal/pdfinput/poppler-utils.h	2026-09-02 04:42:48.436126847 -0300
+@@ -86,6 +86,7 @@
+ std::string getString(const std::string &value);
+ std::string getString(const std::unique_ptr<GooString> &value);
+ std::string getString(const GooString *value);
++std::string getString(const GooString &value);
+ std::string validateString(std::string const &in);
+ 
+ // Replacate poppler FontDict
+diff -Nur a/src/extension/internal/pdfinput/svg-builder.cpp b/src/extension/internal/pdfinput/svg-builder.cpp
+--- a/src/extension/internal/pdfinput/svg-builder.cpp	2026-09-02 04:42:05.299180700 -0300
++++ b/src/extension/internal/pdfinput/svg-builder.cpp	2026-09-02 04:42:48.436056562 -0300
+@@ -49,6 +49,7 @@
+ #include "pdf-utils.h"
+ #include "png.h"
+ #include "poppler-cairo-font-engine.h"
++#include "poppler-transition-api.h"
+ #include "profile-manager.h"
+ #include "svg/css-ostringstream.h"
+ #include "svg/path-string.h"
+@@ -392,6 +393,11 @@
+     return svgConvertRGBToText(r, g, b);
+ }
+ 
++std::string SvgBuilder::convertGfxColor(const GfxColor &color, GfxColorSpace *space)
++{
++    return convertGfxColor(&color, space);
++}
++
+ std::string SvgBuilder::convertGfxColor(const GfxColor *color, GfxColorSpace *space)
+ {
+     std::string icc = "";
+@@ -412,7 +418,7 @@
+     }
+ 
+     GfxRGB rgb;
+-    space->getRGB(color, &rgb);
++    space->_POPPLER_GET_RGB(*color, &rgb);
+     auto rgb_color = svgConvertGfxRGB(&rgb);
+ 
+     if (!icc.empty()) {
+@@ -1214,7 +1220,7 @@
+     if (space->getMode() == csDeviceGray) {
+         // This is a transparency mask.
+         GfxRGB rgb;
+-        space->getRGB(color, &rgb);
++        space->_POPPLER_GET_RGB(*color, &rgb);
+         double gray = (double)rgb.r / 65535.0;
+         gray = CLAMP(gray, 0.0, 1.0);
+         os_opacity << gray;
+diff -Nur a/src/extension/internal/pdfinput/svg-builder.h b/src/extension/internal/pdfinput/svg-builder.h
+--- a/src/extension/internal/pdfinput/svg-builder.h	2026-09-02 04:42:05.299027248 -0300
++++ b/src/extension/internal/pdfinput/svg-builder.h	2026-09-02 04:42:48.435739026 -0300
+@@ -240,6 +240,7 @@
+ 
+     // Colors
+     std::string convertGfxColor(const GfxColor *color, GfxColorSpace *space);
++    std::string convertGfxColor(const GfxColor &color, GfxColorSpace *space);
+     std::string _getColorProfile(cmsHPROFILE hp);
+ 
+     // The calculated font style, if not set, the text must be rendered with cairo instead.

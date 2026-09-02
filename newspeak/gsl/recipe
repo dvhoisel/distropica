@@ -1,0 +1,28 @@
+NAME=gsl
+VERSION=2.8
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc busybox"
+# busybox: o gsl-config é script de shell — a auditoria de fechamento cobra
+# o /bin/sh dele como qualquer outro requisito.
+# gawk: o ./configure chama awk (a classe do curl e do libarchive).
+BUILD_DEPS="gcc-pass2 binutils-glibc make gawk busybox findutils"
+ABOUT="A GNU Scientific Library. Entra porque o Inkscape a exige por nome (gsl no pkg_check_modules REQUIRED) e a lib2geom embutida nele também: é dela a álgebra linear e a resolução de polinômios por trás de curvas de Bézier, offsets e efeitos de caminho. Vêm a libgsl, a libgslcblas (a BLAS de referência que ela carrega), os cabeçalhos, o gsl-config e o .pc; a documentação info fica, como fica a das outras ferramentas GNU desta árvore. Sem estática."
+LICENSE=GPL-3.0-or-later
+SRC="https://ftp.gnu.org/gnu/gsl/gsl-$VERSION.tar.gz"
+SHA256=6a99eeed15632c6354895b1dd542ed5a855c0f15d9ad1326c6fe2b2c9e423190
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure --prefix=/usr --disable-static
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -e "$STAGE/usr/lib/pkgconfig/gsl.pc" ] || { echo "gsl: gsl.pc ausente" >&2; exit 1; }
+    for lib in libgsl.so libgslcblas.so; do
+        [ -e "$STAGE/usr/lib/$lib" ] || { echo "gsl: $lib ausente" >&2; exit 1; }
+    done
+    [ -e "$STAGE/usr/include/gsl/gsl_poly.h" ] || { echo "gsl: cabeçalhos ausentes" >&2; exit 1; }
+    ! ls "$STAGE"/usr/lib/*.a >/dev/null 2>&1 || { echo "gsl: sobrou biblioteca estática" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

@@ -1,0 +1,33 @@
+NAME=bdw-gc
+VERSION=8.2.12
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2"
+# gawk: o ./configure chama awk (a classe do curl e do libarchive).
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf gawk busybox findutils"
+ABOUT="O coletor de lixo conservador de Boehm-Demers-Weiser. O Inkscape o exige por nome — bdw-gc está na lista pkg_check_modules REQUIRED do CMake pinado — para o ciclo de vida dos objetos do documento SVG. Vem com o suporte a C++ (libgccpp) e com threads POSIX; a libatomic_ops não entra porque o gcc desta árvore tem os intrínsecos atômicos que a substituem (--with-libatomic-ops=none). Sem estática e sem documentação. A licença é a própria do projeto, permissiva no estilo MIT."
+LICENSE=Boehm-GC
+SRC="https://github.com/bdwgc/bdwgc/releases/download/v$VERSION/gc-$VERSION.tar.gz"
+SHA256=42e5194ad06ab6ffb806c83eb99c03462b495d979cda782f3c72c08af833cd4e
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure \
+        --prefix=/usr \
+        --disable-static \
+        --enable-cplusplus \
+        --enable-threads=posix \
+        --with-libatomic-ops=none \
+        --disable-docs
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -e "$STAGE/usr/lib/pkgconfig/bdw-gc.pc" ] || { echo "bdw-gc: bdw-gc.pc ausente" >&2; exit 1; }
+    for lib in libgc.so.1 libgccpp.so.1; do
+        [ -e "$STAGE/usr/lib/$lib" ] || { echo "bdw-gc: $lib ausente" >&2; exit 1; }
+    done
+    [ -e "$STAGE/usr/include/gc/gc.h" ] || { echo "bdw-gc: gc.h ausente" >&2; exit 1; }
+    ! readelf -d "$STAGE/usr/lib/libgc.so.1" | grep -q libatomic_ops || {
+        echo "bdw-gc: libatomic_ops entrou no NEEDED" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

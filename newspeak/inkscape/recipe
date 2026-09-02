@@ -1,0 +1,73 @@
+NAME=inkscape
+VERSION=1.4.4
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2 gtkmm glibmm cairomm pangomm atkmm libsigcxx gtk3 gdk-pixbuf glib cairo pango harfbuzz fontconfig freetype libpng zlib libxml2 libxslt lcms2 poppler poppler-data gsl bdw-gc potrace double-conversion boost libepoxy readline librsvg python-glibc python-lxml python-numpy python-tinycss2 python-cssselect pygobject adwaita-icon-theme hicolor-icon-theme shared-mime-info busybox libjpeg-turbo at-spi2-core"
+# busybox: as 194 extensões em Python trazem shebang /usr/bin/env, que é
+# applet do busybox. libjpeg-turbo e at-spi2-core: fato de link do binário
+# (libjpeg.so.8 e libatk-1.0.so.0), apontado pela auditoria de fechamento.
+BUILD_DEPS="gcc-pass2 binutils-glibc cmake ninja pkgconf gettext busybox findutils"
+ABOUT="O editor de vetores. A 0.15 pôs um editor de bitmap na sessão (GIMP); a 0.16 põe o de SVG, e com ele a árvore ganha a família gtkmm inteira, o Boost, o coletor de Boehm, a GSL, o potrace e a double-conversion — cada um exigido por nome no CMake pinado (CMakeScripts/DefineDependsandFlags.cmake), lido e não suposto. O 1.4.4 é o último estável (05/05/2026) e é GTK3; o 1.5, que muda para GTK4, não saiu. IMPORTAÇÃO DE PDF, E O PATCH QUE ELA EXIGE: o Inkscape não usa o wrapper GLib da poppler, usa a API C++ interna, que o upstream chama de instável — e o 1.4.4 a conhece até a 26.2, enquanto esta árvore usa a 26.08. Sem conserto o build morre com 49 erros nos cinco arquivos de pdfinput: a 26.5 trocou o encoding de fonte por std::array, a 26.6 passou cor, estado gráfico e caixas de página a viajar por REFERÊNCIA, a 26.7 tornou privada a herança de GooString, e o Object perdeu streamGetDict e as suas irmãs. O upstream JÁ fez essa porta no master (1.5-dev), com macros no poppler-transition-api.h; o ramo estável 1.4.x não a recebeu. O patch em files/ traz essas macros VERBATIM do master e aplica-as aos sítios do 1.4.4 — a mesma forma condicionada por versão, que continua compilando com poppler anterior. Alternativa recusada: desligar ENABLE_POPPLER, que entregaria um editor de vetores incapaz de abrir o formato que mais chega de fora. FORA, com o motivo de cada um: ImageMagick e GraphicsMagick (importação de raster exótico; não moram aqui), libcdr, libvisio e libwpg (CorelDRAW, Visio, WordPerfect), gspell (corretor), gtksourceview (realce no editor XML), jemalloc, e o X11 — o GTK desta árvore é Wayland-only e o WITH_X11 do CMake exigiria libX11. OpenMP LIGADO (libgomp vem com o gcc-pass2): é o que paralleliza filtros e desfoque. Readline ligado: modo shell. AS EXTENSÕES EM PYTHON são metade do programa (importar e exportar formatos, efeitos, o gerador de código G), e o núcleo delas — o inkex — só carrega com lxml, numpy, tinycss2 e cssselect presentes; os quatro entram como pacotes desta rodada, e a guarda desta receita IMPORTA o inkex com eles antes de aceitar o payload. O que fica de fora do lado Python, dito por nome: pySerial (só as extensões de plotter), Pillow (só a exportação de raster por extensão; a exportação nativa de PNG não depende dele), scour (a saída SVG otimizada) e pyparsing (só a importação HPGL) — cada extensão dessas acusa a falta ao ser chamada, e as demais seguem. A librsvg entra porque os ícones do próprio Inkscape são SVG e quem os carrega no GTK é o loader dela no gdk-pixbuf. Os ícones vão para o hicolor, o .desktop e o MIME para os diretórios compartilhados, com os donos declarados."
+LICENSE="GPL-2.0-or-later AND GPL-3.0-or-later AND LGPL-2.1-or-later"
+SRC="https://media.inkscape.org/media/resources/file/inkscape-$VERSION.tar.xz"
+SHA256=bbce5753a1e08b871a5cf16c665eb060700aaab9a6a379dc63f4c4d9b3b8856e
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+
+    # A PORTA PARA A POPPLER DESTA ÁRVORE. Ver o ABOUT: o 1.4.4 conhece a API
+    # interna da poppler até a 26.2 e aqui ela é a 26.08. O sha do patch fica
+    # nesta linha para que a impressão digital da receita mude com ele — a
+    # impressão vem do texto da receita, não de files/.
+    echo "1e91cfef934c329b636414968bd2f56f7e15e75abeded2b77ad06fd1395578e3  $WORK/importar-pdf-poppler-26.patch" \
+        | sha256sum -c > /dev/null || { echo "inkscape: o patch nao e o esperado" >&2; exit 1; }
+    patch -p1 < "$WORK/importar-pdf-poppler-26.patch"
+    # As duas pontas do patch, conferidas no código e não no rc do patch: a
+    # macro nova do cabeçalho de transição e um dos sítios que a usa.
+    grep -q '^#define _POPPLER_SET_FILL_COLOR' src/extension/internal/pdfinput/poppler-transition-api.h || {
+        echo "inkscape: o patch nao definiu as macros da poppler 26.6" >&2; exit 1; }
+    grep -q 'getStream()->getDict()' src/extension/internal/pdfinput/pdf-parser.cpp || {
+        echo "inkscape: o patch nao trocou streamGetDict no pdf-parser" >&2; exit 1; }
+    ! grep -q 'streamGetDict' src/extension/internal/pdfinput/pdf-parser.cpp || {
+        echo "inkscape: sobrou streamGetDict no pdf-parser" >&2; exit 1; }
+
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    cmake -S . -B build -G Ninja \
+        -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib \
+        -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+        -DBUILD_TESTING=OFF \
+        -DWITH_INTERNAL_2GEOM=ON \
+        -DENABLE_POPPLER=ON -DENABLE_POPPLER_CAIRO=ON \
+        -DENABLE_LCMS=ON -DWITH_OPENMP=ON -DWITH_GNU_READLINE=ON -DWITH_NLS=ON \
+        -DWITH_SVG2=ON \
+        -DWITH_X11=OFF \
+        -DWITH_IMAGE_MAGICK=OFF -DWITH_GRAPHICS_MAGICK=OFF \
+        -DWITH_LIBCDR=OFF -DWITH_LIBVISIO=OFF -DWITH_LIBWPG=OFF \
+        -DWITH_GSPELL=OFF -DWITH_GSOURCEVIEW=OFF -DWITH_JEMALLOC=OFF \
+        -DWITH_MANPAGE_COMPRESSION=OFF
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -x "$STAGE/usr/bin/inkscape" ] || { echo "inkscape: o binário não foi produzido" >&2; exit 1; }
+    base=$(ls "$STAGE"/usr/lib/inkscape/libinkscape_base.so* 2>/dev/null | head -n 1)
+    [ -n "$base" ] || { echo "inkscape: libinkscape_base ausente" >&2; exit 1; }
+    # Cada exigência do CMake é um fato de link na biblioteca principal.
+    for lib in libpoppler.so libpoppler-glib libgtkmm-3.0 libgc.so libpotrace libgsl.so libdouble-conversion libboost_filesystem libgomp libreadline liblcms2 libxslt libepoxy; do
+        readelf -d "$base" "$STAGE/usr/bin/inkscape" | grep -q "$lib" || {
+            echo "inkscape: $lib ausente do NEEDED" >&2; exit 1; }
+    done
+    for lib in libX11 libMagick libGraphicsMagick libcdr libvisio libwpg libgspell libgtksourceview libjemalloc libbacktrace; do
+        ! readelf -d "$base" "$STAGE/usr/bin/inkscape" | grep -q "$lib" || {
+            echo "inkscape: $lib entrou no NEEDED sem ser declarado" >&2; exit 1; }
+    done
+    [ -e "$STAGE/usr/share/applications/org.inkscape.Inkscape.desktop" ] || {
+        echo "inkscape: .desktop não veio" >&2; exit 1; }
+    [ -d "$STAGE/usr/share/inkscape/extensions/inkex" ] || {
+        echo "inkscape: o inkex (núcleo das extensões) não veio" >&2; exit 1; }
+    # A prova das extensões: o inkex carrega com as dependências declaradas —
+    # é o que decide se o menu de extensões funciona ou só acusa erro.
+    PYTHONPATH="$STAGE/usr/share/inkscape/extensions" python3 -c "
+import inkex, inkex.paths, inkex.properties, inkex.css.parser
+import lxml.etree, numpy, tinycss2, cssselect
+" || { echo "inkscape: o inkex não carrega com as dependências declaradas" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

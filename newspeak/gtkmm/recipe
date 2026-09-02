@@ -1,0 +1,39 @@
+NAME=gtkmm
+VERSION=3.24.11
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2 gtk3 gdk-pixbuf glib cairo pango glibmm cairomm pangomm atkmm libsigcxx"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox findutils"
+ABOUT="O GTK 3 em C++ (gtkmm-3.0 e gdkmm-3.0): o toolkit que o Inkscape 1.4 usa, e a razão de toda a família mm entrar na 0.16. Requer gtk+-unix-print-3.0, que é só cabeçalhos e que o gtk3 desta árvore instala. A API X11 do gdkmm fica desligada por nome: o GTK daqui é Wayland-only, e uma biblioteca que oferece o que a de baixo não tem seria promessa falsa. Sem demos, testes e documentação."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/gtkmm/3.24/gtkmm-$VERSION.tar.xz"
+SHA256=19e383c82d5dd89db275e00b82864e90414d4c3fb3d100b2f996bcc2338a4cc7
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dmaintainer-mode=false \
+        -Dbuild-documentation=false \
+        -Dbuild-demos=false \
+        -Dbuild-tests=false \
+        -Dbuild-atkmm-api=true \
+        -Dbuild-x11-api=false \
+        -Dbuild-deprecated-api=true
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    for pc in gtkmm-3.0 gdkmm-3.0; do
+        [ -e "$STAGE/usr/lib/pkgconfig/$pc.pc" ] || { echo "gtkmm: $pc.pc ausente" >&2; exit 1; }
+    done
+    for lib in libgtkmm-3.0.so.1 libgdkmm-3.0.so.1; do
+        [ -e "$STAGE/usr/lib/$lib" ] || { echo "gtkmm: $lib ausente" >&2; exit 1; }
+    done
+    readelf -d "$STAGE/usr/lib/libgtkmm-3.0.so.1" | grep -q libgtk-3 || {
+        echo "gtkmm: libgtk-3 ausente do NEEDED" >&2; exit 1; }
+    ! readelf -d "$STAGE/usr/lib/libgdkmm-3.0.so.1" | grep -q libX11 || {
+        echo "gtkmm: libX11 entrou no NEEDED numa árvore Wayland-only" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

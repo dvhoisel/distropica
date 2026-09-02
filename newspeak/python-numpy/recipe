@@ -1,0 +1,38 @@
+NAME=python-numpy
+VERSION=2.5.2
+KIND=source
+TOOLCHAIN=native
+DEPS="python-glibc glibc gcc-pass2 zlib busybox"
+# busybox: dois utilitários de diagnóstico do NumPy trazem shebang
+# /usr/bin/env, e o env desta árvore é applet do busybox.
+BUILD_DEPS="python-glibc binutils-glibc busybox findutils"
+ABOUT="NumPy. Entra porque o inkex do Inkscape o importa no caminho crítico: inkex/__init__ importa inkex.paths, e inkex/paths/__init__ importa numpy — sem ele NENHUMA extensão Python do Inkscape carrega, nem as que não fazem conta nenhuma (lido no código, não suposto). O ARTEFATO É A RODA OFICIAL do upstream para CPython 3.14 (manylinux_2_28, x86_64) — premissa P2: binário do mantenedor original primeiro. Construir da fonte custaria Cython e meson-python, e o resultado seria um NumPy sem BLAS; a roda traz o OpenBLAS do SciPy e as libgfortran e libquadmath de que ele precisa, num diretório numpy.libs próprio que os módulos acham por RPATH relativo ao ORIGIN (a auditoria do minitrue expande o ORIGIN e cobra que o diretório tenha dono — e o dono é este pacote). O que a roda exige de fora, lido com readelf: libstdc++ e libgcc_s (gcc-pass2), libz (a libgfortran a pede) e a glibc. Os diretórios de testes saem do payload; o dist-info fica sem o RECORD, que listaria o que saiu. A licença é a que o próprio METADATA declara, mais as das bibliotecas embutidas."
+LICENSE="BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 AND GPL-3.0-or-later WITH GCC-exception-3.1 AND LGPL-2.1-or-later"
+SRC="https://files.pythonhosted.org/packages/c7/99/461bd36dbdfac6c1c53efa370bd55a83227542d0d118f1677dbf1a3dacd5/numpy-$VERSION-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+SHA256=318b9a4c845dbea06708a29c84ee429cc3065048db34cdb799047643492050ee
+
+build() {
+    sitedir=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+    install -dm755 "$STAGE$sitedir"
+    unzip -q "$DL" -d "$STAGE$sitedir"
+    rm -f "$STAGE$sitedir/numpy-$VERSION.dist-info/RECORD"
+    find "$STAGE$sitedir/numpy" -type d -name tests -prune -exec rm -rf {} +
+    [ -d "$STAGE$sitedir/numpy.libs" ] || { echo "python-numpy: numpy.libs (OpenBLAS embutido) ausente" >&2; exit 1; }
+    ls "$STAGE$sitedir"/numpy.libs/libscipy_openblas*.so >/dev/null 2>&1 || {
+        echo "python-numpy: OpenBLAS ausente do numpy.libs" >&2; exit 1; }
+    # O que a roda exige de fora tem de ser exatamente o que DEPS declara.
+    for so in "$STAGE$sitedir"/numpy/_core/_multiarray_umath*.so "$STAGE$sitedir"/numpy.libs/*.so*; do
+        readelf -d "$so" | grep NEEDED | grep -vE 'libc\.so|libm\.so|librt\.so|libpthread\.so|ld-linux|libstdc\+\+|libgcc_s|libz\.so|libgfortran|libquadmath|libscipy_openblas' | grep -q . && {
+            echo "python-numpy: $so exige biblioteca externa não declarada:" >&2
+            readelf -d "$so" | grep NEEDED >&2; exit 1; }
+    done
+    # A prova de valor: o OpenBLAS embutido é achado pelo RPATH e faz conta.
+    python3 -c "
+import sys; sys.path.insert(0, '$STAGE$sitedir')
+import numpy as np, importlib.metadata as m
+a = np.arange(9.0).reshape(3, 3)
+assert float(np.linalg.det(a @ a.T + np.eye(3))) > 0
+assert m.version('numpy') == '$VERSION', m.version('numpy')
+" || { echo "python-numpy: a roda não importa ou o BLAS embutido não carrega" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

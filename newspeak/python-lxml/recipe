@@ -1,0 +1,36 @@
+NAME=python-lxml
+VERSION=6.1.2
+KIND=source
+TOOLCHAIN=native
+DEPS="python-glibc glibc"
+BUILD_DEPS="python-glibc binutils-glibc busybox findutils"
+ABOUT="lxml: a libxml2 e a libxslt em Python. Entra porque o inkex — o núcleo Python das extensões do Inkscape — o importa em 14 módulos, sem alternativa. O ARTEFATO É A RODA OFICIAL do upstream para CPython 3.14 (manylinux_2_28, x86_64), e isso é a premissa P2 da distro aplicada à letra: binário do mantenedor original primeiro, fonte só na falta. A roda liga a libxml2 e a libxslt ESTATICAMENTE dentro dos módulos (o NEEDED dos .so é só libc, libm, librt e libpthread — lido com readelf, não suposto), então nem a libxml2 da árvore entra em DEPS: o que ela exige está dentro dela, e a glibc 2.42 daqui satisfaz o manylinux_2_28. A receita não compila nada — desempacota a roda em site-packages e mantém o dist-info do upstream, que é o que importlib.metadata lê; o RECORD sai porque lista arquivos que não são instalados por instalador nenhum. As licenças embutidas (libxml2, libxslt, ElementTree) viajam no dist-info, daí o MIT ao lado do BSD."
+LICENSE="BSD-3-Clause AND MIT"
+SRC="https://files.pythonhosted.org/packages/6a/ba/add33b3c7ce51462cf7a4637bcfec2eaa258364d6015b989dd7d1216e6a6/lxml-$VERSION-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl"
+SHA256=47e367dfe341521426692819803e260d0673899c0ff611f14af978d725e2c999
+
+build() {
+    sitedir=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+    install -dm755 "$STAGE$sitedir"
+    unzip -q "$DL" -d "$STAGE$sitedir"
+    rm -f "$STAGE$sitedir/lxml-$VERSION.dist-info/RECORD"
+    # Cabeçalhos e .pxd servem a quem compila extensões contra o lxml, o que
+    # aqui não acontece.
+    rm -rf "$STAGE$sitedir/lxml/includes"
+    find "$STAGE$sitedir/lxml" -name '*.pxd' -delete
+    [ -e "$STAGE$sitedir/lxml-$VERSION.dist-info/METADATA" ] || { echo "python-lxml: dist-info ausente" >&2; exit 1; }
+    so=$(ls "$STAGE$sitedir"/lxml/etree*.so | head -n 1)
+    [ -n "$so" ] || { echo "python-lxml: módulo etree ausente" >&2; exit 1; }
+    # A premissa da receita, provada no ELF: nada além da libc no NEEDED.
+    readelf -d "$so" | grep NEEDED | grep -vE 'libc\.so|libm\.so|librt\.so|libpthread\.so' | grep -q . && {
+        echo "python-lxml: a roda exige biblioteca externa não declarada:" >&2
+        readelf -d "$so" | grep NEEDED >&2; exit 1; }
+    # E a prova de valor: importa e faz o que o inkex pede dele.
+    python3 -c "
+import sys; sys.path.insert(0, '$STAGE$sitedir')
+import lxml.etree as et, importlib.metadata as m
+assert et.fromstring('<svg><g id=\"a\"/></svg>').find('g').get('id') == 'a'
+assert m.version('lxml') == '$VERSION', m.version('lxml')
+" || { echo "python-lxml: a roda não importa ou não responde" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

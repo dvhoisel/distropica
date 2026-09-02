@@ -1,0 +1,39 @@
+NAME=cairomm
+VERSION=1.14.6
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2 cairo libsigcxx"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox findutils"
+ABOUT="A Cairo em C++ (API cairomm-1.0), degrau do pangomm e do gtkmm 3. A série 1.14 é a da API 1.0; a 1.18 é a API 1.16, do GTK4. O meson pinado detecta o fontconfig, mas só o liga aos TESTES (test_dep, linha 168), que aqui estão desligados: a biblioteca em si liga a cairo e a sigc++, e a sua API FreeType (FtFontFace) é cabeçalho sobre o cairo-ft — o cairomm-ft-1.0.pc exige cairomm-1.0 e cairo-ft, não fontconfig. A primeira escrita desta receita declarava o fontconfig em DEPS e o cobrava no NEEDED; a guarda reprovou um build correto e a leitura do meson desfez a suposição. Sem documentação, exemplos e testes."
+LICENSE=LGPL-2.0-or-later
+SRC="https://www.cairographics.org/releases/cairomm-$VERSION.tar.xz"
+SHA256=7e0d5c7f29175d573a03ab5c45aef63f48dd91a5caf335a404cd763e4b7cea4a
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dmaintainer-mode=false \
+        -Dbuild-documentation=false \
+        -Dbuild-examples=false \
+        -Dbuild-tests=false \
+        -Dbuild-deprecated-api=true \
+        -Dbuild-exceptions-api=true
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/pkgconfig/cairomm-1.0.pc" ] || { echo "cairomm: cairomm-1.0.pc ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/libcairomm-1.0.so.1" ] || { echo "cairomm: biblioteca compartilhada ausente" >&2; exit 1; }
+    for lib in libcairo.so libsigc-2.0; do
+        readelf -d "$STAGE/usr/lib/libcairomm-1.0.so.1" | grep -q "$lib" || {
+            echo "cairomm: $lib ausente do NEEDED" >&2; exit 1; }
+    done
+    # A API FreeType é só cabeçalho sobre o cairo-ft; o .pc dela tem de existir
+    # e nada além de cairo e sigc++ pode ter entrado no link.
+    [ -e "$STAGE/usr/lib/pkgconfig/cairomm-ft-1.0.pc" ] || { echo "cairomm: cairomm-ft-1.0.pc ausente" >&2; exit 1; }
+    ! readelf -d "$STAGE/usr/lib/libcairomm-1.0.so.1" | grep -qE 'libfontconfig|libboost' || {
+        echo "cairomm: biblioteca de teste entrou no link da lib" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

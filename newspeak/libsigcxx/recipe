@@ -1,0 +1,32 @@
+NAME=libsigcxx
+VERSION=2.12.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox findutils"
+ABOUT="libsigc++: sinais e slots em C++ com tipos — a raiz da família gtkmm, que a 0.16 traz inteira para o Inkscape. A série 2.12 (API sigc++-2.0) é a que o glibmm 2.66 e o gtkmm 3.24 exigem; a 3.x é para o GTK4 e não serve aqui. Biblioteca pequena, quase só cabeçalhos; entra o cabeçalho de configuração em /usr/lib/sigc++-2.0/include, que é onde o upstream o põe e onde o .pc o procura. Sem documentação, exemplos, testes e benchmark."
+LICENSE=LGPL-3.0-or-later
+SRC="https://download.gnome.org/sources/libsigc++/2.12/libsigc++-$VERSION.tar.xz"
+SHA256=a9dbee323351d109b7aee074a9cb89ca3e7bcf8ad8edef1851f4cf359bd50843
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dmaintainer-mode=false \
+        -Dbuild-documentation=false \
+        -Dbuild-examples=false \
+        -Dbuild-tests=false \
+        -Dvalidation=false \
+        -Dbenchmark=false \
+        -Dbuild-deprecated-api=true
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/pkgconfig/sigc++-2.0.pc" ] || { echo "libsigcxx: sigc++-2.0.pc ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/libsigc-2.0.so.0" ] || { echo "libsigcxx: biblioteca compartilhada ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/sigc++-2.0/include/sigc++config.h" ] || { echo "libsigcxx: sigc++config.h ausente" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

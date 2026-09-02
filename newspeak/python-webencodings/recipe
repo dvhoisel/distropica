@@ -1,0 +1,34 @@
+NAME=python-webencodings
+VERSION=0.6.1
+KIND=source
+TOOLCHAIN=native
+DEPS="python-glibc"
+BUILD_DEPS="python-glibc busybox findutils"
+ABOUT="Os rótulos de codificação de caracteres do WHATWG (a tabela que diz que latin1, iso-8859-1 e l1 são o mesmo windows-1252). Python puro, sem dependência; entra porque o tinycss2 o exige por nome (Requires-Dist: webencodings), e o tinycss2 é caminho crítico das extensões do Inkscape."
+LICENSE=BSD-3-Clause
+SRC="https://files.pythonhosted.org/packages/d5/a0/8fd707bcb776a7be556bad06a2ea5fb9bd519df78ef8e26f70ccf0f38bff/webencodings-$VERSION.tar.gz"
+SHA256=565f9ad031c702dae404e27a099e3e09186a3ab1b9520f06d215502b651fd910
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    sitedir=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+    install -dm755 "$STAGE$sitedir"
+    cp -a webencodings "$STAGE$sitedir/"
+    find "$STAGE$sitedir/webencodings" -type d -name __pycache__ -exec rm -rf {} +
+    # O mínimo da PEP 566, pela mesma razão do python-markupsafe: sem o
+    # dist-info, importlib.metadata não reconhece o pacote.
+    install -dm755 "$STAGE$sitedir/webencodings-$VERSION.dist-info"
+    cat > "$STAGE$sitedir/webencodings-$VERSION.dist-info/METADATA" <<METADATA
+Metadata-Version: 2.1
+Name: webencodings
+Version: $VERSION
+METADATA
+    chmod 644 "$STAGE$sitedir/webencodings-$VERSION.dist-info/METADATA"
+    install -Dm644 LICENSE "$STAGE/usr/share/licenses/python-webencodings/LICENSE"
+    python3 -c "
+import sys; sys.path.insert(0, '$STAGE$sitedir')
+import webencodings, importlib.metadata as m
+assert m.version('webencodings') == '$VERSION', m.version('webencodings')
+" || { echo "python-webencodings: o módulo não importa" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

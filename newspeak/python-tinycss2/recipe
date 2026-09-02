@@ -1,0 +1,34 @@
+NAME=python-tinycss2
+VERSION=1.5.1
+KIND=source
+TOOLCHAIN=native
+DEPS="python-glibc python-webencodings"
+BUILD_DEPS="python-glibc busybox findutils"
+ABOUT="Tokenizador e parser de CSS de baixo nível, Python puro. Entra porque o inkex do Inkscape o importa no caminho crítico: inkex.properties e inkex.css o usam para ler os estilos do SVG, e inkex/__init__ importa inkex.styles — sem ele extensão nenhuma carrega. Exige o webencodings, que entra junto."
+LICENSE=BSD-3-Clause
+SRC="https://files.pythonhosted.org/packages/a3/ae/2ca4913e5c0f09781d75482874c3a95db9105462a92ddd303c7d285d3df2/tinycss2-$VERSION.tar.gz"
+SHA256=d339d2b616ba90ccce58da8495a78f46e55d4d25f9fd71dfd526f07e7d53f957
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    sitedir=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+    install -dm755 "$STAGE$sitedir"
+    cp -a tinycss2 "$STAGE$sitedir/"
+    find "$STAGE$sitedir/tinycss2" -type d -name __pycache__ -exec rm -rf {} +
+    # O mínimo da PEP 566, pela mesma razão do python-markupsafe: sem o
+    # dist-info, importlib.metadata não reconhece o pacote.
+    install -dm755 "$STAGE$sitedir/tinycss2-$VERSION.dist-info"
+    cat > "$STAGE$sitedir/tinycss2-$VERSION.dist-info/METADATA" <<METADATA
+Metadata-Version: 2.1
+Name: tinycss2
+Version: $VERSION
+METADATA
+    chmod 644 "$STAGE$sitedir/tinycss2-$VERSION.dist-info/METADATA"
+    install -Dm644 LICENSE "$STAGE/usr/share/licenses/python-tinycss2/LICENSE"
+    python3 -c "
+import sys; sys.path.insert(0, '$STAGE$sitedir')
+import tinycss2, importlib.metadata as m
+assert m.version('tinycss2') == '$VERSION', m.version('tinycss2')
+" || { echo "python-tinycss2: o módulo não importa" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

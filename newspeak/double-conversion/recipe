@@ -1,0 +1,24 @@
+NAME=double-conversion
+VERSION=3.4.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2"
+BUILD_DEPS="gcc-pass2 binutils-glibc cmake ninja busybox findutils"
+ABOUT="Conversão exata e rápida entre ponto flutuante e texto (a do V8). A lib2geom embutida no Inkscape a exige (find_package(DoubleConversion REQUIRED)) para escrever coordenadas SVG curtas e sem perda. Só a biblioteca compartilhada, os cabeçalhos e os arquivos de configuração do CMake, que são o que o FindDoubleConversion do Inkscape procura."
+LICENSE=BSD-3-Clause
+SRC="https://github.com/google/double-conversion/archive/refs/tags/v$VERSION.tar.gz"
+SHA256=42fd4d980ea86426e457b24bdfa835a6f5ad9517ddb01cdb42b99ab9c8dd5dc9
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    cmake -S . -B build -G Ninja \
+        -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib \
+        -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/libdouble-conversion.so.3" ] || { echo "double-conversion: biblioteca compartilhada ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/include/double-conversion/double-conversion.h" ] || { echo "double-conversion: cabeçalho ausente" >&2; exit 1; }
+    ls "$STAGE"/usr/lib/cmake/double-conversion/*.cmake >/dev/null 2>&1 || { echo "double-conversion: configuração CMake ausente" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

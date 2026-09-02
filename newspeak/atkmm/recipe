@@ -1,0 +1,29 @@
+NAME=atkmm
+VERSION=2.28.5
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2 at-spi2-core glib glibmm libsigcxx"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox findutils"
+ABOUT="A ATK em C++ (API atkmm-1.6), a camada de acessibilidade que o gtkmm 3 expõe. A série 2.28 é a da API 1.6; a 2.3x é a API 2.36, do GTK4. A atk desta árvore vem do at-spi2-core, que a absorveu — é ele quem entrega o atk.pc, e por isso é ele quem está em DEPS. Sem documentação."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/atkmm/2.28/atkmm-$VERSION.tar.xz"
+SHA256=ae449192a582a2582a95e0602b15d792bbd639e836339b81ef916aa87540ac5c
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dmaintainer-mode=false \
+        -Dbuild-documentation=false \
+        -Dbuild-deprecated-api=true
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/pkgconfig/atkmm-1.6.pc" ] || { echo "atkmm: atkmm-1.6.pc ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/libatkmm-1.6.so.1" ] || { echo "atkmm: biblioteca compartilhada ausente" >&2; exit 1; }
+    readelf -d "$STAGE/usr/lib/libatkmm-1.6.so.1" | grep -q libatk-1.0 || {
+        echo "atkmm: libatk-1.0 ausente do NEEDED" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

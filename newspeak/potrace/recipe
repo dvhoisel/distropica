@@ -1,0 +1,30 @@
+NAME=potrace
+VERSION=1.16
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc zlib"
+# gawk: o ./configure chama awk (a classe do curl e do libarchive).
+BUILD_DEPS="gcc-pass2 binutils-glibc make gawk busybox findutils"
+ABOUT="Vetorização de bitmaps: transforma uma imagem em preto e branco em curvas. O Inkscape a exige (find_package(Potrace REQUIRED)) para o Traçar Bitmap, e a biblioteca só existe se o configure for chamado com --with-libpotrace — por padrão o upstream instala só os executáveis. Vêm a libpotrace, o cabeçalho, e os programas potrace e mkbitmap, com as páginas de manual. Papel A4 e unidades métricas como padrão da saída PostScript, porque é o que esta distro fala. Sem estática."
+LICENSE=GPL-2.0-or-later
+SRC="https://potrace.sourceforge.net/download/$VERSION/potrace-$VERSION.tar.gz"
+SHA256=be8248a17dedd6ccbaab2fcc45835bb0502d062e40fbded3bc56028ce5eb7acc
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure \
+        --prefix=/usr \
+        --with-libpotrace \
+        --disable-static \
+        --enable-a4 \
+        --enable-metric
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -e "$STAGE/usr/lib/libpotrace.so.0" ] || { echo "potrace: libpotrace ausente (faltou --with-libpotrace?)" >&2; exit 1; }
+    [ -e "$STAGE/usr/include/potracelib.h" ] || { echo "potrace: potracelib.h ausente" >&2; exit 1; }
+    for bin in potrace mkbitmap; do
+        [ -x "$STAGE/usr/bin/$bin" ] || { echo "potrace: $bin não foi produzido" >&2; exit 1; }
+    done
+    find "$STAGE" -type d -empty -delete
+}

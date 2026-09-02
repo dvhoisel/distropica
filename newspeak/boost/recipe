@@ -1,0 +1,31 @@
+NAME=boost
+VERSION=1.92.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2"
+BUILD_DEPS="gcc-pass2 binutils-glibc busybox findutils"
+ABOUT="As bibliotecas Boost — os cabeçalhos inteiros e DUAS bibliotecas compiladas, e o recorte é ditado pelo CMake do Inkscape, lido e não suposto: no Linux ele faz find_package(Boost REQUIRED COMPONENTS filesystem) e, em seguida, procura stacktrace_backtrace; não a achando, exige stacktrace_basic. O backtrace pediria a libbacktrace, que não mora aqui, e a guarda garante que ele NÃO foi construído — se fosse, o Inkscape ligaria -lbacktrace e o link falharia. A lib2geom embutida no Inkscape pede só cabeçalhos (Boost >= 1.60), e cabeçalhos do Boost não se recortam por biblioteca: o payload carrega o /usr/include/boost completo, que é grande e é o que é. Construído com o b2 do próprio tarball (bootstrap.sh), em modo compartilhado e sem ICU. Aqui o Boost tem um consumidor; se ganhar outro que precise de mais uma biblioteca compilada, é nesta receita que ela entra, com o mesmo raciocínio."
+LICENSE=BSL-1.0
+SRC="https://archives.boost.io/release/$VERSION/source/boost_1_92_0.tar.bz2"
+SHA256=5c1d40cb8e19adbf740a4ec2da35b3e58f3f5804b1dce44deb53df72193cbc6c
+
+build() {
+    tar -xjf "$DL" --strip-components=1
+    ./bootstrap.sh --prefix=/usr --with-toolset=gcc --with-libraries=filesystem,stacktrace --without-icu
+    ./b2 -j"$JOBS" \
+        --prefix="$STAGE/usr" --includedir="$STAGE/usr/include" --libdir="$STAGE/usr/lib" \
+        toolset=gcc link=shared runtime-link=shared variant=release threading=multi debug-symbols=off \
+        install
+    [ -e "$STAGE/usr/include/boost/version.hpp" ] || { echo "boost: cabeçalhos ausentes" >&2; exit 1; }
+    grep -q '#define BOOST_LIB_VERSION "1_92"' "$STAGE/usr/include/boost/version.hpp" || {
+        echo "boost: version.hpp não é o da 1.92" >&2; exit 1; }
+    for lib in libboost_filesystem.so.$VERSION libboost_stacktrace_basic.so.$VERSION; do
+        [ -e "$STAGE/usr/lib/$lib" ] || { echo "boost: $lib ausente" >&2; ls "$STAGE/usr/lib" >&2; exit 1; }
+    done
+    ! ls "$STAGE"/usr/lib/libboost_stacktrace_backtrace* >/dev/null 2>&1 || {
+        echo "boost: stacktrace_backtrace foi construído; o Inkscape ligaria -lbacktrace, que não existe aqui" >&2; exit 1; }
+    ls "$STAGE"/usr/lib/cmake/Boost-$VERSION/BoostConfig.cmake >/dev/null 2>&1 || {
+        echo "boost: BoostConfig.cmake ausente; o find_package do Inkscape não o acharia" >&2; exit 1; }
+    ! ls "$STAGE"/usr/lib/*.a >/dev/null 2>&1 || { echo "boost: sobrou biblioteca estática" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

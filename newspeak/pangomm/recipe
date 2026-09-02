@@ -1,0 +1,29 @@
+NAME=pangomm
+VERSION=2.46.5
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc gcc-pass2 pango cairo glib glibmm cairomm libsigcxx"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox findutils"
+ABOUT="O Pango em C++ (API pangomm-1.4), degrau do gtkmm 3. A série 2.46 é a da API 1.4; a 2.5x é a API 2.48, do GTK4. Liga a pangocairo, e portanto ao cairomm e ao glibmm da mesma rodada. Sem documentação."
+LICENSE=LGPL-2.1-or-later
+SRC="https://download.gnome.org/sources/pangomm/2.46/pangomm-$VERSION.tar.xz"
+SHA256=38ca0b050b065de4e3da0c182df657437757063bbf0c4b6c9567ddba019b1d68
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dmaintainer-mode=false \
+        -Dbuild-documentation=false \
+        -Dbuild-deprecated-api=true
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -e "$STAGE/usr/lib/pkgconfig/pangomm-1.4.pc" ] || { echo "pangomm: pangomm-1.4.pc ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/libpangomm-1.4.so.1" ] || { echo "pangomm: biblioteca compartilhada ausente" >&2; exit 1; }
+    readelf -d "$STAGE/usr/lib/libpangomm-1.4.so.1" | grep -q libpangocairo || {
+        echo "pangomm: libpangocairo ausente do NEEDED" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}
