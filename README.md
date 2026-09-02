@@ -3,19 +3,19 @@
 > Uma distribuição Linux distópica. Não instala pacotes: **retifica registros**.
 
 **[Site oficial](https://distropica.com.br/)** ·
-**[Baixar a ISO 0.15 (1487 MB)](https://distropica.com.br/releases/distropica-0.15-x86_64.iso)** ·
-**[SHA-256](https://distropica.com.br/releases/distropica-0.15-x86_64.iso.sha256)** ·
-**[Manifesto](https://distropica.com.br/releases/distropica-0.15-x86_64.iso.manifest)** ·
-**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.15-corresponding-sources.tar.zst)** ·
-**[SHA das fontes](https://distropica.com.br/releases/distropica-0.15-corresponding-sources.tar.zst.sha256)** ·
-**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.15-sources.tsv)** ·
-**[Índice de licenças](https://distropica.com.br/releases/distropica-0.15-licencas.tsv)**
+**[Baixar a ISO 0.16 (1568 MB)](https://distropica.com.br/releases/distropica-0.16-x86_64.iso)** ·
+**[SHA-256](https://distropica.com.br/releases/distropica-0.16-x86_64.iso.sha256)** ·
+**[Manifesto](https://distropica.com.br/releases/distropica-0.16-x86_64.iso.manifest)** ·
+**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.16-corresponding-sources.tar.zst)** ·
+**[SHA das fontes](https://distropica.com.br/releases/distropica-0.16-corresponding-sources.tar.zst.sha256)** ·
+**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.16-sources.tsv)** ·
+**[Índice de licenças](https://distropica.com.br/releases/distropica-0.16-licencas.tsv)**
 
-> **Atenção:** a `0.15` é uma **pré-release de desenvolvimento** para VM UEFI
+> **Atenção:** a `0.16` é uma **pré-release de desenvolvimento** para VM UEFI
 > **64 bits**, e a própria mídia declara isso de si: `PROFILE_CLASS=custom`.
 > O instalador apaga integralmente o dispositivo escolhido. Use um disco virtual
 > descartável e confira o SHA-256 antes do boot
-> (`f09c843014c88a92a2f91943f8f590b8acff8402fff97d9cfa28351e20711bd5`).
+> (`0d7b549d5678523c5088adc51af6dd7ed8340006b2f9834086ea82d841622b24`).
 >
 > Ela pede a **senha de root antes do caminho do disco**: toda a interação
 > acontece antes de qualquer escrita, e a partir do disco escolhido a
@@ -38,8 +38,8 @@
 > instalação, o cache **vive no disco alvo ao mesmo tempo** que a árvore cresce,
 > e o pico é a soma dos dois, não o maior deles; o fator quatro em si saiu de
 > medição (um cache de 664 MiB produziu uma árvore de 2096 MiB, razão 3,16) e o
-> resto é margem. O `cache.tar` da `0.15` tem 1326 MiB, o que dá cerca de
-> **7,0 GiB** de raiz mínima.
+> resto é margem. O `cache.tar` da `0.16` tem 1475 MiB, o que dá cerca de
+> **7,7 GiB** de raiz mínima.
 
 A Distrópica parte de uma observação desconfortável sobre o mundo atual: os
 projetos novos (Zig, Go, Rust, os aplicativos das corporações) distribuem
@@ -80,10 +80,10 @@ nas combinações efetivamente distribuídas.
 Cada ISO, EFI, cache ou canal binário publicado deve vir acompanhado de acesso
 equivalente ao seu bundle de fontes correspondentes: revisão da Distrópica,
 crates Rust vendorizadas, fontes upstream exatas, configurações, patches,
-scripts, licenças e inventário. A imagem custom `0.15` atende essa
-regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-0.15-corresponding-sources.tar.zst),
+scripts, licenças e inventário. A imagem custom `0.16` atende essa
+regra por meio do [bundle associado](https://distropica.com.br/releases/distropica-0.16-corresponding-sources.tar.zst),
 preso à revisão `3a84811` e ao SHA-256 da ISO, e acompanha um
-[índice de licenças](https://distropica.com.br/releases/distropica-0.15-licencas.tsv)
+[índice de licenças](https://distropica.com.br/releases/distropica-0.16-licencas.tsv)
 com os 5575 textos extraídos dos artefatos e das fontes correspondentes.
 Todos os 199 pacotes do inventário declaram licença — não há nenhum
 `LICENSE=NOASSERTION`. Três são **receitas de montagem da própria
@@ -170,13 +170,38 @@ Um **protótipo sério de engenharia de sistemas** — ainda um laboratório, n�
 uma distribuição pronta para usuários. A matriz precisa do que está feito,
 testado e futuro vive em **[STATUS.md](STATUS.md)**.
 
-A `0.15` está **publicada** em <https://distropica.com.br/> (2026-09-01): ISO
-instalável, canal binário assinado com 193 pacotes e bundle de fontes
+A `0.16` está **publicada** em <https://distropica.com.br/> (2026-09-02): ISO
+instalável, canal binário assinado com 229 pacotes e bundle de fontes
 correspondentes aprovado no gate estrito. O sistema instalado sobe em modo
 gráfico — compositor **labwc**, navegador **Epiphany** com **vídeo livre**
 (WebM/VP9/Opus), terminal **foot**, barra de tarefas **yambar**, lançador
 **fuzzel** — e instala software do canal pela rede: o **GIMP 3.2** entra assim,
 com `minitrue rectify gimp`.
+
+O que a `0.16` acrescenta é o que faltava para a sessão **servir**, e cada peça
+saiu de uma falta observada, não de lista de desejos. O **Inkscape 1.4.4** e o
+**Zathura** fecham as duas maiores lacunas do desktop — desenhar vetores e ler
+PDF. O **swayimg** mostra uma imagem sem abrir um editor de centenas de
+megabytes. O **grim** e o **slurp** dão captura de tela: até aqui, relatar um
+defeito custava foto de celular apontada para o monitor. O **wl-clipboard** liga
+o terminal ao navegador. O **mandoc** finalmente *formata* as páginas de manual
+que a árvore instala desde a 0.12 — o `man` do BusyBox as entregava cruas, com
+as macros à mostra — e refaz o índice do `apropos` no primeiro boot. O hardware
+ganha nome com **lspci** e **lsusb** de verdade, mais **dmidecode** e
+**ethtool**; e entram ainda **rsync**, **htop**, **bsdtar** e a família de
+fontes **Inter**.
+
+O Inkscape custou o que nenhum outro pacote custou: ele importa PDF pela API
+C++ **interna** da Poppler, que o upstream declara instável, e o último estável
+dele conhece essa API até a 26.2 — esta árvore usa a 26.08. O upstream já fez a
+porta no ramo de desenvolvimento, mas não no estável; a árvore carrega então um
+**patch próprio** (`newspeak/inkscape/files/`) que traz as macros do upstream
+verbatim e as aplica aos sítios da versão estável, com cada substituição
+conferida contra os cabeçalhos reais da Poppler instalada. A alternativa —
+desligar a importação de PDF — foi recusada: entregaria um editor de vetores
+incapaz de abrir o formato que mais chega de fora. A prova não foi compilar: um
+PDF gerado dentro da própria distro volta como SVG com as cores e o texto
+intactos.
 
 Duas correções da `0.14` valem menção porque a `0.13` falhava nelas, e as duas
 saíram de máquina real, não de suposição. O instalador passou a **registrar a
@@ -699,7 +724,7 @@ INCONSISTENT_PROFILE_LOCK_RESULT=refused-before-wipe
 
 Essa evidência continuará sendo de desenvolvimento. Ela não será pino de
 release nem substituirá um manifesto oficial assinado. Endpoint, chave e índice
-do canal estão publicados, e desde 2026-08-22 a **mídia também**: a `0.15` está
+do canal estão publicados, e desde 2026-08-22 a **mídia também**: a `0.16` está
 no ar com ISO, bundle de fontes correspondentes aprovado no gate estrito
 (`bootstrap/sbom --strict`, todos os pacotes com texto de licença),
 inventário e índice de licenças. O que ainda não existe é o *manifesto oficial

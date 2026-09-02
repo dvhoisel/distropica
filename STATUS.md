@@ -134,7 +134,7 @@ O aviso que a receita já tinha detecta o estrago **depois de feito**. O `sync`
 fecha a janela, custa uma fração de segundo uma vez na vida da instalação, e
 não havia motivo para ele não estar lá.
 
-## Evidência integrada atual — `0.15`
+## Evidência integrada atual — `0.16`
 
 A mídia instala a partir do canal binário, reinicia sem ISO, sobe em modo
 gráfico e toca vídeo. Quem a bootou foi o Daniel, no VirtualBox, com disco de
@@ -144,13 +144,13 @@ nenhum deles falhava no build. O que o aceite automatizado pega é a
 instalação; a tela, o clique e o vídeo dependeram de alguém olhar.
 
 ```text
-CANAL=193 pacotes Mundo B (canal-015), CHANNEL_INDEX_FORMAT=4, assinado com a chave de produção
-CANAL_INDEX_SHA256=8a706b867eef9090e1896407c0b9d1b0b6716740476b4a6da31b7620bbf9b26b
-POOL=999 MB · CACHE=1,3 GB
-EFI=target/release-0.15/BOOTX64-0.15.EFI                (23.0 MB)
+CANAL=229 pacotes Mundo B (canal-016), CHANNEL_INDEX_FORMAT=4, assinado com a chave de produção
+CANAL_INDEX_SHA256=e57af61650fd3f33142640bbf444069edb0dfefd2f868300cfad5f72f6f5a8f9
+POOL=1,2 GB · CACHE=1,5 GB
+EFI=target/release-0.16/BOOTX64-0.16.EFI                (23.0 MB)
 EFI_SHA256=f74cda44c6cc1ed34977f72c671ea35ffe5f359888ec55b0116cf2cc2946e349
-ISO=target/release-0.15/distropica-0.15-x86_64.iso      (1487 MB)
-ISO_SHA256=f09c843014c88a92a2f91943f8f590b8acff8402fff97d9cfa28351e20711bd5
+ISO=target/release-0.16/distropica-0.16-x86_64.iso      (1568 MB)
+ISO_SHA256=0d7b549d5678523c5088adc51af6dd7ed8340006b2f9834086ea82d841622b24
 RAIZ_PRODUTORA=target/rebuild-0.13-v48-root
 ```
 
@@ -247,11 +247,12 @@ no mesmo símbolo, morto no build final e provado sob anúncios, pop-ups e
 quatro abas em 2 vCPU/2 GB. O MSE ganhou o `vp9parse` (com a `codecparsers`
 que a auditoria de ABI cobrou), e a política `never` do Epiphany é conferida
 por VALOR no build (`gsettings` na instância), porque o schema é relocável e
-override com path é no-op silencioso. `distropica.com.br` anuncia a 0.15:
+override com path é no-op silencioso. `distropica.com.br` anunciou a 0.15:
 ISO `f09c8430`, bundle de fontes correspondentes `1f66b774` (2,5 GB,
 `bootstrap/sbom --strict` aprovado), inventário e índice de licenças, todos
-com o sha256 conferido no próprio servidor. O canal público serve o
-**canal-015** (193 pacotes); a linhagem anterior ficou inteira em
+com o sha256 conferido no próprio servidor. Desde a 0.16 o canal público
+serve o **canal-016** (229 pacotes) e o canal-015 ficou preservado em
+`canal/oficial-015/`; a linhagem anterior a ele ficou inteira em
 `canal/oficial-014/` (o canal-014f final), com os pré-consertos em `canal/oficial-014-pre-wkpatch/`, `canal/oficial-014-pre-vp9/`, `canal/oficial-014-pre-video/` e `canal/oficial-014-pre-skia/`, o 013f em `canal/oficial-013f/`,
 e o 013e e o índice legado v2 seguem em `canal/oficial-013e/` e
 `canal/oficial-0.12/`.
@@ -275,6 +276,55 @@ impressão digital vem do texto dela. Provado em 2 vCPU/2 GB sobre disco
 instalado pelo cenário 1: YouTube sob `never` com 7,9–8,5% de branco na
 viewport e zero segfault; VP9 local em tempo real, 2696 decodificados e
 zero descartados. Ferramentas da prova em `target/ferramentas-prova/`.
+
+A sétima rodada virou **0.16** e não muda a base: muda o que o sistema
+INSTALADO oferece. Trinta e três receitas novas, e cada uma entrou por uma
+falta observada em uso. As ferramentas da sessão: `grim` e `slurp` (o relato do
+beta tester da 0.15 chegou em foto de celular da tela, porque não havia como
+capturá-la), `wl-clipboard`, `swayimg` (o `imv` foi RECUSADO por medida: exige
+libGL, que a Mesa sem GLX não entrega), e o `mandoc` — a árvore instala páginas
+de manual desde a 0.12 e o único `man` era o applet do BusyBox, que as entrega
+cruas; ele toma o applet e traz o drop-in `06-mandoc.sh`, que refaz o índice do
+`apropos` no boot, como o `04-hwdb.sh` faz com o do udev. O inventário de
+hardware ganha nome de verdade — `pciutils`, `usbutils`, `dmidecode`, `ethtool`
+—, e junto vão `rsync`, `htop`, `bsdtar`, `xxhash` e a família `Inter`.
+
+As duas peças grandes são o **Zathura** (com o `girara` e o plugin de PDF: uma
+sessão com navegador, editor de imagem e terminal não abria um PDF) e o
+**Inkscape 1.4.4**, que arrasta a família gtkmm inteira, o Boost, o coletor de
+Boehm, a GSL, o potrace, a double-conversion e cinco pacotes Python — os quatro
+que o `inkex` importa no caminho crítico, sem os quais NENHUMA extensão dele
+carrega. O `lxml` e o `numpy` entram como as RODAS oficiais do upstream, pela
+premissa P2, com o que exigem de fora provado no `readelf` e o BLAS embutido
+provado por uma conta.
+
+O Inkscape custou o que os outros não custaram. Ele importa PDF pela API C++
+**interna** da Poppler — instável por declaração do upstream — e o 1.4.4
+conhece essa API até a 26.2, enquanto a árvore usa a 26.08: 49 erros de
+compilação em cinco arquivos. A 26.5 trocou o encoding de fonte por
+`std::array`, a 26.6 passou cor, estado gráfico e caixas de página a viajar por
+REFERÊNCIA, a 26.7 tornou privada a herança de `GooString`, e o `Object` perdeu
+`streamGetDict` e as irmãs. O upstream já portou isso no master, com macros no
+`poppler-transition-api.h`; o ramo estável 1.4.x não recebeu. A árvore carrega
+um patch de 553 linhas que traz essas macros VERBATIM e as aplica aos sítios do
+1.4.4, com cada substituição conferida contra os cabeçalhos da Poppler
+instalada — e o sha do patch na receita, porque a impressão digital vem do
+texto dela. A poppler passou a instalar os cabeçalhos internos
+(`ENABLE_UNSTABLE_API_ABI_HEADERS`), com a consequência dita no ABOUT dela:
+cada bump dela tem de ser provado contra o Inkscape. A prova não foi compilar —
+um PDF gerado dentro da distro com a pycairo (retângulo, traço e texto) volta
+do importador como SVG com `fill:#d91919`, `stroke:#1933e6` e a palavra
+intacta: os três caminhos que o patch tocou.
+
+Três defeitos meus foram achados pela árvore e não por mim, e viraram guarda:
+a guarda do `cairomm` cobrava o `fontconfig` no NEEDED, que só entra nos testes
+(o meson pinado o diz); o `mandoc` instalava os aliases como HARD LINKS, que a
+instalação recusa (o knob `LN="ln -sf"` é do próprio upstream); e o `zathura`
+de 2026 instala DOIS executáveis do mesmo código, sendo o `zathura-sandbox` o
+único com seccomp — a guarda cobrava a libseccomp no binário errado. Por fim, o
+`minitrue audit` cobrou treze arestas de DEPS que guarda nenhuma pegava,
+shebang `/usr/bin/env` inclusive: é ele, e não a compilação, quem prova o
+fechamento.
 
 A sexta rodada virou **0.15** porque muda a base, não só o conserto: LLVM
 22.1.8 e llvmpipe entram na árvore (o maior pacote dela, pago
