@@ -89,11 +89,12 @@ openssh
 # entao o gerenciador de pacotes funcionava e so o resto do sistema e que nao
 # tinha TLS verificavel.
 #
-# O hwdata nao traz comando: o BusyBox ja tem lspci e lsusb, e o que falta e a
-# tabela que eles consultam. Sem ela imprimem hexadecimal, e a pergunta 'qual e
-# a minha placa?' fica sem resposta — o que passou a importar quando esta
-# arvore comecou a escolher driver de video, som e wi-fi por hipotese sobre o
-# hardware do outro lado.
+# O hwdata e a tabela que traduz numero PCI em nome, e a frase que estava aqui
+# ate a 0.15 era FALSA: dizia que o BusyBox 'ja tem lspci e lsusb' e que so
+# faltava a tabela. Faltava o programa. O applet do BusyBox nao consulta base
+# nenhuma — lido no util-linux/lspci.c pinado, cujo unico fopen e o uevent —,
+# entao a tabela viajou morta na midia da 0.14 e da 0.15. Quem a consulta agora
+# e o lspci do pciutils, logo abaixo.
 #
 # curl e libevent NAO estao nesta lista, e e de proposito: o git fala HTTPS
 # pela libcurl e o tmux nao constroi sem libevent, entao os dois chegam por
@@ -142,3 +143,67 @@ rust
 # linha. Custa 1 MB e assume seis applets do BusyBox — xz, unxz, xzcat, lzma,
 # unlzma e lzcat —, todos com mais fôlego que os que substituem.
 xz
+
+# INVENTARIO DE HARDWARE COM NOME. O lspci do pciutils e o lsusb do usbutils
+# tomam os applets homonimos do BusyBox (SPEC-0003 §7) e respondem, enfim, 'qual
+# e a minha placa?': o primeiro pela tabela do hwdata acima, o segundo pelo HWDB
+# do udev, que o drop-in 04-hwdb.sh compila no primeiro boot. O dmidecode fecha
+# o trio pelo lado do firmware — fabricante, modelo, memoria, versao do BIOS —,
+# e o ethtool responde o que a placa de rede esta fazendo, que nem o lspci nem o
+# connman dizem: velocidade negociada, estado do cabo, offloads.
+pciutils
+usbutils
+dmidecode
+ethtool
+
+# A SESSAO GRAFICA GANHA MAOS. Os tres primeiros sao desejos de topo porque
+# nada os puxa, e cada um fecha uma falta MEDIDA em uso: o relato do beta tester
+# da 0.15 chegou em foto de celular da tela, porque nao havia como captura-la
+# (grim, e o slurp para escolher a regiao com o rato); e nao havia caminho entre
+# um comando no foot e a barra de enderecos do Epiphany que nao fosse digitar de
+# novo (wl-clipboard). O swayimg mostra uma imagem sem abrir o GIMP — que e um
+# editor de centenas de megabytes de closure para olhar um PNG — e arrasta o
+# LuaJIT, que o meson dele exige por nome.
+grim
+slurp
+wl-clipboard
+swayimg
+
+# O LEITOR DE MANUAL. A arvore INSTALA paginas de manual desde a 0.12 — vim,
+# foot, curl, e agora quase tudo desta lista — e o unico 'man' era o applet do
+# BusyBox, que acha o arquivo e o entrega cru ao paginador: as macros mdoc saiam
+# a mostra. O mandoc formata, toma o applet, e traz o drop-in 06-mandoc.sh, que
+# refaz o indice do apropos no boot.
+mandoc
+
+# O LEITOR DE PDF, que era a maior lacuna do desktop: uma sessao com navegador,
+# editor de imagem e terminal nao abria um PDF. Quem entra na lista e o PLUGIN,
+# nao o zathura: a dependencia aponta do plugin para o leitor, entao pedir o
+# zathura sozinho instalaria um programa que abre janela e diz nao conhecer o
+# formato. O girara e a poppler chegam por DEPS.
+zathura-pdf-poppler
+
+# O EDITOR DE VETORES. A 0.15 pos um editor de bitmap na sessao (GIMP); este
+# poe o de SVG, e e o pacote mais caro desta lista: arrasta por DEPS a familia
+# gtkmm inteira, o Boost, o coletor de Boehm, a GSL, o potrace, a
+# double-conversion e cinco pacotes Python, sem os quais nenhuma extensao dele
+# carrega. Importa PDF por um patch desta arvore contra a poppler 26 — ver o
+# ABOUT da receita.
+inkscape
+
+# TRANSFERIR E OLHAR PROCESSO. O rsync porque o openssh ja mora aqui e rsync
+# sobre ssh e o par natural para levar e trazer uma home; o htop porque o 'top'
+# do BusyBox mostra a lista e nao a arvore, os nucleos um a um, nem deixa matar
+# sem decorar PID; o bsdtar porque o mundo real chega em zip, e o unzip do
+# BusyBox tropeca em nome UTF-8 e em zip64. Nenhum dos tres e dependencia de
+# ninguem.
+rsync
+htop
+bsdtar
+
+# A SEGUNDA FAMILIA DE FONTES. A DejaVu chega por DEPS do desktop e cobre o
+# Unicode; a Inter foi desenhada para tela, e a diferenca se ve em tamanho
+# pequeno — menu, barra de enderecos, texto corrido de pagina. Boa parte da web
+# a pede por nome e caia na DejaVu. Entram so as duas variaveis, que cobrem
+# todos os pesos em dois arquivos.
+inter-fonts
