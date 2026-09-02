@@ -1,0 +1,23 @@
+NAME=inter-fonts
+VERSION=4.1
+KIND=source
+TOOLCHAIN=native
+DEPS="fontconfig"
+BUILD_DEPS="busybox findutils"
+ABOUT="A segunda família de fontes da distro, ao lado da DejaVu. A Inter é uma sans desenhada para tela, com hinting, alturas-x generosas e formas que se distinguem em tamanho pequeno — a diferença que se vê numa barra de endereços, num menu e no texto corrido de uma página; boa parte da web a pede por nome (font-family: Inter) e caía na DejaVu. Entram só as duas fontes VARIÁVEIS do upstream (InterVariable e InterVariable-Italic), que cobrem todos os pesos de Thin a Black com dois arquivos: FreeType, HarfBuzz, Pango e Cairo desta árvore falam OpenType variável, e as 36 estáticas do zip seriam o mesmo desenho repetido. Só dados; a licença OFL viaja no payload, como manda o texto dela."
+LICENSE=OFL-1.1
+SRC="https://github.com/rsms/inter/releases/download/v$VERSION/Inter-$VERSION.zip"
+SHA256=9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e
+
+build() {
+    unzip -q "$DL"
+    install -dm755 "$STAGE/usr/share/fonts/inter"
+    install -m644 InterVariable.ttf InterVariable-Italic.ttf "$STAGE/usr/share/fonts/inter/"
+    install -Dm644 LICENSE.txt "$STAGE/usr/share/licenses/inter-fonts/LICENSE.txt"
+    for f in InterVariable.ttf InterVariable-Italic.ttf; do
+        [ -s "$STAGE/usr/share/fonts/inter/$f" ] || { echo "inter-fonts: $f não veio" >&2; exit 1; }
+    done
+    grep -q 'SIL OPEN FONT LICENSE' "$STAGE/usr/share/licenses/inter-fonts/LICENSE.txt" || {
+        echo "inter-fonts: a licença no zip não é a OFL esperada" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

@@ -1,0 +1,30 @@
+NAME=wl-clipboard
+VERSION=2.3.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc wayland"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf wayland-protocols busybox findutils"
+ABOUT="A área de transferência na linha de comando: wl-copy põe, wl-paste tira. Até aqui não havia caminho entre um comando no foot e a barra de endereços do Epiphany que não passasse por digitar de novo. Fala wl-data-control (o do wlroots) e o ext-data-control-v1 padronizado, que o labwc desta árvore já expõe. O wl-paste procura o xdg-mime para adivinhar tipo de conteúdo quando o compositor não o diz; ele não existe aqui, e o wl-paste segue funcionando com o tipo que o cliente de origem declarou. Sem completions de zsh e fish, que não há."
+LICENSE=GPL-3.0-or-later
+SRC="https://github.com/bugaevc/wl-clipboard/archive/refs/tags/v$VERSION.tar.gz"
+SHA256=b4dc560973f0cd74e02f817ffa2fd44ba645a4f1ea94b7b9614dacc9f895f402
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dprotocols=enabled \
+        -Dzshcompletiondir=no \
+        -Dfishcompletiondir=no
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    for bin in wl-copy wl-paste; do
+        [ -x "$STAGE/usr/bin/$bin" ] || { echo "wl-clipboard: $bin não foi produzido" >&2; exit 1; }
+        readelf -d "$STAGE/usr/bin/$bin" | grep -q libwayland-client || {
+            echo "wl-clipboard: $bin sem libwayland-client no NEEDED" >&2; exit 1; }
+    done
+    find "$STAGE" -type d -empty -delete
+}

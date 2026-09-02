@@ -1,0 +1,50 @@
+NAME=bsdtar
+VERSION=3.8.9
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libarchive zlib xz openssl libxml2"
+# gawk: o ./configure chama awk (a classe do curl e do libarchive).
+BUILD_DEPS="gcc-pass2 binutils-glibc make gawk busybox findutils"
+ABOUT="O tar da libarchive, sob o próprio nome. Abre o que o busybox não abre: zip com nomes em UTF-8 e zip64, 7z, rar, iso9660, cpio, xar — o mundo real chega em zip. É PACOTE À PARTE da libarchive, e a razão é a mecânica da árvore: a impressão digital de um pacote inclui as suas BUILD_DEPS, e a libarchive é dependência do cmake — reconstruí-la para ligar um binário derrubaria o cmake e, atrás dele, o llvm e o webkitgtk. Aqui a mesma fonte pinada é configurada com as mesmas opções da receita da libarchive (mesmos codecs, mesmas ausências), e só o executável e a sua página de manual ficam no payload: a biblioteca que ele exige é a do pacote libarchive, mesma versão, mesmo soname. A primeira escrita desta receita afirmava que o bsdtar ligaria SÓ à libarchive, deixando os codecs para ela carregar em runtime; a auditoria de fechamento provou o contrário — o executável traz libz, liblzma, libcrypto e libxml2 no próprio NEEDED, porque o autotools os passa também ao front-end —, e por isso os quatro estão em DEPS e a guarda os confere um a um. O nome tar continua sendo do busybox, e por isso não há a ambiguidade de PATH que a receita da libarchive temia. bsdcpio, bsdcat e bsdunzip ficam de fora: são o mesmo motor sob outro nome."
+LICENSE=BSD-2-Clause
+SRC="https://github.com/libarchive/libarchive/releases/download/v$VERSION/libarchive-$VERSION.tar.xz"
+SHA256=888c934f9d95648ecb9163dc8e23ab80a476ecb81a8f1154704a227b5b676dde
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --disable-static \
+        --enable-bsdtar \
+        --disable-bsdcpio \
+        --disable-bsdcat \
+        --disable-bsdunzip \
+        --without-bz2lib \
+        --without-lzo2 \
+        --without-nettle \
+        --without-zstd
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    # Só o front-end fica; a biblioteca, os cabeçalhos e as suas páginas são
+    # do pacote libarchive.
+    rm -rf "$STAGE/usr/lib" "$STAGE/usr/include" "$STAGE/usr/share/man/man3" "$STAGE/usr/share/man/man5"
+    [ -x "$STAGE/usr/bin/bsdtar" ] || { echo "bsdtar: o binário não foi produzido" >&2; exit 1; }
+    # Cada NEEDED tem de ter provedor declarado: foi por faltar isso que a
+    # auditoria de fechamento reprovou a primeira versão desta receita.
+    for lib in libarchive.so.13 libz.so.1 liblzma.so.5 libcrypto.so libxml2.so.2; do
+        readelf -d "$STAGE/usr/bin/bsdtar" | grep -q "$lib" || {
+            echo "bsdtar: $lib ausente do NEEDED" >&2
+            readelf -d "$STAGE/usr/bin/bsdtar" | grep NEEDED >&2; exit 1; }
+    done
+    for lib in libzstd libbz2 liblzo2 libnettle; do
+        ! readelf -d "$STAGE/usr/bin/bsdtar" | grep -q "$lib" || {
+            echo "bsdtar: $lib entrou no NEEDED sem ser declarado" >&2; exit 1; }
+    done
+    [ "$(ls "$STAGE/usr/bin")" = bsdtar ] || {
+        echo "bsdtar: sobrou mais que o bsdtar em /usr/bin:" >&2; ls "$STAGE/usr/bin" >&2; exit 1; }
+    [ -e "$STAGE/usr/share/man/man1/bsdtar.1" ] || {
+        echo "bsdtar: página de manual não veio" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

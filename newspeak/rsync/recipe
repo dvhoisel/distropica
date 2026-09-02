@@ -1,0 +1,46 @@
+NAME=rsync
+VERSION=3.5.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc zlib openssl xxhash bash busybox"
+# bash e busybox: o rsync-ssl que vem no payload é script de bash com
+# shebang /usr/bin/env — os dois entram por requisito observado, não por gosto.
+# gawk: o ./configure chama awk (a mesma classe do curl e do libarchive).
+BUILD_DEPS="gcc-pass2 binutils-glibc make gawk busybox findutils"
+ABOUT="Transferência e espelhamento de árvores de arquivos, por delta. O openssh já mora aqui, e rsync sobre ssh é o par natural para levar e trazer uma home ou um backup. A 3.5.0 é release de segurança (33 correções, 13/08/2026), e por isso a versão não é negociável. Checksums: MD5 pela OpenSSL da árvore e xxHash (xxh3, xxh64) pela libxxhash, que a 0.16 traz para o zathura — o rsync a aproveita em vez de ficar sem a opção mais rápida. zstd e lz4 desligados por nome porque não moram aqui; ACL desligado porque não há libacl; xattr fica, que é chamada da própria glibc. popt vai EMBUTIDO (--with-included-popt): é uma biblioteca de opções de linha de comando sem outro consumidor na árvore, e um pacote só para ela seria peso sem leitor — daí o MIT na licença. As páginas de manual vêm PRONTAS no tarball, e por isso a geração (md2man, que pede módulos Python de markdown) está desligada."
+LICENSE="GPL-3.0-or-later AND MIT"
+SRC="https://download.samba.org/pub/rsync/src/rsync-$VERSION.tar.gz"
+SHA256=c7ffd1ef653e99540f661e47cb00b7f9cad1ee6b972399b16f93d672656e0d33
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure \
+        --prefix=/usr \
+        --disable-md2man \
+        --with-included-popt \
+        --with-included-zlib=no \
+        --enable-openssl \
+        --enable-xxhash \
+        --disable-zstd \
+        --disable-lz4 \
+        --disable-acl-support
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -x "$STAGE/usr/bin/rsync" ] || { echo "rsync: o binário não foi produzido" >&2; exit 1; }
+    for lib in libxxhash libcrypto libz; do
+        readelf -d "$STAGE/usr/bin/rsync" | grep -q "$lib" || {
+            echo "rsync: $lib ausente do NEEDED" >&2; exit 1; }
+    done
+    for lib in libzstd liblz4 libacl libpopt; do
+        ! readelf -d "$STAGE/usr/bin/rsync" | grep -q "$lib" || {
+            echo "rsync: $lib entrou no NEEDED sem ser declarado" >&2; exit 1; }
+    done
+    # A versão sabe listar o que foi compilado; xxhash e openssl têm de estar lá.
+    "$STAGE/usr/bin/rsync" --version | grep -q 'xxh' || {
+        echo "rsync: --version não lista xxhash" >&2; exit 1; }
+    for man in man1/rsync.1 man5/rsyncd.conf.5; do
+        [ -e "$STAGE/usr/share/man/$man" ] || { echo "rsync: $man não veio" >&2; exit 1; }
+    done
+    find "$STAGE" -type d -empty -delete
+}

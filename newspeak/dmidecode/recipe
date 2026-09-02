@@ -1,0 +1,25 @@
+NAME=dmidecode
+VERSION=3.7
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="gcc-pass2 binutils-glibc make busybox findutils"
+ABOUT="Inventário do firmware: lê a tabela SMBIOS/DMI e diz fabricante, modelo, placa, memória, slots e versão do BIOS. Fecha o trio de diagnóstico com o lspci e o lsusb novos da 0.16 — 'que máquina é esta?' passa a ter resposta inteira sem abrir o gabinete. Vêm também biosdecode, vpddecode e ownership, que o Makefile constrói em x86. Só binários e páginas de manual; instalados em /usr/bin, porque nesta árvore /usr/sbin é diretório real fora do PATH (a lição do mtr)."
+LICENSE=GPL-2.0-or-later
+SRC="https://download.savannah.gnu.org/releases/dmidecode/dmidecode-$VERSION.tar.xz"
+SHA256=2c3aed12c85a1e6a9410d406d5e417c455466dc1bc7c89278bb32cf7cad91e8a
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    make -j"$JOBS" prefix=/usr sbindir=/usr/bin
+    make install-bin install-man prefix=/usr sbindir=/usr/bin DESTDIR="$STAGE"
+    install -Dm644 LICENSE "$STAGE/usr/share/licenses/dmidecode/LICENSE"
+    for bin in dmidecode biosdecode vpddecode ownership; do
+        [ -x "$STAGE/usr/bin/$bin" ] || { echo "dmidecode: $bin não foi produzido" >&2; exit 1; }
+    done
+    "$STAGE/usr/bin/dmidecode" --version | grep -qx "$VERSION" || {
+        echo "dmidecode: --version não diz $VERSION" >&2; exit 1; }
+    [ -e "$STAGE/usr/share/man/man8/dmidecode.8" ] || {
+        echo "dmidecode: página de manual não veio" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

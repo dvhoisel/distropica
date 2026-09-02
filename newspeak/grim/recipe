@@ -1,0 +1,33 @@
+NAME=grim
+VERSION=1.5.0
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc wayland pixman libpng libjpeg-turbo"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf wayland-protocols scdoc busybox findutils"
+ABOUT="Captura de tela para Wayland. Entra porque o relato de campo da 0.15 chegou em FOTO DE CELULAR da tela: a sessão não tinha nenhuma forma de gravar o que estava sendo mostrado. O grim fala wlr-screencopy e ext-image-copy-capture, os dois protocolos que o wlroots desta árvore anuncia, e escreve PNG ou JPEG (a razão do libjpeg-turbo em DEPS, provada por fato de link na guarda). A seleção de região é trabalho do slurp, seu par: grim -g com a saída do slurp recorta o que o rato desenhou. Sem completions de shell — não há bash-completion nem fish na árvore."
+LICENSE=MIT
+SRC="https://gitlab.freedesktop.org/emersion/grim/-/releases/v$VERSION/downloads/grim-$VERSION.tar.gz"
+SHA256=99708950205d5bfd2e769519fcb6423a9f545175a29c46c7c1cf7965afc4b8eb
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Djpeg=enabled \
+        -Dman-pages=enabled \
+        -Dfish-completions=false \
+        -Dbash-completions=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -x "$STAGE/usr/bin/grim" ] || { echo "grim: o binário não foi produzido" >&2; exit 1; }
+    # JPEG é opção, e opção desligada em silêncio vira pacote que promete e
+    # não entrega: o fato de link é a prova.
+    readelf -d "$STAGE/usr/bin/grim" | grep -q libjpeg || {
+        echo "grim: compilado sem libjpeg no NEEDED" >&2; exit 1; }
+    [ -e "$STAGE/usr/share/man/man1/grim.1" ] || {
+        echo "grim: página de manual não veio" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

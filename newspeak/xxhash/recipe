@@ -1,0 +1,25 @@
+NAME=xxhash
+VERSION=0.8.3
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+# gawk: o Makefile chama awk.
+BUILD_DEPS="gcc-pass2 binutils-glibc make gawk busybox findutils"
+ABOUT="Hash não criptográfico muito rápido (xxh32, xxh64, xxh3, xxh128). Entra porque o zathura de 2026 o exige por nome (dependency('libxxhash')), e o rsync desta mesma rodada o aproveita para as somas xxh3/xxh64. Vem a biblioteca compartilhada, o cabeçalho, o .pc e o utilitário xxhsum com os seus links (xxh32sum, xxh64sum, xxh128sum) — que não colidem com applet nenhum do busybox. A estática sai. Duas licenças porque o upstream as separa: BSD-2-Clause para a biblioteca, GPL-2.0-or-later para o xxhsum."
+LICENSE="BSD-2-Clause AND GPL-2.0-or-later"
+SRC="https://github.com/Cyan4973/xxHash/archive/refs/tags/v$VERSION.tar.gz"
+SHA256=aae608dfe8213dfd05d909a57718ef82f30722c392344583d3f39050c7f29a80
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    make -j"$JOBS" prefix=/usr PREFIX=/usr
+    make install prefix=/usr PREFIX=/usr DESTDIR="$STAGE"
+    rm -f "$STAGE/usr/lib/libxxhash.a"
+    [ -e "$STAGE/usr/lib/libxxhash.so.0" ] || { echo "xxhash: biblioteca compartilhada ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/pkgconfig/libxxhash.pc" ] || { echo "xxhash: libxxhash.pc ausente" >&2; exit 1; }
+    [ -e "$STAGE/usr/include/xxhash.h" ] || { echo "xxhash: cabeçalho ausente" >&2; exit 1; }
+    [ -x "$STAGE/usr/bin/xxhsum" ] || { echo "xxhash: xxhsum não foi produzido" >&2; exit 1; }
+    LD_LIBRARY_PATH="$STAGE/usr/lib" "$STAGE/usr/bin/xxhsum" --version 2>&1 | grep -q "$VERSION" || {
+        echo "xxhash: xxhsum --version não diz $VERSION" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

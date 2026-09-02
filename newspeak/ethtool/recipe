@@ -1,0 +1,32 @@
+NAME=ethtool
+VERSION=7.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc libmnl"
+# gawk: o ./configure chama awk (a classe do curl e do libarchive).
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf gawk busybox findutils"
+ABOUT="Diagnóstico de link cabeado: velocidade e duplex negociados, estado do cabo, estatísticas do driver, offloads, wake-on-lan. Irmão do trio lspci/lsusb/dmidecode — aqueles dizem que placa é; este diz o que ela está fazendo. A interface netlink (pela libmnl, que já mora aqui por causa do nftables) é a que os kernels desta era respondem; a ioctl antiga fica como reserva. Instalado em /usr/bin (o sbindir do upstream cairia fora do PATH desta árvore). Sem completion de bash, que não há."
+LICENSE=GPL-2.0-only
+SRC="https://mirrors.edge.kernel.org/pub/software/network/ethtool/ethtool-$VERSION.tar.xz"
+SHA256=4d78c26edc0255bc92f4b995b5fd66108d75ff966ed4694f6025a6d370bc2496
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure \
+        --prefix=/usr \
+        --sbindir=/usr/bin \
+        --enable-netlink \
+        --enable-pretty-dump \
+        --with-bash-completion-dir=no
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -x "$STAGE/usr/bin/ethtool" ] || { echo "ethtool: o binário não foi produzido" >&2; exit 1; }
+    readelf -d "$STAGE/usr/bin/ethtool" | grep -q libmnl || {
+        echo "ethtool: libmnl ausente do NEEDED (netlink ficou de fora)" >&2; exit 1; }
+    "$STAGE/usr/bin/ethtool" --version | grep -q "$VERSION" || {
+        echo "ethtool: --version não diz $VERSION" >&2; exit 1; }
+    [ -e "$STAGE/usr/share/man/man8/ethtool.8" ] || {
+        echo "ethtool: página de manual não veio" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

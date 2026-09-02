@@ -1,0 +1,97 @@
+NAME=mandoc
+VERSION=1.14.6
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc busybox zlib"
+# zlib: o mandoc lê páginas comprimidas em gzip; é fato de link, apontado
+# pela auditoria de fechamento.
+# Toma o applet homônimo do busybox (man) — SPEC-0003 §7. O busybox segue
+# dono do less, que é o paginador que o man daqui chama.
+SUPERSEDES="busybox"
+BUILD_DEPS="gcc-pass2 binutils-glibc make busybox findutils"
+ABOUT="O leitor de páginas de manual. A árvore INSTALA man pages há versões — vim, foot, curl, e agora pciutils, usbutils, grim, rsync — e o único man que havia era o applet do busybox, que só sabe achar o arquivo e entregá-lo cru ao paginador: não formata mdoc nem roff, e as páginas saíam com as macros à mostra. O mandoc é o formatador do OpenBSD, sem dependência nenhuma além da libc, e nesta árvore man pages são contrato (a decisão de 18/07/2026, à la OpenBSD). Entra o conjunto inteiro: mandoc, man, apropos, whatis, makewhatis, soelim e demandoc; man, apropos, whatis e makewhatis são links para o mesmo binário, refeitos aqui como links relativos porque o Makefile os cria como hard links absolutos ao DESTDIR. O apropos e o man -k precisam do índice mandoc.db, que é estado derivado do que está instalado, como o hwdb e o mime.cache: o drop-in 06-mandoc.sh o refaz no boot quando falta ou quando há página mais nova. O OSNAME que aparece no rodapé das páginas é o da distro, e o MANPATH padrão é só /usr/share/man, que é onde a árvore instala."
+LICENSE=ISC
+SRC="https://mandoc.bsd.lv/snapshots/mandoc-$VERSION.tar.gz"
+SHA256=8bf0d570f01e70a6e124884088870cbed7537f36328d512909eb10cd53179d9c
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    # O configure do mandoc não aceita opções: lê configure.local.
+    cat > configure.local <<'LOCAL'
+PREFIX="/usr"
+BINDIR="/usr/bin"
+SBINDIR="/usr/bin"
+MANDIR="/usr/share/man"
+MANPATH_DEFAULT="/usr/share/man"
+MANPATH_BASE="/usr/share/man"
+OSNAME="Distrópica"
+BINM_PAGER="less"
+INSTALL_LIBMANDOC=0
+LN="ln -sf"
+CFLAGS="-O2"
+LOCAL
+    ./configure
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    # LN="ln -sf" no configure.local: por padrão o Makefile cria os aliases
+    # (man, apropos, whatis, makewhatis) e o whatis.1 como HARD LINKS, e o
+    # minitrue recusa o STAGE inteiro — "contém hardlink; instalação ainda não
+    # preserva essa topologia". O knob existe no configure.local.example do
+    # upstream; não é invenção desta receita.
+    for alias in man apropos whatis makewhatis; do
+        [ -L "$STAGE/usr/bin/$alias" ] || {
+            echo "mandoc: /usr/bin/$alias não é link simbólico (LN não pegou?)" >&2; exit 1; }
+        [ -e "$STAGE/usr/bin/$alias" ] || {
+            echo "mandoc: o link /usr/bin/$alias não resolve" >&2; exit 1; }
+    done
+    achados=$(find "$STAGE" -type f -links +1)
+    [ -z "$achados" ] || {
+        echo "mandoc: sobrou hard link no payload:" >&2; printf '%s\n' "$achados" >&2; exit 1; }
+    for bin in mandoc soelim demandoc; do
+        [ -x "$STAGE/usr/bin/$bin" ] || { echo "mandoc: $bin não foi produzido" >&2; exit 1; }
+    done
+    # A prova do formatador: a própria página do mandoc, renderizada em ASCII,
+    # tem de sair com o cabeçalho formatado e não com macros cruas.
+    "$STAGE/usr/bin/mandoc" -T ascii "$STAGE/usr/share/man/man1/mandoc.1" | grep -q '^MANDOC(1)' || {
+        echo "mandoc: não formatou a própria página" >&2; exit 1; }
+    ! "$STAGE/usr/bin/mandoc" -T ascii "$STAGE/usr/share/man/man1/mandoc.1" | grep -q '^\.Dd' || {
+        echo "mandoc: macros cruas na saída" >&2; exit 1; }
+
+    # --- índice do apropos, refeito no boot ------------------------------
+    mkdir -p "$STAGE/etc/rc.d/rcS.d"
+    cat > "$STAGE/etc/rc.d/rcS.d/06-mandoc.sh" <<'DROPIN'
+# Drop-in de inicializacao: o indice das paginas de manual.
+#
+# O apropos e o man -k consultam /usr/share/man/mandoc.db, que o makewhatis
+# gera a partir das paginas instaladas. E estado derivado do conjunto
+# instalado, como o hwdb do udev e o mime.cache — por isso nasce aqui e nao
+# num pacote. Refaz quando falta ou quando alguma pagina e mais nova que ele.
+if [ -x /usr/bin/makewhatis ] && [ -d /usr/share/man ]; then
+    mandoc_refazer=nao
+    if [ ! -s /usr/share/man/mandoc.db ]; then
+        mandoc_refazer=sim
+    elif [ -n "$(find /usr/share/man -type f -newer /usr/share/man/mandoc.db 2>/dev/null | head -n 1)" ]; then
+        mandoc_refazer=sim
+    fi
+    if [ "$mandoc_refazer" = sim ]; then
+        if /usr/bin/makewhatis /usr/share/man >/dev/null 2>&1; then
+            echo "distropica: indice das paginas de manual gerado"
+        else
+            echo "distropica: FALHA ao gerar o indice das paginas de manual; apropos e man -k" \
+                 "nao encontram nada ate ele existir" >&2
+        fi
+    fi
+    unset mandoc_refazer
+fi
+DROPIN
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/06-mandoc.sh"
+    sh -n "$STAGE/etc/rc.d/rcS.d/06-mandoc.sh" || {
+        echo "mandoc: o drop-in 06-mandoc.sh não passa no sh -n" >&2; exit 1; }
+    # E a prova do índice em si, sobre as páginas deste mesmo payload.
+    "$STAGE/usr/bin/makewhatis" "$STAGE/usr/share/man" || {
+        echo "mandoc: makewhatis falhou sobre as próprias páginas" >&2; exit 1; }
+    [ -s "$STAGE/usr/share/man/mandoc.db" ] || { echo "mandoc: mandoc.db não nasceu" >&2; exit 1; }
+    # O índice é estado de máquina, não payload (mesma regra do hwdb.bin).
+    rm -f "$STAGE/usr/share/man/mandoc.db"
+    find "$STAGE" -type d -empty -delete
+}

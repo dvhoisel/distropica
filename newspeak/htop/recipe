@@ -1,0 +1,41 @@
+NAME=htop
+VERSION=3.5.3
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc ncurses hicolor-icon-theme"
+# gawk: o ./configure chama awk (a classe do curl e do libarchive).
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf gawk busybox findutils"
+ABOUT="Monitor de processos interativo. O top do busybox mostra a lista; o htop mostra a árvore, os núcleos um a um, a memória por tipo, e deixa matar, renicear e filtrar sem decorar PID. Liga à ncursesw da árvore (a mesma do mtr e do vim; a libtinfo separada é declarada pelo ncursesw6-config) em modo Unicode. Sem libsensors, libcap, libnl e hwloc, que não moram aqui e cujas colunas ficam de fora por nome. Traz um .desktop com Terminal=true: o menu do labwc o abre dentro do foot, e o ícone vai para o hicolor, cujo diretório compartilhado é do hicolor-icon-theme."
+LICENSE=GPL-2.0-or-later
+SRC="https://github.com/htop-dev/htop/releases/download/$VERSION/htop-$VERSION.tar.xz"
+SHA256=a8b164386494cb85bb255a415a3f5f80afe7a0c4491da5d113b3a0f951087e65
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure \
+        --prefix=/usr \
+        --sysconfdir=/etc \
+        --enable-unicode \
+        --enable-affinity \
+        --disable-sensors \
+        --disable-capabilities \
+        --disable-delayacct \
+        --disable-hwloc \
+        --disable-pcp \
+        --disable-static
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -x "$STAGE/usr/bin/htop" ] || { echo "htop: o binário não foi produzido" >&2; exit 1; }
+    readelf -d "$STAGE/usr/bin/htop" | grep -q libncursesw || {
+        echo "htop: libncursesw ausente do NEEDED (caiu na ncurses estreita?)" >&2; exit 1; }
+    for lib in libsensors libcap libnl libhwloc; do
+        ! readelf -d "$STAGE/usr/bin/htop" | grep -q "$lib" || {
+            echo "htop: $lib entrou no NEEDED sem ser declarado" >&2; exit 1; }
+    done
+    [ -e "$STAGE/usr/share/applications/htop.desktop" ] || {
+        echo "htop: .desktop não veio" >&2; exit 1; }
+    grep -q '^Terminal=true' "$STAGE/usr/share/applications/htop.desktop" || {
+        echo "htop: o .desktop não declara Terminal=true; o menu o abriria sem terminal" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}
