@@ -1,13 +1,13 @@
 NAME=glib-introspection
-VERSION=2.88.3
+VERSION=2.90.0
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc glib gobject-introspection"
 BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc gettext glib gobject-introspection libffi pcre2 zlib elfutils busybox"
 ABOUT="GIR e typelibs da GLib 2.88: GLib, GLibUnix, GObject, GModule, Gio, GioUnix e GIRepository. O upstream transferiu estes dados do gobject-introspection para a própria GLib, mas gerá-los exige o scanner daquele pacote; uma receita separada quebra esse ciclo de bootstrap conforme a SPEC-0013. Ela recompila a mesma fonte pinada apenas para gerar introspecção e deixa no stage estritamente os quatorze arquivos GIR/typelib, sem bibliotecas, executáveis, cabeçalhos ou pkg-config que colidiriam com glib."
 LICENSE=LGPL-2.1-or-later
-SRC="https://download.gnome.org/sources/glib/2.88/glib-$VERSION.tar.xz"
-SHA256="ab24d24e698dfa1e408b7bcdb508f4aafc906185a8b8ce72fdf79bbbdc9b383b"
+SRC="https://download.gnome.org/sources/glib/2.90/glib-$VERSION.tar.xz"
+SHA256="17d15cac2af80a33271127408e0abc2748eb297c595c2a26409e81e14e7d1b8f"
 
 build() {
     tar -xJf "$DL" --strip-components=1

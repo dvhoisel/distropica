@@ -1,5 +1,5 @@
 NAME=libxslt
-VERSION=1.1.43
+VERSION=1.1.45
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc libxml2 busybox"
@@ -10,10 +10,10 @@ DEPS="glibc libxml2 busybox"
 # 12 usos de $AWK na seção do config.status. É a convenção da árvore, que
 # tem 75 receitas declarando gawk pelo mesmo motivo.
 BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf libxml2 gawk"
-ABOUT="Processador XSLT e o xsltproc usado pelos geradores do GIMP. A 1.1.43 é a última versão compatível com a série libxml2 2.13 fixada pela base; 1.1.44 e 1.1.45 exigem libxml2 2.15.1. Python, extensões criptográficas, plugins, depurador e profiler ficam desligados; as bibliotecas compartilhadas e a ferramenta de transformação permanecem."
+ABOUT="Processador XSLT e o xsltproc usado pelos geradores do GIMP. Segue o estável junto com a libxml2: a 1.1.44 em diante exige libxml2 2.15.1, e até a 0.16 a árvore segurava a 1.1.43 por causa da série 2.13 da libxml2, que saiu. Python, extensões criptográficas, plugins, depurador e profiler ficam desligados; as bibliotecas compartilhadas e a ferramenta de transformação permanecem."
 LICENSE=MIT
 SRC="https://download.gnome.org/sources/libxslt/1.1/libxslt-$VERSION.tar.xz"
-SHA256=5a3d6b383ca5afc235b171118e90f5ff6aa27e9fea3303065231a6d403f0183a
+SHA256="9acfe68419c4d06a45c550321b3212762d92f41465062ca4ea19e632ee5d216e"
 
 build() {
     tar -xJf "$DL" --strip-components=1

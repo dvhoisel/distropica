@@ -4,7 +4,7 @@ KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
 BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf"
-ABOUT="Manipulação de pixel de baixo nível: composição, gradiente, recorte. É o motor de rasterização por software do cairo, e num sistema sem aceleração de GPU é ele quem efetivamente desenha tudo. Como este perfil pretende usar Mesa com softpipe em vez de LLVM, a pixman deixa de ser detalhe de implementação e passa a ser o caminho quente da interface inteira — daí valer ligar as rotinas SIMD de x86, que é o que ela tem de mais rápido."
+ABOUT="Manipulação de pixel de baixo nível: composição, gradiente, recorte. É o motor de rasterização por software do cairo, e num sistema sem aceleração de GPU é ele quem efetivamente desenha tudo. Com o GTK desenhando por Cairo (GSK_RENDERER=cairo, decidido na receita desktop) e os clientes da família do foot compondo em CPU, a pixman é o caminho quente da interface inteira — daí valer ligar as rotinas SIMD de x86, que é o que ela tem de mais rápido."
 LICENSE=MIT
 SRC="https://www.cairographics.org/releases/pixman-$VERSION.tar.xz"
 SHA256=a098c33924754ad43f981b740f6d576c70f9ed1006e12221b1845431ebce1239

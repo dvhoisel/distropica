@@ -1,5 +1,5 @@
 NAME=gegl
-VERSION=0.4.70
+VERSION=0.4.72
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc gcc-pass2 babl glib glib-introspection json-glib libjpeg-turbo libpng gdk-pixbuf gexiv2 cairo pango lcms2 librsvg libtiff poppler"
@@ -14,7 +14,7 @@ BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc babl glib 
 ABOUT="Motor de processamento de imagens do GIMP. Além da base obrigatória (babl, GLib, JSON-GLib, JPEG e PNG), ficam ligados os importadores e operações cujos provedores já pertencem à closure do editor: GdkPixbuf, metadados Exiv2, Little CMS, SVG, TIFF, Cairo/Pango, PDF e OpenMP. O GIR é obrigatório para os plug-ins Python e para o typelib do próprio GIMP; dependências opcionais ausentes continuam explicitamente desligadas para o resultado não variar conforme o builder."
 LICENSE="GPL-3.0-or-later AND LGPL-3.0-or-later AND MIT AND BSD-3-Clause"
 SRC="https://download.gimp.org/gegl/0.4/gegl-$VERSION.tar.xz"
-SHA256=47f50d9c3aecd375deb48c11ebfead52d162e4fc162a4b3d44618277f1faec02
+SHA256="ccbb8cdd1db56ecd4ece5dbabae0118ab2c46b5b3439c94f3cec467798ce956d"
 
 build() {
     tar -xJf "$DL" --strip-components=1

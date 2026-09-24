@@ -1,5 +1,5 @@
 NAME=gst-plugins-good
-VERSION=1.28.6
+VERSION=1.28.7
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc glib gstreamer gst-plugins-base orc libvpx zlib bzip2"
@@ -7,7 +7,7 @@ BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc na
 ABOUT="OS DECODIFICADORES, e é este pacote que faz o <video> tocar. O nome não é marketing do upstream: 'good' é o conjunto cuja licença é LGPL e cujo código o projeto considera de qualidade — e é justamente a fronteira que esta distro queria. Aqui estão o matroskademux, que abre o WebM, e o vpxdec, que decodifica VP8 e VP9; com o opusdec e o vorbisdec que vêm do base, isso é a pilha inteira do vídeo livre da web, YouTube moderno incluído. O que NÃO está aqui é o que esta árvore não quis: H.264 e AAC moram no 'bad' e no 'ugly', com a conversa de patente que o LICENSING.md não quer ter — uma página que só ofereça MP4/H.264 vai continuar sem tocar, e isso é posição e não defeito. O isomp4 entra mesmo assim porque demuxar não é decodificar: um .mp4 com trilha AV1 ou Opus abre; um com H.264 não. Fora ficam todos os plugins de saída e de captura que esta sessão não usa — pulse, jack, oss, v4l2, ximagesrc, gtk3, qt —, além dos codecs proprietários que exigiriam lame, mpg123 ou twolame. Todas as opções são EXPLÍCITAS: 'auto' faria o payload variar com o que estivesse instalado na raiz."
 LICENSE="LGPL-2.1-or-later"
 SRC="https://gstreamer.freedesktop.org/src/gst-plugins-good/gst-plugins-good-$VERSION.tar.xz"
-SHA256="b0c620a4b18b6ee931b4c43bbf1760d308666dc37f730a7e7f1ad327e59ce2df"
+SHA256="87256969c82cf3bc8574301f3e7044a90de0ac500a5a27d8ba38c4dde894dd8b"
 
 build() {
     tar -xJf "$DL" --strip-components=1

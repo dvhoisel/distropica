@@ -1,13 +1,13 @@
 NAME=glib-networking
-VERSION=2.80.1
+VERSION=2.90.0
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc glib openssl ca-certificates"
 BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf gettext glib openssl"
 ABOUT="Backend TLS do GIO. O configurador do GIMP executa g_tls_backend_get_default e aborta se nenhum módulo SSL existir. Usa o OpenSSL já canônico na árvore; GnuTLS, libproxy e proxy GNOME ficam fora, com proxy por variáveis de ambiente."
 LICENSE=LGPL-2.1-or-later
-SRC="https://download.gnome.org/sources/glib-networking/2.80/glib-networking-$VERSION.tar.xz"
-SHA256=b80e2874157cd55071f1b6710fa0b911d5ac5de106a9ee2a4c9c7bee61782f8e
+SRC="https://download.gnome.org/sources/glib-networking/2.90/glib-networking-$VERSION.tar.xz"
+SHA256="83a75e3d9c36b66ee86d3281c2fc997816101968a5126ba322b2acb9a74dd8c0"
 
 build() {
     tar -xJf "$DL" --strip-components=1

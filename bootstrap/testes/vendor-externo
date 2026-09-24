@@ -8,9 +8,9 @@ REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 TMP=${TMPDIR:-/tmp}/distropica-teste-vendor-externo.$$
 trap 'rm -rf "$TMP"' EXIT
 
-CARGO_SOURCE_SHA=a3b9ca3ec784555391415369f0b21d47342a5b22ff9f073faa1ad4b8b0900dac
-RSVG_VENDOR_SHA=8c37c5df2b4468dce7dd6ce07b1fd53d9fabfa35f7c8dffd856c407d46610690
-CARGO_SOURCE_URL=https://distropica.com.br/sources/cargo-c/cargo-c-0.10.24-corresponding-source.tar.xz
+CARGO_SOURCE_SHA=73306e6a3a88bd202b7313247f26d66829179433d72aedeff65de6d124f632ce
+RSVG_VENDOR_SHA=70c5ccb0b5cd401d107d11b1cbcb434283b57e98ff92cc72f70f6ca6d9c8dc8b
+CARGO_SOURCE_URL=https://distropica.com.br/sources/cargo-c/cargo-c-0.10.25-corresponding-source.tar.xz
 
 falhas=0
 if [ ! -e "$REPO/newspeak/cargo-c/files/corresponding-source.tar.xz" ] &&

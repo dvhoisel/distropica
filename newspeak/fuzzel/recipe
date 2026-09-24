@@ -1,5 +1,5 @@
 NAME=fuzzel
-VERSION=1.14.1
+VERSION=1.15.0
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc fcft fontconfig pixman wayland libxkbcommon libpng"
@@ -7,7 +7,7 @@ BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox tllist wayland-
 ABOUT="O LANÇADOR DE APLICATIVOS. W-d abre uma caixa, três letras filtram, Enter executa — o caminho de teclado que faltava entre 'menu do botão direito' e 'decorar atalho por programa'. Da mesma família e da mesma matéria que o foot e o yambar: C sem toolkit, fcft e pixman já pagos, wlr-layer-shell para a sobreposição. Ele lê os .desktop de /usr/share/applications — os mesmos que o Epiphany, o foot e o miniluv já instalam — e por isso não ganha configuração nesta árvore: a lista É o sistema. Ícones em PNG saem da libpng, que já estava aqui; os SVG saem do nanosvg EMBUTIDO no tarball do upstream — código vendorizado pelo autor e coberto pelo pino do SRC, que não é o mesmo que um subproject baixado na hora (o wrap-mode continua nofallback). O backend librsvg fica fora com o cairo junto: arrastaria Rust e cargo-c para dentro da closure por causa de miniaturas. Man pages fora, na linha da árvore — e como o corte do doc/ leva a LICENSE junto, a receita a instala à mão: evidência de licença não é documentação, é obrigação."
 LICENSE=MIT
 SRC="https://codeberg.org/dnkl/fuzzel/releases/download/$VERSION/fuzzel-$VERSION.tar.gz"
-SHA256="a3af48d00d5cb7cb5526ab86bd632c62dbea5901693fdd746a2e7bb5bd64cf04"
+SHA256="11bee600e19ee1638db592e41980445673224716fbedbd0213b25153325f4182"
 
 build() {
     tar -xzf "$DL" --strip-components=1

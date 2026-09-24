@@ -1,5 +1,5 @@
 NAME=libportal
-VERSION=0.10.0
+VERSION=0.11.0
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc glib gtk4"
@@ -7,7 +7,7 @@ BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-gli
 ABOUT="A biblioteca cliente dos portais XDG, na variante GTK4 — libportal-gtk4 é o nome exato que o meson do Epiphany exige. Portais são a forma de um aplicativo confinado pedir ao sistema coisas que ele não pode fazer sozinho: abrir um seletor de arquivos, definir o navegador padrão, imprimir. Esta árvore NÃO tem um serviço de portal rodando, e mesmo assim a biblioteca é obrigatória para compilar; sem servidor do outro lado, as chamadas falham de forma controlada e o Epiphany cai para os diálogos próprios do GTK. É dívida honesta: está aqui porque o upstream a exige, não porque o recurso funcione. Só o backend GTK4 — os de GTK3, Qt5 e Qt6 ficam explicitamente desligados, senão o 'auto' os ligaria conforme o que estivesse na raiz de build."
 LICENSE=LGPL-3.0-or-later
 SRC="https://github.com/flatpak/libportal/releases/download/$VERSION/libportal-$VERSION.tar.xz"
-SHA256="1c74a3f7becbd4ff745d7f565afd06e97e50eb080a0e268cb14bb55289a745bf"
+SHA256="abb9e452a1c372133bd3eb8f0bb30d07b2d0a8fb02001c4155cf287555db4040"
 
 build() {
     tar -xJf "$DL" --strip-components=1

@@ -1,5 +1,5 @@
 NAME=swayimg
-VERSION=5.5
+VERSION=5.6
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc gcc-pass2 wayland libxkbcommon fontconfig freetype luajit libjpeg-turbo libpng librsvg libtiff libwebp exiv2 hicolor-icon-theme glib cairo"
@@ -9,7 +9,7 @@ BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf wayland-protocols busyb
 ABOUT="Visualizador de imagens. Até aqui VER um PNG significava abrir o GIMP — um editor de centenas de megabytes de closure para olhar uma captura de tela. A escolha entre swayimg e imv foi decidida por evidência, não por gosto: o imv desenha com OpenGL de função fixa e exige libGL, e a Mesa desta árvore, construída sem GLX, não entrega libGL; o swayimg pinta em wl_shm e roda em qualquer compositor wlroots. A partir da série 5 ele é C++ com configuração e scripts em Lua, e o LuaJIT é obrigatório — é a única dependência nova que ele trouxe. Formatos: JPEG, PNG, SVG (pela librsvg), TIFF e WebP, que já moram aqui; EXIF pela exiv2, também moradora. GIF, EXR, HEIF, AVIF, JPEG 2000, JPEG XL, Sixel e RAW ficam desligados por nome, porque cada um pediria uma biblioteca que a árvore não tem. Sem modo DRM (é ferramenta de sessão gráfica) e sem a integração com o IPC do sway, que o labwc não fala."
 LICENSE=MIT
 SRC="https://github.com/artemsen/swayimg/archive/refs/tags/v$VERSION.tar.gz"
-SHA256=f84fec722cd0b4cfd86d0a8a820b15a95bbdb1d2cfcded7f67446a7a0c1d1c09
+SHA256="0f70cbc665217a747e8a098e1a881239e96df270930f47c262ab2ecff290e428"
 
 build() {
     tar -xzf "$DL" --strip-components=1

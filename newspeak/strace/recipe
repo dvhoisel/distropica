@@ -1,5 +1,5 @@
 NAME=strace
-VERSION=7.1
+VERSION=7.2
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc busybox ncurses"
@@ -13,7 +13,7 @@ BUILD_DEPS="gcc-pass2 binutils-glibc make linux-headers gawk findutils"
 ABOUT="O instrumento de medir. O lema desta árvore é que 'funciona' não é 'está correta', e que o que se afirma se mede — e a maior parte dos defeitos que custaram caro aqui foi de chamada de sistema que falhou sem ninguém ver: o openpty sem devpts, o udev_enumerate que voltava vazio com o dispositivo legível ali na frente, o g_settings_schema_source_get_default devolvendo NULL. Nenhum deles gritou; todos apareceriam em uma linha de strace. Sem libunwind e sem libdw: eles dariam pilha simbólica no -k, e trariam duas bibliotecas para um recurso que quase nunca se usa num sistema sem depuradores. Sem libselinux, que não existe aqui."
 LICENSE="LGPL-2.1-or-later AND GPL-2.0-or-later"
 SRC="https://github.com/strace/strace/releases/download/v$VERSION/strace-$VERSION.tar.xz"
-SHA256=81743ecf2a5b44186b2f5038afdc8beda7e5c70aed15b4fbfbcc6e9ece24490f
+SHA256="4bde6246926890dcee824f6e6ac42a06752f47d77e5097d86e3c0d6d4b709fe5"
 
 build() {
     tar -xJf "$DL" --strip-components=1

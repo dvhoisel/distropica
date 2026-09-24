@@ -1,5 +1,5 @@
 NAME=xdg-dbus-proxy
-VERSION=0.1.8
+VERSION=0.1.9
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc glib"
@@ -7,7 +7,7 @@ BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox"
 ABOUT="O filtro de D-Bus do confinamento. Dentro do bubblewrap, o processo da web não recebe o socket do barramento: recebe o socket DESTE proxy, que só deixa passar os nomes e as interfaces que o WebKit precisa. Sem ele, o sandbox teria um buraco do tamanho do D-Bus — que é por onde se fala com o resto da sessão. É a terceira peça do trio de confinamento, junto de bubblewrap e libseccomp, e o WebKit o procura por nome em tempo de execução."
 LICENSE=LGPL-2.0-or-later
 SRC="https://github.com/flatpak/xdg-dbus-proxy/releases/download/$VERSION/xdg-dbus-proxy-$VERSION.tar.xz"
-SHA256="b6630bd24f8161b0e2546d2acbb014a3b3249f5c0d75f2a863ade898b9034d3d"
+SHA256="5450dda586ec3bb3ca709d311e845487883faa3b09cf562608d7e84f4311dced"
 
 build() {
     tar -xJf "$DL" --strip-components=1

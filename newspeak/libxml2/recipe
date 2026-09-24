@@ -1,5 +1,5 @@
 NAME=libxml2
-VERSION=2.13.9
+VERSION=2.15.4
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc zlib busybox"
@@ -10,22 +10,25 @@ DEPS="glibc zlib busybox"
 # está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
 # vir antes dele e dispensa a declaração.
 BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf zlib gawk"
-ABOUT="Leitor e escritor de XML em C. Entra por uma via só: o at-spi2-core o exige (libxml-2.0 >= 2.9.1, dependência dura no meson.build dele), e o at-spi2-core entra porque o backend X11 do GTK3 exige a ponte de acessibilidade — corrente que existe porque o libxul.so do Firefox referencia vinte e um símbolos gdk_x11_*. A versão é a 2.13.9 e não a 2.15, que é a mais recente: o Alpine e o Void pinam a série 2.13 por causa de quebras de ABI nas seguintes, e aqui isso vira corroboração dupla de hash em vez de aventura. Construído sem Python, sem ICU, sem LZMA e sem HTTP: o at-spi2 só analisa os arquivos de definição de interface D-Bus, que são XML local e pequeno. O zlib fica porque a descompressão de documento é barata e já está na árvore."
+ABOUT="Leitor e escritor de XML em C. Consumidores não faltam, e nenhum é exótico: o WebKitGTK, a libsoup, a libxslt, o librsvg, o appstream, o shared-mime-info, o labwc (o rc.xml e o tema são XML), o at-spi2-core, a libarchive e o Inkscape. Até a 0.16 a árvore segurava a série 2.13, com o argumento de que Alpine e Void a pinavam por quebra de ABI nas seguintes — e o conferidor de versões, que só olhava dentro da série da URL, nunca mostrou que a 2.15 estável existia. Agora a receita segue o estável. A 2.14 trocou o soname de libxml2.so.2 para libxml2.so.16 e a 2.15 removeu o cliente HTTP e o LZMA; como a árvore é reconstruída inteira, todo consumidor é recompilado contra ela na mesma cadeia. Sem Python e sem ICU; a compatibilidade de ABI do HTTP removido fica desligada, e o zlib fica porque a descompressão de documento é barata e já está na árvore."
 LICENSE=MIT
-SRC="https://download.gnome.org/sources/libxml2/2.13/libxml2-$VERSION.tar.xz"
-SHA256=a2c9ae7b770da34860050c309f903221c67830c86e4a7e760692b803df95143a
+SRC="https://download.gnome.org/sources/libxml2/2.15/libxml2-$VERSION.tar.xz"
+SHA256="98087fd181d9070724f3fbc65c7377db03038eb92bd882374daff44940138821"
 
 build() {
     tar -xJf "$DL" --strip-components=1
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
     ./configure --prefix=/usr --libdir=/usr/lib --disable-static \
-        --without-python --without-icu --without-lzma --without-http \
+        --without-python --without-icu --without-http \
         --with-zlib
     make -j"$JOBS"
     make DESTDIR="$STAGE" install
 
-    [ -e "$STAGE/usr/lib/libxml2.so.2" ] || {
-        echo "libxml2: libxml2.so.2 não foi produzida" >&2
+    # O soname é o da 2.14 em diante (a NEWS do upstream: "bumped from
+    # libxml2.so.2 to libxml2.so.16"). Conferir o nome é conferir que a ABI
+    # que os consumidores vão ligar é a que se pensa.
+    [ -e "$STAGE/usr/lib/libxml2.so.16" ] || {
+        echo "libxml2: libxml2.so.16 não foi produzida" >&2
         exit 1
     }
     [ -e "$STAGE/usr/lib/pkgconfig/libxml-2.0.pc" ] || {

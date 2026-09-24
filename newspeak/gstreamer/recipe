@@ -1,5 +1,5 @@
 NAME=gstreamer
-VERSION=1.28.6
+VERSION=1.28.7
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc glib"
@@ -7,7 +7,7 @@ BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-gli
 ABOUT="O núcleo do GStreamer, e SÓ o núcleo. Está aqui por uma razão medida e não por escolha: o meson do Epiphany faz dependency('gstreamer-1.0') sem nenhum 'required:', então é dependência dura do navegador — mesmo com o vídeo do WebKit desligado, que é como esta árvore o constrói. O base e o good ENTRARAM na 0.14, e até a 0.13 não havia nenhum: o núcleo ficava aqui como encanamento sem água, e um navegador que não toca mídia era o que esta distro dizia querer ser. O preço foi cobrado em uso e a decisão mudou. Hoje o base traz o encanamento e o áudio livre da Xiph, o good traz o matroskademux e o vpxdec — WebM e VP9 —, e o bad e o ugly continuam fora com os codecs patenteados que eles carregam. O ptp-helper fica de fora: é um binário setuid para sincronização de relógio em rede, e setuid é a última coisa que uma árvore como esta acrescenta sem necessidade. Sem introspection, sem exemplos, sem testes e sem benchmarks."
 LICENSE=LGPL-2.1-or-later
 SRC="https://gstreamer.freedesktop.org/src/gstreamer/gstreamer-$VERSION.tar.xz"
-SHA256="62b6b9f0ad3147a6dd6420ac64a91180b14e990695bddd353b96041611d052ca"
+SHA256="787329b2c5758e228a71d926a6dcf960bceaacca3cadd63874ba665dfcda013e"
 
 build() {
     tar -xJf "$DL" --strip-components=1

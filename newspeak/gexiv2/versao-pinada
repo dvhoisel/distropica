@@ -6,5 +6,7 @@ upstream atual é 0.16.2, mas ela é recusada pelo próprio consumidor. Mantemos
 # lido no tarball: gexiv2_maxver = '0.15.0'. Ela é da VERSÃO do GIMP, não da
 # série: a subida para a 3.2.6 tem de reler o meson.build dela, então a
 # premissa é exata.
-PREMISSA=gimp 3.2.4
+# Reconferido em 2026-09-24 contra o GIMP 3.2.6: o meson.build dele mantém
+# gexiv2_maxver = '0.15.0'. A premissa sobe junto com o GIMP.
+PREMISSA=gimp 3.2.6
 CONTRA=0.16.2

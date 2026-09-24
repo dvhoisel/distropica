@@ -1,9 +1,14 @@
-cargo-c 0.10.24 corresponding source
+cargo-c 0.10.25 corresponding source
 
-Archive: cargo-c-0.10.24-corresponding-source.tar.xz
-SHA256: a3b9ca3ec784555391415369f0b21d47342a5b22ff9f073faa1ad4b8b0900dac
-URL: https://distropica.com.br/sources/cargo-c/cargo-c-0.10.24-corresponding-source.tar.xz
-Contents: cargo-c tag source, release Cargo.lock, .cargo/config.toml and 418
+Archive: cargo-c-0.10.25-corresponding-source.tar.xz
+SHA256: 73306e6a3a88bd202b7313247f26d66829179433d72aedeff65de6d124f632ce
+URL: https://distropica.com.br/sources/cargo-c/cargo-c-0.10.25-corresponding-source.tar.xz
+Contents: cargo-c tag source, release Cargo.lock, .cargo/config.toml and 410
 vendored crate directories selected by `cargo vendor --locked --versioned-dirs`.
+The .cargo/config.toml points at the vendor directory relative to itself
+(directory = "vendor"); rebuilding needs nothing but this archive. Proved on
+2026-09-24: extract, unpack the tag source beside it, copy Cargo.lock in, and
+`cargo metadata --locked --offline --no-deps` succeeds with the network off.
 The archive is deterministic: sorted paths, uid/gid 0, numeric owner, fixed
-mtime 1970-01-01 UTC, then xz -9e.
+mtime 1970-01-01 UTC, modes normalized (u+rw,go+rX,go-w), then xz -9e with
+one thread. Two generations produced the same SHA256.

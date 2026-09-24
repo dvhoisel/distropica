@@ -1,5 +1,5 @@
 NAME=llvm
-VERSION=22.1.8
+VERSION=23.1.2
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc gcc-pass2 zlib"
@@ -7,7 +7,7 @@ BUILD_DEPS="make gcc-pass2 binutils-glibc cmake ninja python-glibc busybox findu
 ABOUT="O motor JIT do llvmpipe, e nada além disso. Entra na árvore em 01/09/2026 revertendo a decisão central da receita da Mesa, e a reversão é medida e não gosto: com softpipe (shaders interpretados, uma thread), a política de composição do navegador teve de cair para 'never', que pinta cada quadro de vídeo na thread principal do WebProcess — medido no arnês de fps: rAF de 62/s para 4/s durante reprodução, com o decodificador entregando tudo. O llvmpipe compila os shaders em tempo de execução e rasteriza em múltiplas threads; com ele a composição volta para 'always' e sai da thread principal — a mesma arquitetura que faz o binário da Mozilla tocar vídeo em máquina sem GPU. O preço que a receita da Mesa descrevia continua verdadeiro e agora é pago conscientemente: build na escala de horas e o maior pacote da árvore. Por isso o recorte é agressivo: SÓ o alvo X86, SÓ a libLLVM dinâmica (os .a são apagados do payload — quem linca é a Mesa, via llvm-config --link-shared), SÓ o llvm-config e os headers como interface de build; sem clang, sem lld, sem ferramentas, sem bindings, sem testes. VERSÃO 22.1.8 e não a 23.1.0: a 23 saiu em 25/08/2026, DEPOIS da Mesa 26.2.0 pinada — a série 22 é a que esta Mesa conheceu em desenvolvimento; subir o LLVM é decisão para quando a Mesa subir junto. O exports de cmake sai do payload porque referenciaria arquivos apagados; consumidor desta biblioteca fala llvm-config."
 LICENSE="Apache-2.0 WITH LLVM-exception"
 SRC="https://github.com/llvm/llvm-project/releases/download/llvmorg-$VERSION/llvm-project-$VERSION.src.tar.xz"
-SHA256="922f1817a0df7b1489272d18134ee0087a8b068828f87ac63b9861b1a9965888"
+SHA256="c98bbef08a2b4c2613cd50e9aa9ae7b69b1fe6c16b2c40373bc0ab6116fdf78a"
 
 build() {
     tar -xJf "$DL" --strip-components=1

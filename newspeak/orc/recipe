@@ -1,5 +1,5 @@
 NAME=orc
-VERSION=0.4.42
+VERSION=0.4.44
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
@@ -7,7 +7,7 @@ BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox"
 ABOUT="O compilador SIMD do GStreamer: recebe descrições de operações sobre vetores e gera código de máquina em tempo de execução para SSE/AVX. Não é enfeite numa árvore que renderiza tudo por software — o audioconvert, o videoconvert e o videoscale do gst-plugins-base são justamente os laços que ele acelera, e são eles que rodam em CADA quadro de um vídeo decodificado. Sem ele o base compila e funciona, com os mesmos laços em C escalar. Sem as ferramentas de desenvolvimento (orcc, orc-bugreport) e sem testes: quem consome a biblioteca é o base, em runtime."
 LICENSE="BSD-2-Clause"
 SRC="https://gstreamer.freedesktop.org/src/orc/orc-$VERSION.tar.xz"
-SHA256="7ec912ab59af3cc97874c456a56a8ae1eec520c385ec447e8a102b2bd122c90c"
+SHA256="4aeb97aea2b58224029dc2b23d7d064cfa990cb4fb8c4da440bcbe9c95bc5d2d"
 
 build() {
     tar -xJf "$DL" --strip-components=1

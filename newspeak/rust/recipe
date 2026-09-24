@@ -1,5 +1,5 @@
 NAME=rust
-VERSION=1.97.1
+VERSION=1.98.1
 KIND=binary
 # Expressão do AGREGADO do que ESTA receita instala, e não do Rust sozinho.
 # Levantado de dentro do artefato:
@@ -36,16 +36,16 @@ LICENSE="(MIT OR Apache-2.0) AND Apache-2.0 WITH LLVM-exception AND ISC"
 # descompressor é que não dá conta. O BusyBox desta árvore é binário de
 # upstream, então não há como recompilá-lo com outro limite. Os 12 MB a mais em
 # relação ao xz combinado são o preço de a mídia poder instalar o que embarca.
-SRC="https://static.rust-lang.org/dist/2026-07-16/rustc-$VERSION-x86_64-unknown-linux-gnu.tar.gz \
-     https://static.rust-lang.org/dist/2026-07-16/rust-std-$VERSION-x86_64-unknown-linux-gnu.tar.gz \
-     https://static.rust-lang.org/dist/2026-07-16/cargo-$VERSION-x86_64-unknown-linux-gnu.tar.gz \
-     https://static.rust-lang.org/dist/2026-07-16/clippy-$VERSION-x86_64-unknown-linux-gnu.tar.gz \
-     https://static.rust-lang.org/dist/2026-07-16/rustfmt-$VERSION-x86_64-unknown-linux-gnu.tar.gz"
-SHA256="1c441e430c1cca49dff54a8d59c41038bf6f79f7b8756596cb2f36511a015eba \
-        45b927ecf776b9645ca2ed5b287fc6814824a073c30c7c5d5c0ad4425295ecee \
-        90cbeb8adfe8ca0fcbe01a18bd9b99d3e5e98fd29c003032828ebf3ffba0e4ed \
-        66f93a616bc84939e116e960599b3bc122be7b51f6562bad71011a64a9293dc3 \
-        810f7dcfe64bdaf3e10cbe942274f76cdab2ffca813bfafc75e9d86a6809f039"
+SRC="https://static.rust-lang.org/dist/2026-09-03/rustc-$VERSION-x86_64-unknown-linux-gnu.tar.gz \
+     https://static.rust-lang.org/dist/2026-09-03/rust-std-$VERSION-x86_64-unknown-linux-gnu.tar.gz \
+     https://static.rust-lang.org/dist/2026-09-03/cargo-$VERSION-x86_64-unknown-linux-gnu.tar.gz \
+     https://static.rust-lang.org/dist/2026-09-03/clippy-$VERSION-x86_64-unknown-linux-gnu.tar.gz \
+     https://static.rust-lang.org/dist/2026-09-03/rustfmt-$VERSION-x86_64-unknown-linux-gnu.tar.gz"
+SHA256="a6e35741daaac7978e7f485b564a783d13b6740a1ecf3e80c2e71696ca5cabb2 \
+        eddab0358cbd12aeb897716aab00d1db7b59696e85b9ac4982e72259a9a976b1 \
+        3f1215b2a3b88c7aaa008b561bd4f39d6c6672fa7821e562ab6ba1a6d6f37f61 \
+        81ee497320fc54bab54f27692513808663a120496c27f4c02f60f10645dbc0cc \
+        16db0d6bb3535cfa84c009cffb161aac32d48f6e0648507a1f3368323cac3ec7"
 # Medido no binário, e não deduzido: rustc, librustc_driver e libLLVM pedem
 # libc/libm/libdl/librt/libpthread (glibc), libgcc_s (gcc-pass2) e libz.so.1
 # (zlib). O símbolo de glibc mais novo que exigem é GLIBC_2.17; esta árvore tem

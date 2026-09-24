@@ -1,5 +1,5 @@
 NAME=python-numpy
-VERSION=2.5.2
+VERSION=2.5.3
 KIND=source
 TOOLCHAIN=native
 DEPS="python-glibc glibc gcc-pass2 zlib busybox"
@@ -8,8 +8,8 @@ DEPS="python-glibc glibc gcc-pass2 zlib busybox"
 BUILD_DEPS="python-glibc binutils-glibc busybox findutils"
 ABOUT="NumPy. Entra porque o inkex do Inkscape o importa no caminho crítico: inkex/__init__ importa inkex.paths, e inkex/paths/__init__ importa numpy — sem ele NENHUMA extensão Python do Inkscape carrega, nem as que não fazem conta nenhuma (lido no código, não suposto). O ARTEFATO É A RODA OFICIAL do upstream para CPython 3.14 (manylinux_2_28, x86_64) — premissa P2: binário do mantenedor original primeiro. Construir da fonte custaria Cython e meson-python, e o resultado seria um NumPy sem BLAS; a roda traz o OpenBLAS do SciPy e as libgfortran e libquadmath de que ele precisa, num diretório numpy.libs próprio que os módulos acham por RPATH relativo ao ORIGIN (a auditoria do minitrue expande o ORIGIN e cobra que o diretório tenha dono — e o dono é este pacote). O que a roda exige de fora, lido com readelf: libstdc++ e libgcc_s (gcc-pass2), libz (a libgfortran a pede) e a glibc. Os diretórios de testes saem do payload; o dist-info fica sem o RECORD, que listaria o que saiu. A licença é a que o próprio METADATA declara, mais as das bibliotecas embutidas."
 LICENSE="BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 AND GPL-3.0-or-later WITH GCC-exception-3.1 AND LGPL-2.1-or-later"
-SRC="https://files.pythonhosted.org/packages/c7/99/461bd36dbdfac6c1c53efa370bd55a83227542d0d118f1677dbf1a3dacd5/numpy-$VERSION-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
-SHA256=318b9a4c845dbea06708a29c84ee429cc3065048db34cdb799047643492050ee
+SRC="https://files.pythonhosted.org/packages/45/8f/9beacf79ca7c650688ad0baa80931adb988fe6e6e5d5903c23cc3dbd70eb/numpy-$VERSION-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+SHA256=b0521d0f4aebb6e06189451025fa17a913287b13c03d5fe05c017333b654ea5b
 
 build() {
     sitedir=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')

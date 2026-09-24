@@ -1,11 +1,12 @@
-librsvg 2.62.3 Cargo vendor
+librsvg 2.62.4 Cargo vendor
 
-Archive: librsvg-2.62.3-cargo-vendor.tar.xz
-SHA256: 8c37c5df2b4468dce7dd6ce07b1fd53d9fabfa35f7c8dffd856c407d46610690
-URL: https://distropica.com.br/sources/librsvg/librsvg-2.62.3-cargo-vendor.tar.xz
-Contents: 352 versioned crate directories selected from the upstream Cargo.lock
+Archive: librsvg-2.62.4-cargo-vendor.tar.xz
+SHA256: 70c5ccb0b5cd401d107d11b1cbcb434283b57e98ff92cc72f70f6ca6d9c8dc8b
+URL: https://distropica.com.br/sources/librsvg/librsvg-2.62.4-cargo-vendor.tar.xz
+Contents: 357 versioned crate directories selected from the upstream Cargo.lock
 by `cargo vendor --locked --versioned-dirs`.
 Offline check: CARGO_NET_OFFLINE=true cargo metadata --locked --offline
---no-deps completed against pristine librsvg-2.62.3 source.
+--no-deps completed against pristine librsvg-2.62.4 source.
 The archive is deterministic: sorted paths, uid/gid 0, numeric owner, fixed
-mtime 1970-01-01 UTC, then xz -9e.
+mtime 1970-01-01 UTC, modes normalized (u+rw,go+rX,go-w), then xz -9e with
+one thread. Two generations on 2026-09-24 produced the same SHA256.

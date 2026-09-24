@@ -1,5 +1,5 @@
 NAME=pango-introspection
-VERSION=1.57.1
+VERSION=1.58.2
 KIND=source
 TOOLCHAIN=native
 DEPS="pango glib-introspection gobject-introspection harfbuzz-introspection"
@@ -13,8 +13,8 @@ DEPS="pango glib-introspection gobject-introspection harfbuzz-introspection"
 BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools glib glib-introspection gobject-introspection harfbuzz harfbuzz-introspection fribidi cairo fontconfig freetype"
 ABOUT="Overlay de canal com os cinco namespaces GIR do Pango habilitados pela configuração-base: Pango, PangoCairo, PangoFc, PangoFT2 e PangoOT. Depende explicitamente dos typelibs GLib/HarfBuzz e dos dados estáticos cairo/fontconfig/freetype; o stage fechado não duplica bibliotecas nem headers de pango."
 LICENSE=LGPL-2.0-or-later
-SRC="https://download.gnome.org/sources/pango/1.57/pango-$VERSION.tar.xz"
-SHA256=e65d6d117080dc3aeeb7d8b4b3b518f7383aa2e6cfce23117c623cd624764c2f
+SRC="https://download.gnome.org/sources/pango/1.58/pango-$VERSION.tar.xz"
+SHA256="342385b6ca3b7c73455d7c80a13b7dbe4489e00bc3bd4c5bd6ed4dce421e374a"
 
 build() {
     tar -xJf "$DL" --strip-components=1

@@ -1,67 +1,47 @@
 NAME=adwaita-icon-theme
-VERSION=40.1.1
+VERSION=51.0
 KIND=source
 TOOLCHAIN=native
-DEPS="hicolor-icon-theme"
-# gawk: o `./configure` desta fonte chama awk para gerar o config.status, e
-# declarar só `busybox` NÃO garante awk — o gawk supersede o busybox e leva
-# /usr/bin/awk embora. A falta só aparece quando o gawk já foi construído no
-# mesmo plano, então a quebra é sensível à ordem. Conferido no próprio
-# configure da fonte pinada, não suposto.
-BUILD_DEPS="make busybox gawk"
-ABOUT="Os ícones de verdade: o tema padrão do GTK, o que o gtk-icon-theme-name aponta quando ninguém mexe. Sem ele o GTK abre, mas cada ícone da interface vira o retângulo de imagem quebrada. A versão é 40.1.1 e a escolha não é por conservadorismo — é por evidência. O Adwaita moderno (49.x) é quase inteiramente SVG simbólico, e renderizar SVG no GTK depende do carregador do librsvg, que é escrito em Rust e traria o toolchain inteiro para dentro de uma árvore que decidiu não ter Rust nem para a Mesa. Um Adwaita só de SVG aqui seria um tema de ícones invisíveis. Contei os arquivos antes de decidir: a 40.1.1 traz 2042 PNGs pré-renderizados além de 745 SVGs, então os ícones aparecem sem librsvg nenhum. O preço é ficar numa versão de 2021 e não ter os símbolos novos; a alternativa era Rust, e não paga. Corroborado pelo Alpine 3.15-stable, que é o branch daquela época — as distribuições atuais já não pinam esta versão."
+# O librsvg é dependência de EXECUÇÃO: é o carregador SVG do gdk-pixbuf que ele
+# instala que desenha os ícones escaláveis e simbólicos deste tema. Sem ele o
+# tema abre e cada ícone SVG vira o retângulo de imagem quebrada.
+DEPS="hicolor-icon-theme librsvg"
+# python-glibc: o meson.build chama tools/find_cursors_win32.py por run_command,
+# com shebang de python3. findutils: as conferências abaixo usam find, e o
+# applet do BusyBox sai de cena quando o findutils é construído no mesmo plano.
+BUILD_DEPS="meson ninja python-glibc findutils"
+ABOUT="Os ícones de verdade: o tema padrão do GTK, o que o gtk-icon-theme-name aponta quando ninguém mexe. Sem ele o GTK abre, mas cada ícone da interface vira o retângulo de imagem quebrada. Até a 0.16 a árvore segurava a 40.1.1, de 2021, com um argumento que foi verdade um dia: o Adwaita moderno é em boa parte SVG, renderizar SVG no GTK depende do carregador do librsvg, e o librsvg é Rust. Os dois entraram na árvore com o GIMP — o Rust como Mundo A e o librsvg com o loader do gdk-pixbuf e o cache dele — e o argumento envelheceu sem ninguém notar, porque o conferidor de versões só olhava dentro da série da URL. Agora o tema segue o estável, com o librsvg declarado como dependência de execução. A 51.0 traz 791 SVGs e 975 PNGs. O gtk-update-icon-cache que o meson.build exige encontrar não roda aqui — o índice é estado de máquina, e com DESTDIR o próprio projeto o pula —, então ele é apontado para true num native file, em vez de puxar o GTK para a construção de um pacote que só instala arquivos."
 LICENSE="CC-BY-SA-3.0 OR LGPL-3.0-or-later"
-SRC="https://download.gnome.org/sources/adwaita-icon-theme/40/adwaita-icon-theme-$VERSION.tar.xz"
-SHA256=0b6c436ed6ad9887a88ada1f72a0197b1eb73b020d8d344abab4c7fa7250f8f6
+SRC="https://download.gnome.org/sources/adwaita-icon-theme/51/adwaita-icon-theme-$VERSION.tar.xz"
+SHA256="ba561cf3c96305a47179fa5605856ad695c9238ea07f7093aebd9ba80c4e323b"
 
 build() {
     tar -xJf "$DL" --strip-components=1
-    # As duas ferramentas são PINADAS em false, e não deixadas à sorte do
-    # AC_PATH_PROG, porque senão esta receita muda de comportamento conforme o
-    # que MAIS está instalado — foi exatamente o que aconteceu: ela construiu
-    # quando o GTK3 ainda não existia e passou a falhar depois que ele existiu.
-    #
-    # gtk-encode-symbolic-svg rasteriza os SVGs simbólicos em seis tamanhos, e
-    # rasterizar SVG depende do carregador do librsvg, que é Rust e não está
-    # nesta árvore (ver o ABOUT). Sem ele a etapa morre em "Can't load file:
-    # Unrecognized image file format". O próprio configure.ac faz esta mesma
-    # coisa quando não acha a ferramenta: zera symbolic_encode_sizes. Aqui a
-    # decisão é explícita em vez de acidental.
-    #
-    # gtk-update-icon-cache gera o icon-theme.cache, que é estado de máquina.
-    # O Makefile já o pula quando há DESTDIR, mas pinar remove a dúvida.
-    # Pina-se a VARIÁVEL DE CACHE do autoconf, não a variável de ambiente. O
-    # AC_PATH_PROG só honra um override de ambiente quando o valor PARECE um
-    # caminho absoluto (o case é [\\/]* | ?:[\\/]*); passar apenas "false"
-    # não casa, e ele vai buscar no PATH de todo jeito — foi o que aconteceu na
-    # primeira tentativa deste conserto. A variável de cache é testada antes
-    # dessa lógica e vence.
-    #
-    # O valor tem de ser a string "false" e não /bin/false: o configure.ac
-    # compara com "xfalse" para zerar symbolic_encode_sizes. Com um caminho
-    # real a comparação não casaria, a lista continuaria cheia e o /bin/false
-    # seria EXECUTADO a cada ícone, devolvendo erro.
-    ./configure --prefix=/usr --datadir=/usr/share \
-        ac_cv_path_GTK_ENCODE_SYMBOLIC_SVG=false \
-        ac_cv_path_GTK_UPDATE_ICON_CACHE=false
-    make -j"$JOBS"
-    make install DESTDIR="$STAGE"
+    # O meson exige ACHAR o gtk4-update-icon-cache (ou o do GTK 3), mesmo
+    # pulando a execução com DESTDIR. Apontá-lo para true é a decisão
+    # explícita: o índice do tema é gerado na máquina, não empacotado.
+    cat > nativo.ini <<'NATIVO'
+[binaries]
+gtk4-update-icon-cache = 'true'
+gtk-update-icon-cache = 'true'
+NATIVO
+    meson setup build --prefix=/usr --libdir=lib --buildtype=release \
+        --native-file nativo.ini
+    DESTDIR="$STAGE" ninja -C build install
 
-    # icon-theme.cache é gerado por gtk-update-icon-cache e reflete o que está
-    # instalado na máquina — estado, não payload. O GTK varre o diretório
-    # quando o cache não existe, então removê-lo custa desempenho no primeiro
-    # acesso e nada mais.
+    # icon-theme.cache é estado de máquina; o GTK varre o diretório quando ele
+    # não existe. Nenhum deve ter sido gerado, e se foi, sai.
     find "$STAGE" -name 'icon-theme.cache' -delete
 
     [ -e "$STAGE/usr/share/icons/Adwaita/index.theme" ] || {
         echo "adwaita-icon-theme: index.theme não foi instalado" >&2
         exit 1
     }
-    # A razão de ser desta versão é haver PNG; se um dia sumir, o tema fica
-    # invisível sem librsvg e é melhor falhar aqui do que descobrir na tela.
-    n=$(find "$STAGE/usr/share/icons/Adwaita" -name '*.png' | wc -l)
-    [ "$n" -gt 1000 ] || {
-        echo "adwaita-icon-theme: só $n PNGs; sem librsvg o tema ficaria invisível" >&2
+    # O tema desta versão é o escalável: conferir que os SVGs vieram é
+    # conferir que o tema existe.
+    n=$(find "$STAGE/usr/share/icons/Adwaita" -name '*.svg' | wc -l)
+    [ "$n" -gt 700 ] || {
+        echo "adwaita-icon-theme: só $n SVGs instalados" >&2
         exit 1
     }
 }

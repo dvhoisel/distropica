@@ -1,5 +1,5 @@
 NAME=xz
-VERSION=5.8.3
+VERSION=5.8.4
 KIND=source
 TOOLCHAIN=native
 # busybox pelo /bin/sh dos quatro scripts que o pacote instala — xzgrep,
@@ -32,7 +32,7 @@ BUILD_DEPS="gcc-pass2 binutils-glibc make gawk"
 # construído nem instalado.
 LICENSE="0BSD AND GPL-2.0-or-later AND LGPL-2.1-or-later"
 SRC="https://github.com/tukaani-project/xz/releases/download/v$VERSION/xz-$VERSION.tar.gz"
-SHA256=3d3a1b973af218114f4f889bbaa2f4c037deaae0c8e815eec381c3d546b974a0
+SHA256="0014c7886930454fe8bd4228665b51af55eeae560ea135c9c4cd33f55b2591d9"
 # Certificado publicado pela página oficial https://tukaani.org/xz/ em
 # https://tukaani.org/misc/lasse_collin_pubkey.txt; signer observado e
 # primária 3690C240CE51B4670D30AD1C38EE757D69184620.
