@@ -2415,7 +2415,12 @@ RUNNER_PROOF_SHA256=$(sha_path "$RUNNER_PROOF")
 MINIPAX_LICENSE='GPL-3.0-or-later AND MIT AND Apache-2.0 AND (Apache-2.0 WITH LLVM-exception) AND Unicode-3.0 AND Unlicense AND LGPL-2.1-or-later'
 MINITRUE_LICENSE='GPL-3.0-or-later AND MIT AND Apache-2.0 AND (Apache-2.0 WITH LLVM-exception) AND 0BSD AND BSD-1-Clause AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND CDLA-Permissive-2.0 AND ISC AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND Unicode-3.0 AND Unlicense AND Zlib'
 UTIL_LINUX_LICENSE='GPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-3-Clause AND X11-distribute-modifications-variant AND MIT'
-EFI_PAYLOAD_LICENSE="GPL-2.0-only AND GPL-3.0-or-later AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-1-Clause AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND CDLA-Permissive-2.0 AND ISC AND MIT AND Apache-2.0 AND (Apache-2.0 WITH LLVM-exception) AND 0BSD AND Unicode-3.0 AND Unlicense AND Zlib AND X11-distribute-modifications-variant AND GPL-2.0-or-later"
+# A expressão do EFI inteiro é a conjunção das licenças do que ele embute —
+# inclusive os blobs de firmware (radeon desde a 0.15, microcódigo AMD desde a
+# 0.17), cuja licença é a do linux-firmware. A linha dele nas ENTRY já dizia
+# LicenseRef-linux-firmware-redistributable; a do payload não dizia, e o
+# pacote distropica-efi, que tira a licença daqui, herdaria a omissão.
+EFI_PAYLOAD_LICENSE="GPL-2.0-only AND GPL-3.0-or-later AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-1-Clause AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND CDLA-Permissive-2.0 AND ISC AND MIT AND Apache-2.0 AND (Apache-2.0 WITH LLVM-exception) AND 0BSD AND Unicode-3.0 AND Unlicense AND Zlib AND X11-distribute-modifications-variant AND GPL-2.0-or-later AND LicenseRef-linux-firmware-redistributable"
 
 busybox_source_status=consumed
 [ "$BUSYBOX_ORIGIN" != development-prebuilt ] || busybox_source_status=not-consumed
