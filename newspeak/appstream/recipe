@@ -23,7 +23,7 @@ build() {
     meson setup build --prefix=/usr --libdir=lib --buildtype=release \
         -Dstemming=false -Dsystemd=false -Dvapi=false -Dqt=false \
         -Dcompose=false -Dbash-completion=false -Dapt-support=false \
-        -Dgir=false -Dtools=false -Dsvg-support=false \
+        -Dgir=false -Dtools=false \
         -Dzstd-support=false -Dblake3-support=false \
         -Ddisplay-detection=none -Ddocs=false -Dapidocs=false \
         -Dinstall-docs=false -Dman=false
