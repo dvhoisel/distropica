@@ -398,6 +398,39 @@ fi
 ACPIDROP
     chmod 0644 "$STAGE/etc/rc.d/rcS.d/08-acpid.sh"
 
+    cat > "$STAGE/etc/rc.d/rcS.d/07-efi.sh" <<'EFIDROP'
+# Drop-in de inicializacao: o EFI de boot na ESP. Sourced pelo rcS do base.
+#
+# E o PAR do derivado que o minitrue refaz no rectify (DERIVED_ARTIFACTS): o
+# pacote distropica-efi guarda em /opt o EFI que deve arrancar a maquina, e o
+# `minipax boot-update` o leva a ESP com o anterior de reserva. Quando o
+# rectify acontece no sistema vivo, o proprio minitrue chama o minipax; quando
+# acontece numa raiz montada — o instalador, que retifica em /target —, ninguem
+# chama, e e este drop-in que cumpre no boot seguinte.
+#
+# No sistema ja convergido ele confere e nao escreve nada: o EFI do pacote ja e
+# byte a byte o atual da ESP. O que ele ainda faz nesse caso e repor a entrada
+# de reserva na NVRAM, se uma atualizacao de BIOS a tiver apagado.
+#
+# Falhar aqui nao impede o boot, e nao pode: o EFI que arrancou ESTA sessao
+# continua na ESP. Mas nao e silencioso — sem a linha, a descoberta de que o
+# kernel novo nunca chegou a ESP ficaria para o dia em que ele fizesse falta.
+if [ -x /usr/bin/minipax ] && [ -f /opt/distropica-efi/current/BOOTX64.EFI ] &&
+   [ -d /sys/firmware/efi ]; then
+    if efi_saida=$(/usr/bin/minipax boot-update 2>&1); then
+        case "$efi_saida" in
+            *BOOT_UPDATE=ja-atual*) : ;;
+            *) echo "distropica: EFI de boot levado a ESP ($(printf '%s\n' "$efi_saida" |
+                   sed -n 's/^BOOT_UPDATE=//p')); vale a partir do proximo boot" ;;
+        esac
+    else
+        echo "distropica: o EFI de boot NAO chegou a ESP: $(printf '%s\n' "$efi_saida" | tail -1)" >&2
+    fi
+    unset efi_saida
+fi
+EFIDROP
+    chmod 0644 "$STAGE/etc/rc.d/rcS.d/07-efi.sh"
+
     mkdir -p "$STAGE/etc/rc.d/rcS.d"
     cat > "$STAGE/etc/rc.d/rcS.d/04-usuario.sh" <<'USUARIODROP'
 # Drop-in de inicializacao: a conta comum. Sourced pelo rcS do base.

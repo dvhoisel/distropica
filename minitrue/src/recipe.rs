@@ -66,6 +66,13 @@ pub struct Recipe {
     /// (SPEC-0003 §7): a supersessão vira declarativa — colisão com um
     /// provisional NÃO listado aqui é *doublethink*, não cessão.
     pub supersedes: Vec<String>,
+    /// Caminhos de EXECUTOR que este pacote de Mundo A pode adotar (SPEC-0003
+    /// §7): o `/usr/bin/minitrue` e o `/usr/bin/minipax` que o instalador
+    /// persistiu fora de qualquer registro. Adoção é explícita e verificada —
+    /// o arquivo sem dono só é tomado se os bytes forem os que o instalador
+    /// mediu no `install.manifest`; qualquer outro sem-dono continua sendo
+    /// doublethink.
+    pub adopts: Vec<String>,
     /// Raízes de diretório que este pacote fornece como pontos de depósito
     /// compartilhados. As entradas de diretório do STAGE sob estas raízes
     /// viram claims `D:` (tipo+modo, sem ownership da árvore); arquivos e
@@ -442,6 +449,10 @@ impl Recipe {
     }
 }
 
+/// Os executores que o instalador persiste fora de registro e mede no
+/// `install.manifest` — os únicos caminhos que um `ADOPTS` pode nomear.
+pub const EXECUTORES_ADOTAVEIS: &[&str] = &["/usr/bin/minitrue", "/usr/bin/minipax"];
+
 const DUMP: &str = r#"printf 'NAME=%s\n' "${NAME:-}"
 printf 'VERSION=%s\n' "${VERSION:-}"
 printf 'ABOUT=%s\n' "${ABOUT:-}"
@@ -464,6 +475,7 @@ printf 'REPROCORR=%s\n' "${REPROCORR:-}"
 printf 'REQUIRES_GLIBC=%s\n' "${REQUIRES_GLIBC:-}"
 printf 'PROVISIONAL=%s\n' "${PROVISIONAL:-}"
 printf 'SUPERSEDES=%s\n' "${SUPERSEDES:-}"
+printf 'ADOPTS=%s\n' "${ADOPTS:-}"
 printf 'SHARED_DIRS=%s\n' "${SHARED_DIRS:-}"
 printf 'EPOCH=%s\n' "${EPOCH:-}"
 printf 'TOOLCHAIN=%s\n' "${TOOLCHAIN:-}"
@@ -494,6 +506,7 @@ const DUMP_FIELDS: &[&str] = &[
     "REQUIRES_GLIBC",
     "PROVISIONAL",
     "SUPERSEDES",
+    "ADOPTS",
     "SHARED_DIRS",
     "EPOCH",
     "TOOLCHAIN",
@@ -523,6 +536,7 @@ const CAMPOS_METADADO: &[&str] = &[
     "REQUIRES_GLIBC",
     "PROVISIONAL",
     "SUPERSEDES",
+    "ADOPTS",
     "SHARED_DIRS",
     "EPOCH",
     "TOOLCHAIN",
@@ -1138,6 +1152,7 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
     let deps = list("DEPS");
     let build_deps = list("BUILD_DEPS");
     let supersedes = list("SUPERSEDES");
+    let adopts = list("ADOPTS");
     let shared_dirs = list("SHARED_DIRS");
     for dependency in deps.iter().chain(&build_deps).chain(&supersedes) {
         validate_name(dependency)?;
@@ -1148,6 +1163,27 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         if !seen_shared_dirs.insert(path.as_str()) {
             return fail(2, format!("{name}: SHARED_DIRS repete {path}"));
         }
+    }
+    // Só os dois executores que o instalador mede podem ser adotados: é o
+    // install.manifest que diz os bytes deles, e sem autoridade que diga os
+    // bytes de um arquivo sem dono a adoção seria palpite.
+    let mut seen_adopts = HashSet::new();
+    for path in &adopts {
+        if !EXECUTORES_ADOTAVEIS.contains(&path.as_str()) {
+            return fail(
+                2,
+                format!(
+                    "{name}: ADOPTS só aceita {}; '{path}' não tem bytes medidos pelo instalador",
+                    EXECUTORES_ADOTAVEIS.join(" e ")
+                ),
+            );
+        }
+        if !seen_adopts.insert(path.as_str()) {
+            return fail(2, format!("{name}: ADOPTS repete {path}"));
+        }
+    }
+    if kind != Kind::Binary && !adopts.is_empty() {
+        return fail(2, format!("{name}: ADOPTS só é válido para KIND=binary"));
     }
     if kind != Kind::Source && !shared_dirs.is_empty() {
         return fail(
@@ -1259,6 +1295,7 @@ pub fn load(ctx: &Ctx, name: &str) -> Result<Recipe> {
         toolchain,
         retries,
         supersedes,
+        adopts,
         shared_dirs,
         recipe_bytes,
         files_archive,
@@ -1481,6 +1518,43 @@ mod tests {
         let r = load(&ctx, "foo");
         let _ = std::fs::remove_dir_all(&root);
         r
+    }
+
+    /// ADOPTS nomeia só os dois executores que o instalador mede, uma vez
+    /// cada, e só em Mundo A — é lá que o /usr/bin é um link de pacote.
+    #[test]
+    fn adopts_so_nomeia_executor_medido_e_so_em_mundo_a() {
+        let carrega_binaria = |extra: &str| -> Result<Recipe> {
+            let n = CNT.fetch_add(1, Ordering::Relaxed);
+            let root =
+                std::env::temp_dir().join(format!("mt-recipe-adopts-{}-{n}", std::process::id()));
+            let dir = root.join("var/lib/minitrue/newspeak/foo");
+            std::fs::create_dir_all(&dir).unwrap();
+            let hash = "a".repeat(64);
+            std::fs::write(
+                dir.join("recipe"),
+                format!(
+                    "NAME=foo\nVERSION=1.0\nKIND=binary\nLICENSE=NOASSERTION\nSRC=https://e/foo\nSHA256={hash}\n{extra}\ninstall_pkg(){{ :; }}\n"
+                ),
+            )
+            .unwrap();
+            let ctx = Ctx {
+                root: root.clone(),
+                offline: false,
+                tofu: false,
+                jobs: 1,
+            };
+            let r = load(&ctx, "foo");
+            let _ = std::fs::remove_dir_all(&root);
+            r
+        };
+        assert_eq!(
+            carrega_binaria("ADOPTS=/usr/bin/minitrue").unwrap().adopts,
+            vec!["/usr/bin/minitrue".to_string()]
+        );
+        assert!(carrega_binaria("ADOPTS=/usr/bin/bash").is_err());
+        assert!(carrega_binaria("ADOPTS='/usr/bin/minipax /usr/bin/minipax'").is_err());
+        assert!(load_body("ADOPTS=/usr/bin/minitrue").is_err());
     }
 
     fn test_runner(ctx: &Ctx) -> Recipe {

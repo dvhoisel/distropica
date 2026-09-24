@@ -1538,12 +1538,23 @@ struct DerivedArtifact {
     label: &'static str,
 }
 
-const DERIVED_ARTIFACTS: &[DerivedArtifact] = &[DerivedArtifact {
-    trigger: "/usr/share/glib-2.0/schemas/",
-    tool: "/usr/bin/glib-compile-schemas",
-    args: &["/usr/share/glib-2.0/schemas"],
-    label: "base de esquemas do GSettings",
-}];
+const DERIVED_ARTIFACTS: &[DerivedArtifact] = &[
+    DerivedArtifact {
+        trigger: "/usr/share/glib-2.0/schemas/",
+        tool: "/usr/bin/glib-compile-schemas",
+        args: &["/usr/share/glib-2.0/schemas"],
+        label: "base de esquemas do GSettings",
+    },
+    // O EFI de boot na ESP (SPEC-0008 §4). O pacote distropica-efi guarda em
+    // /opt o EFI que deve arrancar a máquina; levá-lo à ESP, com o anterior de
+    // reserva, é serviço do minipax. O par de boot é o 07-efi.sh do base.
+    DerivedArtifact {
+        trigger: "/opt/distropica-efi/",
+        tool: "/usr/bin/minipax",
+        args: &["boot-update"],
+        label: "EFI de boot na ESP",
+    },
+];
 
 /// Decide quais derivados os records aplicados tocaram. Pura e separada do
 /// executor, para o teste cobrar a decisão sem executar ferramenta nenhuma.
@@ -1930,6 +1941,67 @@ fn install_meta(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> Res
 
 // ---------- mundo A: binário do mantenedor ----------
 
+/// Confere que o arquivo sem dono em `raw_virt` é o executor que o instalador
+/// persistiu, byte a byte. O instalador grava no `install.manifest` o caminho
+/// e o sha256 do minitrue e do minipax que ele próprio executou; é essa a
+/// autoridade, e sem ela a adoção é recusada — um `/usr/bin/minitrue` trocado à
+/// mão não pode virar, em silêncio, propriedade do pacote.
+fn confere_executor_adotavel(ctx: &Ctx, raw_virt: &str) -> Result<()> {
+    let (chave_caminho, chave_hash) = match raw_virt {
+        "/usr/bin/minitrue" => ("MINITRUE_INSTALLED_PATH", "MINITRUE_SHA256"),
+        "/usr/bin/minipax" => ("MINIPAX_INSTALLED_PATH", "MINIPAX_EXECUTABLE_SHA256"),
+        _ => {
+            return fail(
+                4,
+                format!("doublethink detectado: {raw_virt} não é executor adotável"),
+            )
+        }
+    };
+    let manifesto = ctx.root.join("var/lib/minipax/install.manifest");
+    let texto = read_regular_nofollow(&manifesto)
+        .and_then(|bytes| Ok(String::from_utf8(bytes)?))
+        .map_err(|erro| crate::Fail {
+            code: 4,
+            msg: format!(
+                "doublethink detectado: {raw_virt} existe sem dono e não há install.manifest \
+                 legível que diga os bytes do executor ({erro:#}); adoção recusada"
+            ),
+        })?;
+    let campo = |chave: &str| {
+        texto
+            .lines()
+            .find_map(|linha| linha.strip_prefix(chave)?.strip_prefix('='))
+    };
+    let esperado = match (campo(chave_caminho), campo(chave_hash)) {
+        (Some(caminho), Some(hash)) if caminho == raw_virt && canonical_sha256(hash) => hash,
+        _ => {
+            return fail(
+                4,
+                format!(
+                    "doublethink detectado: o install.manifest não mede {raw_virt}; adoção recusada"
+                ),
+            )
+        }
+    };
+    let encontrado =
+        confined_regular_content_hash(&ctx.root, raw_virt)?.ok_or_else(|| crate::Fail {
+            code: 4,
+            msg: format!(
+                "doublethink detectado: {raw_virt} não é arquivo regular; adoção recusada"
+            ),
+        })?;
+    if encontrado != esperado {
+        return fail(
+            4,
+            format!(
+                "doublethink detectado: {raw_virt} não é o executor que o instalador mediu \
+                 (esperado {esperado}, encontrado {encontrado}); adoção recusada"
+            ),
+        );
+    }
+    Ok(())
+}
+
 fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> Result<()> {
     let rec_dir = ctx.records_dir().join(&r.name);
     let opt = ctx.opt(&r.name);
@@ -2137,6 +2209,22 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> R
     for (command, relative) in &pairs {
         recipe::validate_link(&r.name, command, relative)?;
     }
+    // Um ADOPTS só vale para um caminho que o pacote vai de fato ocupar: o
+    // link dele. Adotar o que não se ocupa seria só apagar arquivo alheio.
+    for adotado in &r.adopts {
+        if !pairs
+            .iter()
+            .any(|(command, _)| format!("/usr/bin/{command}") == *adotado)
+        {
+            return fail(
+                2,
+                format!(
+                    "{}: ADOPTS nomeia {adotado}, que não é link deste pacote",
+                    r.name
+                ),
+            );
+        }
+    }
 
     let old_links: HashSet<String> = if rec_dir.join("meta").is_file() {
         read_manifest_strict(&rec_dir)?
@@ -2153,6 +2241,7 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> R
         format!("/opt/{}/current", r.name),
     ];
     let mut takeovers = HashSet::new();
+    let mut adotados: HashSet<String> = HashSet::new();
     // Conjunto de consulta rápida do que este pacote já cedeu. No refresh de um
     // provisional cedido, cada caminho daqui é do SUCESSOR: pular é o ponto
     // inteiro da operação. Fora desse caso o conjunto é vazio e os dois laços
@@ -2193,10 +2282,19 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> R
         }
         let owned = owners.iter().any(|owner| *owner == r.name) || takeovers.contains(&virt);
         if confined_exists(&ctx.root, &raw_virt)? && !owned {
-            return fail(
-                4,
-                format!("doublethink detectado: {virt} já existe sem dono compatível"),
-            );
+            // A ÚNICA exceção ao "sem dono não se adota": o executor que o
+            // instalador persistiu, declarado pela receita e com os bytes que
+            // o install.manifest mediu. Qualquer outra coisa sem dono naquele
+            // caminho continua sendo doublethink.
+            if owners.is_empty() && r.adopts.contains(&raw_virt) {
+                confere_executor_adotavel(ctx, &raw_virt)?;
+                adotados.insert(virt.clone());
+            } else {
+                return fail(
+                    4,
+                    format!("doublethink detectado: {virt} já existe sem dono compatível"),
+                );
+            }
         }
     }
 
@@ -2310,10 +2408,25 @@ fn install_binary(ctx: &Ctx, r: &Recipe, explicit: bool, fingerprint: &str) -> R
                 })?;
             eprintln!("  {virt}: assume o controle de {owner} (provisório)");
         }
-        if confined_exists(&ctx.root, &raw_virt)? {
-            remove_confined(&ctx.root, &raw_virt, false)?;
+        if adotados.contains(&virt) {
+            eprintln!(
+                "  {virt}: adotado — o executor que o instalador mediu passa a ser do pacote {}",
+                r.name
+            );
         }
-        symlink(&target, &linkpath)?;
+        // TROCA ATÔMICA do link: o novo nasce num nome temporário ao lado e
+        // substitui o antigo por rename. Apagar e recriar abria uma janela em
+        // que o comando não existia — inofensiva para quase todo pacote e não
+        // para o /usr/bin/minitrue, que é quem está fazendo a troca.
+        let temporario = ctx.usr_bin().join(format!(".{cmdname}.minitrue-novo"));
+        ensure_mutation_confined(&ctx.root, &temporario)?;
+        match fs::remove_file(&temporario) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        symlink(&target, &temporario)?;
+        fs::rename(&temporario, &linkpath)?;
         manifest.push(raw_virt);
     }
 
@@ -12246,6 +12359,156 @@ mod tests {
         crate::plan::verify_applied_receipt(&context).unwrap();
         verify(&context).unwrap();
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Uma raiz com o executor que o instalador persiste em /usr/bin/minitrue,
+    /// medido no install.manifest, e a receita de Mundo A que o adota.
+    fn raiz_com_executor(
+        rotulo: &str,
+        bytes_do_executor: &[u8],
+        hash_medido: &str,
+        adopts: &str,
+    ) -> (PathBuf, Ctx) {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("mt-adota-{rotulo}-{}-{n}", std::process::id()));
+        let recipes = root.join("var/lib/minitrue/newspeak");
+        let cache = root.join("var/cache/minitrue");
+        fs::create_dir_all(&recipes).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::create_dir_all(root.join("usr/bin")).unwrap();
+        fs::write(root.join("usr/bin/minitrue"), bytes_do_executor).unwrap();
+        fs::set_permissions(
+            root.join("usr/bin/minitrue"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("var/lib/minipax")).unwrap();
+        fs::write(
+            root.join("var/lib/minipax/install.manifest"),
+            format!(
+                "INSTALL_MANIFEST_FORMAT=1\nMINITRUE_SHA256={hash_medido}\nMINITRUE_INSTALLED_PATH=/usr/bin/minitrue\n"
+            ),
+        )
+        .unwrap();
+        let payload = b"minitrue novo\n";
+        let hash = sha256_bytes(payload);
+        fs::write(cache.join(&hash), payload).unwrap();
+        fs::create_dir_all(recipes.join("minitrue")).unwrap();
+        fs::write(
+            recipes.join("minitrue/recipe"),
+            format!(
+                "NAME=minitrue\nVERSION=0.17\nKIND=binary\nLICENSE=NOASSERTION\nSRC=https://media.invalid/minitrue\nSHA256={hash}\nLINKS=\"minitrue=bin/minitrue\"\n{adopts}install_pkg() {{\n  mkdir -p \"$PREFIX/bin\"\n  cp \"$DL\" \"$PREFIX/bin/minitrue\"\n  chmod 755 \"$PREFIX/bin/minitrue\"\n}}\n"
+            ),
+        )
+        .unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: true,
+            tofu: false,
+            jobs: 1,
+        };
+        (root, ctx)
+    }
+
+    /// O executor que o instalador deixou sem dono é adotado pelo pacote — e
+    /// só ele: a adoção exige a declaração da receita E os bytes medidos.
+    #[test]
+    fn pacote_adota_o_executor_medido_e_so_ele() {
+        let antigo = b"minitrue da midia 0.16\n";
+        let (root, ctx) = raiz_com_executor(
+            "ok",
+            antigo,
+            &sha256_bytes(antigo),
+            "ADOPTS=\"/usr/bin/minitrue\"\n",
+        );
+        rectify(&ctx, &["minitrue".to_string()], BinaryPolicy::PreferBinary).unwrap();
+        let link = fs::read_link(root.join("usr/bin/minitrue")).unwrap();
+        assert_eq!(
+            link,
+            PathBuf::from("../../opt/minitrue/current/bin/minitrue")
+        );
+        assert_eq!(
+            fs::read(root.join("usr/bin/minitrue")).unwrap(),
+            b"minitrue novo\n"
+        );
+        assert!(read_manifest(&ctx.records_dir().join("minitrue"))
+            .iter()
+            .any(|line| line.ends_with("  /usr/bin/minitrue")));
+        // Nenhum temporário da troca atômica fica para trás.
+        assert!(!root.join("usr/bin/.minitrue.minitrue-novo").exists());
+        verify(&ctx).unwrap();
+        let _ = fs::remove_dir_all(&root);
+
+        // Trocado à mão depois da instalação: os bytes não são os medidos.
+        let (root, ctx) = raiz_com_executor(
+            "trocado",
+            b"alguem editou\n",
+            &sha256_bytes(antigo),
+            "ADOPTS=\"/usr/bin/minitrue\"\n",
+        );
+        let erro =
+            rectify(&ctx, &["minitrue".to_string()], BinaryPolicy::PreferBinary).unwrap_err();
+        assert!(format!("{erro:#}").contains("não é o executor que o instalador mediu"));
+        assert_eq!(
+            fs::read(root.join("usr/bin/minitrue")).unwrap(),
+            b"alguem editou\n"
+        );
+        let _ = fs::remove_dir_all(&root);
+
+        // Sem a declaração, continua sendo doublethink, com os bytes certos.
+        let (root, ctx) = raiz_com_executor("sem-adopts", antigo, &sha256_bytes(antigo), "");
+        let erro =
+            rectify(&ctx, &["minitrue".to_string()], BinaryPolicy::PreferBinary).unwrap_err();
+        assert!(format!("{erro:#}").contains("já existe sem dono compatível"));
+        assert_eq!(fs::read(root.join("usr/bin/minitrue")).unwrap(), antigo);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// O pacote do EFI dispara o derivado que o leva à ESP; fora do sistema
+    /// vivo o disparo só é anunciado, e quem o cumpre é o 07-efi.sh no boot.
+    #[test]
+    fn pacote_do_efi_dispara_o_derivado_da_esp() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-efi-{}-{n}", std::process::id()));
+        let recipes = root.join("var/lib/minitrue/newspeak");
+        let cache = root.join("var/cache/minitrue");
+        fs::create_dir_all(recipes.join("distropica-efi")).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o700)).unwrap();
+        let payload = b"MZ efi de teste";
+        let hash = sha256_bytes(payload);
+        fs::write(cache.join(&hash), payload).unwrap();
+        fs::write(
+            recipes.join("distropica-efi/recipe"),
+            format!(
+                "NAME=distropica-efi\nVERSION=0.17\nKIND=binary\nLICENSE=NOASSERTION\nSRC=https://media.invalid/BOOTX64.EFI\nSHA256={hash}\ninstall_pkg() {{\n  cp \"$DL\" \"$PREFIX/BOOTX64.EFI\"\n}}\n"
+            ),
+        )
+        .unwrap();
+        let ctx = Ctx {
+            root: root.clone(),
+            offline: true,
+            tofu: false,
+            jobs: 1,
+        };
+        rectify(
+            &ctx,
+            &["distropica-efi".to_string()],
+            BinaryPolicy::PreferBinary,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(root.join("opt/distropica-efi/current/BOOTX64.EFI")).unwrap(),
+            payload
+        );
+        let written: BTreeSet<String> = ["distropica-efi".to_string()].into();
+        let fired = derived_artifacts_touched(&ctx.records_dir(), &written);
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].0.tool, "/usr/bin/minipax");
+        assert_eq!(fired[0].0.args, &["boot-update"]);
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -373,6 +373,47 @@ impl Drop for Montagem {
     }
 }
 
+/// O efivarfs montado durante a operação, quando o sistema não o monta — o
+/// rcS do base não monta, e no sistema instalado o diretório existe vazio.
+/// Diretório com entradas é montagem de alguém (ou o diretório dos testes) e
+/// não se toca.
+struct Efivars {
+    dir: PathBuf,
+    nossa: bool,
+}
+
+impl Efivars {
+    fn abre(dir: &Path) -> Self {
+        let vazio = fs::read_dir(dir)
+            .map(|mut entradas| entradas.next().is_none())
+            .unwrap_or(false);
+        let nossa = vazio
+            && Path::new("/sys/firmware/efi").is_dir()
+            && rustix::mount::mount(
+                "efivarfs",
+                dir,
+                "efivarfs",
+                rustix::mount::MountFlags::NOSUID
+                    | rustix::mount::MountFlags::NODEV
+                    | rustix::mount::MountFlags::NOEXEC,
+                None::<&std::ffi::CStr>,
+            )
+            .is_ok();
+        Efivars {
+            dir: dir.to_path_buf(),
+            nossa,
+        }
+    }
+}
+
+impl Drop for Efivars {
+    fn drop(&mut self) {
+        if self.nossa {
+            let _ = rustix::mount::unmount(&self.dir, rustix::mount::UnmountFlags::empty());
+        }
+    }
+}
+
 /// Opções de `minipax boot-update`.
 pub struct Opcoes {
     pub efi: PathBuf,
@@ -416,6 +457,7 @@ pub fn executa(opcoes: &Opcoes) -> Result<Relatorio> {
         });
     }
 
+    let _efivars = Efivars::abre(&opcoes.efivars);
     // A ESP é a da entrada "Distrópica" da NVRAM: é dela que o firmware
     // arranca. Sem essa entrada (firmware sem runtime, NVRAM zerada) não há
     // como saber qual partição é a nossa sem adivinhar, e adivinhar partição
