@@ -1,0 +1,691 @@
+#!/bin/sh
+# bootstrap/release — confere, prepara, aceita e publica uma versão.
+#
+# POR QUE EXISTE. Até a 0.16 o preparo e a publicação de cada versão eram
+# roteiros avulsos, escritos no scratchpad da sessão e adaptados de uma versão
+# para a outra com sed; o scratchpad não sobrevive à sessão, e só as cópias que
+# alguém lembrou de guardar em target/ferramentas-prova chegaram até aqui. O
+# pior defeito daquela publicação nasceu exatamente num desses roteiros: o
+# zstd morreu com o disco cheio no meio do bundle de fontes, o pipe não era
+# conferido, e o .tar.zst saiu pela metade COM um sha256 coerente com a metade.
+#
+# O que este roteiro carrega por construção, e por quê:
+#
+#   · PORTÕES antes de qualquer build: árvore limpa, cargo audit dos dois
+#     executores, a bateria bootstrap/testes/, o conferidor de versões da P7 e
+#     os testes/clippy/fmt do Rust. A 0.16 saiu com testes quebrados que
+#     ninguém rodava; aqui, teste vermelho é versão que não sai.
+#   · OS EXECUTORES SÃO PACOTES. O minitrue, o minipax e o EFI de boot entram no
+#     canal como KIND=binary, com o sha256 do que este roteiro compilou, e o EFI
+#     embute exatamente esses bytes — é assim que o sistema instalado passa a
+#     receber o próprio gerenciador e o próprio kernel pela mesma via dos
+#     outros pacotes. A fonte correspondente deles é um snapshot do projeto,
+#     publicado em /sources como a de qualquer binário.
+#   · A SEED DO CANAL ACOMPANHA A VERSÃO. A instalação offline grava no alvo a
+#     seed do perfil como o índice operacional; ela estava parada no canal da
+#     0.13 desde 16/08, e as mídias da 0.14 à 0.16 instalaram sistemas que se
+#     achavam na 0.13.
+#   · STATUS DE CADA PIPE conferido, e o bundle provado por DESCOMPRESSÃO e
+#     contagem, não por tamanho.
+#   · A CHAVE DE PRODUÇÃO só entra no rootfs pelo tempo da assinatura do cache,
+#     num caminho que o trap apaga — cópias dela já apareceram dentro de rootfs.
+#   · O NO-AR É EM DUAS VOLTAS. Os arquivos sobem para caminhos de teste, a
+#     atualização de um sistema da versão anterior é provada CONTRA ELES, e só
+#     então o canal troca, com o anterior preservado. O site vem por último.
+#
+# uso:
+#   bootstrap/release conferir
+#   bootstrap/release preparar VERSAO RAIZ
+#       RAIZ: a raiz construtora onde a cadeia fechou (target/rebuild-*-root)
+#   bootstrap/release aceitar VERSAO
+#       instala a ISO pelo instalador de texto e fotografa o login e a sessão
+#   bootstrap/release subir-teste VERSAO
+#       releases e fontes no ar; canal e árvore em caminhos de teste
+#   bootstrap/release aceitar-atualizacao VERSAO DISCO-ANTERIOR
+#       atualiza um disco instalado da versão anterior contra o canal de teste
+#   bootstrap/release publicar VERSAO ANTERIOR
+#       troca o canal (o ANTERIOR fica em canal/oficial-ANTERIOR) e publica o site
+set -eu
+umask 022
+LC_ALL=C
+export LC_ALL
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+cd "$REPO"
+
+SERVIDOR=${DISTROPICA_SERVIDOR:-root@72.60.49.50}
+REMOTO=${DISTROPICA_REMOTO:-/var/www/distropica.com.br}
+SITE=https://distropica.com.br
+CHAVE_SECRETA=${DISTROPICA_CHAVE:-$HOME/.distropica/chaves/canal-oficial.key}
+PERFIL=profiles/official
+CONFIG_CANAL=$PERFIL/channel-bootstrap/channel-config/oficial
+FONTES_CACHE=$REPO/target/fontes-cache
+
+m() { printf '[%s] RELEASE: %s\n' "$(date '+%d/%m %H:%M:%S')" "$*"; }
+morre() { printf '[%s] RELEASE: ERRO: %s\n' "$(date '+%d/%m %H:%M:%S')" "$*" >&2; exit 1; }
+
+uso() { sed -n '/^# uso:/,/^set -eu/p' "$0" | sed '$d; s/^# \{0,1\}//'; }
+
+chave_publica() {
+    sed -n 's/^KEY=//p' "$CONFIG_CANAL" | head -1
+}
+
+# Um pino do build-efi, sem executá-lo: a MESMA leitura que o source-bundle
+# faz — exatamente uma linha NOME=valor —, com as aspas simples ou duplas do
+# valor retiradas e ${VAR} de outro pino expandido.
+pino_efi() {
+    valor=$(sed -n "s/^$1=//p" bootstrap/live/build-efi)
+    [ -n "$valor" ] && [ "$(printf '%s\n' "$valor" | wc -l)" -eq 1 ] ||
+        morre "pino $1 ausente ou duplicado no build-efi"
+    valor=$(printf '%s' "$valor" | sed "s/^'\(.*\)'\$/\1/; s/^\"\(.*\)\"\$/\1/")
+    while :; do
+        case "$valor" in
+            *'${'*'}'*)
+                ref=$(printf '%s' "$valor" | sed 's/.*\${\([A-Z0-9_]*\)}.*/\1/')
+                sub=$(pino_efi "$ref")
+                valor=$(printf '%s' "$valor" | sed "s|\${$ref}|$sub|g")
+                ;;
+            *) break ;;
+        esac
+    done
+    printf '%s\n' "$valor"
+}
+
+# Um objeto do cache de fontes pelo sha256, conferido.
+objeto() {
+    f=$FONTES_CACHE/$1
+    [ -f "$f" ] || morre "fora do cache de fontes ($FONTES_CACHE): $1"
+    [ "$(sha256sum "$f" | cut -d' ' -f1)" = "$1" ] || morre "objeto corrompido no cache: $1"
+    printf '%s\n' "$f"
+}
+
+# Um artefato para dentro de um cache de minitrue, por CÓPIA: o cache exige
+# arquivo regular com um único link, e um hardlink para o cache de fontes é
+# crimestop na primeira leitura.
+para_o_cache() { # arquivo diretorio-de-cache
+    h=$(sha256sum "$1" | cut -d' ' -f1)
+    if [ -f "$2/$h" ]; then
+        [ "$(sha256sum "$2/$h" | cut -d' ' -f1)" = "$h" ] || morre "$2/$h corrompido"
+        return 0
+    fi
+    cp "$1" "$2/.entrando-$h" && chmod 0644 "$2/.entrando-$h" && mv "$2/.entrando-$h" "$2/$h" ||
+        morre "não copiei $1 para $2"
+}
+
+# Os pacotes-fonte do fechamento da mídia: o que o canal emite. É o mesmo
+# fechamento (DEPS e BUILD_DEPS, transitivo) que a cadeia retificou.
+fechamento_mundo_b() {
+    python3 - "$REPO/newspeak" "$PERFIL" <<'PY'
+import os, re, sys
+arvore, perfil = sys.argv[1], sys.argv[2]
+deps, kind = {}, {}
+for p in os.listdir(arvore):
+    r = os.path.join(arvore, p, "recipe")
+    if not os.path.isfile(r):
+        continue
+    s = open(r, encoding="utf-8").read()
+    ds = set()
+    for m in re.finditer(r'^(?:DEPS|BUILD_DEPS)="([^"]*)"', s, re.M):
+        ds.update(m.group(1).split())
+    for m in re.finditer(r'^(?:DEPS|BUILD_DEPS)=([^"\s]+)\s*$', s, re.M):
+        ds.update(m.group(1).split())
+    deps[p] = ds
+    k = re.search(r"^KIND=(\S+)", s, re.M)
+    kind[p] = k.group(1) if k else "?"
+def mundo(nome):
+    return [l.strip() for l in open(os.path.join(perfil, nome), encoding="utf-8")
+            if l.strip() and not l.startswith("#")]
+raizes = set(mundo("target.world")) | set(mundo("cache.world")) | {"gimp"}
+fecho, pilha = set(), list(raizes)
+while pilha:
+    p = pilha.pop()
+    if p in fecho:
+        continue
+    if p not in kind:
+        raise SystemExit(f"o fechamento cita {p}, que não tem receita")
+    fecho.add(p)
+    pilha.extend(deps.get(p, ()))
+print("\n".join(sorted(p for p in fecho if kind[p] == "source")))
+PY
+}
+
+# ---------------------------------------------------------------------------
+# conferir — os portões. Rápidos perto de um build, e qualquer falha para tudo.
+# ---------------------------------------------------------------------------
+conferir() {
+    m "portão 1/5: árvore limpa"
+    [ -z "$(git status --porcelain)" ] || { git status --short >&2; morre "árvore com mudança não commitada"; }
+
+    m "portão 2/5: cargo audit (minitrue e minipax)"
+    # Lido da RAIZ do repositório: é onde mora o .cargo/audit.toml com as
+    # exceções justificadas. Um aviso novo reprova.
+    for crate in minitrue minipax; do
+        cargo audit --file "$crate/Cargo.lock" >/dev/null 2>&1 ||
+            { cargo audit --file "$crate/Cargo.lock" >&2 || true; morre "cargo audit reprovou $crate"; }
+    done
+
+    m "portão 3/5: fmt, clippy e testes do Rust"
+    for crate in minitrue minipax; do
+        (cd "$crate" && cargo fmt --check >/dev/null) || morre "$crate fora do cargo fmt"
+        (cd "$crate" && cargo clippy --offline --locked --all-targets -- -D warnings >/dev/null 2>&1) ||
+            morre "$crate reprovou no clippy"
+        (cd "$crate" && cargo test --offline --locked >/dev/null 2>&1) || morre "$crate reprovou nos testes"
+    done
+
+    m "portão 4/5: bootstrap/testes"
+    falhos=
+    for teste in bootstrap/testes/*; do
+        nome=${teste##*/}
+        # O gimp-e2e é prova sobre uma raiz instalada (--root), não teste da
+        # árvore; roda no aceite de quem mexer no GIMP.
+        [ "$nome" != gimp-e2e ] || continue
+        sh "$teste" >/dev/null 2>&1 || falhos="$falhos $nome"
+    done
+    [ -z "$falhos" ] || morre "teste(s) reprovado(s):$falhos"
+
+    m "portão 5/5: versões (P7)"
+    bootstrap/versoes --so-problemas >&2 ||
+        morre "o conferidor de versões não fechou: atrasado sem ressalva, ou pacote não conferido"
+    m "portões fechados"
+}
+
+# ---------------------------------------------------------------------------
+# preparar VERSAO RAIZ
+# ---------------------------------------------------------------------------
+
+# A fonte correspondente dos executores e do EFI: a árvore do projeto numa
+# revisão, mais o vendor/ que o Cargo.lock fixa e que não é versionado. Um tar
+# determinístico — ordem, datas e donos fixos —, xz com uma thread só, porque o
+# xz multithread muda os bytes com o número de threads.
+snapshot_do_projeto() { # revisao saida
+    snap_rev=$1; snap_saida=$2
+    snap_tmp=$L/.snapshot
+    snap_nome=distropica-projeto-$V
+    rm -rf "$snap_tmp"
+    mkdir -p "$snap_tmp/$snap_nome"
+    git archive --format=tar "$snap_rev" | tar -xf - -C "$snap_tmp/$snap_nome" ||
+        morre "git archive de $snap_rev falhou"
+    cp -a vendor "$snap_tmp/$snap_nome/vendor" || morre "cópia do vendor falhou"
+    zig_versao=$("$RAIZ/opt/zig/current/zig" version)
+    cat > "$snap_tmp/$snap_nome/COMO-RECONSTRUIR" <<EOF
+Fonte correspondente dos binários que a Distrópica $V publica e compila ela
+mesma: o minitrue, o minipax e o EFI de boot (bzImage com o initramfs vivo).
+
+Revisão: $snap_rev
+Ferramentas com que os binários publicados foram produzidos:
+  $(rustc -V)
+  $(cargo -V)
+  zig $zig_versao (o cc musl do ring e dos estáticos do EFI)
+
+  ZIG=/caminho/do/zig bootstrap/build-minitrue.sh --musl minitrue
+  ZIG=/caminho/do/zig bootstrap/build-minitrue.sh --pacote minipax --musl minipax
+
+produzem, byte a byte, os executores das receitas newspeak/minitrue e
+newspeak/minipax. O EFI sai de bootstrap/live/build-efi com esses dois
+executores (--minitrue, --minipax) e as fontes que o próprio build-efi pina
+(kernel, busybox, e2fsprogs, ncurses, util-linux e linux-firmware), que o
+fontes-correspondentes do distropica-efi lista com o sha256 de cada uma.
+O vendor/ é o que 'cargo vendor --manifest-path minitrue/Cargo.toml
+-s minipax/Cargo.toml vendor' gera dos dois Cargo.lock desta revisão.
+EOF
+    snap_epoch=$(git show -s --format=%ct "$snap_rev")
+    tar --sort=name --mtime="@$snap_epoch" --owner=0 --group=0 --numeric-owner \
+        --format=gnu -C "$snap_tmp" -cf "$L/.snapshot.tar" "$snap_nome" ||
+        morre "tar do snapshot falhou"
+    xz -9 -T1 -c "$L/.snapshot.tar" > "$snap_saida" || morre "xz do snapshot falhou"
+    xz -t "$snap_saida" || morre "o snapshot não passa no teste de integridade"
+    rm -rf "$snap_tmp" "$L/.snapshot.tar"
+}
+
+escreve_receita() { # nome licenca url sha links adopts instalacao about
+    r_dir=newspeak/$1
+    mkdir -p "$r_dir"
+    {
+        printf 'NAME=%s\nVERSION=%s\nKIND=binary\n' "$1" "$V"
+        printf 'ABOUT="%s"\n' "$8"
+        printf 'LICENSE="%s"\n' "$2"
+        printf 'SRC="%s"\n' "$3"
+        printf 'SHA256="%s"\n' "$4"
+        [ -z "$5" ] || printf 'LINKS="%s"\n' "$5"
+        [ -z "$6" ] || printf 'ADOPTS="%s"\n' "$6"
+        printf '\ninstall_pkg() {\n%s\n}\n' "$7"
+    } > "$r_dir/recipe"
+}
+
+escreve_correspondentes() { # nome linhas-sha-url
+    {
+        printf '# Fonte correspondente de um binário que o PROJETO compila: o snapshot\n'
+        printf '# da árvore na revisão %s, com o vendor/ das crates, publicado em\n' "$R0"
+        printf '# %s/sources/distropica/. Gerado pelo bootstrap/release.\n' "$SITE"
+        printf 'VERSION=%s\n' "$V"
+        printf '%s\n' "$2"
+    } > "newspeak/$1/fontes-correspondentes"
+}
+
+preparar() {
+    V=${1:?versão}; RAIZ=${2:?raiz construtora}
+    RAIZ=$(CDPATH= cd -- "$RAIZ" && pwd -P)
+    VC=$(printf '%s' "$V" | tr -d .)
+    L=$REPO/target/release-$V
+    [ ! -e "$L" ] || morre "$L já existe; o preparo nunca sobrescreve uma versão"
+    [ -x "$RAIZ/opt/zig/current/zig" ] || morre "$RAIZ não tem o zig da árvore"
+    [ -f "$CHAVE_SECRETA" ] || morre "chave de produção ausente: $CHAVE_SECRETA"
+    livre=$(df -BG --output=avail "$REPO/target" | tail -1 | tr -dc 0-9)
+    [ "$livre" -ge 25 ] || morre "só ${livre}G livres em target/; o preparo pede 25G"
+    conferir
+    R0=$(git rev-parse HEAD)
+    mkdir -p "$L"
+    exec 3>>"$L/preparo.log"
+    printf 'VERSAO=%s\nRAIZ=%s\nR0=%s\n' "$V" "$RAIZ" "$R0" > "$L/ESTADO"
+
+    m "1/12 raiz: registros íntegros e ABI fechada"
+    MT_CADEIA=$REPO/target/release/minitrue
+    NEWSPEAK_PATH=$REPO/newspeak "$MT_CADEIA" --root "$RAIZ" verify >&3 2>&1 ||
+        morre "minitrue verify reprovou a raiz (ver $L/preparo.log)"
+    NEWSPEAK_PATH=$REPO/newspeak "$MT_CADEIA" --root "$RAIZ" audit >&3 2>&1 ||
+        morre "minitrue audit reprovou a raiz (ver $L/preparo.log)"
+    faltam=
+    for p in $(fechamento_mundo_b); do
+        [ -f "$RAIZ/var/lib/minitrue/records/$p/meta" ] || faltam="$faltam $p"
+    done
+    [ -z "$faltam" ] || morre "a cadeia não construiu:$faltam"
+
+    m "2/12 executores: minitrue e minipax estáticos, reprodutíveis"
+    mkdir -p "$L/executores"
+    ZIG=$RAIZ/opt/zig/current/zig bootstrap/build-minitrue.sh --musl \
+        "$L/executores/minitrue" >&3 2>&1 || morre "minitrue musl não compilou"
+    ZIG=$RAIZ/opt/zig/current/zig bootstrap/build-minitrue.sh --pacote minipax --musl \
+        "$L/executores/minipax" >&3 2>&1 || morre "minipax musl não compilou"
+    MINITRUE=$L/executores/minitrue
+    MINIPAX=$L/executores/minipax
+    sha_minitrue=$(sha256sum "$MINITRUE" | cut -d' ' -f1)
+    sha_minipax=$(sha256sum "$MINIPAX" | cut -d' ' -f1)
+    # A cópia da raiz acompanha: é ela que assina o cache dentro do rootfs.
+    cp "$MINITRUE" "$RAIZ/usr/bin/minitrue.novo" && mv "$RAIZ/usr/bin/minitrue.novo" "$RAIZ/usr/bin/minitrue" ||
+        morre "não sincronizei o minitrue da raiz"
+
+    m "3/12 EFI: kernel $(pino_efi LINUX_VERSION), embutindo os dois executores"
+    install -d -m 0700 "$L/efi-out"
+    ZIG=$RAIZ/opt/zig/current/zig nice -n 5 bootstrap/live/build-efi \
+        --mode development --output "$L/efi-out/BOOTX64.EFI" \
+        --work "$L/efi-work" --keep-work \
+        --linux-tar "$(objeto "$(pino_efi LINUX_SHA256)")" \
+        --busybox-tar "$(objeto "$(pino_efi BUSYBOX_SHA256)")" \
+        --e2fsprogs-tar "$(objeto "$(pino_efi E2FSPROGS_SHA256)")" \
+        --ncurses-tar "$(objeto "$(pino_efi NCURSES_SHA256)")" \
+        --util-linux-tar "$(objeto "$(pino_efi UTIL_LINUX_SHA256)")" \
+        --firmware-tar "$(objeto "$(pino_efi LINUX_FIRMWARE_SHA256)")" \
+        --minitrue "$MINITRUE" --minipax "$MINIPAX" \
+        --jobs 6 --source-date-epoch "$(sed -n 's/^SOURCE_DATE_EPOCH=//p' "$PERFIL/profile")" \
+        >&3 2>&1 || morre "o build-efi reprovou (ver $L/preparo.log)"
+    EFI=$L/BOOTX64-$V.EFI
+    cp "$L/efi-out/BOOTX64.EFI" "$EFI"
+    for sc in live-components live-lock live-runner-proof; do
+        cp "$L/efi-out/BOOTX64.EFI.$sc" "$EFI.$sc" || morre "sem o sidecar $sc do EFI"
+    done
+    cp "$L/efi-work/linux-source/.config" "$L/live-kernel-config-$VC" || morre "sem o .config vivo"
+    # O EFI embute EXATAMENTE os executores que as receitas vão fixar.
+    for par in "minitrue-static:$sha_minitrue" "minipax-static:$sha_minipax"; do
+        grep -q "^ENTRY=${par%%:*}|.*|binary:${par#*:}|" "$EFI.live-components" ||
+            morre "o EFI não embute o ${par%%-*} compilado aqui"
+    done
+    # Duas cópias cabem na ESP: a atual e a anterior, com a folga do
+    # boot-update. Se não couberem, a rotação passa a apagar a reserva.
+    esp_mib=64
+    efi_bytes=$(wc -c < "$EFI")
+    [ $((2 * efi_bytes + 4 * 1024 * 1024)) -le $((esp_mib * 1024 * 1024)) ] ||
+        morre "o EFI tem $efi_bytes bytes; duas cópias não cabem na ESP de ${esp_mib} MiB"
+    sha_efi=$(sha256sum "$EFI" | cut -d' ' -f1)
+
+    m "4/12 fonte correspondente do projeto (revisão $(git rev-parse --short "$R0"))"
+    SNAPSHOT=$L/distropica-projeto-$V.tar.xz
+    snapshot_do_projeto "$R0" "$SNAPSHOT"
+    sha_snapshot=$(sha256sum "$SNAPSHOT" | cut -d' ' -f1)
+    for x in "$MINITRUE" "$MINIPAX" "$EFI" "$SNAPSHOT"; do
+        para_o_cache "$x" "$FONTES_CACHE"
+        para_o_cache "$x" "$RAIZ/var/cache/minitrue"
+    done
+    # As fontes de terceiros que o EFI embute entram no cache da raiz: é dele
+    # que o source-bundle tira a fonte correspondente do distropica-efi. O
+    # BusyBox do EFI (da fonte) já não é o do Mundo A (o binário 1.35.0), e sem
+    # isto a GPL dele ficaria sem fonte no bundle.
+    for pino in LINUX BUSYBOX E2FSPROGS NCURSES UTIL_LINUX LINUX_FIRMWARE; do
+        h=$(pino_efi "${pino}_SHA256")
+        para_o_cache "$(objeto "$h")" "$RAIZ/var/cache/minitrue"
+        # A assinatura destacada viaja junto quando existe; o bundle a copia
+        # ao lado da fonte.
+        for lado in sig asc minisig; do
+            [ -f "$FONTES_CACHE/$h.$lado" ] && [ ! -e "$RAIZ/var/cache/minitrue/$h.$lado" ] || continue
+            cp "$FONTES_CACHE/$h.$lado" "$RAIZ/var/cache/minitrue/$h.$lado"
+        done
+    done
+
+    m "5/12 receitas dos artefatos do projeto (R1)"
+    rel=$SITE/releases
+    escreve_receita minitrue "$(pino_efi MINITRUE_LICENSE)" \
+        "$rel/minitrue-$V-x86_64-linux-musl" "$sha_minitrue" \
+        'minitrue=bin/minitrue' /usr/bin/minitrue \
+        '    mkdir -p "$PREFIX/bin"
+    cp "$DL" "$PREFIX/bin/minitrue"
+    chmod 755 "$PREFIX/bin/minitrue"' \
+        "O Ministério da Verdade como pacote da própria distro: o gerenciador que retifica o sistema, publicado pelo projeto como binário estático musl e reprodutível (bootstrap/build-minitrue.sh --musl). ADOTA o /usr/bin/minitrue que o instalador persistiu, conferindo os bytes contra o install.manifest; é assim que o sistema instalado passa a receber o próprio gerenciador pela mesma via dos outros pacotes. São os mesmos bytes que o EFI desta versão embute."
+    escreve_receita minipax "$(pino_efi MINIPAX_LICENSE)" \
+        "$rel/minipax-$V-x86_64-linux-musl" "$sha_minipax" \
+        'minipax=bin/minipax' /usr/bin/minipax \
+        '    mkdir -p "$PREFIX/bin"
+    cp "$DL" "$PREFIX/bin/minipax"
+    chmod 755 "$PREFIX/bin/minipax"' \
+        "O Ministério da Paz como pacote da própria distro: o instalador, o compositor de mídia e o boot-update, que leva o EFI do pacote distropica-efi para a ESP. Binário estático musl e reprodutível, publicado pelo projeto; ADOTA o /usr/bin/minipax que o instalador persistiu, conferindo os bytes contra o install.manifest. São os mesmos bytes que o EFI desta versão embute."
+    escreve_receita minitrue-ponte "$(pino_efi MINITRUE_LICENSE)" \
+        "$rel/minitrue-$V-x86_64-linux-musl" "$sha_minitrue" \
+        'minitrue-ponte=bin/minitrue-ponte' '' \
+        '    mkdir -p "$PREFIX/bin"
+    cp "$DL" "$PREFIX/bin/minitrue-ponte"
+    chmod 755 "$PREFIX/bin/minitrue-ponte"' \
+        "A PONTE, para quem instalou até a 0.16 e só para isso. O minitrue daquelas versões não conhece ADOPTS e recusa, com razão, tomar o /usr/bin/minitrue sem dono; então o primeiro passo é instalar o minitrue novo com outro nome, e é ele quem adota os executores e converge o resto. É o mesmo binário do pacote minitrue, byte a byte. Depois da travessia sai com memoryhole."
+    escreve_receita distropica-efi "$(pino_efi EFI_PAYLOAD_LICENSE)" \
+        "$rel/BOOTX64-$V.EFI" "$sha_efi" '' '' \
+        '    mkdir -p "$PREFIX"
+    cp "$DL" "$PREFIX/BOOTX64.EFI"
+    chmod 644 "$PREFIX/BOOTX64.EFI"' \
+        "O EFI de boot do sistema instalado: o kernel $(pino_efi LINUX_VERSION) e o initramfs vivo num binário só, o mesmo que a mídia desta versão boota. Instalar ou atualizar este pacote faz o minitrue chamar o minipax boot-update, que o põe em EFI/BOOT/BOOTX64.EFI e guarda o que arrancou antes em EFI/distropica/anterior.efi, com as duas entradas na NVRAM; o drop-in 07-efi.sh do base refaz a conta a cada boot."
+    linha_snapshot="$sha_snapshot  $SITE/sources/distropica/distropica-projeto-$V.tar.xz"
+    for p in minitrue minipax minitrue-ponte; do
+        escreve_correspondentes "$p" "$linha_snapshot"
+    done
+    # O EFI embute também fontes de terceiros; cada uma com o pino do build-efi.
+    efi_linhas=$linha_snapshot
+    for pino in LINUX BUSYBOX E2FSPROGS NCURSES UTIL_LINUX LINUX_FIRMWARE; do
+        efi_linhas="$efi_linhas
+$(pino_efi "${pino}_SHA256")  $(pino_efi "${pino}_URL")"
+    done
+    escreve_correspondentes distropica-efi "$efi_linhas"
+    for p in minitrue minipax distropica-efi; do
+        grep -qx "$p" "$PERFIL/target.world" || printf '%s\n' "$p" >> "$PERFIL/target.world"
+    done
+    for p in minitrue minipax minitrue-ponte distropica-efi; do
+        NEWSPEAK_PATH=$REPO/newspeak "$MINITRUE" --root "$RAIZ" newspeak "$p" >&3 2>&1 ||
+            morre "a receita gerada de $p não é aceita pelo minitrue"
+    done
+    git add newspeak/minitrue newspeak/minipax newspeak/minitrue-ponte newspeak/distropica-efi \
+        "$PERFIL/target.world"
+    git commit -q -m "$V: os executores e o EFI viram pacotes do canal
+
+minitrue  $sha_minitrue
+minipax   $sha_minipax
+EFI       $sha_efi (kernel $(pino_efi LINUX_VERSION))
+snapshot  $sha_snapshot (fonte correspondente, revisão $R0)" || morre "commit das receitas falhou"
+    R1=$(git rev-parse HEAD)
+    printf 'R1=%s\n' "$R1" >> "$L/ESTADO"
+
+    m "6/12 espelho de receitas da raiz"
+    # A emissão coteja a receita que construiu cada pacote com a da árvore que
+    # a raiz embarca, e a raiz não se atualiza sozinha.
+    for d in newspeak/*/; do
+        p=${d%/}; p=${p#newspeak/}
+        [ -f "newspeak/$p/recipe" ] || continue
+        rm -rf "$RAIZ/var/lib/minitrue/newspeak/$p.novo"
+        cp -a "newspeak/$p" "$RAIZ/var/lib/minitrue/newspeak/$p.novo"
+        rm -rf "$RAIZ/var/lib/minitrue/newspeak/$p"
+        mv "$RAIZ/var/lib/minitrue/newspeak/$p.novo" "$RAIZ/var/lib/minitrue/newspeak/$p"
+    done
+
+    m "7/12 canal $VC: emissão e assinatura"
+    CANAL=$L/canal-$VC
+    # shellcheck disable=SC2046 # a lista é de nomes canônicos de pacote.
+    NEWSPEAK_PATH=$REPO/newspeak nice -n 5 "$MINITRUE" --root "$RAIZ" channel emit \
+        --output "$CANAL" $(fechamento_mundo_b) >&3 2>&1 || morre "channel emit reprovou"
+    "$MINITRUE" channel sign "$CHAVE_SECRETA" "$CANAL/index" "$(chave_publica)" >&3 2>&1 ||
+        morre "a assinatura do índice falhou"
+
+    m "8/12 seed do canal no perfil (R2)"
+    cp "$CANAL/index" "$PERFIL/channel-bootstrap/channels/oficial/index"
+    cp "$CANAL/index.minisig" "$PERFIL/channel-bootstrap/channels/oficial/index.minisig"
+    git add "$PERFIL/channel-bootstrap/channels/oficial/index" \
+        "$PERFIL/channel-bootstrap/channels/oficial/index.minisig"
+    git commit -q -m "$V: a seed do canal passa a ser o canal-$VC
+
+A instalação offline grava esta seed no alvo como o índice operacional.
+Índice $(sha256sum "$CANAL/index" | cut -d' ' -f1)." || morre "commit da seed falhou"
+    R2=$(git rev-parse HEAD)
+    printf 'R2=%s\n' "$R2" >> "$L/ESTADO"
+
+    m "9/12 cache da mídia"
+    # A chave entra no rootfs só pelo tempo da assinatura; o trap a apaga em
+    # qualquer saída, inclusive por erro.
+    chave_na_raiz=$RAIZ/root/.distropica-chave-$$
+    trap 'rm -f "$chave_na_raiz"' EXIT INT TERM
+    install -d -m 0700 "$RAIZ/root"
+    install -m 0600 "$CHAVE_SECRETA" "$chave_na_raiz"
+    nice -n 5 bootstrap/cache-from-channel --emitted "$CANAL" --output "$L/cache" \
+        --channel-config "$REPO/$CONFIG_CANAL" --secret-key "/root/${chave_na_raiz##*/}" \
+        --minitrue-root "$RAIZ" --profile "$REPO/$PERFIL" \
+        --source-cache "$RAIZ/var/cache/minitrue" --source-cache "$FONTES_CACHE" \
+        >&3 2>&1 || morre "cache-from-channel reprovou"
+    rm -f "$chave_na_raiz"
+    trap - EXIT INT TERM
+
+    m "10/12 ISO"
+    ISO=$L/distropica-$V-x86_64.iso
+    nice -n 5 "$MINIPAX" media build --profile "$REPO/$PERFIL" --mode offline --format iso \
+        --boot-efi "$EFI" --cache "$L/cache" --newspeak "$REPO/newspeak" \
+        --minitrue "$MINITRUE" --output "$ISO" >&3 2>&1 || morre "a composição da ISO reprovou"
+    for ext in sha256 media.lock manifest; do [ -f "$ISO.$ext" ] || morre "falta $ISO.$ext"; done
+
+    m "11/12 árvore Newspeak assinada"
+    "$MINITRUE" pack newspeak "$L/newspeak.tar" >&3 2>&1 || morre "pack da árvore falhou"
+    "$MINITRUE" channel sign "$CHAVE_SECRETA" "$L/newspeak.tar" "$(chave_publica)" >&3 2>&1 ||
+        morre "a assinatura da árvore falhou"
+
+    m "12/12 fontes correspondentes e licenças"
+    FONTES=$REPO/target/fontes-$V
+    [ ! -e "$FONTES" ] || morre "$FONTES já existe"
+    nice -n 5 bootstrap/source-bundle --media "$ISO" --output "$FONTES" --cache "$L/cache" \
+        --minitrue-root "$RAIZ" --minitrue-bin "$MINITRUE" --profile "$REPO/$PERFIL" \
+        --live-kernel-config "$L/live-kernel-config-$VC" \
+        --live-util-linux-tar "$(objeto "$(pino_efi UTIL_LINUX_SHA256)")" --strict \
+        >&3 2>&1 || morre "o source-bundle estrito reprovou"
+    nice -n 5 bootstrap/sbom --bundle "$FONTES" --strict >&3 2>&1 || morre "o sbom estrito reprovou"
+    BUNDLE=$L/distropica-$V-corresponding-sources.tar.zst
+    tar -C "$REPO/target" -cf "$L/.bundle.tar" "fontes-$V" || morre "o tar do bundle falhou"
+    nice -n 5 zstd -19 -T0 -q -o "$BUNDLE" "$L/.bundle.tar" || morre "o zstd do bundle falhou"
+    rm -f "$L/.bundle.tar"
+    # A prova de que o arquivo está inteiro é descomprimi-lo e contar.
+    zstd -t -q "$BUNDLE" || morre "o bundle não passa no teste de integridade"
+    no_tar=$(zstd -dc "$BUNDLE" | tar -tf - | grep -vc '/$') || morre "a listagem do bundle falhou"
+    no_disco=$(find "$FONTES" ! -type d | wc -l)
+    [ "$no_tar" -eq "$no_disco" ] || morre "o bundle tem $no_tar arquivos e o diretório tem $no_disco"
+    cp "$FONTES/INVENTARIO" "$L/distropica-$V-sources.tsv"
+    cp "$FONTES/licencas/INDICE" "$L/distropica-$V-licencas.tsv"
+    (cd "$L" &&
+        sha256sum "${BUNDLE##*/}" > "${BUNDLE##*/}.sha256" &&
+        sha256sum "BOOTX64-$V.EFI" > "BOOTX64-$V.EFI.sha256") || morre "as somas falharam"
+
+    printf 'PREPARADA=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$L/ESTADO"
+    m "PREPARADA: ISO $(cut -c1-16 < "$ISO.sha256")…, canal $(sha256sum "$CANAL/index" | cut -c1-16)…, bundle $(cut -c1-16 < "$BUNDLE.sha256")…"
+}
+
+estado() { # VERSAO — carrega o ESTADO da versão preparada
+    V=${1:?versão}
+    VC=$(printf '%s' "$V" | tr -d .)
+    L=$REPO/target/release-$V
+    [ -f "$L/ESTADO" ] && grep -q '^PREPARADA=' "$L/ESTADO" || morre "a $V não foi preparada"
+}
+
+# ---------------------------------------------------------------------------
+# aceitar VERSAO — a mídia servindo, como uma pessoa a usaria.
+# ---------------------------------------------------------------------------
+aceitar() {
+    estado "$1"
+    prova=$L/prova
+    [ ! -e "$prova" ] || morre "$prova já existe"
+    mkdir -p "$prova"
+    # Senha nova a cada aceite; o disco e os logs são locais e descartáveis.
+    ACCEPT_TUI_SENHA=aceite-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')
+    export ACCEPT_TUI_SENHA
+    # O DISCO DO ACEITE TEM O TAMANHO QUE A MÍDIA PEDE. O instalador recusa
+    # raiz menor que cinco vezes o cache.tar mais 512 MiB (raiz_minima_bytes no
+    # init), e o cache cresce de versão para versão: um disco fixo de 8 GiB
+    # reprovaria uma mídia saudável dizendo o número. O mínimo vai para o
+    # ESTADO, porque é o que o site precisa dizer.
+    cache_bytes=$(du -sb "$L/cache" | cut -f1)
+    raiz_minima=$((cache_bytes * 5 + 536870912))
+    disco_mib=$(( (raiz_minima + 1048575) / 1048576 + 64 + 512 ))
+    [ "$disco_mib" -ge 8192 ] || disco_mib=8192
+    printf 'RAIZ_MINIMA_BYTES=%s\n' "$raiz_minima" >> "$L/ESTADO"
+    m "aceite 1/3: instalador de texto, dois cenários (disco de $disco_mib MiB)"
+    bootstrap/live/accept-tui --efi "$L/BOOTX64-$V.EFI" --iso "$L/distropica-$V-x86_64.iso" \
+        --disk "$prova/disco.raw" --log-dir "$prova/tui" --accel kvm --memory-mib 4096 \
+        --disk-size-mib "$disco_mib" \
+        > "$prova/tui.log" 2>&1 || morre "o aceite do instalador reprovou (ver $prova/tui.log)"
+    m "aceite 2/3: login e sessão gráfica no disco da rota automática"
+    bootstrap/live/screenshot-qemu --disk "$prova/disco.raw" --output "$prova/sessao.ppm" \
+        --log-dir "$prova/sessao" --login distropica --settle 60 \
+        > "$prova/sessao.log" 2>&1 || morre "a sessão não subiu depois do login (ver $prova/sessao.log)"
+    m "aceite 3/3: login e sessão gráfica no disco da rota manual"
+    bootstrap/live/screenshot-qemu --disk "$prova/disco-manual.raw" --output "$prova/sessao-manual.ppm" \
+        --log-dir "$prova/sessao-manual" --login distropica --settle 60 \
+        > "$prova/sessao-manual.log" 2>&1 || morre "a sessão da rota manual não subiu (ver $prova/sessao-manual.log)"
+    printf 'ACEITA=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$L/ESTADO"
+    m "ACEITA: fotos em $prova/sessao.ppm e $prova/sessao-manual.ppm"
+}
+
+# ---------------------------------------------------------------------------
+# Subida conferida: o arquivo vai com nome provisório, troca por rename, e o
+# sha256 é medido NO SERVIDOR. A prova é o que está no ar, não o que o scp
+# disse ter enviado.
+# ---------------------------------------------------------------------------
+sobe_conferido() { # local remoto
+    ssh "$SERVIDOR" "mkdir -p '$(dirname "$2")'" || morre "não criei $(dirname "$2")"
+    scp -q "$1" "$SERVIDOR:$2.novo" || morre "upload de $1 falhou"
+    ssh "$SERVIDOR" "chown debian:debian '$2.novo' && chmod 0644 '$2.novo' && mv '$2.novo' '$2'" ||
+        morre "não publiquei $2"
+    [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$(ssh "$SERVIDOR" "sha256sum '$2' | cut -d' ' -f1")" ] ||
+        morre "$2 no ar diverge do local"
+}
+
+sobe_diretorio() { # local remoto (que não pode existir)
+    ssh "$SERVIDOR" "[ ! -e '$2' ]" || morre "$2 já existe no servidor"
+    scp -qr "$1" "$SERVIDOR:$2" || morre "upload de $1 falhou"
+    ssh "$SERVIDOR" "chown -R debian:debian '$2' &&
+        find '$2' -type d -exec chmod 0755 {} + && find '$2' -type f -exec chmod 0644 {} +" ||
+        morre "não ajustei $2"
+    local_somas=$(cd "$1" && find . -type f -exec sha256sum {} + | sort -k2)
+    remoto_somas=$(ssh "$SERVIDOR" "cd '$2' && find . -type f -exec sha256sum {} + | sort -k2")
+    [ "$local_somas" = "$remoto_somas" ] || morre "$2 no ar diverge do local"
+}
+
+ARTEFATOS="distropica-VER-x86_64.iso distropica-VER-x86_64.iso.sha256
+distropica-VER-x86_64.iso.manifest distropica-VER-x86_64.iso.media.lock
+distropica-VER-corresponding-sources.tar.zst distropica-VER-corresponding-sources.tar.zst.sha256
+distropica-VER-sources.tsv distropica-VER-licencas.tsv BOOTX64-VER.EFI BOOTX64-VER.EFI.sha256"
+
+subir_teste() {
+    estado "$1"
+    grep -q '^ACEITA=' "$L/ESTADO" || morre "a $V não passou no aceite"
+    [ -z "$(git status --porcelain)" ] || morre "árvore com mudança não commitada"
+    arquivos=$(printf '%s\n' "$ARTEFATOS" | sed "s/VER/$V/g")
+    for a in $arquivos; do [ -f "$L/$a" ] || morre "falta $L/$a"; done
+    (cd "$L" && sha256sum -c --quiet "distropica-$V-x86_64.iso.sha256" \
+        "distropica-$V-corresponding-sources.tar.zst.sha256" "BOOTX64-$V.EFI.sha256") ||
+        morre "um artefato local não confere com a própria soma"
+
+    m "1/4 releases"
+    for a in $arquivos; do sobe_conferido "$L/$a" "$REMOTO/releases/$a"; done
+    # Os executores com o nome que as receitas minitrue e minipax fixam.
+    sobe_conferido "$L/executores/minitrue" "$REMOTO/releases/minitrue-$V-x86_64-linux-musl"
+    sobe_conferido "$L/executores/minipax" "$REMOTO/releases/minipax-$V-x86_64-linux-musl"
+
+    m "2/4 fontes externalizadas"
+    # Toda fonte que a árvore aponta em distropica.com.br/sources — SRC de
+    # receita ou linha de fonte correspondente — tem de estar no ar com o sha
+    # que a árvore fixa. Sem isto o SRC do librsvg apontaria um vendor que só
+    # existe no disco de quem o gerou.
+    for decl in newspeak/*/fontes-correspondentes; do
+        grep -E '^[0-9a-f]{64}[[:space:]]+https://distropica\.com\.br/sources/' "$decl" || true
+    done | sort -u | while read -r sha url; do
+        sobe_conferido "$(objeto "$sha")" "$REMOTO${url#"$SITE"}"
+    done
+    for rec in newspeak/*/recipe; do
+        src=$(sed -n 's/^SRC="\(.*\)"$/\1/p' "$rec")
+        case "$src" in "$SITE"/sources/*) ;; *) continue ;; esac
+        sha=$(sed -n 's/^SHA256="\{0,1\}\([0-9a-f]\{64\}\)"\{0,1\}$/\1/p' "$rec")
+        ver=$(sed -n 's/^VERSION=//p' "$rec")
+        url=$(printf '%s' "$src" | sed "s/\$VERSION/$ver/g; s/\${VERSION}/$ver/g")
+        sobe_conferido "$(objeto "$sha")" "$REMOTO${url#"$SITE"}"
+    done
+
+    m "3/4 canal $VC em canal/teste-$VC"
+    sobe_diretorio "$L/canal-$VC" "$REMOTO/canal/teste-$VC"
+
+    m "4/4 árvore Newspeak em newspeak-teste-$VC"
+    sobe_conferido "$L/newspeak.tar.minisig" "$REMOTO/newspeak-teste-$VC/newspeak.tar.minisig"
+    sobe_conferido "$L/newspeak.tar" "$REMOTO/newspeak-teste-$VC/newspeak.tar"
+    printf 'TESTE_NO_AR=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$L/ESTADO"
+    m "NO AR PARA TESTE: $SITE/canal/teste-$VC/ e $SITE/newspeak-teste-$VC/"
+}
+
+aceitar_atualizacao() {
+    estado "$1"
+    DISCO_ANTERIOR=${2:?disco instalado da versão anterior}
+    grep -q '^TESTE_NO_AR=' "$L/ESTADO" || morre "o canal de teste da $V não está no ar"
+    prova=$L/atualizacao
+    [ ! -e "$prova" ] || morre "$prova já existe"
+    # O uname -r do kernel vivo leva o LOCALVERSION da configuração que o EFI
+    # desta versão embutiu (7.2.7-distropica-live), e não só a versão.
+    sufixo=$(sed -n 's/^CONFIG_LOCALVERSION="\(.*\)"$/\1/p' "$L/live-kernel-config-$VC")
+    [ -n "$sufixo" ] || morre "a configuração viva não declara CONFIG_LOCALVERSION"
+    bootstrap/live/accept-upgrade --disk "$DISCO_ANTERIOR" --log-dir "$prova" \
+        --canal "$SITE/canal/teste-$VC/" --newspeak "$SITE/newspeak-teste-$VC/" \
+        --efi-esperado "$L/BOOTX64-$V.EFI" \
+        --kernel-esperado "$(pino_efi LINUX_VERSION)$sufixo" \
+        > "$L/atualizacao.log" 2>&1 || morre "a atualização reprovou (ver $L/atualizacao.log)"
+    printf 'ATUALIZACAO_ACEITA=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$L/ESTADO"
+    m "ATUALIZAÇÃO ACEITA: $prova"
+}
+
+publicar() {
+    estado "$1"
+    ANTERIOR=${2:?versão cujo canal fica preservado, ex.: 016}
+    for marca in ACEITA TESTE_NO_AR ATUALIZACAO_ACEITA; do
+        grep -q "^$marca=" "$L/ESTADO" || morre "falta $marca no ESTADO da $V"
+    done
+    [ -z "$(git status --porcelain)" ] || morre "árvore com mudança não commitada"
+    idx=$(sha256sum "$L/canal-$VC/index" | cut -d' ' -f1)
+
+    m "1/3 canal: oficial vira oficial-$ANTERIOR, teste-$VC vira oficial"
+    ssh "$SERVIDOR" "set -e
+        cd '$REMOTO/canal'
+        [ ! -e 'oficial-$ANTERIOR' ]
+        [ \"\$(sha256sum 'teste-$VC/index' | cut -d' ' -f1)\" = '$idx' ]
+        mv oficial 'oficial-$ANTERIOR'
+        mv 'teste-$VC' oficial" || morre "a troca do canal falhou"
+    [ "$(ssh "$SERVIDOR" "sha256sum '$REMOTO/canal/oficial/index' | cut -d' ' -f1")" = "$idx" ] ||
+        morre "o canal no ar não é o $VC"
+
+    m "2/3 árvore Newspeak em /newspeak/"
+    # A árvore e a assinatura trocam juntas: um cliente que visse a árvore nova
+    # com a assinatura velha recusaria, com razão.
+    ssh "$SERVIDOR" "set -e
+        cd '$REMOTO'
+        if [ -e newspeak ]; then mv newspeak 'newspeak-$ANTERIOR'; fi
+        mv 'newspeak-teste-$VC' newspeak" || morre "a troca da árvore falhou"
+    [ "$(ssh "$SERVIDOR" "sha256sum '$REMOTO/newspeak/newspeak.tar' | cut -d' ' -f1")" = \
+      "$(sha256sum "$L/newspeak.tar" | cut -d' ' -f1)" ] || morre "a árvore no ar não é a da $V"
+
+    m "3/3 site"
+    site/publicar || morre "site/publicar falhou"
+    printf 'PUBLICADA=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$L/ESTADO"
+    m "PUBLICADA: $V"
+}
+
+case "${1:-}" in
+    conferir) shift; conferir "$@" ;;
+    preparar) shift; preparar "$@" ;;
+    aceitar) shift; aceitar "$@" ;;
+    subir-teste) shift; subir_teste "$@" ;;
+    aceitar-atualizacao) shift; aceitar_atualizacao "$@" ;;
+    publicar) shift; publicar "$@" ;;
+    -h|--help|'') uso ;;
+    *) uso >&2; exit 2 ;;
+esac
