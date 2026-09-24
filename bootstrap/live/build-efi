@@ -383,10 +383,10 @@ E2FSPROGS_SHA256=fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0
 # ncurses e util-linux vêm em par: o cfdisk é uma interface de texto, e quem a
 # desenha é a ncursesw. O hash do ncurses bate com o pino do Void Linux E com a
 # receita newspeak/ncurses desta árvore. O do util-linux 2.42.4 foi conferido,
-# em 2026-09-24, contra o sha256sums.asc do kernel.org; a ASSINATURA desse
-# arquivo não foi verificada nesta subida — a chave que a fez (B8868C80…A6B1)
-# não estava publicada com UID nos servidores consultados, e dizer que foi
-# seria mentir sobre o que se conferiu.
+# em 2026-09-24, contra o sha256sums.asc do diretório v2.42 do kernel.org, e a
+# assinatura desse arquivo contra a chave do autosigner do kernel.org
+# (B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1, a mesma que newspeak/linux fixa,
+# obtida do WKD oficial): VALIDSIG, criada em 2026-09-21.
 NCURSES_VERSION=6.6
 NCURSES_URL=https://ftp.gnu.org/gnu/ncurses/ncurses-${NCURSES_VERSION}.tar.gz
 NCURSES_SHA256=355b4cbbed880b0381a04c46617b7656e362585d52e9cf84a67e2009b749ff11

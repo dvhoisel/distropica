@@ -170,34 +170,12 @@ if [ -z "$FROM_SOURCE" ] && curl -fsSL -o "$CARGO_TARGET_DIR/.minitrue-musl.down
     rm -f "$CARGO_TARGET_DIR/.minitrue-musl.download"
     echo "minitrue estático instalado do canal (hash confere)"
 elif rustup target list --installed 2>/dev/null | grep -q '^x86_64-unknown-linux-musl$'; then
-    SHIMS="$CARGO_TARGET_DIR/shims"
-    mkdir -p "$SHIMS"
-    cat > "$SHIMS/zcc" <<EOF
-#!/bin/sh
-# traduz o triple LLVM do crate cc para o do zig (SPEC-0003 §10)
-ZIG="$ROOTFS/opt/zig/current/zig"
-n=\$#; i=0; skip=
-while [ "\$i" -lt "\$n" ]; do
-  a=\$1; shift; i=\$((i+1))
-  if [ -n "\$skip" ]; then skip=; continue; fi
-  case "\$a" in
-    --target=*) continue ;;
-    -target) skip=1; continue ;;
-  esac
-  set -- "\$@" "\$a"
-done
-exec "\$ZIG" cc -target x86_64-linux-musl "\$@"
-EOF
-    cat > "$SHIMS/zar" <<EOF
-#!/bin/sh
-exec "$ROOTFS/opt/zig/current/zig" ar "\$@"
-EOF
-    chmod +x "$SHIMS/zcc" "$SHIMS/zar"
-    CC_x86_64_unknown_linux_musl="$SHIMS/zcc" AR_x86_64_unknown_linux_musl="$SHIMS/zar" \
-        cargo build --release --quiet --no-default-features \
-        --target x86_64-unknown-linux-musl \
-        --manifest-path "$REPO/minitrue/Cargo.toml"
-    cp "$CARGO_TARGET_DIR/x86_64-unknown-linux-musl/release/minitrue" "$ROOTFS/usr/bin/minitrue"
+    # PELO MESMO SCRIPT DO BINÁRIO PUBLICADO. Até a 0.17 este passo tinha um
+    # cargo build próprio, com os invólucros do zig escritos aqui e sem o
+    # --remap-path-prefix: o minitrue de dentro do rootfs embutia 219 caminhos
+    # do builder, enquanto o comentário acima dizia que ele era reprodutível.
+    ZIG="$ROOTFS/opt/zig/current/zig" "$REPO/bootstrap/build-minitrue.sh" --musl \
+        "$ROOTFS/usr/bin/minitrue"
     echo "minitrue estático instalado em /usr/bin do rootfs"
 else
     echo "aviso: target musl ausente (rustup target add x86_64-unknown-linux-musl);"
