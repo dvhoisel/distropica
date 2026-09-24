@@ -429,6 +429,11 @@ impl LiveMaterialImport {
 pub(crate) struct FinalizedMaterials {
     pub lock_sha256: String,
     pub identities: Vec<MaterialIdentity>,
+    /// Os órfãos que o fechamento `sync` mediu DEPOIS da aplicação — vazio em
+    /// qualquer outro propósito. São apontados ao operador e nunca removidos
+    /// (SPEC-0003 §2); medi-los antes da aplicação erraria no pacote que a
+    /// árvore nova voltou a exigir.
+    pub orphans: Vec<PlanOrphan>,
 }
 
 pub struct ResolvedPlan {
@@ -2204,7 +2209,7 @@ fn finalize_abi(
     // MINITRUE_REOBSERVACAO_COMPLETA=1 força o caminho antigo — é o
     // interruptor da prova frio==morno e a saída de emergência.
     let material_set: BTreeSet<String> = material.iter().cloned().collect();
-    let previous = if plan.purpose == PlanPurpose::Rectify
+    let previous = if matches!(plan.purpose, PlanPurpose::Rectify | PlanPurpose::Sync)
         && std::env::var_os("MINITRUE_REOBSERVACAO_COMPLETA").is_none()
     {
         load_previous_applied_plan(ctx)
@@ -3295,20 +3300,25 @@ pub(crate) fn finalize_applied(
     written_records: &BTreeSet<String>,
     closure: AppliedClosure,
 ) -> Result<FinalizedMaterials> {
-    let roots: Vec<PlanRoot> =
-        if purpose == PlanPurpose::Rectify && closure == AppliedClosure::Complete {
-            // `applied-plans/current` is the authority for the complete installed
-            // world, not merely for the package names of this invocation.
-            roots_from_system_world(ctx)?
-        } else {
-            roots
-                .iter()
-                .map(|name| PlanRoot {
-                    name: name.clone(),
-                    role: RootRole::Install,
-                })
-                .collect()
-        };
+    // Um `rectify` completo e um `sync` completo afirmam a MESMA coisa: este é o
+    // mundo instalado inteiro. Os dois fecham contra o world do sistema e os
+    // dois emitem o receipt; o que os distingue é só como escolheram o que
+    // aplicar.
+    let autoridade_de_mundo = matches!(purpose, PlanPurpose::Rectify | PlanPurpose::Sync)
+        && closure == AppliedClosure::Complete;
+    let roots: Vec<PlanRoot> = if autoridade_de_mundo {
+        // `applied-plans/current` is the authority for the complete installed
+        // world, not merely for the package names of this invocation.
+        roots_from_system_world(ctx)?
+    } else {
+        roots
+            .iter()
+            .map(|name| PlanRoot {
+                name: name.clone(),
+                role: RootRole::Install,
+            })
+            .collect()
+    };
     let mut plan = resolve_for_with_intermediate(
         ctx,
         &roots,
@@ -3379,13 +3389,14 @@ pub(crate) fn finalize_applied(
     // parcial não pode afirmar isso: ele fecha o que deu certo até a falha, e o
     // resto da closure não foi construído. Emitir receipt aqui trocaria a
     // retomada barata por uma autoridade falsa.
-    if purpose == PlanPurpose::Rectify && closure == AppliedClosure::Complete {
+    if autoridade_de_mundo {
         let receipt = persist_applied_receipt(ctx, &plan, &lock_sha256)?;
         eprintln!("  receipt aplicado: {receipt}");
     }
     Ok(FinalizedMaterials {
         lock_sha256,
         identities,
+        orphans: plan.orphans.clone(),
     })
 }
 
@@ -4299,8 +4310,10 @@ impl ResolvedPlan {
     /// content-addressed preexistentes precisam provar nome, bytes e formato;
     /// colisões, symlinks e tipos especiais falham antes da mutação.
     pub(crate) fn preflight_publication(&self, ctx: &Ctx) -> Result<()> {
-        if self.purpose != PlanPurpose::Rectify {
-            bail!("preflight de publicação só pertence a PURPOSE=rectify");
+        // Os dois propósitos que APLICAM: `rectify` com os nomes pedidos e
+        // `sync` com o world inteiro. Os demais só resolvem ou emitem.
+        if !matches!(self.purpose, PlanPurpose::Rectify | PlanPurpose::Sync) {
+            bail!("preflight de publicação só pertence a PURPOSE=rectify ou sync");
         }
         preflight_content_addressed_namespace(
             &ctx.root.join("var/lib/minitrue/plan-locks"),
@@ -4591,7 +4604,7 @@ impl ResolvedPlan {
         if !self.tree_revalidated.get() {
             bail!("PLAN_LOCK não pode ser persistido antes de revalidar a árvore");
         }
-        if self.purpose == PlanPurpose::Rectify {
+        if matches!(self.purpose, PlanPurpose::Rectify | PlanPurpose::Sync) {
             // Revalidação imediatamente antes da primeira publicação factual;
             // o preflight original ocorreu antes de qualquer payload/record.
             self.preflight_publication(ctx)?;
@@ -5335,19 +5348,31 @@ fn persist_applied_receipt(
     // os overlays -introspection: nenhum vai para a superfície, e todos deixam
     // record porque o record é quem responde de quem é cada arquivo.
     //
-    // O que a igualdade queria garantir eram duas coisas distintas, e as duas
-    // continuam garantidas separadamente: nenhum record órfão de pacote que saiu
-    // do world, e nenhum participante do world sem record. O receipt segue
-    // comprometendo só os runtime, que é o laço logo abaixo.
+    // O que a igualdade queria garantir eram duas coisas distintas: nenhum
+    // record que o receipt não descreva, e nenhum participante do world sem
+    // record. O receipt segue comprometendo os runtime, que é o laço logo
+    // abaixo.
+    //
+    // O ÓRFÃO É DECLARADO, não recusado (2026-09-24). A primeira forma desta
+    // checagem recusava todo record fora do world resolvido, e isso
+    // contradizia a regra do próprio rolling: órfão nunca é removido sem ordem
+    // do administrador (SPEC-0003 §2). Uma árvore nova que larga uma
+    // dependência deixa esse pacote instalado e fora da closure — e, com a
+    // recusa, nenhum rectify completo voltaria a fechar até alguém apagá-lo.
+    // Agora cada órfão entra no receipt com o fato do próprio record: a
+    // autoridade continua descrevendo o diretório inteiro, só que dizendo o
+    // que é mundo e o que é resto.
     let record_names = record_snapshot.names();
     let plan_names: BTreeSet<String> = plan.nodes.keys().cloned().collect();
-    let mut orfaos = record_names.difference(&plan_names).peekable();
-    if orfaos.peek().is_some() {
-        let lista: Vec<&str> = orfaos.map(String::as_str).collect();
-        bail!(
-            "diretório de records tem pacote fora do world resolvido: {}",
-            lista.join(" ")
-        );
+    let orphan_names: Vec<String> = record_names.difference(&plan_names).cloned().collect();
+    let mut orphan_facts = Vec::new();
+    for package in &orphan_names {
+        let record = ctx.records_dir().join(package);
+        orphan_facts.push((
+            package.clone(),
+            install::verify_historical_record(ctx, &record, package)
+                .with_context(|| format!("{package}: record órfão não é íntegro"))?,
+        ));
     }
     let mut ausentes = expected_records.difference(&record_names).peekable();
     if ausentes.peek().is_some() {
@@ -5371,15 +5396,25 @@ fn persist_applied_receipt(
         ));
     }
     facts.sort();
+    orphan_facts.sort();
     record_snapshot.revalidate()?;
+    // Sem órfão, o receipt continua sendo o formato 1 byte a byte: o formato 2
+    // é o 1 com a seção de órfãos no fim, e só existe quando há o que declarar.
+    let formato = if orphan_facts.is_empty() { 1 } else { 2 };
     let mut body = format!(
-        "APPLIED_PLAN_RECEIPT_FORMAT=1\nPLAN_LOCK_SHA256={plan_lock_sha256}\nTREE_SHA256={}\nWORLD_SHA256={}\nRECORD_COUNT={}\n",
+        "APPLIED_PLAN_RECEIPT_FORMAT={formato}\nPLAN_LOCK_SHA256={plan_lock_sha256}\nTREE_SHA256={}\nWORLD_SHA256={}\nRECORD_COUNT={}\n",
         plan.tree_sha256,
         sha256(&world_bytes),
         facts.len()
     );
     for (package, fact) in &facts {
         push_line(&mut body, format!("RECORD\t{}\t{fact}", encode(package)))?;
+    }
+    if !orphan_facts.is_empty() {
+        push_line(&mut body, format!("ORPHAN_COUNT={}", orphan_facts.len()))?;
+        for (package, fact) in &orphan_facts {
+            push_line(&mut body, format!("ORPHAN\t{}\t{fact}", encode(package)))?;
+        }
     }
     let directory = ctx.root.join("var/lib/minitrue/applied-plans");
     plan_publication_checkpoint("before_receipt_persist")?;
@@ -5405,6 +5440,9 @@ struct AppliedReceipt {
     tree_sha256: String,
     world_sha256: String,
     records: BTreeMap<String, String>,
+    /// Records presentes e fora do world, cada um com o fato do próprio
+    /// record (formato 2). Vazio no formato 1.
+    orphans: BTreeMap<String, String>,
 }
 
 fn parse_current_receipt_pointer(bytes: &[u8]) -> Result<(String, String)> {
@@ -5435,43 +5473,80 @@ fn parse_applied_receipt(bytes: &[u8], expected_sha256: &str) -> Result<AppliedR
     }
     let text = std::str::from_utf8(bytes).context("receipt aplicado não é UTF-8")?;
     let lines: Vec<&str> = text.lines().collect();
-    if lines.len() < 5 || header_value(lines[0], "APPLIED_PLAN_RECEIPT_FORMAT")? != "1" {
+    if lines.len() < 5 {
+        bail!("receipt aplicado possui formato desconhecido");
+    }
+    // Formato 1: só os records do mundo. Formato 2: o 1 com a seção de órfãos
+    // declarados no fim — e ela é obrigatória e não vazia, porque sem órfão o
+    // receipt é escrito no formato 1. Dois formatos para o mesmo estado
+    // abririam dois hashes para o mesmo mundo.
+    let formato = header_value(lines[0], "APPLIED_PLAN_RECEIPT_FORMAT")?;
+    if !matches!(formato, "1" | "2") {
         bail!("receipt aplicado possui formato desconhecido");
     }
     let plan_lock_sha256 = header_value(lines[1], "PLAN_LOCK_SHA256")?.to_string();
     let tree_sha256 = header_value(lines[2], "TREE_SHA256")?.to_string();
     let world_sha256 = header_value(lines[3], "WORLD_SHA256")?.to_string();
     let count = canonical_count(header_value(lines[4], "RECORD_COUNT")?, "RECORD_COUNT")?;
-    if count > MAX_PLAN_ENTRIES || lines.len() != 5 + count {
+    if count > MAX_PLAN_ENTRIES || lines.len() < 5 + count {
         bail!("RECORD_COUNT do receipt não corresponde aos records");
     }
+    let record_lines = &lines[5..5 + count];
+    let resto = &lines[5 + count..];
+    let orphan_lines: &[&str] = if formato == "1" {
+        if !resto.is_empty() {
+            bail!("RECORD_COUNT do receipt não corresponde aos records");
+        }
+        &[]
+    } else {
+        let Some(cabecalho) = resto.first() else {
+            bail!("receipt formato 2 sem a seção de órfãos que o define");
+        };
+        let orphan_count =
+            canonical_count(header_value(cabecalho, "ORPHAN_COUNT")?, "ORPHAN_COUNT")?;
+        if orphan_count == 0 || orphan_count > MAX_PLAN_ENTRIES || resto.len() != 1 + orphan_count {
+            bail!("ORPHAN_COUNT do receipt não corresponde aos órfãos");
+        }
+        &resto[1..]
+    };
     if !canonical_sha256(&plan_lock_sha256)
         || !canonical_sha256(&tree_sha256)
         || !canonical_sha256(&world_sha256)
     {
         bail!("receipt aplicado contém hash não canônico");
     }
-    if lines[5..]
-        .windows(2)
-        .any(|pair| pair[0].as_bytes() >= pair[1].as_bytes())
-    {
-        bail!("records do receipt não estão C-sort/únicos");
-    }
-    let mut records = BTreeMap::new();
-    for line in &lines[5..] {
-        let fields = record_fields(line, "RECORD", 3)?;
-        let package = decode(fields[1])?;
-        recipe::validate_name(&package)?;
-        if !canonical_sha256(fields[2]) || records.insert(package, fields[2].to_string()).is_some()
+    for secao in [record_lines, orphan_lines] {
+        if secao
+            .windows(2)
+            .any(|pair| pair[0].as_bytes() >= pair[1].as_bytes())
         {
-            bail!("receipt contém record repetido ou hash factual inválido");
+            bail!("records do receipt não estão C-sort/únicos");
         }
+    }
+    let le_secao = |secao: &[&str], rotulo: &str| -> Result<BTreeMap<String, String>> {
+        let mut mapa = BTreeMap::new();
+        for line in secao {
+            let fields = record_fields(line, rotulo, 3)?;
+            let package = decode(fields[1])?;
+            recipe::validate_name(&package)?;
+            if !canonical_sha256(fields[2]) || mapa.insert(package, fields[2].to_string()).is_some()
+            {
+                bail!("receipt contém record repetido ou hash factual inválido");
+            }
+        }
+        Ok(mapa)
+    };
+    let records = le_secao(record_lines, "RECORD")?;
+    let orphans = le_secao(orphan_lines, "ORPHAN")?;
+    if orphans.keys().any(|package| records.contains_key(package)) {
+        bail!("receipt declara como órfão um record do mundo");
     }
     Ok(AppliedReceipt {
         plan_lock_sha256,
         tree_sha256,
         world_sha256,
         records,
+        orphans,
     })
 }
 
@@ -5734,7 +5809,9 @@ pub(crate) fn verify_applied_receipt(ctx: &Ctx) -> Result<()> {
     }
     let lock = persisted_lock_bytes(ctx, &receipt.plan_lock_sha256)?;
     let verified = verify_canonical(&lock)?;
-    if verified.purpose != "rectify"
+    // `sync` fecha contra o world inteiro como o `rectify` completo, e é
+    // autoridade de mundo pela mesma razão (SPEC-0011 §3.2).
+    if !matches!(verified.purpose.as_str(), "rectify" | "sync")
         || verified.roots != verified_root_map(&world_roots)
         || receipt.world_sha256 != sha256(&world_bytes)
         || receipt.tree_sha256 != verified.tree_sha256
@@ -5767,13 +5844,33 @@ pub(crate) fn verify_applied_receipt(ctx: &Ctx) -> Result<()> {
     // errado era medir o DISCO com a régua do receipt.
     let record_names = record_snapshot.names();
     let lock_names: BTreeSet<String> = verified.nodes.keys().cloned().collect();
-    let mut orfaos = record_names.difference(&lock_names).peekable();
-    if orfaos.peek().is_some() {
-        let lista: Vec<&str> = orfaos.map(String::as_str).collect();
+    // O que está no disco e fora do lock tem de ser EXATAMENTE o que o receipt
+    // declarou órfão — nem um a mais (record que ninguém descreve), nem um a
+    // menos (órfão declarado que sumiu sem o receipt saber).
+    let fora_do_lock: BTreeSet<String> = record_names.difference(&lock_names).cloned().collect();
+    let declarados: BTreeSet<String> = receipt.orphans.keys().cloned().collect();
+    let mut nao_declarados = fora_do_lock.difference(&declarados).peekable();
+    if nao_declarados.peek().is_some() {
+        let lista: Vec<&str> = nao_declarados.map(String::as_str).collect();
         bail!(
             "diretório de records tem pacote fora do PLAN_LOCK do receipt: {}",
             lista.join(" ")
         );
+    }
+    let mut sumidos = declarados.difference(&fora_do_lock).peekable();
+    if sumidos.peek().is_some() {
+        let lista: Vec<&str> = sumidos.map(String::as_str).collect();
+        bail!(
+            "receipt declara órfão que não está fora do mundo no disco: {}",
+            lista.join(" ")
+        );
+    }
+    for (package, expected_fact) in &receipt.orphans {
+        let observed =
+            install::verify_historical_record(ctx, &ctx.records_dir().join(package), package)?;
+        if &observed != expected_fact {
+            bail!("{package}: fato do record órfão diverge do receipt corrente");
+        }
     }
     let mut ausentes = expected_packages.difference(&record_names).peekable();
     if ausentes.peek().is_some() {
@@ -8516,6 +8613,72 @@ mod tests {
 
     static COUNT: AtomicU64 = AtomicU64::new(0);
 
+    /// O formato 2 do receipt é o 1 com a seção de órfãos no fim, e só ela o
+    /// define: sem órfão o receipt é formato 1, então um 2 vazio, um órfão que
+    /// também é record do mundo ou uma contagem que não bate são recusados.
+    #[test]
+    fn receipt_formato_2_declara_orfaos_e_recusa_as_formas_ambiguas() {
+        let h = |label: &str| test_pin(label);
+        let cabecalho = |formato: u8, records: usize| {
+            format!(
+                "APPLIED_PLAN_RECEIPT_FORMAT={formato}\nPLAN_LOCK_SHA256={}\nTREE_SHA256={}\nWORLD_SHA256={}\nRECORD_COUNT={records}\n",
+                h("lock"),
+                h("tree"),
+                h("world")
+            )
+        };
+        let parse =
+            |corpo: &str| parse_applied_receipt(corpo.as_bytes(), &sha256(corpo.as_bytes()));
+
+        let v1 = cabecalho(1, 1) + &format!("RECORD\tbase\t{}\n", h("base"));
+        let lido = parse(&v1).unwrap();
+        assert!(lido.orphans.is_empty());
+
+        let v2 = cabecalho(2, 1)
+            + &format!("RECORD\tbase\t{}\n", h("base"))
+            + "ORPHAN_COUNT=1\n"
+            + &format!("ORPHAN\textra\t{}\n", h("extra"));
+        let lido = parse(&v2).unwrap();
+        assert_eq!(lido.records.len(), 1);
+        assert_eq!(lido.orphans.get("extra"), Some(&h("extra")));
+
+        // Formato 1 não carrega seção de órfãos.
+        assert!(parse(
+            &(v1.clone() + "ORPHAN_COUNT=1\n" + &format!("ORPHAN\textra\t{}\n", h("extra")))
+        )
+        .is_err());
+        // Formato 2 sem órfão é o formato 1 escrito com outro número.
+        assert!(parse(&(cabecalho(2, 1) + &format!("RECORD\tbase\t{}\n", h("base")))).is_err());
+        assert!(parse(
+            &(cabecalho(2, 1) + &format!("RECORD\tbase\t{}\n", h("base")) + "ORPHAN_COUNT=0\n")
+        )
+        .is_err());
+        // Contagem que não bate com as linhas.
+        assert!(parse(
+            &(cabecalho(2, 1)
+                + &format!("RECORD\tbase\t{}\n", h("base"))
+                + "ORPHAN_COUNT=2\n"
+                + &format!("ORPHAN\textra\t{}\n", h("extra")))
+        )
+        .is_err());
+        // Órfão que é também record do mundo.
+        assert!(parse(
+            &(cabecalho(2, 1)
+                + &format!("RECORD\tbase\t{}\n", h("base"))
+                + "ORPHAN_COUNT=1\n"
+                + &format!("ORPHAN\tbase\t{}\n", h("base")))
+        )
+        .is_err());
+        // Órfãos fora da ordem C.
+        assert!(parse(
+            &(cabecalho(2, 1)
+                + &format!("RECORD\tbase\t{}\n", h("base"))
+                + "ORPHAN_COUNT=2\n"
+                + &format!("ORPHAN\tzeta\t{}\nORPHAN\talfa\t{}\n", h("z"), h("a")))
+        )
+        .is_err());
+    }
+
     struct LiveFixture {
         lock: Vec<u8>,
         components: Vec<u8>,
@@ -9367,18 +9530,22 @@ mod tests {
         // anterior não cobre (pacote novo) reanalisa; pendente reanalisa; e
         // requerente de provider que SAIU do mundo reanalisa.
         let anterior = plano_anterior_para_reuso(
-            &[
-                ("epiphany", "gtk3"),
-                ("foot", "fcft"),
-                ("orfao", "sumido"),
-            ],
+            &[("epiphany", "gtk3"), ("foot", "fcft"), ("orfao", "sumido")],
             &["epiphany", "foot", "fcft", "gtk3", "orfao", "pendurado"],
             &["pendurado"],
         );
-        let material: BTreeSet<String> = ["epiphany", "foot", "fcft", "gtk3", "orfao", "gimp", "pendurado"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let material: BTreeSet<String> = [
+            "epiphany",
+            "foot",
+            "fcft",
+            "gtk3",
+            "orfao",
+            "gimp",
+            "pendurado",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         let escritos: BTreeSet<String> = ["gtk3".to_string(), "gimp".to_string()].into();
         let reuso = abi_reuse_set(&anterior, &material, &escritos);
         // reaproveitam: foot (provider intocado) e fcft (sem requires).

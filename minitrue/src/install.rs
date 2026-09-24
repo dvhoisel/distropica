@@ -1262,16 +1262,47 @@ pub fn lint_build(ctx: &Ctx, requested: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// O que um `rectify` retifica: os pacotes nomeados na linha de comando, ou o
+/// world inteiro (`--sync`). A diferença mora só aqui, na escolha das raízes e
+/// do propósito; resolução, aplicação, journal e fechamento são o MESMO
+/// caminho, porque um `sync` que aplicasse por outro código seria uma segunda
+/// implementação do núcleo transacional esperando para divergir da primeira.
+#[derive(Clone, Copy)]
+enum Alvo<'a> {
+    Pacotes(&'a [String]),
+    World,
+}
+
 pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> {
+    retifica(ctx, Alvo::Pacotes(names), policy)
+}
+
+/// `rectify --sync` (SPEC-0011 §3.2): converge o sistema ao world resolvido
+/// contra a árvore corrente. Cada pacote cuja versão ou identidade na árvore
+/// difere da registrada é retificado — do canal quando a política deixa, da
+/// fonte quando não —, e a origem instalada é comparada com a que a política
+/// escolheria, mesmo com o record íntegro. Não acrescenta nada ao world e não
+/// remove nada: o que ficou fora da closure é APONTADO no fim, e a remoção
+/// continua sendo ordem explícita do administrador (SPEC-0003 §2).
+///
+/// É o "atualizar o sistema" do rolling, dito como reconciliação: depois de
+/// `rectify newspeak` trazer a árvore nova, este é o comando que leva a
+/// máquina até ela.
+pub fn rectify_sync(ctx: &Ctx, policy: BinaryPolicy) -> Result<()> {
+    retifica(ctx, Alvo::World, policy)
+}
+
+fn retifica(ctx: &Ctx, alvo: Alvo<'_>, policy: BinaryPolicy) -> Result<()> {
     // A ABERTURA se apresenta antes de qualquer trabalho: a primeira
     // resolução — impressões digitais da árvore, registros, canal — leva
     // perto de um minuto e não imprimia nada, e o operador via o comando
     // parado sem saber se andava. Mesma lição, três vezes no mesmo tema:
     // espera sem rótulo parece travamento (#73).
-    eprintln!(
-        "resolvendo o plano: {} — medindo o mundo instalado (leva um minuto)",
-        names.join(" ")
-    );
+    let rotulo = match alvo {
+        Alvo::Pacotes(names) => names.join(" "),
+        Alvo::World => "o world inteiro (--sync)".to_string(),
+    };
+    eprintln!("resolvendo o plano: {rotulo} — medindo o mundo instalado (leva um minuto)");
     let _lock = acquire_lock(ctx)?; // segurado até o fim da operação
                                     // Uma transação órfã de outro pacote pode ter substituído justamente um
                                     // caminho que o pacote pedido pretende tomar. Resolva-a antes de carregar
@@ -1283,10 +1314,41 @@ pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> 
         "configuração do minitrue",
     )?;
     ensure_no_internal_claims(ctx)?;
-    let explicit: HashSet<&str> = names.iter().map(String::as_str).collect();
-    let mut plan = crate::plan::resolve(
+    // As raízes do `sync` são lidas DEPOIS do lock: o world que se converge é o
+    // que existia quando a operação ganhou a raiz, não um lido antes dela.
+    let (names, purpose): (Vec<String>, crate::plan::PlanPurpose) = match alvo {
+        Alvo::Pacotes(names) => (names.to_vec(), crate::plan::PlanPurpose::Rectify),
+        Alvo::World => {
+            let roots = crate::plan::roots_from_system_world(ctx)?;
+            if roots.is_empty() {
+                return fail(
+                    1,
+                    "rectify --sync: o world está vazio — não há presente a que convergir",
+                );
+            }
+            (
+                roots.into_iter().map(|root| root.name).collect(),
+                crate::plan::PlanPurpose::Sync,
+            )
+        }
+    };
+    // Só os nomes pedidos na linha de comando entram no world. As raízes do
+    // `sync` JÁ SÃO o world; reescrevê-lo seria mutação sem ordem.
+    let explicit: HashSet<&str> = match alvo {
+        Alvo::Pacotes(names) => names.iter().map(String::as_str).collect(),
+        Alvo::World => HashSet::new(),
+    };
+    let roots: Vec<crate::plan::PlanRoot> = names
+        .iter()
+        .map(|name| crate::plan::PlanRoot {
+            name: name.clone(),
+            role: crate::plan::RootRole::Install,
+        })
+        .collect();
+    let mut plan = crate::plan::resolve_for(
         ctx,
-        names,
+        &roots,
+        purpose,
         policy,
         crate::plan::AbiPolicy::Development,
         channel::LoadMode::Mutating,
@@ -1370,7 +1432,7 @@ pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> 
         match crate::plan::finalize_applied(
             ctx,
             &raizes,
-            crate::plan::PlanPurpose::Rectify,
+            purpose,
             policy,
             crate::plan::AbiPolicy::Development,
             &written_records,
@@ -1399,8 +1461,8 @@ pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> 
     eprintln!("  fechando o plano aplicado: reobservando payload e ABI do mundo (leva minutos)");
     let finalized = crate::plan::finalize_applied(
         ctx,
-        names,
-        crate::plan::PlanPurpose::Rectify,
+        &names,
+        purpose,
         policy,
         crate::plan::AbiPolicy::Development,
         &written_records,
@@ -1411,6 +1473,9 @@ pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> 
         finalized.lock_sha256,
         finalized.identities.len()
     );
+    if purpose == crate::plan::PlanPurpose::Sync {
+        relata_orfaos(&finalized.orphans);
+    }
     // AQUI HAVIA UM RESUMO DE "correções não aplicadas", e o fato de ele não
     // existir mais é o conserto inteiro contado em uma linha.
     //
@@ -1425,6 +1490,31 @@ pub fn rectify(ctx: &Ctx, names: &[String], policy: BinaryPolicy) -> Result<()> 
     // Com o refresh no lugar, `anotar_correcao_descartada` ficou sem chamador
     // nenhum, e foi o compilador quem apontou isso.
     Ok(())
+}
+
+/// Aponta, sem remover, o que o `sync` deixou fora da closure do world. A
+/// remoção é `memoryhole` e é ordem do administrador: o world diz o que se
+/// quer, e um pacote que saiu dele pode ser algo que alguém ainda usa à mão.
+/// O resíduo de build (toolchain que só a construção pediu) é separado do
+/// inalcançável, porque o primeiro é esperado numa máquina que compila e o
+/// segundo é o que a árvore nova deixou de pedir.
+fn relata_orfaos(orphans: &[crate::plan::PlanOrphan]) {
+    if orphans.is_empty() {
+        eprintln!("  nenhum órfão: tudo o que está instalado é pedido pelo world");
+        return;
+    }
+    eprintln!(
+        "  {} pacote(s) fora da closure do world — apontados, NÃO removidos:",
+        orphans.len()
+    );
+    for orphan in orphans {
+        let porque = match orphan.kind.as_str() {
+            "build-residue" => "resíduo de build: só a construção o pediu",
+            _ => "inalcançável: nada no world o exige mais",
+        };
+        eprintln!("    {:<28} {porque}", orphan.package);
+    }
+    eprintln!("  para removê-los: minitrue memoryhole <pacote>...");
 }
 
 /// Um artefato DERIVADO que o boot mantém e que um rectify no sistema vivo
@@ -1502,8 +1592,14 @@ fn refresh_derived_artifacts(ctx: &Ctx, written: &BTreeSet<String>) {
             );
             continue;
         }
-        eprintln!("  refazendo derivado: {} (tocada por {quem})", artifact.label);
-        match std::process::Command::new(artifact.tool).args(artifact.args).output() {
+        eprintln!(
+            "  refazendo derivado: {} (tocada por {quem})",
+            artifact.label
+        );
+        match std::process::Command::new(artifact.tool)
+            .args(artifact.args)
+            .output()
+        {
             Ok(saida) if saida.status.success() => {}
             Ok(saida) => eprintln!(
                 "  aviso: {} falhou ({}); o próximo boot refaz — {}",
@@ -7477,7 +7573,62 @@ pub fn memoryhole(ctx: &Ctx, names: &[String]) -> Result<()> {
         world_remove(ctx, name)?;
         println!("{name} nunca existiu.");
     }
+    refaz_receipt_apos_remocao(ctx);
     Ok(())
+}
+
+/// O RECEIPT ACOMPANHA A REMOÇÃO. O `memoryhole` apagava record e entrada do
+/// world e deixava o receipt — a autoridade do mundo instalado — descrevendo o
+/// estado de antes; o `verify` seguinte acusava "autoridade global inválida" até
+/// um `rectify` completo qualquer refazê-lo. Com o `rectify --sync` apontando
+/// órfãos e mandando o operador usar `memoryhole` neles, isso deixaria de ser
+/// raro e viraria o caminho normal.
+///
+/// Refazer é fechar o world de novo, sem aplicar nada: todo nó já é `keep`, e a
+/// observação de ABI dos que não mudaram é reaproveitada do plano anterior.
+/// Falhar aqui NÃO desfaz a remoção, que já aconteceu e está correta — por isso
+/// o erro é dito e não devolvido: devolvê-lo faria parecer que o pacote ficou.
+fn refaz_receipt_apos_remocao(ctx: &Ctx) {
+    let pointer = ctx.root.join("var/lib/minitrue/applied-plans/current");
+    // Sem autoridade anterior (uma raiz de build, uma instalação que nunca
+    // fechou um plano), não há o que manter coerente.
+    if fs::symlink_metadata(&pointer).is_err() {
+        return;
+    }
+    let resultado = (|| -> Result<()> {
+        let roots = crate::plan::roots_from_system_world(ctx)?;
+        if roots.is_empty() {
+            // Mundo vazio e nada instalado: o estado coerente é não ter
+            // autoridade nenhuma, e é isso que o verify aceita.
+            let restam = fs::read_dir(ctx.records_dir())
+                .map(|entries| entries.flatten().next().is_some())
+                .unwrap_or(false);
+            if restam {
+                bail!("o world ficou vazio com records instalados; nada pode ser a raiz do plano");
+            }
+            fs::remove_file(&pointer)?;
+            return Ok(());
+        }
+        eprintln!("  refazendo a autoridade do mundo instalado sem o que saiu (leva um minuto)");
+        let names: Vec<String> = roots.into_iter().map(|root| root.name).collect();
+        crate::plan::finalize_applied(
+            ctx,
+            &names,
+            crate::plan::PlanPurpose::Rectify,
+            BinaryPolicy::PreferBinary,
+            crate::plan::AbiPolicy::Development,
+            &BTreeSet::new(),
+            crate::plan::AppliedClosure::Complete,
+        )
+        .map(|_| ())
+    })();
+    if let Err(erro) = resultado {
+        eprintln!(
+            "  aviso: a remoção está feita, mas o receipt do mundo instalado não pôde ser \
+             refeito ({erro:#}). O verify vai acusá-lo até o próximo `minitrue rectify --sync`, \
+             que o refaz — o caso comum é a árvore ter mudado sem que o sistema tenha convergido a ela."
+        );
+    }
 }
 
 // ---------- archives / verify / newspeak ----------
@@ -10870,21 +11021,21 @@ mod tests {
         // O caso do gimp: gtk3 re-retificado embarca .gschema.xml e a base
         // compilada precisa ser refeita; um pacote qualquer não dispara nada.
         let n = CNT.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "minitrue-derivados-{}-{n}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("minitrue-derivados-{}-{n}", std::process::id()));
         let records = root.join("records");
         for (nome, linha) in [
-            ("toca-schema", "f:aaaa  /usr/share/glib-2.0/schemas/org.gtk.Settings.FileChooser.gschema.xml"),
+            (
+                "toca-schema",
+                "f:aaaa  /usr/share/glib-2.0/schemas/org.gtk.Settings.FileChooser.gschema.xml",
+            ),
             ("nao-toca", "f:bbbb  /usr/bin/qualquer"),
         ] {
             let dir = records.join(nome);
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join("manifest"), format!("{linha}\n")).unwrap();
         }
-        let written: BTreeSet<String> =
-            ["toca-schema".to_string(), "nao-toca".to_string()].into();
+        let written: BTreeSet<String> = ["toca-schema".to_string(), "nao-toca".to_string()].into();
         let fired = derived_artifacts_touched(&records, &written);
         assert_eq!(fired.len(), 1, "só o gatilho do GSettings devia disparar");
         assert!(fired[0].0.label.contains("GSettings"));
@@ -12002,6 +12153,97 @@ mod tests {
         assert!(!meta.contains_key("CHANNEL_SHA256"));
         assert!(!cache.join("channel-config").exists());
         assert!(!cache.join("channels").exists());
+        verify(&context).unwrap();
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `rectify --sync` contra uma árvore que ANDOU (SPEC-0011 §3.2): o `base`
+    /// sobe de versão e larga a dependência que puxava o `extra`. O sync leva
+    /// o `base` à versão nova, não toca no world, e deixa o `extra` onde está —
+    /// fora da closure, apontado como inalcançável, nunca removido.
+    #[test]
+    fn rectify_sync_converge_ao_world_e_aponta_orfao_sem_remover() {
+        let n = CNT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("mt-sync-{}-{n}", std::process::id()));
+        let recipes = root.join("var/lib/minitrue/newspeak");
+        let cache = root.join("var/cache/minitrue");
+        fs::create_dir_all(&recipes).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o700)).unwrap();
+        let escreve = |name: &str, version: &str, payload: &[u8], deps: &str| {
+            let hash = sha256_bytes(payload);
+            fs::write(cache.join(&hash), payload).unwrap();
+            let recipe_dir = recipes.join(name);
+            fs::create_dir_all(&recipe_dir).unwrap();
+            fs::write(
+                recipe_dir.join("recipe"),
+                format!(
+                    "NAME={name}\nVERSION={version}\nKIND=binary\nLICENSE=NOASSERTION\n{deps}SRC=https://media.invalid/{name}-{version}\nSHA256={hash}\nLINKS=\"{name}=bin/{name}\"\ninstall_pkg() {{\n  mkdir -p \"$PREFIX/bin\"\n  cp \"$DL\" \"$PREFIX/bin/{name}\"\n  chmod 755 \"$PREFIX/bin/{name}\"\n}}\n"
+                ),
+            )
+            .unwrap();
+        };
+        escreve("extra", "1", b"extra\n", "");
+        escreve("base", "1", b"base 1\n", "DEPS=\"extra\"\n");
+        let context = Ctx {
+            root: root.clone(),
+            offline: true,
+            tofu: false,
+            jobs: 1,
+        };
+
+        // O world vazio não tem presente a que convergir: recusa, não no-op.
+        assert!(rectify_sync(&context, BinaryPolicy::PreferBinary).is_err());
+
+        rectify(&context, &["base".to_string()], BinaryPolicy::PreferBinary).unwrap();
+        assert_eq!(fs::read_to_string(context.world_path()).unwrap(), "base\n");
+        assert!(context.records_dir().join("extra").is_dir());
+
+        // A árvore nova: o base 2 não precisa mais do extra.
+        escreve("base", "2", b"base 2\n", "");
+        rectify_sync(&context, BinaryPolicy::PreferBinary).unwrap();
+
+        let meta = read_meta_strict(&context.records_dir().join("base"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(meta.get("VERSION").map(String::as_str), Some("2"));
+        assert_eq!(
+            fs::read(root.join("opt/base/2/bin/base")).unwrap(),
+            b"base 2\n"
+        );
+        // O world é a ENTRADA do sync, não a saída: nada acrescentado.
+        assert_eq!(fs::read_to_string(context.world_path()).unwrap(), "base\n");
+        // O extra saiu da closure e continua instalado.
+        assert!(context.records_dir().join("extra").is_dir());
+        assert_eq!(
+            fs::read(root.join("opt/extra/1/bin/extra")).unwrap(),
+            b"extra\n"
+        );
+        let depois = crate::plan::resolve_for(
+            &context,
+            &crate::plan::roots_from_system_world(&context).unwrap(),
+            crate::plan::PlanPurpose::Sync,
+            BinaryPolicy::PreferBinary,
+            crate::plan::AbiPolicy::Development,
+            channel::LoadMode::ReadOnly,
+        )
+        .unwrap();
+        assert!(depois
+            .orphans
+            .iter()
+            .any(|orphan| orphan.package == "extra" && orphan.kind == "unreachable"));
+        verify(&context).unwrap();
+
+        // Convergido, o sync seguinte não tem o que fazer e não falha.
+        rectify_sync(&context, BinaryPolicy::PreferBinary).unwrap();
+
+        // O passo que o sync manda dar: memoryhole no órfão. A autoridade do
+        // mundo instalado acompanha a remoção, e o verify continua limpo — até
+        // 2026-09-24 ele acusava o receipt velho até o próximo rectify.
+        memoryhole(&context, &["extra".to_string()]).unwrap();
+        assert!(!context.records_dir().join("extra").exists());
+        crate::plan::verify_applied_receipt(&context).unwrap();
         verify(&context).unwrap();
 
         let _ = fs::remove_dir_all(&root);
@@ -16117,7 +16359,9 @@ mod tests {
             channel::LoadMode::ReadOnly,
         )
         .unwrap();
-        assert!(missing_plan.authenticate_objects(&context, true, None).is_err());
+        assert!(missing_plan
+            .authenticate_objects(&context, true, None)
+            .is_err());
         fs::rename(&missing_producer, &producer_cache_path).unwrap();
 
         fs::write(&producer_cache_path, b"PLAN_LOCK adulterado\n").unwrap();
@@ -16130,7 +16374,9 @@ mod tests {
             channel::LoadMode::ReadOnly,
         )
         .unwrap();
-        assert!(tampered_plan.authenticate_objects(&context, true, None).is_err());
+        assert!(tampered_plan
+            .authenticate_objects(&context, true, None)
+            .is_err());
         fs::write(&producer_cache_path, &producer_plan).unwrap();
 
         let unrelated_payload = sha256_bytes(b"payload factual de outro produtor");
@@ -16217,7 +16463,9 @@ mod tests {
         );
         assert_eq!(producer_media.nodes["pkg"].payload_sha256, reprocorr);
         assert!(producer_media.material_identities(true).is_err());
-        producer_media.authenticate_objects(&context, true, None).unwrap();
+        producer_media
+            .authenticate_objects(&context, true, None)
+            .unwrap();
         producer_media.revalidate_tree(&context).unwrap();
         let producer_media_bytes = producer_media.canonical_bytes().unwrap();
         let producer_materials = producer_media.material_identities(true).unwrap();

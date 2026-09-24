@@ -946,8 +946,7 @@ fn sha256_fd_stable(
     // re-hash completo. Entre processos, quem re-mede o disco é o verify.
     static MEDIDOS: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<FileSnapshot, String>>,
-    > =
-        std::sync::OnceLock::new();
+    > = std::sync::OnceLock::new();
     let medidos = MEDIDOS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     if let Some(hash) = medidos
         .lock()

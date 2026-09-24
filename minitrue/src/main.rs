@@ -217,6 +217,42 @@ fn classifica_plan(media: bool, sync: bool, names: &[String]) -> anyhow::Result<
 enum DespachoRectify {
     Arvore,
     Pacotes(install::BinaryPolicy),
+    /// `rectify --sync`: o world inteiro, e nada além dele.
+    World(install::BinaryPolicy),
+}
+
+/// A porta de entrada do `rectify`, com o `--sync` (SPEC-0011 §3.2). O `sync`
+/// lê as raízes do world e por isso não aceita nome nenhum: um `--sync gimp`
+/// seria ambíguo entre "converja tudo" e "retifique o gimp", e qualquer das
+/// leituras surpreenderia quem digitou a outra. A árvore (`newspeak`) também
+/// fica fora: trazer a árvore nova e convergir a ela são dois atos, e é assim
+/// que o operador vê o que mudou entre um e outro.
+fn classifica_rectify_com_sync(
+    names: &[String],
+    sync: bool,
+    no_binary: bool,
+    only_binary: bool,
+) -> anyhow::Result<DespachoRectify> {
+    if sync {
+        if !names.is_empty() {
+            return fail(
+                1,
+                "rectify --sync converge o world inteiro e não aceita nomes; \
+                 para um pacote só, use rectify <pacote>",
+            );
+        }
+        return match classifica_rectify(&[], no_binary, only_binary)? {
+            DespachoRectify::Pacotes(policy) => Ok(DespachoRectify::World(policy)),
+            _ => unreachable!("sem nomes não há árvore a despachar"),
+        };
+    }
+    if names.is_empty() {
+        return fail(
+            1,
+            "rectify: diga o que retificar (ou --sync para o world inteiro)",
+        );
+    }
+    classifica_rectify(names, no_binary, only_binary)
 }
 
 /// `newspeak` é nome reservado pela SPEC-0011, não uma receita ordinária.
@@ -501,18 +537,12 @@ fn run() -> anyhow::Result<()> {
     let _legacy_reader_lock = legacy_reader_lock(&ctx, cmd.as_deref(), &names, closure)?;
 
     match cmd.as_deref() {
-        Some("rectify") => {
-            if sync {
-                return fail(1, "rectify --sync chega no Marco 0.2");
-            }
-            if names.is_empty() {
-                return fail(1, "rectify: diga o que retificar");
-            }
-            match classifica_rectify(&names, no_binary, only_binary)? {
-                DespachoRectify::Arvore => arvore::rectify(&ctx),
-                DespachoRectify::Pacotes(policy) => install::rectify(&ctx, &names, policy),
-            }
-        }
+        Some("rectify") => match classifica_rectify_com_sync(&names, sync, no_binary, only_binary)?
+        {
+            DespachoRectify::Arvore => arvore::rectify(&ctx),
+            DespachoRectify::Pacotes(policy) => install::rectify(&ctx, &names, policy),
+            DespachoRectify::World(policy) => install::rectify_sync(&ctx, policy),
+        },
         Some("plan") => {
             let _lock = install::acquire_read_lock(&ctx)?;
             let despacho = classifica_plan(media, sync, &names)?;
@@ -871,6 +901,25 @@ mod main_tests {
         // `newspeak` é a árvore reservada da SPEC-0011, não uma receita.
         assert!(classifica_plan(false, false, &["newspeak".into()]).is_err());
         assert!(classifica_plan(true, false, &["newspeak".into()]).is_err());
+    }
+
+    #[test]
+    fn rectify_sync_le_o_world_e_recusa_nomes() {
+        assert_eq!(
+            classifica_rectify_com_sync(&[], true, false, false).unwrap(),
+            DespachoRectify::World(install::BinaryPolicy::PreferBinary)
+        );
+        assert_eq!(
+            classifica_rectify_com_sync(&[], true, false, true).unwrap(),
+            DespachoRectify::World(install::BinaryPolicy::BinaryOnly)
+        );
+        assert!(classifica_rectify_com_sync(&["gimp".into()], true, false, false).is_err());
+        assert!(classifica_rectify_com_sync(&["newspeak".into()], true, false, false).is_err());
+        assert!(classifica_rectify_com_sync(&[], false, false, false).is_err());
+        assert_eq!(
+            classifica_rectify_com_sync(&["base".into()], false, false, false).unwrap(),
+            DespachoRectify::Pacotes(install::BinaryPolicy::PreferBinary)
+        );
     }
 
     #[test]
