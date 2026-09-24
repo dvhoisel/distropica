@@ -7,7 +7,7 @@ export LC_ALL
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 SOURCE=$REPO/bootstrap/live/live-lock-helper.c
-CONFIG=$REPO/bootstrap/live/busybox-1.35.0.config
+CONFIG=$REPO/bootstrap/live/busybox-1.38.0.config
 BUILDER=$REPO/bootstrap/live/build-efi
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/distropica-live-lock-test.XXXXXXXX")
 trap 'chmod -R u+rwX -- "$TMP" 2>/dev/null || true; rm -rf -- "$TMP"' EXIT HUP INT TERM
@@ -806,7 +806,7 @@ case "$fixture_phase" in
         "$FIXTURE_CP" "$FIXTURE_WRAPPER" \
             "$FIXTURE_WORK/source/bootstrap/live/live-lock"
         "$FIXTURE_CP" "$FIXTURE_CONFIG" \
-            "$FIXTURE_WORK/source/bootstrap/live/busybox-1.35.0.config"
+            "$FIXTURE_WORK/source/bootstrap/live/busybox-1.38.0.config"
         "$FIXTURE_CHMOD" 0700 \
             "$FIXTURE_WORK/source/bootstrap/live/build-efi" \
             "$FIXTURE_WORK/source/bootstrap/live/live-lock"
@@ -1408,7 +1408,7 @@ for mapping in \
 done
 grep -Fqx 'CONFIG_STATIC=y' "$CONFIG" &&
 grep -Fqx '# CONFIG_FEATURE_SHARED_BUSYBOX is not set' "$CONFIG" &&
-    ok 'BusyBox 1.35.0 versionado exige estático/applets completos'
+    ok 'BusyBox 1.38.0 versionado exige estático/applets completos'
 
 # ASan+UBSan são apenas instrumentos host; nunca são qualificados como release.
 if cc -std=c17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \

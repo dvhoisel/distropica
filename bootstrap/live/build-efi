@@ -213,7 +213,7 @@ EOF
             printf "%s  %s\n" "$(proof_field BUILD_EFI_SOURCE_SHA256)" /work/source/bootstrap/live/build-efi | sha256sum -c - >/dev/null
             printf "%s  %s\n" "$(proof_field LIVE_LOCK_SOURCE_SHA256)" /work/source/bootstrap/live/live-lock | sha256sum -c - >/dev/null
             printf "%s  %s\n" "$(proof_field LIVE_LOCK_HELPER_SOURCE_SHA256)" /work/source/bootstrap/live/live-lock-helper.c | sha256sum -c - >/dev/null
-            printf "%s  %s\n" "$(proof_field BUSYBOX_CONFIG_SHA256)" /work/source/bootstrap/live/busybox-1.35.0.config | sha256sum -c - >/dev/null
+            printf "%s  %s\n" "$(proof_field BUSYBOX_CONFIG_SHA256)" /work/source/bootstrap/live/busybox-1.38.0.config | sha256sum -c - >/dev/null
             /work/bootstrap-zig/zig cc -target x86_64-linux-musl -static -Os -std=c17 \
                 -ffile-prefix-map=/work/source=/usr/src/distropica \
                 -fdebug-prefix-map=/work/source=/usr/src/distropica \
@@ -369,14 +369,22 @@ REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 LINUX_VERSION=7.2.7
 LINUX_SHA256=4ac34c47db2540ffb2713943f8d891ff1702e0ba6934525a493b7d1cad43145a
 LINUX_URL=https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${LINUX_VERSION}.tar.xz
-BUSYBOX_VERSION=1.35.0
-BUSYBOX_SHA256=faeeb244c35a348a334f4a59e44626ee870fb07b6884d68c10ae8bc19f83a694
+# O BusyBox do EFI é compilado da fonte, e anda sozinho: o do Mundo A continua
+# no binário 1.35.0 que o busybox.net publica, e este segue o estável. A 1.38.0
+# (2026-05-13) foi conferida pela assinatura DSA/SHA-1 de Denys Vlasenko
+# (C9E9416F76E610DBD09D040F47B70C55ACC9965B, VALIDSIG) e pelo sha512 do APKBUILD
+# do Alpine, que é outra infraestrutura. A configuração subiu por oldconfig com
+# os defaults das 26 opções novas, menos duas: a proteção contra /../ na
+# extração (FEATURE_PATH_TRAVERSAL_PROTECTION) liga, e o ssl_server — um
+# servidor TLS de teste — sai de uma imagem de instalação.
+BUSYBOX_VERSION=1.38.0
+BUSYBOX_SHA256=34f9ea6ff8636f2c9241153b9114eefa9e65674a45318ae1ef95bb5f31c53bb2
 BUSYBOX_URL=https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2
 # Compatibilidade exclusiva do modo development. Release nunca consome este
 # binário: ele é construído do tar oficial acima e da configuração versionada.
 BUSYBOX_PREBUILT_SHA256=6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348
 BUSYBOX_CONFIG=$REPO/bootstrap/live/busybox-${BUSYBOX_VERSION}.config
-BUSYBOX_CONFIG_SHA256=1b668913cfd8ba850814e4637ea1bf800d8c9f5e0d508c26048c769a8d70682e
+BUSYBOX_CONFIG_SHA256=ad9c7bed0212772823bca34f87923389e69486130e342b389441ab2be0bff888
 E2FSPROGS_VERSION=1.47.4
 E2FSPROGS_URL=https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v${E2FSPROGS_VERSION}/e2fsprogs-${E2FSPROGS_VERSION}.tar.xz
 E2FSPROGS_SHA256=fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b
@@ -485,7 +493,7 @@ uso: bootstrap/live/build-efi --output BOOTX64.EFI [opções]
                       rootfs fica RO e o WORK irmão é o único bind RW
   --keep-work         preserva o diretório temporário
   --linux-tar ARQ     o tar do kernel (linux-$LINUX_VERSION) já baixado
-  --busybox-tar ARQ   tar oficial busybox-1.35.0.tar.bz2
+  --busybox-tar ARQ   tar oficial busybox-$BUSYBOX_VERSION.tar.bz2
   --busybox ARQ       prebuilt estático legado (somente development)
   --e2fsprogs-tar ARQ e2fsprogs já baixado (mke2fs/e2fsck estáticos)
   --ncurses-tar ARQ   ncurses já baixado (a interface do cfdisk)
@@ -1413,7 +1421,7 @@ fi
 busybox_applets=$($BUSYBOX --list)
 for required_applet in $REQUIRED_BUSYBOX_APPLETS; do
     printf '%s\n' "$busybox_applets" | grep -Fqx "$required_applet" || {
-        echo "erro: BusyBox 1.35.0 não contém applet obrigatório: $required_applet" >&2
+        echo "erro: BusyBox $BUSYBOX_VERSION não contém applet obrigatório: $required_applet" >&2
         exit 1
     }
 done
@@ -2431,7 +2439,7 @@ RUNNER_PROOF_SHA256=$RUNNER_PROOF_SHA256
 BUILD_CONTRACT_SHA256=$BUILD_CONTRACT_SHA256
 ENTRY_COUNT=27
 ENTRY_SCHEMA=id|variant|status|materiality|role|artifact_kind|origin_kind|source_id|provenance|license|license_evidence_sha256|input_sha256|payload_sha256|config_sha256|contract_sha256|toolchain_id|toolchain_sha256
-ENTRY=busybox-config|live-efi|consumed|identity-only|identity-only|config|repo|repo:bootstrap/live/busybox-1.35.0.config|config:busybox-1.35.0|-|$EMPTY_SHA256|$BUSYBOX_CONFIG_SHA256|$BUSYBOX_CONFIG_SHA256|$BUSYBOX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=busybox-config|live-efi|consumed|identity-only|identity-only|config|repo|repo:bootstrap/live/busybox-${BUSYBOX_VERSION}.config|config:busybox-${BUSYBOX_VERSION}|-|$EMPTY_SHA256|$BUSYBOX_CONFIG_SHA256|$BUSYBOX_CONFIG_SHA256|$BUSYBOX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
 ENTRY=busybox-source|live-efi|$busybox_source_status|identity-only|identity-only|source|official-tar|official:busybox-$BUSYBOX_VERSION|sha256:$BUSYBOX_SHA256|-|$EMPTY_SHA256|$BUSYBOX_SHA256|$BUSYBOX_SHA256|$BUSYBOX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
 ENTRY=busybox-static|live-efi|produced|material|runtime|payload|$BUSYBOX_ORIGIN|initramfs:/bin/busybox|built:$BUSYBOX_ORIGIN|GPL-2.0-only AND MIT|$MATERIAL_LICENSE_EVIDENCE_SHA256|$BUSYBOX_SHA256|$BUSYBOX_BINARY_SHA256|$BUSYBOX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
 ENTRY=cargo-locks|live-efi|measured|identity-only|identity-only|provenance|repo|repo:minipax+minitrue/Cargo.lock|locked:cargo|-|$EMPTY_SHA256|$CARGO_LOCKS_SHA256|$CARGO_LOCKS_SHA256|$CARGO_LOCKS_SHA256|$BUILD_CONTRACT_SHA256|$RUST_TOOLCHAIN_ID|$RUST_TOOLCHAIN_HASH
