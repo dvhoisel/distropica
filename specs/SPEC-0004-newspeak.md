@@ -62,6 +62,7 @@ Opcionais:
 | `DEPS` | dependências diretas de runtime (nomes canônicos de receitas); requisitos ELF externos precisam alcançar seu provedor por uma aresta direta, conforme SPEC-0013 §4 |
 | `BUILD_DEPS` | dependências só de build (mundo B; nomes canônicos), materializadas apenas quando houver compilação local; SPEC-0013 §2 |
 | `LINKS` | mundo A: comandos a expor, `nome=caminho/relativo/no/prefix`, sem `/`, `.` ou `..` nos componentes; default: todo executável em `bin/` do prefix |
+| `ADOPTS` | mundo A: executor persistido pelo instalador que o pacote pode adotar — só `/usr/bin/minitrue` e `/usr/bin/minipax`, sem repetição, e cada um precisa ser link do próprio pacote. A adoção só acontece se os bytes no disco forem os do `install.manifest` do Minipax (SPEC-0003 §3) |
 | `REQUIRES_GLIBC` | `1` ⇒ só instala após o Estágio 2 (SPEC-0005) |
 | `ABOUT` | uma linha: o que é / justificativa de classificação |
 | `SIG` + `SIGKEY` | minisign/signify legado: URL HTTPS literal da assinatura e chave pública base64 em uma linha (§5) |

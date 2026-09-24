@@ -51,12 +51,14 @@ minitrue corroborate <pkg>        confere attestations contra a identidade insta
 ```
 
 Esta é a interface normativa. No protótipo atual estão implementados
-`rectify <pkg>`, `memoryhole`, `archives`, `verify`, `newspeak`, `explain`,
-`why`, `pack`, `attest`, `corroborate`, `cache verify`, o consumo de canais
-assinados, `channel emit` e `channel refresh`; `--sync`, rollback, `unperson`,
-`lint`, a CLI de gestão `channel add|remove|list` e as variantes de
-remoção/varredura acima
-continuam no Marco 0.2 (ver `STATUS.md`).
+`rectify <pkg>`, `rectify newspeak`, `rectify --sync` (desde a 0.17),
+`memoryhole`, `archives`, `verify`, `newspeak`, `lint`, `audit`, `plan`,
+`fingerprint`, `explain`, `why`, `pack`, `attest`, `corroborate`,
+`cache verify`, o consumo de canais assinados, `channel emit`,
+`channel refresh`, `channel keygen` e `channel sign`; rollback, `unperson`, a
+CLI de gestão `channel add|remove|list`, o `memoryhole --orfaos` e as demais
+variantes de remoção/varredura acima continuam no Marco 0.2 (ver
+`STATUS.md`).
 
 Opções globais:
 
@@ -132,7 +134,12 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
 - `rectify --sync` converge o sistema à intenção: instala o que falta
   (world + dependências) e **aponta** órfãos — instalados sem constar no
   world nem ser dependência de quem consta. Órfão NUNCA é removido
-  automaticamente; `memoryhole --orfaos` remove sob ordem explícita.
+  automaticamente; `memoryhole --orfaos` remove sob ordem explícita. O
+  `--sync` não aceita nomes (as raízes são o world, e um world vazio é erro)
+  e fecha o receipt global declarando os órfãos que deixou
+  (`APPLIED_PLAN_RECEIPT_FORMAT=2`, SPEC-0013 §7); o `memoryhole` refecha o
+  receipt depois de remover. Atualizar um sistema instalado é
+  `minitrue rectify newspeak` seguido de `minitrue rectify --sync`.
 - `unperson` não altera o world: a intenção permanece, o corpo está lá.
 - Reinstalar uma máquina = `minipax install --profile <perfil> --newspeak
   <árvore> --world <arquivo> --target <raiz>` (SPEC-0008).
@@ -190,13 +197,32 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
    conferida como minisign/signify contra a chave versionada na árvore, com
    verificador embutido — nunca chamando gpg externo. O cache da assinatura é
    ligado ao hash do artefato, chave e URL e é revalidado em cache-hit; sob
-   `--offline`, precisa estar presente. Falha ⇒ erro 7. `SIGSUMS` e OpenPGP são
-   norma do Marco 0.2 e hoje falham explicitamente como não implementados.
+   `--offline`, precisa estar presente. Falha ⇒ erro 7. A assinatura OpenPGP
+   por artefato (`SIG_n`) e o manifesto de somas assinado (`SIGSUMS`) também
+   estão implementados, com o motor OpenPGP embutido e a chave versionada em
+   `files/` (SPEC-0004 §5). O instante de verificação pinado (`SIG_EPOCH_n`,
+   `SIGSUMS_EPOCH`) é o da revisão humana: assinatura criada depois dele é
+   recusada, e a validade da chave é julgada nele. Por isso subir a versão de
+   uma receita assinada é conferir a assinatura nova e mover o instante, e o
+   `bootstrap/sobe-versao` recusa fazê-lo sozinho; a URL da assinatura é
+   literal, sem expansão.
 6. **Instalação**:
    - **Mundo A** (`KIND=binary`): executa `install_pkg()` da receita com
      `PREFIX=/opt/<nome>/<versão>.tmp`; sucesso ⇒ rename atômico para
      `/opt/<nome>/<versão>`, flip do symlink `current`, criação dos links
-     de comando (`LINKS`) em `/usr/bin`.
+     de comando (`LINKS`) em `/usr/bin`. Cada link novo é criado ao lado e
+     trocado por `rename`, de modo que nenhum instante deixa o comando
+     ausente — o que importa quando o comando é o próprio minitrue.
+     **Adoção (`ADOPTS`, desde a 0.17)**: um link que colidiria com arquivo
+     sem dono é *doublethink*, com uma exceção estreita — os executores que o
+     Minipax persiste ao instalar (`/usr/bin/minitrue`, `/usr/bin/minipax`).
+     A receita que os nomeia em `ADOPTS` pode tomá-los, e só se os bytes no
+     disco forem os que o `install.manifest` do Minipax registrou; qualquer
+     outro arquivo, ou os mesmos caminhos com outros bytes, segue recusado.
+     É assim que o sistema instalado passa a receber o próprio gerenciador
+     pelo canal. Um minitrue anterior à 0.17 não conhece `ADOPTS` e, com
+     razão, recusa a colisão: a travessia passa pelo pacote `minitrue-ponte`,
+     o mesmo binário com outro nome (SPEC-0011 §3.2).
    - **Mundo B** (`KIND=source`): antes de compilar consulta os canais binários
      (SPEC-0009) por um artefato da identidade exata da receita. Havendo um
      aceitável, instala-o **como mundo B pré-buildado** — tarball passivo já

@@ -19,9 +19,10 @@ observação e `CLOSURE_SHA256` canônico. Desde 2026-07-28 ele **impede**:
 `channel emit` recusa publicar pacote cujo payload exija provedor não
 declarado. O PATH/view de build, `PLAN_LOCK_FORMAT=1`, `plan`, o preview
 `plan --sync`, `cache verify --closure`, `RECORD_FORMAT=4` e o receipt global
-estão implementados. Continuam não implementados o gate produtivo da
-composição de mídia/profile, a aplicação `rectify --sync`, rollback e a coleta
-explícita de órfãos.
+estão implementados, e desde a 0.17 também a aplicação `rectify --sync`, que
+aponta órfãos no receipt sem removê-los. Continuam não implementados o gate
+produtivo da composição de mídia/profile, rollback e a coleta explícita de
+órfãos.
 
 ## 1. Princípio: a árvore é o lock global
 
@@ -323,6 +324,19 @@ hash factual de exatamente cada diretório de record e ponteiro atômico
 `applied-plans/current`. Ausência, record extra ou fact hash divergente falha
 fechado.
 
+Quando a convergência deixa records fora do plano — órfãos que o
+`rectify --sync` aponta e não remove —, o receipt passa a
+`APPLIED_PLAN_RECEIPT_FORMAT=2`: depois das linhas `RECORD`, um
+`ORPHAN_COUNT=n` e uma linha `ORPHAN\t<pacote>\t<fato>` por órfão. A
+conferência exige que os records fora do plano sejam EXATAMENTE os órfãos
+declarados, e confere o fato histórico de cada um. As formas ambíguas são
+recusadas na leitura: formato 1 com seção de órfãos, formato 2 sem órfão,
+contagem que não bate com as linhas, órfão que também é record e órfãos fora
+da ordem C. Sem órfão o receipt continua no formato 1, byte a byte. Só o `rectify` completo e o
+`--sync` completo têm autoridade sobre o world e escrevem receipt; o
+`memoryhole` o refaz depois de remover, e quando o world e os records se
+esvaziam, retira o ponteiro.
+
 Antes do primeiro payload/record, o mutador varre por descritores os namespaces
 de locks, slices, records, receipts/current e seus alvos. Há limite de 64 MiB
 por objeto, 100.000 entradas e 255 bytes por nome; nomes e records são
@@ -478,7 +492,8 @@ provar que o único conjunto escolhido declara e contém tudo de que depende.
 | plan lock tipado e `verify` de identidade exata da dependência | implementado (`PLAN_LOCK_FORMAT=1`, record v4 + receipt) |
 | `cache verify --closure` | implementado, read-only/offline |
 | `plan` e preview `plan --sync` | implementados, read-only sob lock compartilhado |
-| aplicação `rectify --sync`, rollback e coleta de órfãos | não implementados |
+| aplicação `rectify --sync` | implementada (0.17): world como raízes, órfãos no receipt v2 |
+| rollback e coleta de órfãos | não implementados |
 | canal oficial público | publicado; payloads da árvore corrente ainda precisam ser reemitidos |
 | metapacote gráfico suportado | futuro |
 

@@ -518,9 +518,11 @@ fornece esse comportamento de boot. O projeto poderá adotar ou implementar um
 stub mínimo sem depender do systemd, mas não deve chamar de UKI um `bzImage`
 que recebeu seções sem um consumidor compatível.
 
-`bootstrap/live/build-efi` implementa esse primeiro marco: pina Linux 7.1.8 e
-o BusyBox estático, exige `minipax`/`minitrue` estáticos e incorpora os quatro
-componentes e o PID 1 via `CONFIG_INITRAMFS_SOURCE`. No boot, o initramfs
+`bootstrap/live/build-efi` implementa esse primeiro marco: pina o kernel e o
+BusyBox (compilado estático da fonte), exige `minipax`/`minitrue` estáticos e
+incorpora os componentes e o PID 1 via `CONFIG_INITRAMFS_SOURCE`. As versões
+moram nos pinos do próprio build-efi, que a P7 confere como `efi:<nome>`
+(SPEC-0011 §7.1). No boot, o initramfs
 localiza o payload, inicia `install-media` e, em boots posteriores, localiza a
 raiz por `LABEL=DISTROPICA_ROOT`. O compositor continua recebendo o EFI pronto
 e mede seus bytes; o construtor do EFI ainda não consome nem coteja
@@ -531,7 +533,8 @@ O kernel vivo fixa `CONFIG_MODULES=n` e seu initramfs não distribui módulo
 algum: todos os drivers necessários para encontrar mídia, rede e disco
 precisam estar built-in, e a guarda pós-`olddefconfig` exige `=y` para cada
 classe suportada. `LOCALVERSION=-distropica-live` faz seu release ser
-`7.1.8-distropica-live`, distinto do kernel `7.1.8` materializado no target.
+`<versão>-distropica-live` (na 0.17, `7.2.7-distropica-live`), distinto do
+kernel do pacote `linux` materializado no target.
 Não há carregador de `.ko` nem busca automática depois do `switch_root`; isso
 não amplia a cobertura estreita de drivers deste marco.
 
@@ -546,11 +549,16 @@ esse contrato funcione antes de haver módulos, o EFI vivo DEVE trazer built-in
 artefato: embute `/dev/vda` e `distropica.test=1` e não pode ser apresentada
 como instalador humano.
 
-O instalador copia esse mesmo EFI para `EFI/BOOT/BOOTX64.EFI` na ESP. A gestão
-do sistema instalado deverá reter o EFI anterior em
-`EFI/distropica/anterior.efi` e nunca remover o kernel em execução. Rotação
-A/B, atualização do EFI quando `/boot/vmlinuz-*` muda, entrada NVRAM e rescue
-continuam fora do núcleo implementado.
+O instalador copia esse mesmo EFI para `EFI/BOOT/BOOTX64.EFI` na ESP e
+registra a entrada na NVRAM (`minipax efi-boot`). Desde a 0.17 o EFI do
+sistema instalado é o pacote `distropica-efi`, e a rotação A/B está
+implementada: `minipax boot-update` leva o EFI do pacote a
+`EFI/BOOT/BOOTX64.EFI`, guarda o que arrancou antes em
+`EFI/distropica/anterior.efi`, confere espaço antes de escrever e grava por
+temporário + `rename`, e mantém as duas entradas na NVRAM; se a máquina
+arrancou pela reserva, só o atual é trocado. Nunca remove o EFI em execução.
+O minitrue o chama ao retificar o pacote, e o drop-in `07-efi.sh` do base, a
+cada boot. Rescue continua fora do núcleo implementado.
 
 ## 8. Camada inicial de instalação de disco
 
@@ -785,7 +793,6 @@ Internet, hardware real, reprodução independente ou publicação oficial.
 ## 10. Questões em aberto
 
 - formato e implementação do stub de uma futura UKI real;
-- retenção/rotação atômica dos EFIs corrente e anterior;
 - BIOS legado: só será considerado diante de hardware que o justifique;
 - LUKS: initramfs, prompt e recuperação precisam ser dimensionados;
 - composição final de `base` e `live.world`, justificada na árvore Newspeak;

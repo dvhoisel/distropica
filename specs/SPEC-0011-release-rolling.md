@@ -104,6 +104,33 @@ A resolução que antecede essa convergência deve ser o plano único e tipado d
 SPEC-0013 §7: o preview e a aplicação compartilham algoritmo e plan lock;
 build-deps inativas não entram na closure runtime; órfãos são apenas apontados.
 
+Desde a 0.17 isso está implementado, e atualizar um sistema instalado é:
+
+```sh
+minitrue rectify newspeak
+minitrue rectify --sync
+```
+
+Os próprios executores rolam por essa via: o minitrue, o minipax e o EFI de
+boot são pacotes do canal (`minitrue`, `minipax`, `distropica-efi`, Mundo A,
+compilados e publicados pelo projeto), e os dois primeiros ADOTAM os
+`/usr/bin/minitrue` e `/usr/bin/minipax` que o instalador persistiu
+(SPEC-0003 §3). Quem instalou até a 0.16 tem um minitrue que não conhece a
+adoção, e por isso a primeira travessia passa por uma ponte — o mesmo binário
+novo, instalado com outro nome, que adota os executores e converge o resto:
+
+```sh
+minitrue rectify newspeak
+minitrue rectify minitrue-ponte
+minitrue-ponte rectify minitrue minipax distropica-efi
+minitrue rectify --sync
+minitrue memoryhole minitrue-ponte
+```
+
+É esta a sequência que o aceite da atualização (`bootstrap/live/accept-upgrade`)
+executa num disco instalado pela versão anterior, contra o canal de teste,
+antes de o canal oficial trocar.
+
 ## 4. Detecção de mudança e o fingerprint de build
 
 Rolar exige saber o que mudou entre a árvore antiga e a nova. Hoje o registro
@@ -178,12 +205,21 @@ P7 começa pelo kernel: a Distrópica acompanha o **stable mais recente** do
 kernel.org (não um LTS antigo). É o maior risco do edge — kernel novo =
 hardware novo suportado, mas menos rodagem.
 
-A rede já existe (SPEC-0008 §4): a ESP mantém o UKI corrente e o **anterior**
-(`EFI/distropica/anterior.efi`), e `rectify` do pacote `linux` rotaciona os
-dois. Kernel edge que não bota → escolher a entrada anterior no firmware, sem
-menu nem timeout. É o rollback-de-mundo-B (§5.1) na forma mais crítica, e a
-razão de o boot A/B ter sido desenhado antes deste spec: **edge no kernel só é
-aceitável porque o boot anterior sempre sobrevive.**
+A rede existe desde a 0.17 (SPEC-0008 §7). O kernel que arranca o sistema
+instalado é o do EFI de boot — o mesmo da mídia da versão —, e esse EFI é o
+pacote `distropica-efi`. Instalá-lo ou atualizá-lo faz o minitrue chamar o
+`minipax boot-update` (artefato derivado): o EFI do pacote vira
+`EFI/BOOT/BOOTX64.EFI`, o que arrancou antes vai para
+`EFI/distropica/anterior.efi`, e as duas entradas, "Distrópica" e "Distrópica
+(anterior)", ficam na NVRAM, a atual primeiro. Se a máquina rodava a reserva
+— o atual não arrancou —, só o atual é trocado e a reserva fica onde está. O
+drop-in `07-efi.sh` do base refaz a conta a cada boot, que é o que cobre a
+retificação numa raiz montada, onde ninguém chama o minipax. Kernel edge que
+não bota → escolher "Distrópica (anterior)" no menu do firmware. É o
+rollback-de-mundo-B (§5.1) na forma mais crítica: **edge no kernel só é
+aceitável porque o boot anterior sempre sobrevive.** A ESP de 64 MiB comporta
+as duas cópias com folga, e o preparo da versão recusa um EFI que não caiba
+duas vezes.
 
 "Stable mais recente" é o *mainline stable* (a série nova), não
 necessariamente o *longterm*. Quem precise de estabilidade extrema PODE pinar
@@ -196,14 +232,14 @@ projeto é o stable novo.
 |------|--------|
 | Design rolling (tree-at-commit, sem release) | pronto — é o que P1 pressupõe |
 | Política edge (P7) | especificada (SPEC-0001 P7 + este spec) |
-| Boot A/B do kernel (rollback do mais arriscado) | especificado (SPEC-0008 §4) |
-| `rectify newspeak` (árvore-como-pacote) | **implementado e coberto por testes unitários** (§3.1); falta E2E contra a publicação oficial |
-| `rectify --sync` | speced, *stubbed* (SPEC-0003) |
+| Boot A/B do kernel (rollback do mais arriscado) | **implementado** (0.17): `distropica-efi` + `minipax boot-update` + `07-efi.sh` (§6) |
+| `rectify newspeak` (árvore-como-pacote) | **implementado** (§3.1); o E2E é o `accept-upgrade`, que o release exige antes de trocar o canal |
+| `rectify --sync` | **implementado** (0.17): world como raízes, órfãos apontados no receipt v2 (SPEC-0013) |
 | Fingerprint de build | **implementado, transitivo** (§4) |
 | Rollback de mundo B | **lacuna** (§5.1) |
 | Canal binário: consumo, lock v2 e emissão | **implementação inicial pronta** (SPEC-0009) |
 | `channel refresh` autenticado + diff auditável | **implementado e coberto por teste unitário** |
-| Republicação automática a cada roll | especificada, não implementada |
+| Republicação a cada roll | `bootstrap/release`: um comando por etapa (conferir, preparar, aceitar, subir-teste, aceitar-atualizacao, publicar); não é automática |
 
 Com o fingerprint transitivo, o protocolo binário inicial e a
 **árvore-como-pacote** feitos, restam **rollback de mundo B** (a rede) —
@@ -264,6 +300,15 @@ consequência de ninguém ter olhado. O arquivo separado evita mudar o fingerpri
 e recompilar payloads só por atualizar uma justificativa de governança.
 "Atrasado sem motivo registrado" e "pinado por regressão" deixam de ser
 indistinguíveis.
+
+### Os insumos do EFI entram na mesma conta
+
+O kernel, o BusyBox, o e2fsprogs, o ncurses, o util-linux e o firmware que o
+`bootstrap/live/build-efi` compila ou embute não passam pelo newspeak, e por
+isso nenhuma rodada da P7 os lia: o BusyBox do ambiente vivo ficou na 1.35.0,
+de 2022, até a 0.17. O `bootstrap/versoes` os confere como `efi:<nome>`, pelo
+mesmo veredito das receitas, e a ressalva de cada um, quando houver, mora em
+`bootstrap/live/versao-pinada/<nome>`.
 
 ## 8. Conjunto publicável e fontes correspondentes
 
@@ -382,6 +427,12 @@ atomicamente durante os próprios builds locais e grava `RELEASE_ROOT=yes` em
   aplicar — desejável, e o registro-texto já permite computá-lo.
 - **News / intervenção manual** (à la Arch): bumps que exigem ação do admin.
   Um campo na árvore? A decidir.
+- **O pacote `linux` depois do `distropica-efi`**: o sistema instalado arranca
+  pelo kernel do EFI (`MODULES=n`, tudo built-in); o pacote `linux`, com
+  módulos assinados em `/usr/lib/modules`, nunca é o kernel que roda, e cada
+  subida dele custa a cerimônia de assinatura dos módulos. Mantê-lo, torná-lo
+  o kernel do boot (um EFI montado no alvo) ou tirá-lo do mundo é decisão em
+  aberto.
 - **Edge × reprodutibilidade da base**: cada bump de glibc/gcc refaz as provas
   (SPEC-0010) e o `reprocorr` do canal. Convém um *gate*: não republicar a base
   sem a prova refeita.
