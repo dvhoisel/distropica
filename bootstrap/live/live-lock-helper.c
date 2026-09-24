@@ -1288,6 +1288,7 @@ struct runner_info {
     char e2fs_tar[65];
     char ncurses_tar[65];
     char util_linux_tar[65];
+    char firmware_tar[65];
     char minipax[65];
     char minitrue[65];
     char zig_tar[65];
@@ -1315,7 +1316,7 @@ static struct runner_info parse_runner_text(const char *text) {
     const char *p = text;
     char line[256], variant[32];
     p = line_after(p, line, sizeof(line), "Runner header");
-    if (strcmp(line, "LIVE_RUNNER_PROOF_FORMAT=1"))
+    if (strcmp(line, "LIVE_RUNNER_PROOF_FORMAT=2"))
         die("Runner Proof header inválido");
     p = ordered_value(p, "VARIANT", variant, sizeof(variant), "Runner Proof");
     p = ordered_value(p, "BUILD_MODE", info.mode, sizeof(info.mode), "Runner Proof");
@@ -1355,6 +1356,8 @@ static struct runner_info parse_runner_text(const char *text) {
                       sizeof(info.ncurses_tar), "Runner Proof");
     p = ordered_value(p, "UTIL_LINUX_TAR_SHA256", info.util_linux_tar,
                       sizeof(info.util_linux_tar), "Runner Proof");
+    p = ordered_value(p, "LINUX_FIRMWARE_TAR_SHA256", info.firmware_tar,
+                      sizeof(info.firmware_tar), "Runner Proof");
     p = ordered_value(p, "MINIPAX_BINARY_SHA256", info.minipax,
                       sizeof(info.minipax), "Runner Proof");
     p = ordered_value(p, "MINITRUE_BINARY_SHA256", info.minitrue,
@@ -1380,7 +1383,8 @@ static struct runner_info parse_runner_text(const char *text) {
         info.source_snapshot, info.build_source, info.live_lock_source,
         info.helper_source, info.helper_binary, info.busybox_config,
         info.linux_tar, info.busybox_tar,
-        info.e2fs_tar, info.ncurses_tar, info.util_linux_tar, info.minipax,
+        info.e2fs_tar, info.ncurses_tar, info.util_linux_tar,
+        info.firmware_tar, info.minipax,
         info.minitrue, info.zig_tar, info.zig_binary, info.musl_tree};
     for (size_t i = 0; i < ARRAY_LEN(hashes); i++) {
         if (!valid_sha256(hashes[i])) die("Runner Proof contém hash inválido");
@@ -2331,9 +2335,9 @@ static const char work_marker_name[] = ".distropica-live-work";
 static void hash_release_request(char **a, char hex[65]) {
     struct sha256_ctx c;
     sha256_init(&c);
-    static const char domain[] = "DISTROPICA_LIVE_WORK_REQUEST_FORMAT=1\0";
+    static const char domain[] = "DISTROPICA_LIVE_WORK_REQUEST_FORMAT=2\0";
     sha256_update(&c, domain, sizeof(domain));
-    for (uint32_t i = 0; i < 20; i++) {
+    for (uint32_t i = 0; i < 21; i++) {
         hash_u32(&c, i);
         hash_bytes(&c, a[i], strlen(a[i]));
     }
@@ -2545,7 +2549,7 @@ static void command_release_preflight(char **a) {
     hash_self(self);
     if (strcmp(self, ri.helper_binary))
         die("helper externo diverge do pin binário no Runner Proof");
-    if (strcmp(a[19], ri.epoch) || !decimal_string(a[19]))
+    if (strcmp(a[20], ri.epoch) || !decimal_string(a[20]))
         die("epoch externo diverge do Runner Proof");
     if (strcmp(a[2], ri.runner_path))
         die("caminho do runner diverge do Runner Proof");
@@ -2557,9 +2561,10 @@ static void command_release_preflight(char **a) {
     require_regular_hash(a[13], ri.e2fs_tar, "tar e2fsprogs");
     require_regular_hash(a[14], ri.ncurses_tar, "tar ncurses");
     require_regular_hash(a[15], ri.util_linux_tar, "tar util-linux");
-    require_regular_hash(a[16], ri.minipax, "binário Minipax");
-    require_regular_hash(a[17], ri.minitrue, "binário Minitrue");
-    require_regular_hash(a[18], ri.zig_tar, "tar Zig");
+    require_regular_hash(a[16], ri.firmware_tar, "tar linux-firmware");
+    require_regular_hash(a[17], ri.minipax, "binário Minipax");
+    require_regular_hash(a[18], ri.minitrue, "binário Minitrue");
+    require_regular_hash(a[19], ri.zig_tar, "tar Zig");
     validate_builder_lock(a[5], &ri);
     require_regular_hash(a[6], a[7], "evidência de licenças");
     char measured_root[65];
@@ -2618,7 +2623,7 @@ static void usage(FILE *stream) {
         "  live-lock-helper components INPUTS OUTPUT\n"
         "  live-lock-helper verify-runner RUNNER-PROOF\n"
         "  live-lock-helper check-output OUTPUT-EFI\n"
-        "  live-lock-helper release-preflight PROOF PROOF-SHA RUNNER SNAPSHOT ROOTFS BUILDER-LOCK LICENSE LICENSE-SHA OUTPUT WORK BUILD-EFI LINUX BUSYBOX E2FS NCURSES UTIL MINIPAX MINITRUE ZIG EPOCH\n"
+        "  live-lock-helper release-preflight PROOF PROOF-SHA RUNNER SNAPSHOT ROOTFS BUILDER-LOCK LICENSE LICENSE-SHA OUTPUT WORK BUILD-EFI LINUX BUSYBOX E2FS NCURSES UTIL FIRMWARE MINIPAX MINITRUE ZIG EPOCH\n"
         "  live-lock-helper work-verify WORK MARKER-SHA REQUEST-SHA PROOF-SHA pristine|populated\n"
         "  live-lock-helper release-work-exec ROOT ROOT-SHA WORK MARKER-SHA REQUEST-SHA PROOF-SHA pristine|populated PROGRAMA [ARG...]\n"
         "  live-lock-helper tree-exec ROOT ROOT-SHA PROGRAMA [ARG...]\n"
@@ -2653,7 +2658,7 @@ int main(int argc, char **argv) {
         command_verify_runner(argv[2]);
     } else if (!strcmp(argv[1], "check-output") && argc == 3) {
         command_check_output(argv[2]);
-    } else if (!strcmp(argv[1], "release-preflight") && argc == 22) {
+    } else if (!strcmp(argv[1], "release-preflight") && argc == 23) {
         command_release_preflight(&argv[2]);
     } else if (!strcmp(argv[1], "work-verify") && argc == 7) {
         command_work_verify(argv[2], argv[3], argv[4], argv[5], argv[6]);

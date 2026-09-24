@@ -119,7 +119,7 @@ if [ "$live_outer_mode" = release ] && [ "$live_outer_inner" = no ]; then
         "$live_runner" "$live_snapshot" "$live_rootfs" \
         "$live_builder_lock" "$live_license" "$live_license_sha" \
         "$live_output" "$live_work" "$0" "$live_linux" "$live_busybox" \
-        "$live_e2fs" "$live_ncurses" "$live_util" "$live_minipax" \
+        "$live_e2fs" "$live_ncurses" "$live_util" "$live_fw" "$live_minipax" \
         "$live_minitrue" "$live_zig" "$live_epoch") || {
         printf '%s\n' 'erro: preflight nativo externo do release falhou' >&2
         exit 1
@@ -504,7 +504,7 @@ uso: bootstrap/live/build-efi --output BOOTX64.EFI [opções]
   --builder-id ID     identidade que precisa coincidir com o builder lock
   --runner ARQ        bwrap absoluto autenticado externamente (release)
   --runner-sha256 H   pin exato do bwrap
-  --runner-proof ARQ  LIVE_RUNNER_PROOF_FORMAT=1 autenticado
+  --runner-proof ARQ  LIVE_RUNNER_PROOF_FORMAT=2 autenticado
   --runner-proof-sha256 H pin exato dos bytes do runner proof
   --source-snapshot ARQ snapshot privado/pinado desta árvore
   --source-snapshot-sha256 H pin exato do snapshot
@@ -2356,6 +2356,7 @@ if [ "$MODE" = release ]; then
         "E2FSPROGS_TAR_SHA256=$E2FSPROGS_SHA256" \
         "NCURSES_TAR_SHA256=$NCURSES_SHA256" \
         "UTIL_LINUX_TAR_SHA256=$UTIL_LINUX_SHA256" \
+        "LINUX_FIRMWARE_TAR_SHA256=$LINUX_FIRMWARE_SHA256" \
         "MINIPAX_BINARY_SHA256=$MINIPAX_SHA256" \
         "MINITRUE_BINARY_SHA256=$MINITRUE_SHA256" \
         "ZIG_TAR_SHA256=$ZIG_TAR_EXPECTED" \
@@ -2369,7 +2370,7 @@ if [ "$MODE" = release ]; then
 else
     RUNNER_PROOF=$WORK/LIVE_RUNNER_PROOF
     cat > "$RUNNER_PROOF" <<EOF
-LIVE_RUNNER_PROOF_FORMAT=1
+LIVE_RUNNER_PROOF_FORMAT=2
 VARIANT=live-efi
 BUILD_MODE=development
 AUTHENTICATED=no
@@ -2390,6 +2391,7 @@ BUSYBOX_TAR_SHA256=$BUSYBOX_SHA256
 E2FSPROGS_TAR_SHA256=$E2FSPROGS_SHA256
 NCURSES_TAR_SHA256=$NCURSES_SHA256
 UTIL_LINUX_TAR_SHA256=$UTIL_LINUX_SHA256
+LINUX_FIRMWARE_TAR_SHA256=$LINUX_FIRMWARE_SHA256
 MINIPAX_BINARY_SHA256=$MINIPAX_SHA256
 MINITRUE_BINARY_SHA256=$MINITRUE_SHA256
 ZIG_TAR_SHA256=$ZIG_INPUT_SHA256

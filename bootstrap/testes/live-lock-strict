@@ -104,7 +104,7 @@ make_runner() { # destino mode
     fi
     {
         printf '%s\n' \
-            'LIVE_RUNNER_PROOF_FORMAT=1' \
+            'LIVE_RUNNER_PROOF_FORMAT=2' \
             'VARIANT=live-efi' \
             "BUILD_MODE=$mode" \
             "AUTHENTICATED=$authenticated" \
@@ -125,6 +125,7 @@ make_runner() { # destino mode
             "E2FSPROGS_TAR_SHA256=$pin" \
             "NCURSES_TAR_SHA256=$pin" \
             "UTIL_LINUX_TAR_SHA256=$pin" \
+            "LINUX_FIRMWARE_TAR_SHA256=$pin" \
             "MINIPAX_BINARY_SHA256=$pin" \
             "MINITRUE_BINARY_SHA256=$pin" \
             "ZIG_TAR_SHA256=$pin" \
@@ -228,8 +229,8 @@ else
 fi
 if grep -Fqx 'ENTRY_COUNT=27' "$TMP/a/components" &&
    grep -Fqx 'RELEASE_ELIGIBLE=no' "$TMP/a/components" &&
-   [ "$(wc -l < "$TMP/a/runner" | tr -d ' ')" -eq 27 ]; then
-    ok 'schema fecha 27 fatos, Proof 27 linhas e Components não se autopromove'
+   [ "$(wc -l < "$TMP/a/runner" | tr -d ' ')" -eq 28 ]; then
+    ok 'schema fecha 27 fatos, Proof 28 linhas e Components não se autopromove'
 else
     fail 'schema/count/elegibilidade Components incorretos'
 fi
@@ -728,7 +729,7 @@ cp "$BUILDER" "$OUTER_BUILDER"
 chmod 0700 "$OUTER_BUILDER"
 
 for outer_input in linux.tar.xz busybox.tar.bz2 e2fsprogs.tar.xz \
-    ncurses.tar.gz util-linux.tar.xz minipax minitrue zig.tar.xz \
+    ncurses.tar.gz util-linux.tar.xz linux-firmware.tar.xz minipax minitrue zig.tar.xz \
     source.snapshot license-evidence; do
     printf '%s\n' "$outer_input" > "$OUTER/inputs/$outer_input"
     chmod 0600 "$OUTER/inputs/$outer_input"
@@ -845,6 +846,7 @@ case "$fixture_phase" in
             --e2fsprogs-tar "$FIXTURE_E2FS" \
             --ncurses-tar "$FIXTURE_NCURSES" \
             --util-linux-tar "$FIXTURE_UTIL" \
+            --firmware-tar "$FIXTURE_FW" \
             --minipax "$FIXTURE_MINIPAX" --minitrue "$FIXTURE_MINITRUE" \
             --minipax-sha256 "$FIXTURE_MINIPAX_SHA" \
             --minitrue-sha256 "$FIXTURE_MINITRUE_SHA" \
@@ -920,11 +922,12 @@ outer_busybox_sha=$("$HELPER" sha256 "$OUTER/inputs/busybox.tar.bz2")
 outer_e2fs_sha=$("$HELPER" sha256 "$OUTER/inputs/e2fsprogs.tar.xz")
 outer_ncurses_sha=$("$HELPER" sha256 "$OUTER/inputs/ncurses.tar.gz")
 outer_util_sha=$("$HELPER" sha256 "$OUTER/inputs/util-linux.tar.xz")
+outer_fw_sha=$("$HELPER" sha256 "$OUTER/inputs/linux-firmware.tar.xz")
 outer_zig_tar_pin=$("$HELPER" sha256 "$OUTER/inputs/zig.tar.xz")
 
 OUTER_PROOF=$OUTER/inputs/runner.proof
 cat > "$OUTER_PROOF" <<EOF
-LIVE_RUNNER_PROOF_FORMAT=1
+LIVE_RUNNER_PROOF_FORMAT=2
 VARIANT=live-efi
 BUILD_MODE=release
 AUTHENTICATED=yes
@@ -945,6 +948,7 @@ BUSYBOX_TAR_SHA256=$outer_busybox_sha
 E2FSPROGS_TAR_SHA256=$outer_e2fs_sha
 NCURSES_TAR_SHA256=$outer_ncurses_sha
 UTIL_LINUX_TAR_SHA256=$outer_util_sha
+LINUX_FIRMWARE_TAR_SHA256=$outer_fw_sha
 MINIPAX_BINARY_SHA256=$outer_minipax_sha
 MINITRUE_BINARY_SHA256=$outer_minitrue_sha
 ZIG_TAR_SHA256=$outer_zig_tar_pin
@@ -967,6 +971,7 @@ run_preflight_fixture() { # proof proof-sha runner output work
         "$OUTER_BUILDER" "$OUTER/inputs/linux.tar.xz" \
         "$OUTER/inputs/busybox.tar.bz2" "$OUTER/inputs/e2fsprogs.tar.xz" \
         "$OUTER/inputs/ncurses.tar.gz" "$OUTER/inputs/util-linux.tar.xz" \
+        "$OUTER/inputs/linux-firmware.tar.xz" \
         "$OUTER/inputs/minipax" "$OUTER/inputs/minitrue" \
         "$OUTER/inputs/zig.tar.xz" 1704067200
 }
@@ -1120,6 +1125,7 @@ FIXTURE_BUSYBOX=$OUTER/inputs/busybox.tar.bz2
 FIXTURE_E2FS=$OUTER/inputs/e2fsprogs.tar.xz
 FIXTURE_NCURSES=$OUTER/inputs/ncurses.tar.gz
 FIXTURE_UTIL=$OUTER/inputs/util-linux.tar.xz
+FIXTURE_FW=$OUTER/inputs/linux-firmware.tar.xz
 FIXTURE_MINIPAX=$OUTER/inputs/minipax
 FIXTURE_MINITRUE=$OUTER/inputs/minitrue
 FIXTURE_MINIPAX_SHA=$outer_minipax_sha
@@ -1137,7 +1143,7 @@ export FIXTURE_CC FIXTURE_CHMOD FIXTURE_MKDIR FIXTURE_CP FIXTURE_MV \
     FIXTURE_CONFIG FIXTURE_HELPER FIXTURE_PROOF FIXTURE_PROOF_SHA \
     FIXTURE_SNAPSHOT FIXTURE_SNAPSHOT_SHA FIXTURE_RUNNER FIXTURE_RUNNER_SHA \
     FIXTURE_TEMPLATE FIXTURE_HELPER_PIN FIXTURE_ROOTFS FIXTURE_ROOT_SHA \
-    FIXTURE_LINUX FIXTURE_BUSYBOX FIXTURE_E2FS FIXTURE_NCURSES FIXTURE_UTIL \
+    FIXTURE_LINUX FIXTURE_BUSYBOX FIXTURE_E2FS FIXTURE_NCURSES FIXTURE_UTIL FIXTURE_FW \
     FIXTURE_MINIPAX FIXTURE_MINITRUE FIXTURE_MINIPAX_SHA FIXTURE_MINITRUE_SHA \
     FIXTURE_ZIG FIXTURE_ZIG_TAR_SHA FIXTURE_ZIG_SHA FIXTURE_MUSL_SHA \
     FIXTURE_BUILDER_LOCK FIXTURE_BUILDER_LOCK_SHA FIXTURE_LICENSE \
@@ -1171,6 +1177,7 @@ invoke_outer() { # runner runner-sha proof-sha output work log-prefix
         --e2fsprogs-tar "$OUTER/inputs/e2fsprogs.tar.xz" \
         --ncurses-tar "$OUTER/inputs/ncurses.tar.gz" \
         --util-linux-tar "$OUTER/inputs/util-linux.tar.xz" \
+        --firmware-tar "$OUTER/inputs/linux-firmware.tar.xz" \
         --minipax "$OUTER/inputs/minipax" --minitrue "$OUTER/inputs/minitrue" \
         --minipax-sha256 "$outer_minipax_sha" \
         --minitrue-sha256 "$outer_minitrue_sha" \
