@@ -1,0 +1,24 @@
+# Configuração do `cargo audit` para o minitrue e o minipax.
+#
+# O `cargo audit` é PORTÃO de release (bootstrap/release): um aviso novo sobre
+# qualquer crate do Cargo.lock reprova a publicação. Por isso uma exceção aqui
+# não é silêncio — cada uma diz por que o aviso não alcança o uso desta árvore,
+# e o que teria de mudar para passar a alcançar.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — rsa 0.9 (Marvin Attack): canal lateral de tempo que
+    # permite recuperar a chave PRIVADA observando operações de decriptação e
+    # assinatura RSA. Não há versão corrigida.
+    #
+    # O crate chega só pelo sequoia-openpgp, e o minitrue usa o OpenPGP para UMA
+    # coisa: verificar a assinatura do upstream sobre um tarball (openpgp.rs).
+    # Verificar é operação com a chave PÚBLICA; não existe chave privada RSA do
+    # lado do minitrue para ser recuperada. Conferido em 2026-09-24: o único
+    # assinador do crate é ed25519 (channel.rs, attest.rs), e nenhum caminho
+    # constrói KeyPair, Signer ou Decryptor do sequoia.
+    #
+    # Deixa de valer no dia em que o minitrue ASSINAR ou DECIFRAR com RSA — aí
+    # a exceção sai e o aviso volta a reprovar.
+    "RUSTSEC-2023-0071",
+]
