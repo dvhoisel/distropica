@@ -3,7 +3,7 @@ VERSION=1.8.0
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc fcft fontconfig pixman wayland libpng dbus"
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox tllist wayland-protocols"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox tllist wayland-protocols findutils"
 ABOUT="O DAEMON DE NOTIFICAÇÕES. Sem ele, org.freedesktop.Notifications não tem dono no barramento de sessão e todo aviso morre calado — download que o Epiphany terminou, evento que um aplicativo futuro queira contar. Mesma família do foot, yambar e fuzzel: C sem toolkit, fcft e pixman, wlr-layer-shell para desenhar o balão. Fala libdbus de verdade — a dependência nova é só a biblioteca do dbus que a árvore já instala pelo daemon. Sobe pelo autostart do labwc, explícito e visível; o arquivo de serviço D-Bus que o pacote instala em /usr/share/dbus-1/services fica como rede de segurança — se o daemon morrer, a primeira notificação o reativa pela ativação tradicional que este dbus tem. Sem systemd (o meson pula sozinho quando não o encontra), sem man pages (-Ddocs=disabled, linha da árvore) — e como o corte das docs leva junto a LICENSE e o fnott.ini de exemplo, a licença volta à mão: evidência não é documentação. Configuração de tema fica para quando doer: os padrões são legíveis, e o arquivo, quando vier, mora em /etc/xdg/fnott — caminho que o próprio upstream usa."
 LICENSE=MIT
 SRC="https://codeberg.org/dnkl/fnott/releases/download/$VERSION/fnott-$VERSION.tar.gz"

@@ -3,7 +3,7 @@ VERSION=6.0.3
 KIND=source
 TOOLCHAIN=native
 DEPS="python-glibc"
-BUILD_DEPS="python-glibc"
+BUILD_DEPS="python-glibc findutils"
 ABOUT="Leitor e escritor de YAML. Entra por imposição e não por uso: o meson.build da Mesa faz import yaml e aborta se falhar, sem condicionar a verificação aos drivers escolhidos — quem precisa de YAML de fato são os geradores do freedreno e do panfrost, que esta árvore não constrói. Pagar uma dependência por uma checagem que não se aplica é feio, mas contornar seria remendar o meson.build da Mesa, e um patch nosso num arquivo de configuração alheio é dívida pior que um pacote a mais. O acelerador em C sobre a libyaml não é compilado, pelo mesmo motivo do markupsafe; o __init__.py resolve isso sozinho com __with_libyaml__ = False e usa o analisador puro. É o archive do GitHub, e não o sdist do PyPI, porque é o do GitHub que o Alpine pina — e assim a conferência do hash tem duas fontes independentes."
 LICENSE=MIT
 SRC="https://github.com/yaml/pyyaml/archive/$VERSION.tar.gz"

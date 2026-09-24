@@ -80,7 +80,7 @@ SETUP
     # ter awk nenhum — o busybox está lá, mas já cedeu /usr/bin/awk ao gawk. O
     # awk falhava, o `while read` recebia vazio e saía com 0, então o conserto
     # não acontecia EM SILÊNCIO. `case` do shell resolve sem ferramenta externa.
-    find "$STAGE/usr/lib/python3.14" -type f -name '*.py' -perm -u+x -exec sh -c '
+    busybox find "$STAGE/usr/lib/python3.14" -type f -name '*.py' -perm -u+x -exec sh -c '
         for arquivo do
             case $(head -1 "$arquivo") in
                 "#!"*"/env python")
@@ -90,5 +90,5 @@ SETUP
         done
     ' _ {} +
 
-    find "$STAGE" -type d -empty -delete
+    busybox find "$STAGE" -type d -empty -delete
 }

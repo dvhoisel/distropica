@@ -7,7 +7,7 @@ TOOLCHAIN=native
 # busybox pelo mesmo motivo. Sem a declaração o pacote vai para ABI_PENDING e
 # derruba o fechamento inteiro da cadeia, e não só a si mesmo.
 DEPS="glibc libtasn1 libffi busybox"
-BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc findutils"
 ABOUT="O carregador de módulos PKCS#11 e o módulo de confiança que expõe a loja de certificados do sistema por essa interface. Entra porque o gcr o exige, e o gcr é exigido pelo Epiphany — é a base sobre a qual o navegador lê e mostra certificado. O módulo de confiança aponta para a mesma âncora que o resto da árvore usa, o ca-certificates, em vez de manter uma segunda cópia de CAs. Sem systemd (a opção instalaria unidades de socket), sem gtk-doc, sem man e sem testes."
 LICENSE=BSD-3-Clause
 SRC="https://github.com/p11-glue/p11-kit/releases/download/$VERSION/p11-kit-$VERSION.tar.xz"

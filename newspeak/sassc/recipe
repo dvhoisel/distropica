@@ -8,7 +8,7 @@ TOOLCHAIN=native
 # derrubando o fechamento da v42; estas três receitas trazem o mesmo defeito e
 # ainda não chegaram a construir.
 DEPS="glibc gcc-pass2 libsass"
-BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox"
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox findutils"
 ABOUT="A linha de comando do libsass. É BUILD_DEP da libadwaita e de mais nada: o meson dela procura o programa 'sassc' para compilar o estilo de .scss para CSS. Não faz parte do sistema instalado, e é por isso que está declarado só como dependência de build lá."
 LICENSE=MIT
 SRC="https://github.com/sass/sassc/archive/refs/tags/$VERSION.tar.gz"

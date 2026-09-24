@@ -9,7 +9,7 @@ DEPS="glibc libxml2 busybox"
 # leitura ruim. Conferido no configure da fonte pinada, não suposto: são 8 a
 # 12 usos de $AWK na seção do config.status. É a convenção da árvore, que
 # tem 75 receitas declarando gawk pelo mesmo motivo.
-BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf libxml2 gawk"
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf libxml2 gawk findutils"
 ABOUT="Processador XSLT e o xsltproc usado pelos geradores do GIMP. Segue o estável junto com a libxml2: a 1.1.44 em diante exige libxml2 2.15.1, e até a 0.16 a árvore segurava a 1.1.43 por causa da série 2.13 da libxml2, que saiu. Python, extensões criptográficas, plugins, depurador e profiler ficam desligados; as bibliotecas compartilhadas e a ferramenta de transformação permanecem."
 LICENSE=MIT
 SRC="https://download.gnome.org/sources/libxslt/1.1/libxslt-$VERSION.tar.xz"

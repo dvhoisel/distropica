@@ -3,7 +3,7 @@ VERSION=1.10.8
 KIND=source
 TOOLCHAIN=native
 DEPS="graphene glib-introspection"
-BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools glib glib-introspection gobject-introspection"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf python-glibc setuptools glib glib-introspection gobject-introspection findutils"
 ABOUT="Overlay de canal com o namespace GIR Graphene-1.0, e existe por um elo só: o Gsk-4.0 do GTK4 o declara em includes, e sem ele o typelib do Gtk-4.0 não se gera. Conferido no gtk/meson.build da fonte pinada do GTK4, linha 1198 — gsk_gir_inc = [ gdk_gir[0], 'Graphene-1.0' ]. Como toda receita -introspection desta árvore, não duplica biblioteca nem cabeçalho: o stage fechado tem dois arquivos, o .gir e o .typelib. A receita-base do graphene segue com introspection desligada, e é ela que vai para a superfície."
 LICENSE=MIT
 SRC="https://github.com/ebassi/graphene/archive/refs/tags/$VERSION.tar.gz"

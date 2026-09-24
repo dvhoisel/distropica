@@ -6,7 +6,7 @@ DEPS="glibc"
 # gawk: o configure gerado pelo autoconf usa $AWK dentro do config.status — doze
 # vezes nesta fonte, contadas — e sem ele a configuração morre depois de já ter
 # respondido a todos os testes. Mesma lição do a35f435.
-BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox"
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox findutils"
 ABOUT="O parser de YAML em C, e entra por uma cadeia de três elos que só apareceu quando o WebKit começou a compilar de fato. O ruby desta árvore existe para o offlineasm do JavaScriptCore; o build do WebKit também roda Source/WebCore/Scripts/GenerateSettings.rb, que faz require 'yaml'; e o yaml.rb do Ruby é uma casca sobre a extensão psych, que é C e liga esta biblioteca. Sem ela o ruby compila, roda, e falha só naquele script — no objeto 2385 de 9375, depois de meia hora de C++. O Ruby 3.4 NÃO embute mais o libyaml: em ext/psych há apenas os fontes da extensão, e o configure procura yaml.h no sistema (o log dele diz 'yaml.h not found' e segue, o que torna a falta invisível até o momento errado). É biblioteca de build e não de superfície: nada do sistema instalado a consulta, ela chega ao alvo só porque o ruby a declara. Upstream dormente por escolha, não por abandono — a 0.2.5 é de 2020 e continua sendo a última estável; a 0.2.6 tem release candidate desde então, que a P7 proíbe. O SHA256 foi corroborado por dois canais, o release do GitHub e o pyyaml.org, com o mesmo valor."
 LICENSE=MIT
 SRC="https://github.com/yaml/libyaml/releases/download/$VERSION/yaml-$VERSION.tar.gz"

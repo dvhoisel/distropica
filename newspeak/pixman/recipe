@@ -3,7 +3,7 @@ VERSION=0.46.4
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
-BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf"
+BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf findutils"
 ABOUT="Manipulação de pixel de baixo nível: composição, gradiente, recorte. É o motor de rasterização por software do cairo, e num sistema sem aceleração de GPU é ele quem efetivamente desenha tudo. Com o GTK desenhando por Cairo (GSK_RENDERER=cairo, decidido na receita desktop) e os clientes da família do foot compondo em CPU, a pixman é o caminho quente da interface inteira — daí valer ligar as rotinas SIMD de x86, que é o que ela tem de mais rápido."
 LICENSE=MIT
 SRC="https://www.cairographics.org/releases/pixman-$VERSION.tar.xz"

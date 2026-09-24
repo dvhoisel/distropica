@@ -7,7 +7,7 @@ TOOLCHAIN=native
 # busybox pelo mesmo motivo. Sem a declaração o pacote vai para ABI_PENDING e
 # derruba o fechamento inteiro da cadeia, e não só a si mesmo.
 DEPS="glibc busybox"
-BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox"
+BUILD_DEPS="make gcc-pass2 binutils-glibc gawk busybox findutils"
 ABOUT="A base da pilha do GnuPG: códigos de erro e alguns utilitários comuns (gpgrt) que a libgcrypt exige antes de compilar qualquer linha. Não faz criptografia — existe para que erro tenha o mesmo número e o mesmo nome em todas as bibliotecas da família. Entra na árvore por um caminho só: o WebKitGTK exige LibGcrypt 1.7.0 ou maior, e a libgcrypt não constrói sem esta. Sem doc, sem testes e SEM as ligações de linguagem (--disable-languages), que instalariam arquivos .m4 e wrappers para Common Lisp e Python que ninguém aqui usa; sem nls, porque a distro não traduz mensagem de biblioteca."
 LICENSE=LGPL-2.1-or-later
 SRC="https://gnupg.org/ftp/gcrypt/libgpg-error/libgpg-error-$VERSION.tar.bz2"

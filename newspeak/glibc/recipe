@@ -122,14 +122,14 @@ build() {
     # ferramenta (linha 569), então isto não inventa um estado novo: fixa o
     # estado que sempre valeu aqui. Quem compila os catálogos da glibc é o
     # pacote locales, que já depende dela e PODE depender do gettext.
-    mo_indevido=$(find "$STAGE/usr/share/locale" -name '*.mo' 2>/dev/null || true)
+    mo_indevido=$(busybox find "$STAGE/usr/share/locale" -name '*.mo' 2>/dev/null || true)
     if [ -n "$mo_indevido" ]; then
         echo "FATAL: a glibc gerou catálogo .mo; MSGFMT não foi pinado:" >&2
         echo "$mo_indevido" >&2
         exit 1
     fi
-    find "$STAGE/usr/share/locale" -mindepth 1 -type d -empty -delete
-    vazio=$(find "$STAGE/usr/share/locale" -mindepth 1 -type d -empty 2>/dev/null || true)
+    busybox find "$STAGE/usr/share/locale" -mindepth 1 -type d -empty -delete
+    vazio=$(busybox find "$STAGE/usr/share/locale" -mindepth 1 -type d -empty 2>/dev/null || true)
     if [ -n "$vazio" ]; then
         echo "FATAL: sobrou diretório vazio sob /usr/share/locale:" >&2
         echo "$vazio" >&2
@@ -141,7 +141,7 @@ build() {
     # regulares independentes antes de selar o payload.
     # Processe um nome por vez: em lote, separar o primeiro nome altera o nlink
     # dos demais durante a travessia e pode deixar um alias escapar.
-    find "$STAGE" -type f -links +1 -exec sh -ec '
+    busybox find "$STAGE" -type f -links +1 -exec sh -ec '
         for path do
             copy=$path.minitrue-copy
             if [ -e "$copy" ] || [ -L "$copy" ]; then

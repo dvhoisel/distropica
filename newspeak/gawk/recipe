@@ -55,5 +55,5 @@ build() {
     # BUILD_DEPS da própria glibc. A regra é a mesma que a glibc aplica ao
     # largar ldd e tzselect: não entregar o que não funciona.
     rm -rf "$STAGE/usr/lib/gawk"
-    find "$STAGE" -type d -empty -delete
+    busybox find "$STAGE" -type d -empty -delete
 }

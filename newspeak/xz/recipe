@@ -13,7 +13,7 @@ DEPS="glibc busybox"
 # correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
 # está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
 # vir antes dele e dispensa a declaração.
-BUILD_DEPS="gcc-pass2 binutils-glibc make gawk"
+BUILD_DEPS="gcc-pass2 binutils-glibc make gawk findutils"
 # Expressão do que ESTA receita instala, e não do tarball inteiro. O próprio
 # COPYING do upstream reparte, e a repartição importa:
 #

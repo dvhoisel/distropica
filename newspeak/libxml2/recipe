@@ -9,7 +9,7 @@ DEPS="glibc zlib busybox"
 # correta e a quebra ficava escondida atrás da ORDEM de construção. Só quem
 # está na closure do próprio gawk (binutils, make, busybox, zig) é garantido
 # vir antes dele e dispensa a declaração.
-BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf zlib gawk"
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf zlib gawk findutils"
 ABOUT="Leitor e escritor de XML em C. Consumidores não faltam, e nenhum é exótico: o WebKitGTK, a libsoup, a libxslt, o librsvg, o appstream, o shared-mime-info, o labwc (o rc.xml e o tema são XML), o at-spi2-core, a libarchive e o Inkscape. Até a 0.16 a árvore segurava a série 2.13, com o argumento de que Alpine e Void a pinavam por quebra de ABI nas seguintes — e o conferidor de versões, que só olhava dentro da série da URL, nunca mostrou que a 2.15 estável existia. Agora a receita segue o estável. A 2.14 trocou o soname de libxml2.so.2 para libxml2.so.16 e a 2.15 removeu o cliente HTTP e o LZMA; como a árvore é reconstruída inteira, todo consumidor é recompilado contra ela na mesma cadeia. Sem Python e sem ICU; a compatibilidade de ABI do HTTP removido fica desligada, e o zlib fica porque a descompressão de documento é barata e já está na árvore."
 LICENSE=MIT
 SRC="https://download.gnome.org/sources/libxml2/2.15/libxml2-$VERSION.tar.xz"

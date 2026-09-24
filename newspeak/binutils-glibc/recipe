@@ -60,7 +60,7 @@ SHIM
     # hardlinks, portanto o payload precisa selar cada alias como arquivo
     # regular independente. Um nome por execução evita que a alteração de
     # nlink durante a travessia deixe o último alias escapar de um lote.
-    find "$STAGE" -type f -links +1 -exec sh -ec '
+    busybox find "$STAGE" -type f -links +1 -exec sh -ec '
         for path do
             copy=$path.minitrue-copy
             if [ -e "$copy" ] || [ -L "$copy" ]; then

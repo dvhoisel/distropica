@@ -46,7 +46,7 @@ build() {
     # Veja newspeak/binutils: o aplicador mundo-B ainda não preserva grupos de
     # hardlinks, portanto o payload precisa selar cada alias como arquivo
     # regular independente, um por execução para não perder aliases.
-    find "$STAGE" -type f -links +1 -exec sh -ec '
+    busybox find "$STAGE" -type f -links +1 -exec sh -ec '
         for path do
             copy=$path.minitrue-copy
             if [ -e "$copy" ] || [ -L "$copy" ]; then

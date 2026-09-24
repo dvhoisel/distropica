@@ -12,7 +12,7 @@ DEPS="glibc"
 # leitura ruim. Conferido no configure da fonte pinada, não suposto: são 8 a
 # 12 usos de $AWK na seção do config.status. É a convenção da árvore, que
 # tem 75 receitas declarando gawk pelo mesmo motivo.
-BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf m4 gawk"
+BUILD_DEPS="gcc-pass2 binutils-glibc make pkgconf m4 gawk findutils"
 ABOUT="Parser YAML em C exigido pela biblioteca AppStream. A implementação é autônoma; suporte de desenvolvimento, sanitizadores e rede de testes ficam desligados."
 LICENSE=MIT
 SRC="https://github.com/pantoniou/libfyaml/releases/download/v$VERSION/libfyaml-$VERSION.tar.gz"
