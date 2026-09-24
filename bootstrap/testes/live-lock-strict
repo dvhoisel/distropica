@@ -138,9 +138,9 @@ make_runner() { # destino mode
 descriptor() { # id -> materiality role artifact
     case "$1" in
         busybox-config) echo 'identity-only identity-only config' ;;
-        busybox-source|e2fsprogs-source|linux-source|live-lock-helper-source|ncurses-source|util-linux-source)
+        busybox-source|e2fsprogs-source|linux-firmware-source|linux-source|live-lock-helper-source|ncurses-source|util-linux-source)
             echo 'identity-only identity-only source' ;;
-        busybox-static|e2fsprogs-static|minipax-static|minitrue-static|util-linux-static)
+        busybox-static|e2fsprogs-static|linux-firmware-embutido|minipax-static|minitrue-static|util-linux-static)
             echo 'material runtime payload' ;;
         cargo-locks|minipax-crates|minitrue-crates|vendor-scrypt)
             echo 'identity-only identity-only provenance' ;;
@@ -154,7 +154,7 @@ descriptor() { # id -> materiality role artifact
     esac
 }
 
-IDS='busybox-config busybox-source busybox-static cargo-locks e2fsprogs-source e2fsprogs-static linux-config linux-source live-lock-helper-source live-lock-helper-static minipax-crates minipax-static minitrue-crates minitrue-static ncurses-source ncurses-static overlay-files runtime-musl-static scripts-live toolchain-builder toolchain-musl toolchain-zig util-linux-source util-linux-static vendor-scrypt'
+IDS='busybox-config busybox-source busybox-static cargo-locks e2fsprogs-source e2fsprogs-static linux-config linux-firmware-embutido linux-firmware-source linux-source live-lock-helper-source live-lock-helper-static minipax-crates minipax-static minitrue-crates minitrue-static ncurses-source ncurses-static overlay-files runtime-musl-static scripts-live toolchain-builder toolchain-musl toolchain-zig util-linux-source util-linux-static vendor-scrypt'
 SCHEMA='ENTRY_SCHEMA=id|variant|status|materiality|role|artifact_kind|origin_kind|source_id|provenance|license|license_evidence_sha256|input_sha256|payload_sha256|config_sha256|contract_sha256|toolchain_id|toolchain_sha256'
 
 make_inputs() { # destino runner mode
@@ -173,7 +173,7 @@ make_inputs() { # destino runner mode
             'SOURCE_DATE_EPOCH=1704067200' \
             "RUNNER_PROOF_SHA256=$runner_sha" \
             "BUILD_CONTRACT_SHA256=$contract_hash" \
-            'ENTRY_COUNT=25' \
+            'ENTRY_COUNT=27' \
             "$SCHEMA"
         for id in $IDS; do
             set -- $(descriptor "$id")
@@ -226,10 +226,10 @@ if cmp -s "$TMP/a/components" "$TMP/b/components"; then
 else
     fail 'LIVE_COMPONENTS variou com o diretório'
 fi
-if grep -Fqx 'ENTRY_COUNT=25' "$TMP/a/components" &&
+if grep -Fqx 'ENTRY_COUNT=27' "$TMP/a/components" &&
    grep -Fqx 'RELEASE_ELIGIBLE=no' "$TMP/a/components" &&
    [ "$(wc -l < "$TMP/a/runner" | tr -d ' ')" -eq 27 ]; then
-    ok 'schema fecha 25 fatos, Proof 27 linhas e Components não se autopromove'
+    ok 'schema fecha 27 fatos, Proof 27 linhas e Components não se autopromove'
 else
     fail 'schema/count/elegibilidade Components incorretos'
 fi

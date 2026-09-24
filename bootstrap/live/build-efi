@@ -366,8 +366,8 @@ unset TAR_OPTIONS GZIP BZIP2 BZIP XZ_DEFAULTS XZ_OPT CONFIG_SITE \
     CARGO_ENCODED_RUSTFLAGS PKG_CONFIG_PATH PKG_CONFIG_LIBDIR
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
-LINUX_VERSION=7.1.8
-LINUX_SHA256=ff01dcb449279d5b4cfccdb01fee639cf5ff1803f1749a77844dd33915422c49
+LINUX_VERSION=7.2.7
+LINUX_SHA256=4ac34c47db2540ffb2713943f8d891ff1702e0ba6934525a493b7d1cad43145a
 LINUX_URL=https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${LINUX_VERSION}.tar.xz
 BUSYBOX_VERSION=1.35.0
 BUSYBOX_SHA256=faeeb244c35a348a334f4a59e44626ee870fb07b6884d68c10ae8bc19f83a694
@@ -381,22 +381,35 @@ E2FSPROGS_VERSION=1.47.4
 E2FSPROGS_URL=https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v${E2FSPROGS_VERSION}/e2fsprogs-${E2FSPROGS_VERSION}.tar.xz
 E2FSPROGS_SHA256=fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b
 # ncurses e util-linux vêm em par: o cfdisk é uma interface de texto, e quem a
-# desenha é a ncursesw. Os dois hashes foram conferidos contra terceiros — o do
-# ncurses bate com o pino do Void Linux E com a receita newspeak/ncurses desta
-# árvore; o do util-linux, com o sha256sums.asc assinado do kernel.org.
+# desenha é a ncursesw. O hash do ncurses bate com o pino do Void Linux E com a
+# receita newspeak/ncurses desta árvore. O do util-linux 2.42.4 foi conferido,
+# em 2026-09-24, contra o sha256sums.asc do kernel.org; a ASSINATURA desse
+# arquivo não foi verificada nesta subida — a chave que a fez (B8868C80…A6B1)
+# não estava publicada com UID nos servidores consultados, e dizer que foi
+# seria mentir sobre o que se conferiu.
 NCURSES_VERSION=6.6
 NCURSES_URL=https://ftp.gnu.org/gnu/ncurses/ncurses-${NCURSES_VERSION}.tar.gz
 NCURSES_SHA256=355b4cbbed880b0381a04c46617b7656e362585d52e9cf84a67e2009b749ff11
-UTIL_LINUX_VERSION=2.42.2
+UTIL_LINUX_VERSION=2.42.4
 UTIL_LINUX_URL=https://mirrors.edge.kernel.org/pub/linux/utils/util-linux/v2.42/util-linux-${UTIL_LINUX_VERSION}.tar.xz
-UTIL_LINUX_SHA256=03a05d3adf9602ef128f2da05b84b3205ce60c351e5737c0370f74000679ce8a
+UTIL_LINUX_SHA256=fbd62a100ab7bb8746ba0661255c3c48185b1e9021507c624da01fbc696330ec
 # O firmware da Radeon Palm embutido no kernel vivo (EXTRA_FIRMWARE): mesmo
 # tarball e mesmo sha do linux-firmware-wifi da arvore — um pino, duas
 # receitas, zero divergencia. Os quatro nomes sairam do radeon/*.c da fonte.
-LINUX_FIRMWARE_VERSION=20260810
+LINUX_FIRMWARE_VERSION=20260916
 LINUX_FIRMWARE_URL=https://mirrors.edge.kernel.org/pub/linux/kernel/firmware/linux-firmware-${LINUX_FIRMWARE_VERSION}.tar.xz
-LINUX_FIRMWARE_SHA256=ac17c34fe73756926a961fbafadf8d8f07a3bd2dd2f4ea31a0fb5d50c714a49a
+LINUX_FIRMWARE_SHA256=f80dcb757a623deda62200c08e0e1a88c76fb6b54964f31b35fa74da1c90ccc5
 RADEON_FW_FILES='radeon/PALM_pfp.bin radeon/PALM_me.bin radeon/SUMO_rlc.bin radeon/SUMO_uvd.bin'
+# O MICROCÓDIGO AMD, do mesmo tarball. Sem ele o CPU roda o microcódigo que a
+# BIOS trouxe, e máquina de BIOS velha — o notebook Bobcat do beta tester é
+# família 14h — fica sem as mitigações de hardware publicadas depois. O kernel
+# carrega cedo o que estiver EMBUTIDO (amd-ucode/microcode_amd.bin para as
+# famílias até 14h, microcode_amd_famXXh.bin a partir da 15h), e os seis
+# arquivos somam ~305 KB: cabem sem ameaçar o A/B da ESP. O da Intel mora em
+# outro upstream e soma ~15 MB por cópia; com duas cópias numa ESP de 64 MiB não
+# cabe, e fica fora até a ESP das instalações novas crescer.
+AMD_UCODE_FILES='amd-ucode/microcode_amd.bin amd-ucode/microcode_amd_fam15h.bin amd-ucode/microcode_amd_fam16h.bin amd-ucode/microcode_amd_fam17h.bin amd-ucode/microcode_amd_fam19h.bin amd-ucode/microcode_amd_fam1ah.bin'
+EXTRA_FW_FILES="$RADEON_FW_FILES $AMD_UCODE_FILES"
 ZIG_VERSION=0.16.0
 ZIG_TAR_SHA256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
 EMPTY_SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
@@ -471,7 +484,7 @@ uso: bootstrap/live/build-efi --output BOOTX64.EFI [opções]
                       em vez de usar ferramentas do hospedeiro; em release o
                       rootfs fica RO e o WORK irmão é o único bind RW
   --keep-work         preserva o diretório temporário
-  --linux-tar ARQ     linux-7.1.8.tar.xz já baixado
+  --linux-tar ARQ     o tar do kernel (linux-$LINUX_VERSION) já baixado
   --busybox-tar ARQ   tar oficial busybox-1.35.0.tar.bz2
   --busybox ARQ       prebuilt estático legado (somente development)
   --e2fsprogs-tar ARQ e2fsprogs já baixado (mke2fs/e2fsck estáticos)
@@ -1781,10 +1794,18 @@ set_config --disable IKCONFIG
 # Firefox e sem áudio não é um desktop. O custo medido do stack HDA builtin é
 # de algumas centenas de KiB num EFI de 17 MiB.
 for symbol in NETWORK_FILESYSTEMS NFS_FS SECURITY_SELINUX \
-    IO_URING HIBERNATION SUSPEND KEXEC KEXEC_FILE CRASH_DUMP CGROUPS \
+    IO_URING HIBERNATION KEXEC KEXEC_FILE CRASH_DUMP CGROUPS \
     PERF_EVENTS FTRACE BPF_SYSCALL NUMA CPU_FREQ WIRELESS; do
     set_config --disable "$symbol"
 done
+# A SUSPENSÃO saiu da lista acima na 0.17. Ela estava desligada por tamanho,
+# como o resto, numa época em que este kernel só instalava; desde que ele é o
+# kernel que o sistema INSTALADO boota, um notebook que fecha a tampa e não
+# dorme gasta a bateria na mochila. O tratador da tampa é do base (acpid): ele
+# tranca a sessão com o swaylock e só então escreve 'mem' em /sys/power/state.
+# A hibernação continua fora: exige swap do tamanho da RAM e retomada pelo
+# initramfs, que este desenho não tem.
+set_config --enable SUSPEND
 # Wi-Fi. BUILTIN, e não em módulo — e essa diferença é o defeito inteiro.
 #
 # O newspeak/linux constrói estes drivers como '=m', com um argumento correto
@@ -1948,7 +1969,7 @@ done
 # do tarball pinado SÓ os quatro blobs da Palm (a HD 6310 do notebook do beta
 # tester, lspci 1002:9802) e as evidências WHENCE/LICENSE.radeon — a mesma
 # exceção declarada do linux-firmware-wifi, estendida à GPU em 01/09/2026.
-prepare_radeon_firmware() {
+prepare_extra_firmware() {
     FIRMWARE_TAR=${FIRMWARE_TAR:-$WORK/linux-firmware-${LINUX_FIRMWARE_VERSION}.tar.xz}
     [ -f "$FIRMWARE_TAR" ] || fetch "$LINUX_FIRMWARE_URL" "$FIRMWARE_TAR"
     if [ "$MODE" = release ]; then
@@ -1960,9 +1981,9 @@ prepare_radeon_firmware() {
     rm -rf -- "$WORK/firmware" "$WORK/firmware-licenses"
     mkdir -p "$WORK/firmware" "$WORK/firmware-licenses"
     fw_prefix=linux-firmware-${LINUX_FIRMWARE_VERSION}
-    set -- ; for f in $RADEON_FW_FILES; do set -- "$@" "$fw_prefix/$f"; done
+    set -- ; for f in $EXTRA_FW_FILES; do set -- "$@" "$fw_prefix/$f"; done
     tar -xJf "$FIRMWARE_TAR" --strip-components=1 -C "$WORK/firmware" "$@" || {
-        echo "erro: blobs radeon não vieram do linux-firmware" >&2; exit 1; }
+        echo "erro: blobs da radeon ou microcódigo AMD não vieram do linux-firmware" >&2; exit 1; }
     tar -xJf "$FIRMWARE_TAR" --strip-components=1 -C "$WORK/firmware-licenses" \
         "$fw_prefix/WHENCE" "$fw_prefix/LICENSE.radeon" 2>/dev/null ||
         tar -xJf "$FIRMWARE_TAR" --strip-components=1 -C "$WORK/firmware-licenses" \
@@ -1971,7 +1992,15 @@ prepare_radeon_firmware() {
     [ -f "$WORK/firmware-licenses/LICENSE.radeon" ] ||
         mv "$WORK/firmware-licenses/LICENSES/LICENSE.radeon" \
            "$WORK/firmware-licenses/LICENSE.radeon"
-    for f in $RADEON_FW_FILES; do
+    tar -xJf "$FIRMWARE_TAR" --strip-components=1 -C "$WORK/firmware-licenses" \
+        "$fw_prefix/LICENSE.amd-ucode" 2>/dev/null ||
+        tar -xJf "$FIRMWARE_TAR" --strip-components=1 -C "$WORK/firmware-licenses" \
+            "$fw_prefix/LICENSES/LICENSE.amd-ucode" || {
+            echo "erro: LICENSE.amd-ucode não veio do linux-firmware" >&2; exit 1; }
+    [ -f "$WORK/firmware-licenses/LICENSE.amd-ucode" ] ||
+        mv "$WORK/firmware-licenses/LICENSES/LICENSE.amd-ucode" \
+           "$WORK/firmware-licenses/LICENSE.amd-ucode"
+    for f in $EXTRA_FW_FILES; do
         [ -s "$WORK/firmware/$f" ] || {
             echo "erro: $f vazio ou ausente após extração" >&2; exit 1; }
     done
@@ -1979,9 +2008,11 @@ prepare_radeon_firmware() {
         echo "erro: WHENCE vazio" >&2; exit 1; }
     [ -s "$WORK/firmware-licenses/LICENSE.radeon" ] || {
         echo "erro: LICENSE.radeon vazia" >&2; exit 1; }
+    [ -s "$WORK/firmware-licenses/LICENSE.amd-ucode" ] || {
+        echo "erro: LICENSE.amd-ucode vazia" >&2; exit 1; }
     unset fw_prefix
 }
-prepare_radeon_firmware
+prepare_extra_firmware
 
 # Drivers de KMS por hardware, espelhando newspeak/linux pelo mesmo motivo do
 # bloco de rede acima: quem boota o sistema INSTALADO é este kernel, o
@@ -2001,7 +2032,7 @@ for symbol in DRM_VMWGFX DRM_VBOXVIDEO DRM_BOCHS DRM_VIRTIO_GPU DRM_RADEON; do
 done
 # A Radeon precisa do firmware DENTRO da imagem (kernel monolítico): o
 # caminho é o de DENTRO do sandbox de build, por isso WORK_INNER e não WORK.
-set_config --set-str EXTRA_FIRMWARE "$RADEON_FW_FILES"
+set_config --set-str EXTRA_FIRMWARE "$EXTRA_FW_FILES"
 set_config --set-str EXTRA_FIRMWARE_DIR "$WORK_INNER/firmware"
 kmake olddefconfig
 grep -q '^CONFIG_CMDLINE_BOOL=y$' "$SOURCE/.config" || {
@@ -2013,8 +2044,14 @@ grep -q '^# CONFIG_MODULES is not set$' "$SOURCE/.config" || {
 grep -q '^CONFIG_DRM_RADEON=y$' "$SOURCE/.config" || {
     echo "erro: kernel descartou CONFIG_DRM_RADEON=y" >&2; exit 1;
 }
-grep -Fq "CONFIG_EXTRA_FIRMWARE=\"$RADEON_FW_FILES\"" "$SOURCE/.config" || {
-    echo "erro: kernel descartou o EXTRA_FIRMWARE da radeon" >&2; exit 1;
+grep -Fq "CONFIG_EXTRA_FIRMWARE=\"$EXTRA_FW_FILES\"" "$SOURCE/.config" || {
+    echo "erro: kernel descartou o EXTRA_FIRMWARE (radeon + microcódigo AMD)" >&2; exit 1;
+}
+grep -q '^CONFIG_MICROCODE=y$' "$SOURCE/.config" || {
+    echo "erro: kernel descartou CONFIG_MICROCODE, e o microcódigo embutido seria inerte" >&2; exit 1;
+}
+grep -q '^CONFIG_SUSPEND=y$' "$SOURCE/.config" || {
+    echo "erro: kernel descartou CONFIG_SUSPEND; a tampa do notebook não suspenderia" >&2; exit 1;
 }
 grep -Fq "CONFIG_EXTRA_FIRMWARE_DIR=\"$WORK_INNER/firmware\"" "$SOURCE/.config" || {
     echo "erro: kernel descartou o EXTRA_FIRMWARE_DIR" >&2; exit 1;
@@ -2289,6 +2326,7 @@ else
         sha_path "$REPO/minitrue/Cargo.lock"
         sha_path "$WORK/firmware-licenses/WHENCE"
         sha_path "$WORK/firmware-licenses/LICENSE.radeon"
+        sha_path "$WORK/firmware-licenses/LICENSE.amd-ucode"
     } > "$LICENSE_EVIDENCE"
     chmod 0600 "$LICENSE_EVIDENCE"
     MATERIAL_LICENSE_EVIDENCE_SHA256=$(sha_path "$LICENSE_EVIDENCE")
@@ -2392,22 +2430,22 @@ BUILD_CONTRACT_SHA256=$BUILD_CONTRACT_SHA256
 ENTRY_COUNT=27
 ENTRY_SCHEMA=id|variant|status|materiality|role|artifact_kind|origin_kind|source_id|provenance|license|license_evidence_sha256|input_sha256|payload_sha256|config_sha256|contract_sha256|toolchain_id|toolchain_sha256
 ENTRY=busybox-config|live-efi|consumed|identity-only|identity-only|config|repo|repo:bootstrap/live/busybox-1.35.0.config|config:busybox-1.35.0|-|$EMPTY_SHA256|$BUSYBOX_CONFIG_SHA256|$BUSYBOX_CONFIG_SHA256|$BUSYBOX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
-ENTRY=busybox-source|live-efi|$busybox_source_status|identity-only|identity-only|source|official-tar|official:busybox-1.35.0|sha256:$BUSYBOX_SHA256|-|$EMPTY_SHA256|$BUSYBOX_SHA256|$BUSYBOX_SHA256|$BUSYBOX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=busybox-source|live-efi|$busybox_source_status|identity-only|identity-only|source|official-tar|official:busybox-$BUSYBOX_VERSION|sha256:$BUSYBOX_SHA256|-|$EMPTY_SHA256|$BUSYBOX_SHA256|$BUSYBOX_SHA256|$BUSYBOX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
 ENTRY=busybox-static|live-efi|produced|material|runtime|payload|$BUSYBOX_ORIGIN|initramfs:/bin/busybox|built:$BUSYBOX_ORIGIN|GPL-2.0-only AND MIT|$MATERIAL_LICENSE_EVIDENCE_SHA256|$BUSYBOX_SHA256|$BUSYBOX_BINARY_SHA256|$BUSYBOX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
 ENTRY=cargo-locks|live-efi|measured|identity-only|identity-only|provenance|repo|repo:minipax+minitrue/Cargo.lock|locked:cargo|-|$EMPTY_SHA256|$CARGO_LOCKS_SHA256|$CARGO_LOCKS_SHA256|$CARGO_LOCKS_SHA256|$BUILD_CONTRACT_SHA256|$RUST_TOOLCHAIN_ID|$RUST_TOOLCHAIN_HASH
-ENTRY=e2fsprogs-source|live-efi|consumed|identity-only|identity-only|source|official-tar|official:e2fsprogs-1.47.4|sha256:$E2FSPROGS_SHA256|-|$EMPTY_SHA256|$E2FSPROGS_SHA256|$E2FSPROGS_SHA256|$E2FS_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
-ENTRY=e2fsprogs-static|live-efi|produced|material|runtime|payload|built-from-source|initramfs:mke2fs+e2fsck+mke2fs.conf|source:e2fsprogs-1.47.4|GPL-2.0-only AND LGPL-2.0-only AND BSD-3-Clause AND MIT|$MATERIAL_LICENSE_EVIDENCE_SHA256|$E2FSPROGS_SHA256|$E2FS_PAYLOAD_SHA256|$E2FS_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=e2fsprogs-source|live-efi|consumed|identity-only|identity-only|source|official-tar|official:e2fsprogs-$E2FSPROGS_VERSION|sha256:$E2FSPROGS_SHA256|-|$EMPTY_SHA256|$E2FSPROGS_SHA256|$E2FSPROGS_SHA256|$E2FS_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=e2fsprogs-static|live-efi|produced|material|runtime|payload|built-from-source|initramfs:mke2fs+e2fsck+mke2fs.conf|source:e2fsprogs-$E2FSPROGS_VERSION|GPL-2.0-only AND LGPL-2.0-only AND BSD-3-Clause AND MIT|$MATERIAL_LICENSE_EVIDENCE_SHA256|$E2FSPROGS_SHA256|$E2FS_PAYLOAD_SHA256|$E2FS_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
 ENTRY=linux-config|live-efi|consumed|identity-only|identity-only|config|generated|kernel:.config|olddefconfig:live-efi|-|$EMPTY_SHA256|$LINUX_CONFIG_SHA256|$LINUX_CONFIG_SHA256|$LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
-ENTRY=linux-firmware-radeon|live-efi|produced|material|runtime|payload|official-tar|kernel:EXTRA_FIRMWARE|sha256:$LINUX_FIRMWARE_SHA256|LicenseRef-linux-firmware-redistributable|$MATERIAL_LICENSE_EVIDENCE_SHA256|$LINUX_FIRMWARE_SHA256|$RADEON_FW_PAYLOAD_SHA256|$LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=linux-firmware-embutido|live-efi|produced|material|runtime|payload|official-tar|kernel:EXTRA_FIRMWARE|sha256:$LINUX_FIRMWARE_SHA256|LicenseRef-linux-firmware-redistributable|$MATERIAL_LICENSE_EVIDENCE_SHA256|$LINUX_FIRMWARE_SHA256|$RADEON_FW_PAYLOAD_SHA256|$LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
 ENTRY=linux-firmware-source|live-efi|consumed|identity-only|identity-only|source|official-tar|official:linux-firmware-$LINUX_FIRMWARE_VERSION|sha256:$LINUX_FIRMWARE_SHA256|-|$EMPTY_SHA256|$LINUX_FIRMWARE_SHA256|$LINUX_FIRMWARE_SHA256|$LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
-ENTRY=linux-source|live-efi|consumed|identity-only|identity-only|source|official-tar|official:linux-7.1.8|sha256:$LINUX_SHA256|-|$EMPTY_SHA256|$LINUX_SHA256|$LINUX_SHA256|$LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
+ENTRY=linux-source|live-efi|consumed|identity-only|identity-only|source|official-tar|official:linux-$LINUX_VERSION|sha256:$LINUX_SHA256|-|$EMPTY_SHA256|$LINUX_SHA256|$LINUX_SHA256|$LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
 ENTRY=live-lock-helper-source|live-efi|consumed|identity-only|identity-only|source|repo|repo:bootstrap/live/live-lock-helper.c|source:runner-proof|-|$EMPTY_SHA256|$HELPER_SOURCE_SHA256|$HELPER_SOURCE_SHA256|$HELPER_SOURCE_SHA256|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
 ENTRY=live-lock-helper-static|live-efi|produced|identity-only|identity-only|tool|built-from-source|builder:live-lock-helper|source:$HELPER_SOURCE_SHA256|-|$EMPTY_SHA256|$HELPER_SOURCE_SHA256|$HELPER_BINARY_SHA256|$HELPER_SOURCE_SHA256|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
 ENTRY=minipax-crates|live-efi|$minipax_crates_status|identity-only|identity-only|provenance|repo|repo:minipax|locked:$MINIPAX_CRATES_SHA256|-|$EMPTY_SHA256|$MINIPAX_CRATES_SHA256|$MINIPAX_CRATES_SHA256|$(sha_path "$REPO/minipax/Cargo.toml")|$BUILD_CONTRACT_SHA256|$RUST_TOOLCHAIN_ID|$RUST_TOOLCHAIN_HASH
 ENTRY=minipax-static|live-efi|produced|material|runtime|payload|$MINIPAX_ORIGIN|initramfs:/bin/minipax|binary:$MINIPAX_SHA256|$MINIPAX_LICENSE AND MIT|$MATERIAL_LICENSE_EVIDENCE_SHA256|$MINIPAX_INPUT_SHA256|$MINIPAX_SHA256|$(sha_path "$REPO/minipax/Cargo.toml")|$BUILD_CONTRACT_SHA256|$RUST_TOOLCHAIN_ID|$RUST_TOOLCHAIN_HASH
 ENTRY=minitrue-crates|live-efi|$minitrue_crates_status|identity-only|identity-only|provenance|repo|repo:minitrue|locked:$MINITRUE_CRATES_SHA256|-|$EMPTY_SHA256|$MINITRUE_CRATES_SHA256|$MINITRUE_CRATES_SHA256|$(sha_path "$REPO/minitrue/Cargo.toml")|$BUILD_CONTRACT_SHA256|$RUST_TOOLCHAIN_ID|$RUST_TOOLCHAIN_HASH
 ENTRY=minitrue-static|live-efi|produced|material|runtime|payload|$MINITRUE_ORIGIN|initramfs:/bin/minitrue|binary:$MINITRUE_SHA256|$MINITRUE_LICENSE AND MIT|$MATERIAL_LICENSE_EVIDENCE_SHA256|$MINITRUE_INPUT_SHA256|$MINITRUE_SHA256|$(sha_path "$REPO/minitrue/Cargo.toml")|$BUILD_CONTRACT_SHA256|$RUST_TOOLCHAIN_ID|$RUST_TOOLCHAIN_HASH
-ENTRY=ncurses-source|live-efi|consumed|identity-only|identity-only|source|official-tar|official:ncurses-6.6|sha256:$NCURSES_SHA256|-|$EMPTY_SHA256|$NCURSES_SHA256|$NCURSES_SHA256|$NCURSES_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=ncurses-source|live-efi|consumed|identity-only|identity-only|source|official-tar|official:ncurses-$NCURSES_VERSION|sha256:$NCURSES_SHA256|-|$EMPTY_SHA256|$NCURSES_SHA256|$NCURSES_SHA256|$NCURSES_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
 ENTRY=ncurses-static|live-efi|produced|material|runtime|linked-input|built-from-source|linked:libncursesw.a|archive:$NCURSES_PAYLOAD_SHA256|X11-distribute-modifications-variant|$MATERIAL_LICENSE_EVIDENCE_SHA256|$NCURSES_SHA256|$NCURSES_PAYLOAD_SHA256|$NCURSES_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
 ENTRY=overlay-files|live-efi|produced|material|runtime|overlay|repo|initramfs:overlay-own|tree:$OVERLAY_SHA256|GPL-3.0-or-later|$MATERIAL_LICENSE_EVIDENCE_SHA256|$OVERLAY_SHA256|$OVERLAY_SHA256|$OVERLAY_SHA256|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
 ENTRY=runtime-musl-static|live-efi|produced|material|runtime|linked-input|toolchain|linked:musl-runtime|binaries:$MUSL_RUNTIME_PAYLOAD_SHA256|MIT|$MATERIAL_LICENSE_EVIDENCE_SHA256|$MUSL_INPUT_SHA256|$MUSL_RUNTIME_PAYLOAD_SHA256|$MUSL_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
@@ -2415,7 +2453,7 @@ ENTRY=scripts-live|live-efi|consumed|material|runtime|script|repo|initramfs:init
 ENTRY=toolchain-builder|live-efi|measured|identity-only|identity-only|tool|builder-rootfs|builder:$BUILDER_TOOLCHAIN_ID|lock:$BUILDER_IDENTITY_HASH|-|$EMPTY_SHA256|$BUILDER_IDENTITY_HASH|$BUILDER_PAYLOAD_HASH|$BUILDER_IDENTITY_HASH|$BUILD_CONTRACT_SHA256|$BUILDER_TOOLCHAIN_ID|$BUILDER_IDENTITY_HASH
 ENTRY=toolchain-musl|live-efi|measured|identity-only|identity-only|tool|toolchain|toolchain:$MUSL_TOOLCHAIN_ID|tree:$MUSL_TOOLCHAIN_HASH|-|$EMPTY_SHA256|$MUSL_INPUT_SHA256|$MUSL_PAYLOAD_SHA256|$MUSL_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
 ENTRY=toolchain-zig|live-efi|measured|identity-only|identity-only|tool|official-tar|toolchain:zig-0.16.0|binary:$ZIG_PAYLOAD_SHA256|-|$EMPTY_SHA256|$ZIG_INPUT_SHA256|$ZIG_PAYLOAD_SHA256|$MUSL_PAYLOAD_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
-ENTRY=util-linux-source|live-efi|consumed|identity-only|identity-only|source|official-tar|official:util-linux-2.42.2|sha256:$UTIL_LINUX_SHA256|-|$EMPTY_SHA256|$UTIL_LINUX_SHA256|$UTIL_LINUX_SHA256|$UTIL_LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
+ENTRY=util-linux-source|live-efi|consumed|identity-only|identity-only|source|official-tar|official:util-linux-$UTIL_LINUX_VERSION|sha256:$UTIL_LINUX_SHA256|-|$EMPTY_SHA256|$UTIL_LINUX_SHA256|$UTIL_LINUX_SHA256|$UTIL_LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
 ENTRY=util-linux-static|live-efi|produced|material|runtime|payload|built-from-source|initramfs:cfdisk+sfdisk|source:util-linux-2.42.2|$UTIL_LINUX_LICENSE|$MATERIAL_LICENSE_EVIDENCE_SHA256|$UTIL_LINUX_SHA256|$UTIL_LINUX_PAYLOAD_SHA256|$UTIL_LINUX_CONFIG_SHA256|$BUILD_CONTRACT_SHA256|$MUSL_TOOLCHAIN_ID|$MUSL_TOOLCHAIN_HASH
 ENTRY=vendor-scrypt|live-efi|$vendor_status|identity-only|identity-only|provenance|repo|repo:minitrue/vendor-scrypt|locked:$VENDOR_SCRYPT_SHA256|-|$EMPTY_SHA256|$VENDOR_SCRYPT_SHA256|$VENDOR_SCRYPT_SHA256|$(sha_path "$REPO/minitrue/vendor-scrypt/Cargo.toml")|$BUILD_CONTRACT_SHA256|$RUST_TOOLCHAIN_ID|$RUST_TOOLCHAIN_HASH
 EOF

@@ -1,5 +1,5 @@
 NAME=linux-headers
-VERSION=7.1.8
+VERSION=7.2.7
 KIND=source
 BUILD_DEPS="make busybox"
 ABOUT="cabeçalhos da API do kernel (uapi) que a glibc consome; make headers não compila nada, só sanitiza e copia"
@@ -10,7 +10,7 @@ LICENSE="GPL-2.0 WITH Linux-syscall-note"
 # não embarca mais. `vN.x` não é prefixo pontuado da versão, então o
 # `sobe-versao` não deriva sozinho: subir de major aqui é edição de receita.
 SRC="https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$VERSION.tar.xz"
-SHA256="ff01dcb449279d5b4cfccdb01fee639cf5ff1803f1749a77844dd33915422c49"
+SHA256="4ac34c47db2540ffb2713943f8d891ff1702e0ba6934525a493b7d1cad43145a"
 # Certificado obtido do WKD oficial kernel.org:
 # https://kernel.org/.well-known/openpgpkey/hu/ew8uiogxwri7d3fuioqgt7u1d5sngorx?l=autosigner
 # signer observado e primária B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1.

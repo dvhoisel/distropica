@@ -1,5 +1,5 @@
 NAME=linux-firmware-radeon
-VERSION=20260810
+VERSION=20260916
 KIND=source
 TOOLCHAIN=native
 DEPS=""
@@ -7,7 +7,7 @@ BUILD_DEPS="busybox"
 ABOUT="Firmware da GPU Radeon da família Evergreen/Palm — os quatro blobs que a HD 6310 do notebook do beta tester pede ao kernel: PALM_pfp, PALM_me, SUMO_rlc e SUMO_uvd, nomes lidos do drivers/gpu/drm/radeon/*.c da fonte pinada, não de documentação. É a MESMA exceção declarada do linux-firmware-wifi, estendida à GPU pela mesma razão e sob a mesma licença de redistribuição (WHENCE); a decisão de estendê-la foi tomada em 01/09/2026, medida contra a alternativa: sem o driver, os dois núcleos Bobcat carregam decodificação, pintura, composição e apresentação sozinhos, e o vídeo afoga na apresentação — rAF de 62/s para 4/s com o decodificador entregando tudo. SÓ os quatro blobs, e não a família radeon/ inteira (~90 arquivos): o kernel os EMBUTE por nome via CONFIG_EXTRA_FIRMWARE — o kernel vivo é monolítico, sem carregador de módulos, e firmware que não estiver dentro da imagem não existe para ele —, então cada arquivo daqui a mais seria mídia sem uso. Outra GPU radeon um dia exigirá ampliar a lista, e o lugar de ampliar é este, com o nome vindo do fonte do kernel como estes vieram. O pacote também instala os blobs em /usr/lib/firmware para o kernel do pacote linux (que carrega módulos) e para o build-efi encontrá-los dentro do root."
 LICENSE="linux-firmware (ver WHENCE; blobs proprietários redistribuíveis)"
 SRC="https://mirrors.edge.kernel.org/pub/linux/kernel/firmware/linux-firmware-$VERSION.tar.xz"
-SHA256="ac17c34fe73756926a961fbafadf8d8f07a3bd2dd2f4ea31a0fb5d50c714a49a"
+SHA256="f80dcb757a623deda62200c08e0e1a88c76fb6b54964f31b35fa74da1c90ccc5"
 
 build() {
     tar -xJf "$DL" --strip-components=1
