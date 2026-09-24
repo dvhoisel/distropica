@@ -22,7 +22,7 @@ DEPS="glibc gcc-pass2 glib gtk4 cairo pango harfbuzz icu libsoup libxml2 libxslt
 # cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
 # subprojeto. Conferido nos .pc instalados, não suposto.
 BUILD_DEPS="make gcc-pass2 binutils-glibc cmake ninja pkgconf busybox python-glibc ruby gperf gettext perl wayland-protocols findutils"
-ABOUT="O MOTOR DE NAVEGACAO, e o maior build desta arvore — C++ na escala de horas. E a variante GTK4 da API, webkitgtk-6.0, que o Epiphany exige e que e o unico caminho para um navegador maduro sem X11 duro na interface. SEM LLVM no proprio WebKit: o JIT do JavaScriptCore usa o backend B3 proprio desde 2016, entao nada de clang nem de libLLVM aqui — o LLVM da arvore existe pelo llvmpipe da Mesa, e nao entra nesta receita. A PINTURA e por CPU: desde a 2.46 o WebKit rasteriza com Skia e tem caminho de CPU real, e a sessao o escolhe (WEBKIT_SKIA_ENABLE_CPU_RENDERING, na receita desktop); a COMPOSICAO segue a politica always do navegador, sobre o r600 onde ha Radeon e o llvmpipe onde nao ha. COM VIDEO E AUDIO desde a 0.14, e a posicao anterior era o contrario: ate a 0.13 esta receita desligava ENABLE_VIDEO, ENABLE_WEB_AUDIO e ENABLE_WEB_CODECS, o que pelo GStreamerDependencies.cmake desligava USE_GSTREAMER inteiro e deixava a arvore sem um unico decodificador — 'o preco e o YouTube nao tocar', dizia aqui. O preco foi cobrado e a decisao mudou. O que entrou foi a pilha LIVRE e so ela: gst-plugins-base pelo encanamento e pelo audio da Xiph, gst-plugins-good pelo matroskademux e pelo vpxdec, que sao o WebM e o VP9. H.264 e AAC continuam de fora, porque moram no 'bad' e no 'ugly' e trazem a conversa de patente que o LICENSING.md nao quer — uma pagina que so ofereca MP4/H.264 segue sem tocar, e isso continua sendo posicao. O ENABLE_MEDIA_SOURCE vem junto e ligado por default do proprio port (GStreamerDefinitions.cmake), que e o que faz streaming adaptativo funcionar. USE_GSTREAMER_GL fica OFF: a arvore compoe por software. ENABLE_SPEECH_SYNTHESIS segue desligado, que exigiria flite ou spiel. O CONFINAMENTO fica LIGADO: cada processo que interpreta HTML de origem desconhecida roda dentro de um bubblewrap com syscalls filtradas pela libseccomp e o D-Bus atras do xdg-dbus-proxy; desligar compilaria e regrediria seguranca em relacao ao que o Firefox ja entregava. Sem XWayland e sem alvo X11 — o ENABLE_X11_TARGET exigiria um GTK com backend X11 e traria as bibliotecas cliente de volta pela porta do navegador. Sem introspection, sem documentacao, sem journald, sem MiniBrowser e sem corretor ortografico, que exigiria enchant e dicionarios."
+ABOUT="O MOTOR DE NAVEGACAO, e o maior build desta arvore — C++ na escala de horas. E a variante GTK4 da API, webkitgtk-6.0, que o Epiphany exige e que e o unico caminho para um navegador maduro sem X11 duro na interface. SEM LLVM no proprio WebKit: o JIT do JavaScriptCore usa o backend B3 proprio desde 2016, entao nada de clang nem de libLLVM aqui — o LLVM da arvore existe pelo llvmpipe da Mesa, e nao entra nesta receita. A PINTURA e por CPU: desde a 2.46 o WebKit rasteriza com Skia e tem caminho de CPU real, e a sessao o escolhe (WEBKIT_SKIA_ENABLE_CPU_RENDERING, na receita desktop); a COMPOSICAO segue a politica always do navegador, sobre o r600 onde ha Radeon e o llvmpipe onde nao ha. COM VIDEO E AUDIO desde a 0.14, e a posicao anterior era o contrario: ate a 0.13 esta receita desligava ENABLE_VIDEO, ENABLE_WEB_AUDIO e ENABLE_WEB_CODECS, o que pelo GStreamerDependencies.cmake desligava USE_GSTREAMER inteiro e deixava a arvore sem um unico decodificador — 'o preco e o YouTube nao tocar', dizia aqui. O preco foi cobrado e a decisao mudou. O que entrou foi a pilha LIVRE e so ela: gst-plugins-base pelo encanamento e pelo audio da Xiph, gst-plugins-good pelo matroskademux e pelo vpxdec, que sao o WebM e o VP9. H.264 e AAC continuam de fora, porque moram no 'bad' e no 'ugly' e trazem a conversa de patente que o LICENSING.md nao quer — uma pagina que so ofereca MP4/H.264 segue sem tocar, e isso continua sendo posicao. O ENABLE_MEDIA_SOURCE vem junto e ligado por default do proprio port (GStreamerDefinitions.cmake), que e o que faz streaming adaptativo funcionar. USE_GSTREAMER_GL fica OFF, e o gl do gst-plugins-base junto: os quadros de video saem do GStreamer em memoria comum e o compositor do WebKit os leva a tela — o caminho em que a 0.15 mediu o rAF a ~60/s com o video tocando em janela, e que o beta tester confirmou na Radeon dele; ligar trocaria esse caminho por um que ninguem mediu aqui. ENABLE_SPEECH_SYNTHESIS segue desligado, que exigiria flite ou spiel. O CONFINAMENTO fica LIGADO: cada processo que interpreta HTML de origem desconhecida roda dentro de um bubblewrap com syscalls filtradas pela libseccomp e o D-Bus atras do xdg-dbus-proxy; desligar compilaria e regrediria seguranca em relacao ao que o Firefox ja entregava. Sem XWayland e sem alvo X11 — o ENABLE_X11_TARGET exigiria um GTK com backend X11 e traria as bibliotecas cliente de volta pela porta do navegador. Sem introspection, sem documentacao, sem journald, sem MiniBrowser e sem corretor ortografico, que exigiria enchant e dicionarios."
 LICENSE=LGPL-2.1-or-later
 SRC="https://webkitgtk.org/releases/webkitgtk-$VERSION.tar.xz"
 SHA256="846fd19ccedbae1dbfe904f26dbf2d68a800a33a50caf2ad5222c8dcb3f25682"
@@ -74,6 +74,28 @@ build() {
         echo "webkitgtk: o patch nao-compor-sem-aceleracao nao aplicou no RenderLayerCompositor" >&2
         exit 1
     }
+    # GL E MPEG-TS SÓ QUANDO LIGADOS. O Source/cmake/GStreamerChecks.cmake pede
+    # os componentes mpegts e gl para TODO ENABLE_VIDEO, e até a 2.52 o pedido
+    # não valia nada: o FindGStreamer.cmake passava ao
+    # FIND_PACKAGE_HANDLE_STANDARD_ARGS o NOME da lista de variáveis exigidas,
+    # e não a lista. A 2.54 traz o conserto do upstream (315375@main, bug
+    # 317298), e o pedido velho passou a valer: sem gstreamer-gl-1.0 e
+    # gstreamer-mpegts-1.0 o configure para — medido, na cadeia da 0.17 —,
+    # mesmo com USE_GSTREAMER_GL e USE_GSTREAMER_MPEGTS desligados. São essas
+    # duas opções que decidem se as bibliotecas entram no link
+    # (Source/WebCore/platform/GStreamer.cmake), e cada uma já tem o seu
+    # FATAL_ERROR logo abaixo no mesmo arquivo para quando estiver ligada; a
+    # sondagem de todos os componentes roda de qualquer jeito no
+    # FindGStreamer. Tirá-los da lista incondicional deixa o configure dizer o
+    # que as opções dizem. A alternativa, construir as duas bibliotecas só
+    # para o configure achá-las, poria na mídia código que nada liga. O main
+    # do upstream ainda pede os dois (conferido em 24/09/2026).
+    sed -i 's/^\( *list(APPEND GSTREAMER_COMPONENTS video\) mpegts tag gl)$/\1 tag)/' \
+        Source/cmake/GStreamerChecks.cmake
+    grep -q '^ *list(APPEND GSTREAMER_COMPONENTS video tag)$' Source/cmake/GStreamerChecks.cmake || {
+        echo "webkitgtk: o GStreamerChecks.cmake mudou; revisar o pedido de mpegts e gl" >&2
+        exit 1
+    }
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
     # USE_SYSPROF_CAPTURE=OFF, e aqui a escolha é o OPOSTO da do unifdef, de
     # propósito. O CMake oferece dois caminhos — usar a libsysprof-capture-4 do
@@ -83,9 +105,9 @@ build() {
     # WEBKIT_OPTION_DEPEND(USE_SYSTEM_SYSPROF_CAPTURE USE_SYSPROF_CAPTURE) faz a
     # do sistema depender desta, e com ela OFF os dois ramos do if ficam falsos.
     #
-    # O que é: buffer de tracing para profiling. Numa árvore que recusou LLVM,
-    # GStreamer, vídeo, WebRTC, síntese de voz, gamepad e hifenização, telemetria
-    # de desempenho do navegador é a coisa mais dispensável da lista. Diferente
+    # O que é: buffer de tracing para profiling. Numa árvore que recusou WebRTC,
+    # síntese de voz, gamepad e hifenização, telemetria de desempenho do
+    # navegador é a coisa mais dispensável da lista. Diferente
     # do unifdef, que é FERRAMENTA e sem ele o build não sai, este é RECURSO — e
     # a resposta certa para recurso indesejado é desligar, não embutir.
 
@@ -121,10 +143,9 @@ build() {
     #
     # ENABLE_GAMEPAD exige a libmanette, e o CMake não avisa: ele ABORTA com
     # "libmanette is required for ENABLE_GAMEPAD" depois de resolver tudo o mais.
-    # O padrão da porta GTK é ON (OptionsGTK.cmake:103). Um navegador sem vídeo,
-    # sem WebRTC e sem síntese de voz não tem por que falar com joystick, e
-    # desligar isto tira também o WEBXR, que o próprio CMake faz depender dele
-    # (linha 162).
+    # O padrão da porta GTK é ON (OptionsGTK.cmake:103). Um navegador sem WebRTC
+    # e sem síntese de voz não tem por que falar com joystick, e desligar isto
+    # tira também o WEBXR, que o próprio CMake faz depender dele (linha 162).
     #
     # O comentário fica AQUI e não entre as opções: comentário no meio de uma
     # continuação `\` encerra o comando, e o `sh -n` não acusa.
