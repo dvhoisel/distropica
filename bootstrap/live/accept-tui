@@ -212,6 +212,22 @@ sobe() {
     exec 3> "$TECLAS"
 }
 
+# A SENHA DO USUARIO, desde a 0.17: o instalador a pede depois da confirmacao
+# e antes da primeira escrita. O aceite a DIGITA como uma pessoa — nao ha
+# atalho de teste no instalador, e nao deve haver. Vem de ACCEPT_TUI_SENHA
+# para quem vier depois (o primeiro boot automatizado) poder fazer login com
+# ela; os logs do aceite sao locais e o disco e descartavel.
+SENHA_USUARIO=${ACCEPT_TUI_SENHA:-aceite-da-tui}
+digita_senha() {
+    espera 'Senha do usuario distropica' 120 ||
+        falha "o instalador não pediu a senha do usuário"
+    digita "$SENHA_USUARIO\r"
+    espera 'Repita a senha' 30 || falha "o instalador não pediu a confirmação da senha"
+    digita "$SENHA_USUARIO\r"
+    espera 'senha do usuario recebida' 30 || falha "o instalador não aceitou a senha"
+    echo "accept-tui:   senha do usuário digitada no prompt"
+}
+
 liga_midia() {
     cen=$1
     printf 'device_add usb-storage,drive=midia,bus=xhci.0,id=pendrive\n' |
@@ -254,6 +270,7 @@ digita '\r'
 espera 'Enter APAGA o disco' 60 || falha "a confirmação não veio"
 echo "accept-tui:   confirmando a destruição de /dev/vda"
 digita '\r'
+digita_senha
 espera 'INSTALLATION COMPLETE' "$CENARIO_TIMEOUT" ||
     falha "a instalação pela rota automática não terminou"
 echo "accept-tui:   cenário 1 OK — instalou pelo instalador de texto"
@@ -306,6 +323,7 @@ digita '1'
 espera 'Enter FORMATA as partições' 60 || falha "a confirmação manual não veio"
 echo "accept-tui:   confirmando o plano manual"
 digita '\r'
+digita_senha
 espera 'INSTALLATION COMPLETE' "$CENARIO_TIMEOUT" ||
     falha "a instalação pela rota manual não terminou"
 echo "accept-tui:   cenário 2 OK — instalou pelas partições escolhidas à mão"

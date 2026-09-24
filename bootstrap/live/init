@@ -633,6 +633,62 @@ ask_root_password() {
 # Escreve o hash no sistema ja instalado. Nao ha o que perguntar aqui: se o
 # modo de teste pulou a coleta, nao ha hash e a conta segue bloqueada, que e
 # exatamente o que o modo de teste quer.
+# A SENHA DA CONTA DA SESSAO, desde a 0.17. A tty1 passou a pedir login e a
+# tampa do notebook a bloquear a tela antes de suspender; as duas coisas
+# conferem ESTA senha. Ate a 0.16 a conta 'distropica' nascia travada ('!' no
+# shadow) e a maquina ligava direto na sessao — um bloqueio de tela ali seria
+# teatro, porque reiniciar o contornaria.
+#
+# Pedida na instalacao INTERATIVA, que e a de toda pessoa real e a do aceite
+# pelo instalador de texto, que digita no prompt como uma pessoa. A variante
+# automatizada (distropica.install= no cmdline, so em EFI de teste) nao tem
+# quem digite: a conta fica travada, como o root ja fica em modo de teste, e o
+# que se entra nela e pelo root. Uma senha conhecida gravada em midia de teste
+# seria uma porta dos fundos esperando para ser copiada para a de producao.
+ask_user_password() {
+    if [ -n "$(cmdline_value distropica.install 2>/dev/null || true)" ]; then
+        say "instalacao automatizada: a conta distropica fica sem senha"
+        return 0
+    fi
+    say "solicitando senha do usuario distropica"
+    while :; do
+        printf 'Senha do usuario distropica (login e desbloqueio da tela): ' >/dev/console
+        stty -echo </dev/console >/dev/console 2>&1 || true
+        IFS= read -r first </dev/console
+        printf '\nRepita a senha: ' >/dev/console
+        IFS= read -r second </dev/console
+        stty echo </dev/console >/dev/console 2>&1 || true
+        printf '\n' >/dev/console
+        if [ -n "$first" ] && [ "$first" = "$second" ]; then
+            senha_usuario_cifrada=$(printf '%s\n' "$first" | cryptpw -m sha512)
+            first=
+            second=
+            [ -n "$senha_usuario_cifrada" ] ||
+                rescue "não consegui cifrar a senha do usuário"
+            say "senha do usuario recebida"
+            return 0
+        fi
+        first=
+        second=
+        say "senhas vazias ou diferentes; tente novamente"
+    done
+}
+
+# A conta nasce no primeiro boot (04-usuario.sh do base), que so cria a linha
+# do shadow se ela NAO existir. Gravar a linha aqui e dar a senha sem duplicar
+# a criacao da conta — passwd e group continuam sendo de quem sempre foram. O
+# campo de ultima troca fica vazio, como na linha que o 04-usuario.sh escreve:
+# zero ali obrigaria a trocar a senha no primeiro login.
+apply_user_password() {
+    alvo=$1
+    [ -n "${senha_usuario_cifrada:-}" ] || return 0
+    ! grep -q '^distropica:' "$alvo/etc/shadow" 2>/dev/null || return 1
+    printf 'distropica:%s::0:99999:7:::\n' "$senha_usuario_cifrada" \
+        >> "$alvo/etc/shadow" || return 1
+    senha_usuario_cifrada=
+    return 0
+}
+
 apply_root_password() {
     password_root=$1
     [ -n "$senha_root_cifrada" ] || return 0
@@ -845,6 +901,7 @@ install_system() {
         --only-binary || rescue "a instalação no disco falhou"
 
     apply_root_password /target || rescue "não configurei a senha de root"
+    apply_user_password /target || rescue "não configurei a senha do usuário"
     say "senha de root configurada"
 
     # O rótulo desta espera não é enfeite: o verify re-mede o sistema
@@ -952,6 +1009,7 @@ silencia_kernel
 decide_instalacao
 confere_particoes_escolhidas
 ask_root_password
+ask_user_password
 restaura_kernel
 install_system
 rescue "o instalador retornou inesperadamente"

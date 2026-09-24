@@ -1,0 +1,33 @@
+NAME=libxcrypt
+VERSION=4.5.2
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+# perl: os geradores de build-aux/scripts são Perl, e o configure os chama.
+# gawk e findutils: o configure usa awk, e as conferências abaixo usam find — os
+# dois applets do BusyBox saem de cena quando os pacotes reais são construídos
+# no mesmo plano.
+BUILD_DEPS="gcc-pass2 binutils-glibc make perl gawk busybox findutils"
+ABOUT="A função crypt() do sistema, que a glibc deixou de ter: a 2.39 removeu a libcrypt, e esta árvore usa a 2.42. Entra por UM consumidor, o swaylock, que sem PAM confere a senha de quem bloqueou a tela comparando o hash do /etc/shadow com crypt() — e o hash que ele encontra é o \$6\$ (sha512crypt) que o cryptpw do BusyBox gera no instalador. Construída só com os algoritmos que o próprio upstream marca como fortes (--enable-hashes=strong: yescrypt, as variantes do bcrypt, scrypt e o sha512crypt), então um hash DES ou MD5 antigo no shadow simplesmente não confere. Sem a API obsoleta (--enable-obsolete-api=no): entrega a libcrypt.so.2 e o crypt.h, e não a libcrypt.so.1 de compatibilidade binária com a glibc antiga, que nada nesta árvore pede."
+LICENSE="LGPL-2.1-or-later AND BSD-3-Clause AND BSD-2-Clause AND 0BSD AND Public-Domain"
+SRC="https://github.com/besser82/libxcrypt/releases/download/v$VERSION/libxcrypt-$VERSION.tar.xz"
+SHA256=71513a31c01a428bccd5367a32fd95f115d6dac50fb5b60c779d5c7942aec071
+
+build() {
+    tar -xJf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure --prefix=/usr --libdir=/usr/lib --disable-static \
+        --enable-hashes=strong --enable-obsolete-api=no
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -e "$STAGE/usr/lib/libcrypt.so.2" ] || {
+        echo "libxcrypt: libcrypt.so.2 não foi produzida" >&2; exit 1; }
+    [ -e "$STAGE/usr/include/crypt.h" ] || {
+        echo "libxcrypt: crypt.h não foi instalado" >&2; exit 1; }
+    # A API obsoleta desligada é promessa do ABOUT, e opção de configure que
+    # o autoconf não reconhece passa calada: o que prova é a ausência.
+    [ ! -e "$STAGE/usr/lib/libcrypt.so.1" ] || {
+        echo "libxcrypt: a libcrypt.so.1 obsoleta veio mesmo assim" >&2; exit 1; }
+    find "$STAGE" -name '*.la' -delete
+    find "$STAGE" -type d -empty -delete
+}

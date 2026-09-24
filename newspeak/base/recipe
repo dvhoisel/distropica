@@ -3,7 +3,7 @@ VERSION=0.2
 KIND=source
 TOOLCHAIN=none
 DEPS="busybox ndisc6"
-ABOUT="Config de boot da Fase B (SPEC-0006): /etc/inittab (busybox init → getty → login), rc.d/rcS (monta proc/sys/devtmpfs/tmpfs, mdev, hostname, DHCP IPv4 e, em IPv6, DHCPv6 mais o RDNSS do Router Advertisement lido de uma vez pelo rdisc6 — o kernel faz SLAAC sozinho mas ignora o RDNSS, e o busybox nao sabe le-lo), rc.d/rcK, hostname, motd, os-release e a licença da Distrópica. Duas peças existem por causa da separação de propriedade do manifesto, e não por gosto de indireção: o /etc/rc.d/session, despachante da tty1, e o laço de drop-ins /etc/rc.d/rcS.d/*.sh no fim do rcS. O /etc/inittab e o rcS pertencem a ESTE pacote; um pacote que precise subir daemon no boot ou tomar a tty1 — o 'desktop', com o seatd e o weston, é o primeiro — não pode reescrevê-los sem colidir. Então o base pergunta em vez de saber: se /usr/bin/distropica-desktop existir, a tty1 vira sessão gráfica; se não existir, vira getty como sempre. Note que o base NÃO cria /etc/rc.d/rcS.d: diretório vazio vira claim de árvore no manifesto v2 e bloquearia o pacote que fosse depositar o drop-in ali — foi assim que a glibc confiscou o /usr/share/locale. Receita de MONTAGEM: sem SRC (não baixa nada), o build() gera arquivos legíveis e instala auxiliares que fazem parte do mesmo snapshot da receita. Instala defaults de /etc via fábrica (/usr/share/factory/etc → materializa em /etc). NÃO gerencia contas: passwd/shadow são estado do admin (um futuro base-files/adduser + doas cuida disso; SPEC-0006 §5)."
+ABOUT="Config de boot da Fase B (SPEC-0006): /etc/inittab (busybox init → getty → login), rc.d/rcS (monta proc/sys/devtmpfs/tmpfs, mdev, hostname, DHCP IPv4 e, em IPv6, DHCPv6 mais o RDNSS do Router Advertisement lido de uma vez pelo rdisc6 — o kernel faz SLAAC sozinho mas ignora o RDNSS, e o busybox nao sabe le-lo), rc.d/rcK, hostname, motd, os-release e a licença da Distrópica. Duas peças existem por causa da separação de propriedade do manifesto, e não por gosto de indireção: o /etc/rc.d/session, despachante da tty1, e o laço de drop-ins /etc/rc.d/rcS.d/*.sh no fim do rcS. O /etc/inittab e o rcS pertencem a ESTE pacote; um pacote que precise subir daemon no boot ou tomar a tty1 — o 'desktop', com o seatd e o labwc, é o primeiro — não pode reescrevê-los sem colidir. Então o base pergunta em vez de saber: a tty1 sempre pede login, e se /usr/bin/distropica-desktop existir o despachante prepara como root o runtime e o log da sessão, que o pacote desktop sobe depois do login e nunca como root. Note que o base NÃO cria /etc/rc.d/rcS.d: diretório vazio vira claim de árvore no manifesto v2 e bloquearia o pacote que fosse depositar o drop-in ali — foi assim que a glibc confiscou o /usr/share/locale. Receita de MONTAGEM: sem SRC (não baixa nada), o build() gera arquivos legíveis e instala auxiliares que fazem parte do mesmo snapshot da receita. Instala defaults de /etc via fábrica (/usr/share/factory/etc → materializa em /etc). NÃO gerencia contas: passwd/shadow são estado do admin. Quem dá a senha da conta 'distropica' é o instalador, que a pede junto com a de root; o 04-usuario.sh cria a conta no primeiro boot se ela não existir e nunca troca uma senha já gravada (SPEC-0006 §5)."
 LICENSE="GPL-3.0-or-later"
 
 build() {
@@ -51,10 +51,12 @@ build() {
 ::sysinit:/etc/rc.d/rcS
 # console serial (QEMU/serial) — getty -> login
 ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100
-# tty1 e o console primario: sessao grafica se houver, getty se nao houver.
-# Quem decide e o /etc/rc.d/session, e nao esta linha, porque o /etc/inittab
-# pertence ao pacote base e o modo grafico pertence ao pacote desktop — um nao
-# pode reescrever o arquivo do outro sem colidir no manifesto.
+# tty1 e o console primario, e pede login. O /etc/rc.d/session prepara como
+# root o que a sessao grafica vai precisar (runtime e log) e da o getty; quem
+# sobe o modo grafico depois do login e o /etc/profile.d do pacote desktop. A
+# separacao existe porque o /etc/inittab pertence ao pacote base e o modo
+# grafico ao pacote desktop — um nao pode reescrever o arquivo do outro sem
+# colidir no manifesto.
 tty1::respawn:/etc/rc.d/session
 # tty2 e a saida de emergencia: getty puro, sempre. Se a sessao grafica
 # entrar em ciclo de respawn na tty1, ainda ha onde logar com Alt+F2.
@@ -65,144 +67,46 @@ INITTAB
 
     cat > "$STAGE/etc/rc.d/session" <<'SESSION'
 #!/bin/sh
-# session — o que roda na tty1. Uma pergunta e tres respostas.
+# session — o que roda na tty1, como root, antes do login.
 #
-# Se o pacote desktop estiver instalado E houver placa de video com KMS, sobe
-# o modo grafico; senao, sobe um getty como sempre. O teste e a EXISTENCIA do
-# lancador, nao um arquivo de configuracao, porque instalar o pacote e a unica
-# acao que o usuario tomou e nao faz sentido pedir uma segunda.
+# A TTY1 PEDE LOGIN DESDE A 0.17. Ate a 0.16 este script era a sessao
+# grafica: preparava o terreno e dava `su -l distropica -c distropica-desktop`,
+# e a maquina ligava direto na sessao, com a conta sem senha. Com o bloqueio de
+# tela na suspensao, isso virou teatro — reiniciar contornaria o bloqueio —, e
+# o modelo mudou por decisao do mantenedor: a conta tem senha (o instalador a
+# pede), a tty1 pede login, e quem sobe a sessao grafica e o /etc/profile.d do
+# pacote desktop, DEPOIS do login e nunca como root.
 #
-# O teste do /dev/dri nao e zelo: o inittab marca esta linha como respawn, e um
-# compositor que morre por falta de placa seria reiniciado para sempre. Numa
-# maquina sem driver KMS — QEMU com VGA padrao, por exemplo — o resultado seria
-# um laco em vez de um console. Melhor um getty honesto.
-# O HOME, e ele NAO e detalhe cosmetico. O init do BusyBox entrega HOME=/ e
-# nao le o /etc/passwd; quem le e o `login`, e a sessao grafica nao passa por
-# ele — entra direto por esta linha do inittab. O sintoma barato e um `cd` sem
-# argumento dentro do terminal ir para / em vez de /root. O caro e que TODO
-# programa que grava configuracao no HOME passa a sujar a raiz do sistema: o
-# Firefox cria /.mozilla, com perfil, cache e cookies, na raiz.
+# O que fica aqui e so o que o usuario nao consegue fazer sozinho, porque
+# exige root:
 #
-# Lido do /etc/passwd e nao escrito aqui, porque o dono desse fato e o passwd;
-# repetir '/root' nesta linha seria criar uma segunda verdade que ninguem
-# atualizaria. Se o diretorio nao existir, mantem-se o que veio: melhor um
-# HOME errado do que um HOME que aponta para lugar nenhum.
-sessao_home=$(awk -F: -v uid="$(id -u 2>/dev/null || echo 0)" \
-    '$3 == uid { print $6; exit }' /etc/passwd 2>/dev/null)
-if [ -n "$sessao_home" ] && [ -d "$sessao_home" ]; then
-    HOME=$sessao_home
-    export HOME
-    cd "$HOME" || true
-fi
-unset sessao_home
-
-# O PATH DA SESSAO GRAFICA, e ele precisa ser posto AQUI porque o /etc/profile
-# nao alcanca este caminho: aquele arquivo e lido por shell de LOGIN, e o
-# terminal do weston abre shell interativo comum, que herda o ambiente do
-# compositor — que herda deste script, que herda do init. Sem esta linha, quem
-# abre o terminal grafico tem um PATH diferente de quem entra pelo console, e a
-# diferenca so aparece quando um comando funciona num e nao no outro.
+#   o /run/user/UID. /run e de root, modo 0755; o lancador tentava criar o
+#   diretorio e o mkdir falhava calado, e o compositor saia por falta de
+#   XDG_RUNTIME_DIR com uma mensagem que nao apontava para permissao nenhuma;
 #
-# Mesma lista e mesma ordem do /etc/profile. Sao duas verdades sobre o mesmo
-# fato, o que e ruim; e a alternativa — ler o /etc/profile daqui — seria pior,
-# porque este script roda como root ANTES da queda de privilegio e importaria
-# num contexto o ambiente montado para outro.
-PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-export PATH
-
-if [ -x /usr/bin/distropica-desktop ]; then
-    for card in /dev/dri/card*; do
-        [ -e "$card" ] || continue
-        # Se o compositor sair sozinho (o usuario encerrou a sessao), cai no
-        # getty em vez de reabrir a sessao grafica; quem quiser de volta usa
-        # `distropica-desktop`.
-        #
-        # A SESSAO GRAFICA NAO RODA COMO ROOT. Ela rodava, e isso significava
-        # que o Firefox — o programa desta distro que mais abre conteudo de
-        # terceiro — tinha permissao de reescrever o /usr. Quem lanca esta
-        # linha e o init, entao aqui somos root e a queda de privilegio e nossa
-        # para fazer.
-        #
-        # O 'su' AQUI NAO EXIGE SETUID: quem chama e root, e o busybox so exige
-        # o bit quando o chamador nao e. E por isso que a sessao grafica de
-        # usuario comum funciona sem tornar o busybox setuid; o que exige o bit
-        # e o caminho inverso, o `su -` do usuario para root.
-        #
-        # -l e obrigatorio e nao cosmetico: sem ele o ambiente continua o do
-        # root — HOME=/root a frente de tudo —, e o Firefox criaria o perfil em
-        # /root sem poder escrever la. Com -l vem HOME=/home/distropica, o
-        # shell de login le o perfil, e o cd inicial e a home certa.
-        #
-        # O /run/user/UID e criado ANTES da queda de privilegio porque /run e
-        # de root e modo 0755: o proprio usuario nao consegue criar o diretorio
-        # dele la dentro. O lancador ate tenta, e o mkdir falha silenciosamente
-        # — o weston entao sai por falta de XDG_RUNTIME_DIR, que e uma mensagem
-        # que nao aponta para permissao nenhuma.
-        # A CONDICAO E 'A GLIBC RESOLVE?', e nao 'o id acha?'. Os dois nao
-        # sao a mesma pergunta: o busybox tem parser proprio de /etc/passwd e
-        # aceita arquivo que a glibc recusa. Quem precisa da conta aqui e o
-        # dbus da sessao, que usa getpwuid da glibc — entao e a glibc que
-        # decide. Com 'id' no lugar disto, uma conta meio-existente levava a
-        # sessao a subir, o barramento a falhar e a tela a virar console, com o
-        # erro aparecendo tres camadas acima e sem apontar para nada.
-        if getent passwd distropica >/dev/null 2>&1; then
-            sessao_uid=$(id -u distropica)
-            mkdir -p "/run/user/$sessao_uid"
-            chown "$sessao_uid:$sessao_uid" "/run/user/$sessao_uid" 2>/dev/null || true
-            chmod 0700 "/run/user/$sessao_uid"
-            # O LOG DA SESSAO TEM DE SER GRAVAVEL PELO USUARIO, e este par de
-            # linhas e o que faltava: o lancador redireciona a saida do
-            # compositor para /var/log, que e de root, e assim que a sessao
-            # passou a rodar como 'distropica' o compositor morreu na primeira
-            # linha com "Permission denied". A tty1 caiu para o getty e a tela
-            # virou console — o defeito apareceu na PRIMEIRA foto tirada depois
-            # da queda de privilegio, e nao haveria como perceber sem ela.
-            #
-            # O arquivo e criado aqui, ainda como root, e nao movido para dentro
-            # da home: o valor dele e ser encontravel por quem for diagnosticar
-            # um boot que nao chegou a tela, e /var/log e onde essa pessoa olha.
-            # Truncar a cada sessao e proposital — o que interessa e a falha
-            # desta vez, nao o historico.
-            #
-            # O NOME NAO DIZ QUAL COMPOSITOR, e isso e o conserto de segunda
-            # ordem. Ele dizia: era weston.log, escrito aqui e lido pelo
-            # lancador da receita 'desktop'. Quando o compositor virou labwc, o
-            # lancador passou a escrever labwc.log e ESTA linha continuou
-            # criando weston.log — a correcao ficou em pe, apontando para um
-            # arquivo que ninguem mais usava, e o defeito que ela existe para
-            # impedir voltou identico sob outro nome, com as mesmas doze linhas
-            # de comentario acima explicando por que nao deveria acontecer.
-            # Duas receitas guardavam o mesmo fato, e uma delas envelheceu.
-            # Agora o nome e do PAPEL, nao do programa: trocar de compositor de
-            # novo nao mexe nele.
-            mkdir -p /var/log
-            : > /var/log/distropica-sessao.log
-            chown "$sessao_uid:$sessao_uid" /var/log/distropica-sessao.log 2>/dev/null || true
-            chmod 0644 /var/log/distropica-sessao.log
-            # Uma linha de diagnostico antes da queda de privilegio. Ela existe
-            # porque a falha desta etapa e MUDA por natureza: se a conta nao
-            # resolver, o que aparece na tela e o erro de um programa tres
-            # camadas acima — 'dbus: Looking up user ID 1000: not found' — e
-            # nada diz que o problema esta aqui. Custa um echo por boot.
-            echo "distropica: sessao para uid $sessao_uid;" \
-                 "passwd resolve: $(getent passwd "$sessao_uid" >/dev/null 2>&1 &&
-                    echo sim || echo NAO)"
-            su -l distropica -c /usr/bin/distropica-desktop
-            unset sessao_uid
-        else
-            # Sem a conta comum, sobe como root em vez de nao subir. O drop-in
-            # 04-usuario.sh deveria te-la criado; se nao criou, uma tela de
-            # root e melhor que uma tty1 em respawn — e a mensagem diz o que
-            # houve, em vez de deixar o operador procurando.
-            echo "distropica: a conta 'distropica' nao resolve pela glibc;" >&2
-            echo "            sessao grafica como root. Se ela existe no" >&2
-            echo "            /etc/passwd, o arquivo esta corrompido — veja o" >&2
-            echo "            aviso do 04-usuario.sh no inicio do boot." >&2
-            /usr/bin/distropica-desktop
-        fi
-        echo "distropica: sessao grafica encerrada; console na tty1"
-        break
-    done
+#   o /var/log/distropica-sessao.log, gravavel pelo usuario. O lancador manda
+#   a saida do compositor para la, e /var/log e de root — foi assim que a
+#   primeira sessao sem privilegio morreu na primeira linha com "Permission
+#   denied". O NOME e do PAPEL, nao do programa: ele ja foi weston.log, o
+#   compositor virou labwc, e esta linha continuou criando o arquivo antigo
+#   enquanto o lancador escrevia outro. Truncado a cada volta da tty1 de
+#   proposito: o que interessa e a falha desta sessao.
+#
+# A CONDICAO E 'A GLIBC RESOLVE A CONTA?', e nao 'o id acha?': o busybox tem
+# parser proprio do /etc/passwd e aceita arquivo que a glibc recusa, e quem
+# precisa da conta e o dbus da sessao, pela glibc. Sem a conta, nao ha o que
+# preparar: a tty1 pede login do mesmo jeito, e o root entra para ver o que
+# houve — o aviso do 04-usuario.sh no inicio do boot diz o que procurar.
+if [ -x /usr/bin/distropica-desktop ] && getent passwd distropica >/dev/null 2>&1; then
+    sessao_uid=$(id -u distropica)
+    mkdir -p "/run/user/$sessao_uid"
+    chown "$sessao_uid:$sessao_uid" "/run/user/$sessao_uid" 2>/dev/null || true
+    chmod 0700 "/run/user/$sessao_uid"
+    mkdir -p /var/log
+    : > /var/log/distropica-sessao.log
+    chown "$sessao_uid:$sessao_uid" /var/log/distropica-sessao.log 2>/dev/null || true
+    chmod 0644 /var/log/distropica-sessao.log
+    unset sessao_uid
 fi
 exec /sbin/getty 38400 tty1
 SESSION
@@ -318,6 +222,57 @@ PROFILE
 exec /sbin/poweroff
 PWRBTN
     chmod 0755 "$STAGE/etc/acpi/PWRF/00000080"
+
+    mkdir -p "$STAGE/etc/acpi/LID"
+    cat > "$STAGE/etc/acpi/LID/00000080" <<'TAMPA'
+#!/bin/sh
+# A tampa fechou. Chamado pelo acpid, como root. O nome do caminho e o que o
+# acpid do BusyBox 1.35 monta, lido no acpid.c da fonte pinada e nao suposto: o
+# evento SW_LID com valor 1 vira "button/lid LID0 00000080", e a tabela de acoes
+# leva LID0 a LID/00000080. So o FECHAMENTO tem evento; abrir nao chama nada.
+#
+# Duas coisas, nesta ordem, e a ordem e o conteudo:
+#
+#   1. BLOQUEIA a sessao grafica, se houver uma. O swaylock -f so volta depois
+#      de a tela estar trancada (ext-session-lock-v1: dali em diante o labwc
+#      nao mostra janela nenhuma, nem se o swaylock morrer). Suspender antes
+#      disso entregaria a sessao aberta a quem abrisse a tampa.
+#   2. SUSPENDE em RAM.
+#
+# O swaylock roda como o DONO da sessao, e nao como root: e a senha dele que o
+# bloqueio confere. Quem e o dono se le do runtime — o /run/user/UID que tem o
+# socket do Wayland —, e nao de um nome fixo, para valer para qualquer conta.
+exec >> /var/log/distropica-tampa.log 2>&1
+echo "$(date '+%F %T') tampa fechada"
+
+grep -qw mem /sys/power/state 2>/dev/null || {
+    echo "  o kernel nao oferece suspensao em RAM; nada a fazer"
+    exit 0
+}
+
+for socket in /run/user/*/wayland-[0-9]*; do
+    [ -S "$socket" ] || continue
+    runtime=${socket%/*}
+    uid=${runtime##*/}
+    dono=$(awk -F: -v u="$uid" '$3 == u { print $1; exit }' /etc/passwd)
+    [ -n "$dono" ] && [ -x /usr/bin/swaylock ] || break
+    # O timeout existe para um compositor travado nao impedir a maquina de
+    # dormir com a bateria acabando. Sem bloqueio confirmado, o log diz.
+    if timeout 15 su -s /bin/sh "$dono" -c \
+        "XDG_RUNTIME_DIR='$runtime' WAYLAND_DISPLAY='${socket##*/}' exec /usr/bin/swaylock -f -c 1a1a1a"; then
+        echo "  sessao de $dono bloqueada"
+    else
+        echo "  AVISO: o bloqueio da sessao de $dono nao confirmou (ja estava bloqueada?)"
+    fi
+    break
+done
+
+sync
+echo "  suspendendo"
+echo mem > /sys/power/state
+echo "$(date '+%F %T') acordou"
+TAMPA
+    chmod 0755 "$STAGE/etc/acpi/LID/00000080"
 
     mkdir -p "$STAGE/etc/rc.d/rcS.d"
     cat > "$STAGE/etc/rc.d/rcS.d/02-swap.sh" <<'SWAPDROP'
@@ -523,7 +478,13 @@ fi
 #          criou o problema, e o sintoma medido em QEMU foi o iwgtk sair com
 #          status 0, sem janela e sem erro visivel na tela: a mensagem ia para
 #          o stderr do compositor, que so se le abrindo /var/log/weston.log.
-for grupo_hw in seat:101 audio:102 netdev:98; do
+#   video  quem pode mudar o BRILHO da tela. A regra de udev que o pacote
+#          brightnessctl instala passa o /sys/class/backlight/*/brightness ao
+#          grupo video com escrita, e as teclas de brilho do labwc chamam o
+#          brightnessctl como o usuario da sessao. Sem o grupo, a tecla nao faz
+#          nada e nada diz por que. De quebra, o udevd para de reclamar no boot
+#          de "specified group 'video' unknown", que as regras padrao dele usam.
+for grupo_hw in seat:101 audio:102 netdev:98 video:103; do
     grep -q "^${grupo_hw%%:*}:" /etc/group 2>/dev/null ||
         echo "${grupo_hw%%:*}:x:${grupo_hw##*:}:distropica" >> /etc/group
 done

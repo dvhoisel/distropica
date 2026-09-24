@@ -1,0 +1,45 @@
+NAME=swaylock
+VERSION=1.8.6
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc wayland libxkbcommon cairo libxcrypt"
+BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf wayland-protocols scdoc busybox findutils"
+ABOUT="O bloqueio de tela. Entra com o modelo de acesso da 0.17: a conta da sessão passa a ter senha e o boot pede login, e fechar a tampa do notebook bloqueia a sessão antes de suspender — sem isso, quem pegasse a máquina fechada a abriria já dentro da sessão. Fala ext-session-lock-v1, que o labwc anuncia, então o compositor garante que nenhuma janela aparece por cima do bloqueio nem se o swaylock morrer. SEM PAM, porque a árvore não tem PAM: a senha é conferida contra o /etc/shadow com crypt() da libxcrypt, e por isso o binário é SETUID root. O root dura o tempo de ler o hash — o shadow.c do upstream faz setgid e setuid para o usuário real logo em seguida e confere que não consegue voltar a ser root, e é esse trecho que torna o setuid aceitável. Sem gdk-pixbuf: o bloqueio é uma cor, não uma imagem. Com páginas de manual (scdoc); sem completions de shell."
+LICENSE=MIT
+SRC="https://github.com/swaywm/swaylock/releases/download/v$VERSION/swaylock-$VERSION.tar.gz"
+SHA256=a15154348fef852fdb224112d137c393c826478b777f63479beb15e8d3812eaf
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=lib \
+        --buildtype=release \
+        -Dpam=disabled \
+        -Dgdk-pixbuf=disabled \
+        -Dman-pages=enabled \
+        -Dzsh-completions=false \
+        -Dbash-completions=false \
+        -Dfish-completions=false
+    ninja -C build -j"$JOBS"
+    DESTDIR="$STAGE" ninja -C build install
+    [ -x "$STAGE/usr/bin/swaylock" ] || {
+        echo "swaylock: o binário não foi produzido" >&2; exit 1; }
+    # O backend é o do shadow, e o fato de link é a prova: sem a libcrypt no
+    # NEEDED, o meson teria achado PAM ou nada.
+    readelf -d "$STAGE/usr/bin/swaylock" | grep -q 'libcrypt\.so\.2' || {
+        echo "swaylock: sem libcrypt no NEEDED; o backend do shadow não foi escolhido" >&2
+        exit 1
+    }
+    # SETUID: o meson do upstream só avisa ("often needs to be setuid when
+    # compiled without libpam") e instala 0755. Sem o bit, getspnam falha e o
+    # bloqueio nunca aceita senha nenhuma — trancaria a pessoa para fora.
+    chmod 4755 "$STAGE/usr/bin/swaylock"
+    [ -e "$STAGE/usr/share/man/man1/swaylock.1" ] || {
+        echo "swaylock: página de manual não veio" >&2; exit 1; }
+    # O /etc/pam.d não deve existir sem PAM; se existir, o meson achou PAM.
+    [ ! -e "$STAGE/etc/pam.d" ] || {
+        echo "swaylock: instalou configuração de PAM" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}

@@ -1,0 +1,33 @@
+NAME=brightnessctl
+VERSION=0.5.1
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+BUILD_DEPS="gcc-pass2 binutils-glibc make busybox findutils"
+ABOUT="O brilho da tela pelas teclas do notebook. O labwc liga XF86MonBrightnessUp e Down a ele. Escreve em /sys/class/backlight/*/brightness, que é só do root por padrão; a permissão vem da regra de udev que o próprio upstream distribui (90-brightnessctl.rules), aplicada pelo eudev: o arquivo do brilho passa ao grupo video com escrita, e a conta da sessão entra no grupo video no primeiro boot (04-usuario.sh do base). Por isso NÃO é setuid, que é o modo que o Makefile escolhe quando a regra não é instalada. A regra vai para /usr/lib/udev/rules.d e não para o /lib/udev do default, porque /lib nesta árvore é um link para usr/lib. Sem logind: o caminho do systemd fica desligado."
+LICENSE=MIT
+SRC="https://github.com/Hummer12007/brightnessctl/archive/refs/tags/$VERSION.tar.gz"
+SHA256=a68869e23f56ac4f2e28f1783002810ddbf10f95e1af9b48b2912fb169f46994
+
+build() {
+    tar -xzf "$DL" --strip-components=1
+    # CFLAGS na LINHA DE COMANDO substitui os '+=' do Makefile, que trazem um
+    # -g incondicional (e o VERSION = 0.5 escrito à mão no Makefile da 0.5.1).
+    # O contrato de flags da árvore é -O2 -g0; o resto é o que o upstream pede.
+    make -j"$JOBS" \
+        CFLAGS="$CFLAGS -std=c99 -Wall -Wextra -DVERSION=\\\"$VERSION\\\" -D_POSIX_C_SOURCE=200809L" \
+        PREFIX=/usr
+    make install DESTDIR="$STAGE" PREFIX=/usr UDEVDIR=/usr/lib/udev/rules.d \
+        INSTALL_UDEV_RULES=1
+    [ -x "$STAGE/usr/bin/brightnessctl" ] || {
+        echo "brightnessctl: o binário não foi produzido" >&2; exit 1; }
+    # Com a regra instalada o Makefile escolhe 0755; setuid aqui seria o
+    # sinal de que a regra não entrou.
+    [ ! -u "$STAGE/usr/bin/brightnessctl" ] || {
+        echo "brightnessctl: saiu setuid; a regra de udev não foi instalada" >&2; exit 1; }
+    grep -q 'SUBSYSTEM=="backlight"' "$STAGE/usr/lib/udev/rules.d/90-brightnessctl.rules" || {
+        echo "brightnessctl: a regra de udev do backlight não veio" >&2; exit 1; }
+    "$STAGE/usr/bin/brightnessctl" --version 2>&1 | grep -q "$VERSION" || {
+        echo "brightnessctl: --version não diz $VERSION" >&2; exit 1; }
+    find "$STAGE" -type d -empty -delete
+}
