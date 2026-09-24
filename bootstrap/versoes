@@ -750,6 +750,89 @@ pinados=
 atuais=0
 [ -n "$TSV" ] && printf '# pacote\tpinada\tupstream\tveredito\tmotivo\n' > "$TSV"
 
+# O VEREDITO DE UMA FONTE, o mesmo para receita e para insumo do EFI.
+confere() {  # rotulo versao url erro_fonte ressalva
+    rotulo=$1; versao=$2; url=$3; erro_fonte=$4; decl=$5
+    motivo=
+    nova=
+    if [ -n "$erro_fonte" ]; then
+        # Fonte fixa que o extrator não entende não some em silêncio. É
+        # software no payload sem versão auditada, portanto o gate fecha.
+        veredito='?'
+        motivo=$erro_fonte
+        naoconferidos="$naoconferidos $rotulo"
+    else
+        : > "$FALHAS"
+        nova=$(upstream_de "$url" "$versao" 2>/dev/null | head -1)
+        if [ -z "$nova" ]; then
+            # A falha só vale quando o handler NÃO produziu resposta. O
+            # `de_github` tenta releases/latest e cai nas tags: em projeto
+            # sem releases aquele 404 é caminho normal, não avaria.
+            if [ -s "$FALHAS" ]; then
+                veredito='!'
+                motivo="consulta falhou (HTTP $(cut -d' ' -f1 "$FALHAS" | sort -u | tr '\n' '/' | sed 's|/$||'))"
+                falhou="$falhou $rotulo"
+            else
+                veredito='?'
+                naoconferidos="$naoconferidos $rotulo"
+            fi
+        elif [ "$nova" = "$versao" ]; then
+            veredito=atual
+            atuais=$((atuais + 1))
+            # Não reprova: só aponta o arquivo que já não segura nada.
+            [ -f "$decl" ] && motivo='ressalva sobrando: o pinado já é o mais novo'
+        elif [ "$(printf '%s\n%s\n' "$versao" "$nova" | sort -V | tail -1)" = "$versao" ]; then
+            # Pinado maior que o índice: índice incompleto ou nome inferido
+            # errado. Não é legítimo promover isso a "atual".
+            veredito='?'
+            naoconferidos="$naoconferidos $rotulo"
+        elif motivo=$(ressalva_pinada "$decl"); then
+            # A ressalva está bem FORMADA. Falta saber se ainda vale: o
+            # upstream pode ter andado, a premissa pode ter saído da
+            # árvore, e quem segura uma série ainda tem de estar no topo
+            # dela.
+            serie=$(pino_valor "$decl" SERIE | head -1)
+            vencido=$(pino_vencido "$decl" "$nova")
+            if [ -n "$vencido" ]; then
+                veredito=atrasado
+                motivo=$vencido
+                atrasados="$atrasados $rotulo"
+            elif [ -n "$serie" ]; then
+                nova_serie=$(upstream_de "$url" "$versao" "$serie" 2>/dev/null | head -1)
+                if [ -z "$nova_serie" ]; then
+                    veredito='?'
+                    motivo="SERIE=$serie: o tratador deste upstream não sabe restringir série"
+                    naoconferidos="$naoconferidos $rotulo"
+                elif [ "$nova_serie" != "$versao" ]; then
+                    veredito=atrasado
+                    motivo="atrás dentro da própria série $serie (fora dela: $nova)"
+                    nova=$nova_serie
+                    atrasados="$atrasados $rotulo"
+                else
+                    veredito=pinado
+                    pinados="$pinados $rotulo"
+                fi
+            else
+                veredito=pinado
+                pinados="$pinados $rotulo"
+            fi
+        else
+            veredito=atrasado
+            if [ -f "$decl" ]; then
+                motivo='ressalva sem motivo, data ISO ou gatilho (CONTRA=/PREMISSA=)'
+            fi
+            atrasados="$atrasados $rotulo"
+        fi
+    fi
+
+    [ -n "$TSV" ] && printf '%s\t%s\t%s\t%s\t%s\n' \
+        "$rotulo" "${versao:--}" "${nova:--}" "$veredito" "$motivo" >> "$TSV"
+    if [ "$SO_PROBLEMAS" = no ] || [ "$veredito" != atual ]; then
+        printf '  %-9s %-22s %-14s %s\n' \
+            "$veredito" "$rotulo" "${versao:--}" "${nova:-—}"
+    fi
+}
+
 for receita in "$REPO"/newspeak/*/recipe; do
     pacote=$(basename "$(dirname "$receita")")
     versao_receita=$(grep -m1 '^VERSION=' "$receita" | cut -d= -f2- | tr -d '"')
@@ -765,88 +848,44 @@ for receita in "$REPO"/newspeak/*/recipe; do
     fontes=$(fontes_conferiveis "$pacote" "$versao_receita" "$src")
     while IFS='|' read -r rotulo versao url erro_fonte; do
         [ -n "$rotulo" ] || continue
-        decl="$REPO/newspeak/$pacote/versao-pinada"
-        motivo=
-        nova=
-        if [ -n "$erro_fonte" ]; then
-            # Fonte fixa que o extrator não entende não some em silêncio. É
-            # software no payload sem versão auditada, portanto o gate fecha.
-            veredito='?'
-            motivo=$erro_fonte
-            naoconferidos="$naoconferidos $rotulo"
-        else
-            : > "$FALHAS"
-            nova=$(upstream_de "$url" "$versao" 2>/dev/null | head -1)
-            if [ -z "$nova" ]; then
-                # A falha só vale quando o handler NÃO produziu resposta. O
-                # `de_github` tenta releases/latest e cai nas tags: em projeto
-                # sem releases aquele 404 é caminho normal, não avaria.
-                if [ -s "$FALHAS" ]; then
-                    veredito='!'
-                    motivo="consulta falhou (HTTP $(cut -d' ' -f1 "$FALHAS" | sort -u | tr '\n' '/' | sed 's|/$||'))"
-                    falhou="$falhou $rotulo"
-                else
-                    veredito='?'
-                    naoconferidos="$naoconferidos $rotulo"
-                fi
-            elif [ "$nova" = "$versao" ]; then
-                veredito=atual
-                atuais=$((atuais + 1))
-                # Não reprova: só aponta o arquivo que já não segura nada.
-                [ -f "$decl" ] && motivo='ressalva sobrando: o pinado já é o mais novo'
-            elif [ "$(printf '%s\n%s\n' "$versao" "$nova" | sort -V | tail -1)" = "$versao" ]; then
-                # Pinado maior que o índice: índice incompleto ou nome inferido
-                # errado. Não é legítimo promover isso a "atual".
-                veredito='?'
-                naoconferidos="$naoconferidos $rotulo"
-            elif motivo=$(ressalva_pinada "$decl"); then
-                # A ressalva está bem FORMADA. Falta saber se ainda vale: o
-                # upstream pode ter andado, a premissa pode ter saído da
-                # árvore, e quem segura uma série ainda tem de estar no topo
-                # dela.
-                serie=$(pino_valor "$decl" SERIE | head -1)
-                vencido=$(pino_vencido "$decl" "$nova")
-                if [ -n "$vencido" ]; then
-                    veredito=atrasado
-                    motivo=$vencido
-                    atrasados="$atrasados $rotulo"
-                elif [ -n "$serie" ]; then
-                    nova_serie=$(upstream_de "$url" "$versao" "$serie" 2>/dev/null | head -1)
-                    if [ -z "$nova_serie" ]; then
-                        veredito='?'
-                        motivo="SERIE=$serie: o tratador deste upstream não sabe restringir série"
-                        naoconferidos="$naoconferidos $rotulo"
-                    elif [ "$nova_serie" != "$versao" ]; then
-                        veredito=atrasado
-                        motivo="atrás dentro da própria série $serie (fora dela: $nova)"
-                        nova=$nova_serie
-                        atrasados="$atrasados $rotulo"
-                    else
-                        veredito=pinado
-                        pinados="$pinados $rotulo"
-                    fi
-                else
-                    veredito=pinado
-                    pinados="$pinados $rotulo"
-                fi
-            else
-                veredito=atrasado
-                if [ -f "$decl" ]; then
-                    motivo='ressalva sem motivo, data ISO ou gatilho (CONTRA=/PREMISSA=)'
-                fi
-                atrasados="$atrasados $rotulo"
-            fi
-        fi
-
-        [ -n "$TSV" ] && printf '%s\t%s\t%s\t%s\t%s\n' \
-            "$rotulo" "${versao:--}" "${nova:--}" "$veredito" "$motivo" >> "$TSV"
-        if [ "$SO_PROBLEMAS" = no ] || [ "$veredito" != atual ]; then
-            printf '  %-9s %-22s %-14s %s\n' \
-                "$veredito" "$rotulo" "${versao:--}" "${nova:-—}"
-        fi
+        confere "$rotulo" "$versao" "$url" "$erro_fonte" \
+            "$REPO/newspeak/$pacote/versao-pinada"
     done <<EOF
 $fontes
 EOF
+done
+
+# OS INSUMOS DO EFI TAMBÉM SÃO SOFTWARE NO PAYLOAD. O kernel, o busybox, o
+# e2fsprogs, o ncurses, o util-linux e o firmware que o build-efi compila ou
+# embute não passam pelo newspeak: eram pinos que nenhuma rodada da P7 lia, e
+# o busybox do EFI ficou na 1.35.0 de 2022 sem que nada dissesse. A ressalva
+# de cada um, quando houver, mora em bootstrap/live/versao-pinada/<nome>, no
+# mesmo formato das receitas.
+pino_efi() {  # NOME — uma linha NOME=valor do build-efi, com ${VAR} expandido
+    valor=$(sed -n "s/^$1=//p" "$REPO/bootstrap/live/build-efi")
+    [ -n "$valor" ] && [ "$(printf '%s\n' "$valor" | wc -l)" -eq 1 ] || return 1
+    while :; do
+        case "$valor" in
+            *'${'*'}'*)
+                ref=$(printf '%s' "$valor" | sed 's/.*\${\([A-Z0-9_]*\)}.*/\1/')
+                sub=$(pino_efi "$ref") || return 1
+                valor=$(printf '%s' "$valor" | sed "s|\${$ref}|$sub|g")
+                ;;
+            *) break ;;
+        esac
+    done
+    printf '%s\n' "$valor"
+}
+for insumo in LINUX:linux BUSYBOX:busybox E2FSPROGS:e2fsprogs NCURSES:ncurses \
+              UTIL_LINUX:util-linux LINUX_FIRMWARE:linux-firmware; do
+    pino=${insumo%%:*}
+    nome=${insumo#*:}
+    if v=$(pino_efi "${pino}_VERSION") && u=$(pino_efi "${pino}_URL"); then
+        confere "efi:$nome" "$v" "$u" "" "$REPO/bootstrap/live/versao-pinada/$nome"
+    else
+        confere "efi:$nome" "" "" "pino ${pino}_VERSION/URL ausente no build-efi" \
+            "$REPO/bootstrap/live/versao-pinada/$nome"
+    fi
 done
 
 echo
