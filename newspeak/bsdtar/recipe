@@ -32,8 +32,10 @@ build() {
     rm -rf "$STAGE/usr/lib" "$STAGE/usr/include" "$STAGE/usr/share/man/man3" "$STAGE/usr/share/man/man5"
     [ -x "$STAGE/usr/bin/bsdtar" ] || { echo "bsdtar: o binário não foi produzido" >&2; exit 1; }
     # Cada NEEDED tem de ter provedor declarado: foi por faltar isso que a
-    # auditoria de fechamento reprovou a primeira versão desta receita.
-    for lib in libarchive.so.13 libz.so.1 liblzma.so.5 libcrypto.so libxml2.so.2; do
+    # auditoria de fechamento reprovou a primeira versão desta receita. O da
+    # libxml2 é .so.16 desde a 2.14, que trocou o soname; a guarda que cobrava
+    # o .so.2 derrubou a cadeia da 0.17.
+    for lib in libarchive.so.13 libz.so.1 liblzma.so.5 libcrypto.so libxml2.so.16; do
         readelf -d "$STAGE/usr/bin/bsdtar" | grep -q "$lib" || {
             echo "bsdtar: $lib ausente do NEEDED" >&2
             readelf -d "$STAGE/usr/bin/bsdtar" | grep NEEDED >&2; exit 1; }
