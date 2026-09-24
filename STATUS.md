@@ -1,8 +1,77 @@
 # STATUS — o que está feito, testado e futuro
 
 Fonte única da verdade sobre a maturidade. As `specs/` descrevem a **norma**;
-este arquivo descreve o **estado**. Atualizado à mão em 2026-08-24, no dia em
-que a `0.14` foi **publicada** — site, ISO, canal e bundle de fontes no ar.
+este arquivo descreve o **estado**. A seção seguinte é a da `0.17`, em
+preparo; da seção "Licenciamento e publicação" em diante o texto é o da
+revisão de 2026-08-24, no dia em que a `0.14` foi **publicada**, com as seções
+de evidência de cada versão posterior acrescentadas por cima da anterior.
+
+## Estado atual — `0.17`, em preparo (não publicada)
+
+A `0.17` não traz aplicativo novo. O tema é **o sistema instalado se
+atualiza**, e a reavaliação de 24/09 mostrou que ele não se atualizava: a árvore
+de receitas nunca foi publicada (`newspeak.tar` dava 404), o EFI da ESP só era
+escrito pelo instalador, a seed do canal que a instalação grava no alvo estava
+parada na `0.13`, e nenhum aceite exercitava uma atualização — todos
+instalavam do zero.
+
+O que a `0.17` implementa, commitado e com testes:
+
+- **Atualizar é `minitrue rectify newspeak` seguido de `minitrue rectify
+  --sync`.** O `--sync` converge o world inteiro à árvore corrente e aponta,
+  sem remover, o que ficou fora; o receipt global passa a declarar os órfãos
+  (`APPLIED_PLAN_RECEIPT_FORMAT=2`).
+- **Os executores e o EFI são pacotes do canal**: `minitrue`, `minipax` e
+  `distropica-efi` (Mundo A, compilados pelo projeto, estáticos e
+  reprodutíveis — o mesmo binário sai de qualquer diretório, medido). Os dois
+  primeiros ADOTAM o executor que o instalador persistiu, só se os bytes forem
+  os do `install.manifest`. Quem vem da `0.16` atravessa por uma ponte
+  (`minitrue-ponte`), porque o minitrue antigo não conhece a adoção.
+- **Boot A/B**: o `minipax boot-update` leva o EFI do pacote à ESP, guarda o
+  que arrancou antes em `EFI/distropica/anterior.efi` e mantém as duas
+  entradas na NVRAM; o drop-in `07-efi.sh` refaz a conta a cada boot.
+- **Acesso**: o instalador pede a senha da conta `distropica`, a tty1 pede
+  login antes da sessão gráfica, e fechar a tampa tranca a sessão com o
+  `swaylock` antes de suspender (suspensão religada no kernel vivo).
+- **Notebook**: brilho (`brightnessctl`, sem setuid, pela regra de udev),
+  volume, `Print`/`Shift+Print` para o `distropica-captura`, e a bateria na
+  barra quando a máquina tem uma.
+- **Segurança**: rustls 0.23.45 (RUSTSEC-2026-0285) e o `cargo audit` como
+  portão; microcódigo AMD embutido no kernel; o BusyBox do ambiente vivo sai da
+  1.35.0, de 2022, para a 1.38.0; o OpenSSL troca de chave de assinatura e a
+  troca é conferida pela chave antiga, que certifica a nova.
+- **Versões (P7)**: kernel 7.2.7, a pilha do GNOME 51 (glib 2.90, GTK 4.24,
+  libadwaita 1.10, Epiphany 51), LLVM 23, Mesa 26.2.3, WebKitGTK 2.54, OpenSSL
+  4.0.2, GIMP 3.2.6, poppler 26.09. O conferidor sai com 0: 238 atuais e 10
+  pinados com motivo — e passou a conferir os insumos do EFI, que nenhuma
+  rodada lia.
+- **Release**: `bootstrap/release` (conferir, preparar, aceitar, subir-teste,
+  aceitar-atualizacao, publicar) substitui os roteiros de scratchpad; o
+  `bootstrap/live/accept-upgrade` atualiza um disco instalado pela versão
+  anterior contra o canal de teste, reinicia e exige o kernel novo e o EFI
+  novo como atual.
+
+Defeitos achados no caminho que atingiam o que JÁ está publicado:
+
+- o bundle de fontes da `0.14` à `0.16` entregou, como fonte correspondente
+  da loja de raízes, o `certdata.txt` de uma loja anterior (e por uma URL de
+  ramo que anda); o `fontes-correspondentes` passou a declarar a versão e o
+  bundle recusa divergência;
+- a linha `linux-firmware-live` dos inventários da `0.15` e da `0.16` saiu com
+  `${LINUX_FIRMWARE_VERSION}` literal na URL;
+- a seed do canal nas mídias da `0.14` à `0.16` era o índice da `0.13`.
+
+E uma classe fechada: o `findutils` supersede o `find` do BusyBox, e ~120
+receitas só funcionavam pela ordem de construção. Todas declaram agora o
+provedor (as nove do fechamento do próprio `findutils` chamam `busybox find`),
+e o lint da árvore não acusa mais nenhuma aresta faltante.
+
+O que ainda NÃO está provado: a cadeia do zero da `0.17` está em construção;
+o EFI, a ISO, o canal e o bundle da versão não foram gerados; os aceites do
+instalador, do login e da atualização da `0.16` ainda não rodaram contra eles;
+e o pacote `linux` espera a cerimônia de assinatura dos módulos da 7.2.7.
+
+## A revisão da `0.14` (2026-08-24)
 
 O que mudou de natureza nesta revisão: **a instalação a partir do canal binário
 fechou**. Ela não fechava, e a causa era do resolvedor, não da mídia — o
