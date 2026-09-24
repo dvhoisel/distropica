@@ -10,8 +10,13 @@
 #
 # O dispositivo de vídeo é virtio-gpu e não a VGA padrão: o kernel desta distro
 # tem CONFIG_DRM_VIRTIO_GPU=y e NÃO tem bochs, simpledrm nem cirrus. Com a VGA
-# padrão não existe /dev/dri/card0, o /etc/rc.d/session cai no getty de
-# propósito, e a foto mostraria um console — sem nada ter quebrado.
+# padrão não existe /dev/dri/card0, o /etc/profile.d não sobe a sessão, e a
+# foto mostraria um console — sem nada ter quebrado.
+#
+# DESDE A 0.17 A TTY1 PEDE LOGIN, e a sessão gráfica só sobe depois dele. Sem
+# --login a foto de um sistema 0.17 mostra o prompt, e está certa. Com ele, o
+# script faz o que uma pessoa faz: espera o getty, digita o usuário e a senha
+# no teclado, e só então conta o --settle.
 set -eu
 umask 022
 LC_ALL=C
@@ -30,6 +35,8 @@ CLICKS=
 SETTLE_AFTER=60
 SETTLE_BETWEEN=60
 NIC=none
+LOGIN=
+BOOT_TIMEOUT=600
 
 usage() {
     cat <<'EOF'
@@ -39,7 +46,19 @@ uso: bootstrap/live/screenshot-qemu --disk INSTALADO.raw --output TELA.ppm \
   --disk ARQ         disco raw JÁ instalado (não é modificado: snapshot)
   --output ARQ       arquivo .ppm a criar; não é sobrescrito
   --log-dir DIR      diretório novo para serial, OVMF_VARS e o socket
-  --settle N         segundos de espera antes da foto (default: 90)
+  --settle N         segundos de espera antes da foto (default: 90); com
+                     --login, contados DEPOIS do login
+  --login USUARIO    faz login na tty1 antes da foto: espera o getty aparecer
+                     no serial (a ttyS0 e a tty1 sobem juntas pelo inittab),
+                     digita o usuário e a senha pelo teclado PS/2 do q35, e
+                     só então conta o --settle. A senha vem da variável
+                     ACCEPT_TUI_SENHA — a mesma com que o accept-tui a digitou
+                     no instalador, e com o mesmo default dele —, nunca da
+                     linha de comando, que o ps mostra
+  --boot-timeout N   com --login: teto em segundos para o getty (default: 600).
+                     Só é gasto inteiro quando o boot NÃO chega: a espera acaba
+                     no getty. Com o hospedeiro carregado (uma cadeia com -j6 ao
+                     lado), um primeiro boot já passou de 180s sem nada no serial
   --click X,Y        clica nessa coordenada antes de fotografar, movendo o
                      ponteiro pelo monitor do QEMU. Serve para provar que um
                      aplicativo ABRE, e não só que o compositor subiu: sem
@@ -81,6 +100,8 @@ while [ "$#" -gt 0 ]; do
         --settle-after) SETTLE_AFTER=${2:?}; shift 2 ;;
         --settle-between) SETTLE_BETWEEN=${2:?}; shift 2 ;;
         --nic) NIC=${2:?}; shift 2 ;;
+        --login) LOGIN=${2:?}; shift 2 ;;
+        --boot-timeout) BOOT_TIMEOUT=${2:?}; shift 2 ;;
         --memory-mib) MEMORY_MIB=${2:?}; shift 2 ;;
         --accel) ACCEL=${2:?}; shift 2 ;;
         --ovmf-code) OVMF_CODE=${2:?}; shift 2 ;;
@@ -101,6 +122,16 @@ case "$ACCEL" in tcg|kvm) ;; *) echo "erro: --accel inválido" >&2; exit 1 ;; es
 [ "$ACCEL" != kvm ] || [ -r /dev/kvm ] || {
     echo "erro: --accel kvm exige /dev/kvm legível" >&2; exit 1;
 }
+case "$BOOT_TIMEOUT" in ''|*[!0-9]*) echo "erro: --boot-timeout precisa ser numérico" >&2; exit 1 ;; esac
+# As ferramentas são conferidas ANTES do boot: descobrir a falta de uma depois
+# de minutos de espera jogaria a espera fora. O socat fala com o monitor; o
+# python3 fala QMP, que é por onde passam o clique e o teclado.
+command -v socat >/dev/null 2>&1 || {
+    echo "erro: socat é necessário para falar com o monitor do QEMU" >&2
+    exit 1
+}
+[ -z "$CLICKS$LOGIN" ] || command -v python3 >/dev/null 2>&1 || {
+    echo "erro: python3 é necessário para falar QMP (--click e --login)" >&2; exit 1; }
 
 mkdir -p "$LOG_DIR"
 LOG_DIR=$(CDPATH= cd -- "$LOG_DIR" && pwd -P)
@@ -110,6 +141,122 @@ MONITOR=$LOG_DIR/monitor.sock
 QMP=$LOG_DIR/qmp.sock
 SERIAL=$LOG_DIR/serial.log
 SHOT=$LOG_DIR/tela.ppm
+
+# Fala QMP. `qmp clique X Y` posiciona o tablet e clica; `qmp digita TEXTO` e
+# `qmp digita-senha` digitam no teclado e terminam com Enter.
+qmp() {
+    n=0
+    while [ ! -S "$QMP" ] && [ "$n" -lt 100 ]; do n=$((n + 1)); sleep 0.1; done
+    [ -S "$QMP" ] || { echo "erro: socket QMP não apareceu" >&2; exit 1; }
+    python3 - "$QMP" "$@" <<'QMPPY' || exit 1
+import json
+import os
+import socket
+import string
+import sys
+import time
+
+caminho, modo, args = sys.argv[1], sys.argv[2], sys.argv[3:]
+LARGURA, ALTURA = 1280, 800
+
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect(caminho)
+f = s.makefile("rw", encoding="utf-8", newline="\n")
+
+
+def comando(cmd, **args):
+    f.write(json.dumps({"execute": cmd, "arguments": args} if args
+                       else {"execute": cmd}) + "\n")
+    f.flush()
+    # O QMP intercala eventos assíncronos com respostas; a resposta é a
+    # primeira linha que traga "return" ou "error".
+    while True:
+        linha = f.readline()
+        if not linha:
+            raise SystemExit("QMP fechou a conexão")
+        msg = json.loads(linha)
+        if "error" in msg:
+            raise SystemExit(f"QMP recusou {cmd}: {msg['error']}")
+        if "return" in msg:
+            return msg["return"]
+
+
+f.readline()          # saudação
+comando("qmp_capabilities")
+
+def enviar(eventos):
+    # SEM o parametro `device`, e isto e uma armadilha de nome. Em
+    # `input-send-event` o `device` NAO e o dispositivo de entrada: e o
+    # console de VIDEO para onde rotear o evento. Passar "tablet" ali com
+    # `-display none` faz o QEMU procurar a propriedade `device` no
+    # qemu-fixed-text-console, nao achar, e ABORTAR — o processo morre com
+    # SIGABRT e o cliente ve apenas "Connection reset by peer", sem uma
+    # palavra sobre a causa. Medido aqui.
+    #
+    # Omitido, o QEMU roteia por TIPO de evento: `abs` vai para um
+    # dispositivo que suporte eixo absoluto, que e exatamente o tablet.
+    comando("input-send-event", events=eventos)
+
+
+def clique(x, y):
+    ax = min(32767, max(0, round(x * 32767 / (LARGURA - 1))))
+    ay = min(32767, max(0, round(y * 32767 / (ALTURA - 1))))
+    # Posicionar e clicar sao lotes SEPARADOS, e de proposito: o compositor
+    # precisa processar o movimento e decidir o foco antes do botao chegar.
+    # Num unico lote o weston ve os dois no mesmo quadro e o realce acontece
+    # sem a ativacao.
+    enviar([{"type": "abs", "data": {"axis": "x", "value": ax}},
+            {"type": "abs", "data": {"axis": "y", "value": ay}}])
+    time.sleep(1.0)
+    enviar([{"type": "btn", "data": {"down": True, "button": "left"}}])
+    time.sleep(0.15)
+    enviar([{"type": "btn", "data": {"down": False, "button": "left"}}])
+    print(f"  clique absoluto em ({x},{y}) -> eixo ({ax},{ay})")
+
+
+# O TECLADO e o PS/2 que o q35 emula — o kernel desta arvore tem
+# KEYBOARD_ATKBD e SERIO_I8042 —, e o console usa o mapa padrao do kernel, o
+# US. Cada caractere vira o qcode da tecla que o produz nesse mapa; o que nao
+# tem tecla mapeada aqui e recusado ANTES da primeira tecla, para nunca
+# digitar meia senha.
+ESPECIAIS = {"-": ["minus"], "_": ["shift", "minus"], ".": ["dot"],
+             " ": ["spc"]}
+
+
+def teclas(texto):
+    combos = []
+    for c in texto:
+        if c in string.ascii_lowercase or c in string.digits:
+            combos.append([c])
+        elif c in string.ascii_uppercase:
+            combos.append(["shift", c.lower()])
+        elif c in ESPECIAIS:
+            combos.append(ESPECIAIS[c])
+        else:
+            raise SystemExit("texto com caractere sem tecla mapeada no "
+                             "teclado US deste script")
+    return combos + [["ret"]]
+
+
+def digita(texto):
+    for combo in teclas(texto):
+        comando("send-key",
+                keys=[{"type": "qcode", "data": k} for k in combo])
+        time.sleep(0.08)
+
+
+if modo == "clique":
+    clique(int(args[0]), int(args[1]))
+elif modo == "digita":
+    digita(args[0])
+elif modo == "digita-senha":
+    # Pelo ambiente e nunca por argv, que o ps mostra. O default e o do
+    # accept-tui, que digitou esta mesma senha no instalador.
+    digita(os.environ.get("ACCEPT_TUI_SENHA", "aceite-da-tui"))
+else:
+    raise SystemExit(f"modo QMP desconhecido: {modo}")
+QMPPY
+}
 
 # snapshot=on: o boot não persiste nada no disco, então fotografar não estraga
 # a evidência do aceite nem impede repetir.
@@ -141,14 +288,33 @@ while [ ! -S "$MONITOR" ] && [ "$n" -lt 100 ]; do
 done
 [ -S "$MONITOR" ] || { echo "erro: monitor do QEMU não apareceu" >&2; exit 1; }
 
-echo "esperando ${SETTLE}s pelo boot e pela sessão gráfica"
+if [ -n "$LOGIN" ]; then
+    # O getty da ttyS0 no serial é o sinal de que o init chegou ao inittab; o
+    # da tty1 sobe na mesma volta, depois que o /etc/rc.d/session prepara o
+    # runtime da sessão. Digitar antes de o getty abrir a tty1 perderia as
+    # teclas: ao abrir, ele descarta a entrada pendente.
+    echo "esperando o getty (até ${BOOT_TIMEOUT}s)"
+    n=0
+    until grep -Fq 'distropica login:' "$SERIAL" 2>/dev/null; do
+        kill -0 "$QEMU_PID" 2>/dev/null || {
+            echo "erro: o QEMU saiu antes do getty (serial: $SERIAL)" >&2; exit 1; }
+        [ "$n" -lt "$BOOT_TIMEOUT" ] || {
+            echo "erro: nenhum getty em ${BOOT_TIMEOUT}s (serial: $SERIAL)" >&2; exit 1; }
+        n=$((n + 1))
+        sleep 1
+    done
+    sleep 5
+    qmp digita "$LOGIN"
+    # O login pede a senha depois de ler o usuário; digitá-la antes do prompt
+    # a entregaria ao terminal ainda em eco, e o login a descartaria.
+    sleep 3
+    qmp digita-senha
+    echo "login de $LOGIN digitado na tty1; esperando ${SETTLE}s pela sessão gráfica"
+else
+    echo "esperando ${SETTLE}s pelo boot e pela sessão gráfica"
+fi
 sleep "$SETTLE"
 
-# O socat é a forma de falar com o monitor sem terminal interativo.
-command -v socat >/dev/null 2>&1 || {
-    echo "erro: socat é necessário para falar com o monitor do QEMU" >&2
-    exit 1
-}
 if [ -n "$CLICKS" ]; then
     # Valida TODAS as coordenadas antes de clicar em qualquer uma. Descobrir no
     # segundo clique que ele estava malformado significaria jogar fora os
@@ -186,11 +352,6 @@ if [ -n "$CLICKS" ]; then
     # O eixo absoluto do virtio-input vai de 0 a 32767, independente da
     # resolução; a conversão é linear e a guarda de resolução lá embaixo
     # continua sendo o que impede o clique de cair no lugar errado em silêncio.
-    command -v python3 >/dev/null 2>&1 || {
-        echo "erro: python3 é necessário para falar QMP" >&2; exit 1; }
-    n=0
-    while [ ! -S "$QMP" ] && [ "$n" -lt 100 ]; do n=$((n + 1)); sleep 0.1; done
-    [ -S "$QMP" ] || { echo "erro: socket QMP não apareceu" >&2; exit 1; }
     primeiro=sim
     for par in $CLICKS; do
         [ "$primeiro" = sim ] || {
@@ -198,71 +359,7 @@ if [ -n "$CLICKS" ]; then
             sleep "$SETTLE_BETWEEN"
         }
         primeiro=nao
-        x=${par%,*}
-        y=${par#*,}
-    python3 - "$QMP" "$x" "$y" <<'QMPCLICK' || exit 1
-import json
-import socket
-import sys
-import time
-
-caminho, x, y = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
-LARGURA, ALTURA = 1280, 800
-
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.connect(caminho)
-f = s.makefile("rw", encoding="utf-8", newline="\n")
-
-
-def comando(cmd, **args):
-    f.write(json.dumps({"execute": cmd, "arguments": args} if args
-                       else {"execute": cmd}) + "\n")
-    f.flush()
-    # O QMP intercala eventos assíncronos com respostas; a resposta é a
-    # primeira linha que traga "return" ou "error".
-    while True:
-        linha = f.readline()
-        if not linha:
-            raise SystemExit("QMP fechou a conexão")
-        msg = json.loads(linha)
-        if "error" in msg:
-            raise SystemExit(f"QMP recusou {cmd}: {msg['error']}")
-        if "return" in msg:
-            return msg["return"]
-
-
-f.readline()          # saudação
-comando("qmp_capabilities")
-
-ax = min(32767, max(0, round(x * 32767 / (LARGURA - 1))))
-ay = min(32767, max(0, round(y * 32767 / (ALTURA - 1))))
-
-
-def enviar(eventos):
-    # SEM o parametro `device`, e isto e uma armadilha de nome. Em
-    # `input-send-event` o `device` NAO e o dispositivo de entrada: e o
-    # console de VIDEO para onde rotear o evento. Passar "tablet" ali com
-    # `-display none` faz o QEMU procurar a propriedade `device` no
-    # qemu-fixed-text-console, nao achar, e ABORTAR — o processo morre com
-    # SIGABRT e o cliente ve apenas "Connection reset by peer", sem uma
-    # palavra sobre a causa. Medido aqui.
-    #
-    # Omitido, o QEMU roteia por TIPO de evento: `abs` vai para um
-    # dispositivo que suporte eixo absoluto, que e exatamente o tablet.
-    comando("input-send-event", events=eventos)
-
-
-# Posicionar e clicar sao lotes SEPARADOS, e de proposito: o compositor precisa
-# processar o movimento e decidir o foco antes do botao chegar. Num unico lote
-# o weston ve os dois no mesmo quadro e o realce acontece sem a ativacao.
-enviar([{"type": "abs", "data": {"axis": "x", "value": ax}},
-        {"type": "abs", "data": {"axis": "y", "value": ay}}])
-time.sleep(1.0)
-enviar([{"type": "btn", "data": {"down": True, "button": "left"}}])
-time.sleep(0.15)
-enviar([{"type": "btn", "data": {"down": False, "button": "left"}}])
-print(f"  clique absoluto em ({x},{y}) -> eixo ({ax},{ay})")
-QMPCLICK
+        qmp clique "${par%,*}" "${par#*,}"
     done
     echo "esperando ${SETTLE_AFTER}s pelo aplicativo"
     sleep "$SETTLE_AFTER"
@@ -288,10 +385,54 @@ if [ -n "$CLICKS" ]; then
     lida=$(head -c 32 "$SHOT" | tr '\n' ' ' | cut -d' ' -f2,3)
     [ "$lida" = "1280 800" ] || {
         echo "erro: a tela é '$lida', mas a conversão do --click assume 1280 800;" >&2
-        echo "      ajuste TELA_LARGURA/TELA_ALTURA neste script" >&2
+        echo "      ajuste LARGURA/ALTURA no QMP deste script" >&2
         exit 1
     }
 fi
 cp "$SHOT" "$OUTPUT"
 echo "tela: $OUTPUT ($(wc -c < "$OUTPUT") bytes)"
 echo "serial: $SERIAL"
+# COM --login A FOTO TEM DE SER A SESSÃO, e não o console. O console é o fbcon
+# do virtio-gpu, fundo preto puro; a sessão é a parede do desktop, a logo
+# sobre o cinza 1a1a1a do tema, com a barra no mesmo cinza — a foto da 0.16
+# mediu 0,0% de preto puro e 96,8% desse cinza. Metade da tela em (0,0,0) é o
+# console: o login não entrou, ou a sessão caiu de volta no getty. A foto fica
+# gravada mesmo assim, porque é ela que mostra qual dos dois.
+if [ -n "$LOGIN" ]; then
+    preto=$(python3 - "$OUTPUT" <<'PRETO'
+import sys
+
+d = open(sys.argv[1], "rb").read()
+# Cabeçalho PPM lido token a token: um split ingênuo engoliria os primeiros
+# bytes de pixel que por acaso fossem brancos.
+campos, i = [], 0
+while len(campos) < 4:
+    while d[i:i + 1].isspace():
+        i += 1
+    if d[i:i + 1] == b"#":
+        while d[i:i + 1] not in (b"\n", b""):
+            i += 1
+        continue
+    j = i
+    while j < len(d) and not d[j:j + 1].isspace():
+        j += 1
+    campos.append(d[i:j])
+    i = j
+if campos[0] != b"P6" or campos[3] != b"255":
+    raise SystemExit("screendump não é um PPM P6 de 8 bits")
+largura, altura = int(campos[1]), int(campos[2])
+px = d[i + 1:]
+total = largura * altura
+if len(px) < 3 * total:
+    raise SystemExit("screendump truncado")
+preto = sum(1 for k in range(0, 3 * total, 3) if px[k:k + 3] == b"\0\0\0")
+print(preto * 100 // total)
+PRETO
+) || { echo "erro: não consegui medir a foto" >&2; exit 1; }
+    [ "$preto" -lt 50 ] || {
+        echo "erro: a foto depois do login é o console (${preto}% de preto puro):" >&2
+        echo "      a sessão gráfica não subiu; veja $OUTPUT" >&2
+        exit 1
+    }
+    echo "sessão gráfica na foto (${preto}% de preto puro)"
+fi
