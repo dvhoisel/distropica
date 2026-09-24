@@ -64,7 +64,7 @@ KIND=source
 LICENSE=MIT
 DEPS="cargo-c"
 EOF
-printf '%s  %s\n' "$FIXTURE_SOURCE_SHA" "$CARGO_SOURCE_URL" > \
+printf 'VERSION=0.10.24\n%s  %s\n' "$FIXTURE_SOURCE_SHA" "$CARGO_SOURCE_URL" > \
     "$FIXTURE/newspeak/cargo-c/fontes-correspondentes"
 printf '%s\n' aplicativo > "$FIXTURE/profiles/official/target.world"
 : > "$FIXTURE/profiles/official/cache.world"
