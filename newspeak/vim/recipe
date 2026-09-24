@@ -1,5 +1,5 @@
 NAME=vim
-VERSION=9.2.1125
+VERSION=9.2.1129
 KIND=source
 TOOLCHAIN=native
 SUPERSEDES="busybox"
@@ -20,7 +20,7 @@ ABOUT="Vim de terminal com edição multibyte, syntax, eval e cores verdadeiras;
 #                       que o diff interno existe; o COPYING dele é a LGPL 2.1
 LICENSE="Vim AND 0BSD AND BSD-2-Clause AND PSF-2.0 AND LGPL-2.1-or-later"
 SRC="https://github.com/vim/vim/archive/refs/tags/v$VERSION.tar.gz"
-SHA256="6242a0916e07d38c7c25b583e69f413806b772808e95130133a23c9d46cedb32"
+SHA256="a30c7c49be62fe59dd746c8bca3853ac5996327cd641b038334be7e926929c2c"
 
 build() {
     tar -xzf "$DL" --strip-components=1
