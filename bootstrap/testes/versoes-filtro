@@ -65,6 +65,13 @@ teste librsvg    2.62.3   sim 2.62.3   2.62.90 2.62.3 2.62.2
 # do pango2, de 2022, e a estável é a 1.58.2.
 teste pango      1.57.1   sim 1.58.2   1.90.0 1.58.2 1.58.0 1.57.1
 
+# E o minor 90 que CONTINUA a série é estável: o glib 2.90.0 sucede o 2.89.x
+# de desenvolvimento, e o glib-networking 2.90.0 veio depois do 2.90.alpha. A
+# primeira versão da regra acima descartava os dois e devolvia o 2.88.3 e o
+# 2.80.1 como se fossem o topo.
+teste glib       2.88.3   sim 2.90.0   2.90.0 2.89.4 2.89.0 2.88.3
+teste glib-netw  2.80.1   sim 2.90.0   2.90.0 2.90.alpha 2.80.1 2.80.0
+
 # Minor ímpar que NÃO é desenvolvimento. Deduzir a convenção dos números
 # descartava o 2.11.1, que é release.
 teste minicom    2.10     nao 2.11.1   2.11.1 2.11 2.10 2.9

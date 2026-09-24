@@ -331,11 +331,21 @@ maior() {
 #   1.26.0) do libdrm 2.4.134 (não existe 2.5.x).
 filtra_candidatos() {  # versao_pinada [gnome]
     awk -F. -v pin="$1" -v gnome="${2:-nao}" '
+        # Pré-lançamento nomeado do GNOME (2.90.alpha, 2.90.rc): não é
+        # candidato, mas é evidência de que o minor dele é um ciclo normal.
+        /^[0-9]+\.[0-9]+\.(alpha|beta|rc)[0-9]*$/ {
+            split($0, v, ".")
+            prerelease[v[1] "." v[2]] = 1
+            next
+        }
         {
             linha[++n] = $0
             split($0, v, ".")
-            if (v[1] != "" && v[2] != "") maior_minor[v[1]] = \
-                (v[2] + 0 > maior_minor[v[1]] + 0) ? v[2] + 0 : maior_minor[v[1]] + 0
+            if (v[1] != "" && v[2] != "") {
+                maior_minor[v[1]] = \
+                    (v[2] + 0 > maior_minor[v[1]] + 0) ? v[2] + 0 : maior_minor[v[1]] + 0
+                existe_minor[v[1] "." (v[2] + 0)] = 1
+            }
         }
         END {
             split(pin, p, ".")
@@ -349,11 +359,20 @@ filtra_candidatos() {  # versao_pinada [gnome]
                 # inferência só vale quando existe minor acima no mesmo major.
                 if (v[3] != "" && v[3] + 0 >= 90 && \
                     (gnome == "sim" || maior_minor[v[1]] + 0 > v[2] + 0)) continue
-                # E o MINOR >= 90 também, no GNOME: é a prévia da próxima
-                # versão maior (o GTK 3.90 antes do 4.0, o pango 1.90 que
-                # anunciava o pango2). O pango 1.57.1 era mandado para a 1.90.0,
-                # de 2022, com a 1.58.2 estável publicada.
-                if (gnome == "sim" && v[2] != "" && v[2] + 0 >= 90) continue
+                # E o MINOR >= 90, no GNOME, pode ser a prévia da próxima
+                # versão maior: o pango 1.90.0 de 2022 anunciava o pango2, e o
+                # pango 1.57.1 era mandado para ela com a 1.58.2 estável
+                # publicada. MAS NÃO SEMPRE, e a primeira versão desta regra
+                # descartava sem distinguir: o glib 2.90.0 é a estável de
+                # setembro de 2026, sucessora do 2.89.x de desenvolvimento, e o
+                # glib-networking 2.90.0 veio depois de um 2.90.alpha. O que
+                # separa os casos é a CONTINUIDADE: o minor 90 é ciclo normal
+                # quando o mesmo major tem o minor 89 ou um pré-lançamento
+                # nomeado do próprio 90. O pango saltou do 1.50 para o 1.90 sem
+                # nenhum dos dois.
+                if (gnome == "sim" && v[2] != "" && v[2] + 0 >= 90 && \
+                    !existe_minor[v[1] "." (v[2] - 1)] && \
+                    !prerelease[v[1] "." (v[2] + 0)]) continue
                 print linha[i]
             }
         }'
@@ -442,7 +461,7 @@ de_gnome() {    # url, versao pinada, [série a que se restringir]
     # quem declara SERIE= no pino é consultado dentro da série.
     serie=${3:-}
     busca "https://download.gnome.org/sources/$pkg/cache.json" |
-        tr ',' '\n' | grep -oE '"[0-9]+(\.[0-9]+)*"' | tr -d '"' |
+        tr ',' '\n' | grep -oE '"[0-9]+(\.[0-9]+)*(\.(alpha|beta|rc)[0-9]*)?"' | tr -d '"' |
         awk -v serie="$serie" \
             'serie == "" || $0 == serie || index($0, serie ".") == 1' |
         filtra_candidatos "$2" sim | maior
