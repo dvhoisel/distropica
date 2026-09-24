@@ -1,4 +1,15 @@
-# Fonte Mozilla exata da qual o cacert.pem de 2026-07-16 foi convertido.
-# O próprio cabeçalho do PEM grava este SHA256 como a identidade de
-# certdata.txt; a conversão com mk-ca-bundle produz as mesmas 119 raízes.
-e57912808daef7b2b0fa4df2ccf17e47aeaf26c839a38f85c76003ebafd866bd https://raw.githubusercontent.com/mozilla-firefox/firefox/refs/heads/release/security/nss/lib/ckfw/builtins/certdata.txt
+# Fonte Mozilla exata da qual o cacert.pem de 2026-08-13 foi convertido.
+# O próprio cabeçalho do PEM grava o SHA256 do certdata.txt de que saiu, e é
+# este. Conferido reconvertendo: o mk-ca-bundle.pl 1.33 do tarball do curl
+# 8.22.0, rodado sobre este arquivo, produz as mesmas 121 raízes do
+# cacert.pem pinado na receita, byte a byte fora do cabeçalho.
+#
+# A URL APONTA UM COMMIT, e não o ramo. A da 0.14 à 0.16 era
+# refs/heads/release, que anda: o arquivo servido ali já não é este, e quem
+# fosse buscar a fonte pela URL receberia outra coisa. Pior, o pino ficou
+# preso ao certdata do cacert.pem de 2026-07-16 quando a receita subiu para o
+# de 2026-08-13 — o bundle de fontes das três versões entregou, como fonte da
+# loja de raízes, a de uma loja anterior. O commit 4e9426ae é o último que tocou
+# o certdata.txt no ramo release antes de 13/08 (o seguinte é de 08/09).
+VERSION=2026-08-13
+81b7f2576333a2e360e673f912d7b0b7a765d836c731003e348a46cac5d37198 https://raw.githubusercontent.com/mozilla-firefox/firefox/4e9426ae522c67de47ff3e060774328b42df0134/security/nss/lib/ckfw/builtins/certdata.txt

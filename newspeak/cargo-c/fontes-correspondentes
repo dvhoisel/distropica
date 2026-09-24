@@ -4,6 +4,7 @@
 # o cache binário da mídia. Quando um artefato efetivamente distribui esse
 # binário, `bootstrap/source-bundle` busca o snapshot pelo SHA e o classifica
 # como `fonte-correspondente`; cargo-c não pertence à mídia oficial atual.
+VERSION=0.10.25
 73306e6a3a88bd202b7313247f26d66829179433d72aedeff65de6d124f632ce  https://distropica.com.br/sources/cargo-c/cargo-c-0.10.25-corresponding-source.tar.xz
 # O .cargo/config.toml do snapshot aponta o vendor RELATIVO a ele (directory =
 # "vendor"). O da 0.10.24 apontava um /tmp da máquina que o gerou, e quem

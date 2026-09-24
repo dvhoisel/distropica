@@ -32,6 +32,11 @@
 # e a assinatura destacada que ele oferece. É substancialmente melhor que nada e
 # ainda assim menos que o ideal — a mesma ressalva que vale para o busybox.
 #
-# FORMATO: linhas de '<sha256>  <url>'. Comentários com '#'. Os arquivos
+# FORMATO: uma linha VERSION=<a versão da receita> e linhas de
+# '<sha256>  <url>'. Comentários com '#'. O bundle recusa o arquivo cuja
+# VERSION não seja a da receita: a fonte correspondente é a da versão
+# distribuída, e é assim que uma subida de versão que esqueça este arquivo
+# deixa de passar em silêncio — a do rust para a 1.98.1 passou. Os arquivos
 # precisam estar no cache de fontes do rootfs para entrarem no bundle.
+VERSION=1.98.1
 be1816e7f6c40abb90245ad6e024bed2a7e88d7dda4561e4d5470207df616b9f  https://static.rust-lang.org/dist/2026-09-03/rustc-1.98.1-src.tar.xz

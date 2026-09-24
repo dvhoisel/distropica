@@ -74,7 +74,7 @@ LICENSE=MIT
 SRC=https://example.invalid/correspondente-binario.tar
 SHA256=$fonte_sha
 EOF
-printf '%s %s\n' "$correspondente_sha" \
+printf 'VERSION=1\n%s %s\n' "$correspondente_sha" \
     https://example.invalid/correspondente-fonte.tar \
     > "$FIXTURE/newspeak/correspondente/fontes-correspondentes"
 cat > "$FIXTURE/newspeak/app/recipe" <<'EOF'
@@ -104,7 +104,7 @@ DEPS=""
 SRC=https://example.invalid/runtime-bin
 SHA256=$runtime_sha
 EOF
-printf '%s %s\n' "$runtime_fonte_sha" \
+printf 'VERSION=1\n%s %s\n' "$runtime_fonte_sha" \
     https://example.invalid/runtime-bin-source.tar \
     > "$FIXTURE/newspeak/runtime-bin/fontes-correspondentes"
 cat > "$FIXTURE/newspeak/cargo-c/recipe" <<EOF
@@ -115,7 +115,7 @@ DEPS=""
 SRC=https://example.invalid/cargo-c
 SHA256=$cargo_sha
 EOF
-printf '%s %s\n' "$cargo_fonte_sha" \
+printf 'VERSION=1\n%s %s\n' "$cargo_fonte_sha" \
     https://example.invalid/cargo-c-source.tar \
     > "$FIXTURE/newspeak/cargo-c/fontes-correspondentes"
 cat > "$FIXTURE/newspeak/seed/recipe" <<EOF
@@ -811,6 +811,37 @@ else
     echo '  FALHOU  fonte correspondente corrompida sem diagnóstico de hash'
     falhas=$((falhas + 1))
 fi
+
+# A fonte correspondente é a da versão DISTRIBUÍDA. Uma subida de versão que
+# esquecesse o fontes-correspondentes passava em silêncio — o rust 1.98.1 ia
+# sair com a fonte da 1.97.1. Recusado nos dois modos, antes de ler o cache.
+decl_correspondente=$FIXTURE/newspeak/correspondente/fontes-correspondentes
+cp "$decl_correspondente" "$TMP/correspondente-decl.orig"
+sed -i 's/^VERSION=1$/VERSION=0/' "$decl_correspondente"
+if roda --artifact "$TMP/channel-index" \
+    --output "$TMP/correspondente-versao-velha" --cache "$CACHE" \
+    --minitrue-root "$ROOT" > "$TMP/correspondente-versao-velha.log" 2>&1; then
+    echo '  FALHOU  fonte correspondente de outra versão aceita'
+    falhas=$((falhas + 1))
+elif grep -q 'declara a fonte da versão' "$TMP/correspondente-versao-velha.log"; then
+    echo '  ok      fonte correspondente precisa ser da versão da receita'
+else
+    echo '  FALHOU  versão divergente da fonte correspondente sem diagnóstico'
+    falhas=$((falhas + 1))
+fi
+sed -i '/^VERSION=/d' "$decl_correspondente"
+if roda --artifact "$TMP/channel-index" \
+    --output "$TMP/correspondente-sem-versao" --cache "$CACHE" \
+    --minitrue-root "$ROOT" > "$TMP/correspondente-sem-versao.log" 2>&1; then
+    echo '  FALHOU  fonte correspondente sem VERSION aceita'
+    falhas=$((falhas + 1))
+elif grep -q 'exatamente uma linha VERSION=' "$TMP/correspondente-sem-versao.log"; then
+    echo '  ok      fonte correspondente sem VERSION é recusada'
+else
+    echo '  FALHOU  fonte correspondente sem VERSION sem diagnóstico'
+    falhas=$((falhas + 1))
+fi
+cp "$TMP/correspondente-decl.orig" "$decl_correspondente"
 
 # Um link com alvo de bytes corretos não é um objeto content-addressed regular:
 # seguir o link permitiria materializar arquivo fora do cache auditado.

@@ -262,6 +262,7 @@ subidos=0
 falhos=
 sem_checksum=
 rolantes=
+correspondentes=
 
 for alvo in $alvos; do
     pacote=${alvo%%=*}
@@ -347,6 +348,13 @@ for alvo in $alvos; do
     marca=$([ -n "$esperado" ] && echo 'conferido' || echo 'sem checksum publicado')
     printf '  ok      %-20s %-12s -> %-12s %s\n' "$pacote" "$velha" "$nova" "$marca"
     subidos=$((subidos + 1))
+    # A FONTE CORRESPONDENTE NÃO SOBE SOZINHA. Ela é outro arquivo (a fonte de
+    # um binário, um snapshot com o vendor), e o sha dela não sai daqui. O
+    # bundle de fontes recusa o fontes-correspondentes cuja VERSION não seja a
+    # da receita; este aviso existe para que a recusa não chegue de surpresa
+    # na hora da publicação.
+    [ ! -f "$REPO/newspeak/$pacote/fontes-correspondentes" ] ||
+        correspondentes="$correspondentes $pacote"
 done
 
 echo
@@ -354,5 +362,9 @@ printf 'subidos: %d\n' "$subidos"
 # LISTADO POR NOME, pelo mesmo motivo do `versoes`: um total esconde quem.
 [ -n "$sem_checksum" ] && printf 'sem checksum publicado pelo upstream:%s\n' "$sem_checksum"
 [ -n "$rolantes" ] && printf 'URL sem versão (pegou o que o upstream serve agora):%s\n' "$rolantes"
+[ -n "$correspondentes" ] &&
+    printf 'FONTE CORRESPONDENTE A REFAZER (o bundle de fontes recusa até lá):%s\n' \
+        "$correspondentes"
 [ -n "$falhos" ] && { printf 'NÃO SUBIRAM:%s\n' "$falhos"; exit 1; }
+[ -z "$correspondentes" ] || exit 1
 exit 0

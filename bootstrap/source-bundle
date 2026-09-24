@@ -1520,8 +1520,28 @@ copia_sidecar_regular() { # ORIGEM DESTINO DESCRICAO
 coletar_correspondentes() {
     decl=$(dirname "$receita")/fontes-correspondentes
     [ -f "$decl" ] || return 0
+    # A FONTE CORRESPONDENTE É A DA VERSÃO DISTRIBUÍDA, e o arquivo o declara
+    # numa linha VERSION= que precisa ser a da receita. Sem ela, subir a versão
+    # de um pacote e esquecer este arquivo passava em silêncio: foi o que
+    # aconteceu com o rust 1.98.1, que ia sair com a fonte da 1.97.1, e com o
+    # ca-certificates, cujo bundle de fontes entregou o certdata de uma loja
+    # anterior por três versões. Divergência é erro nos dois modos, como a do
+    # pino do firmware: o que está errado é a árvore, não o cache.
+    decl_versao=$(sed -n 's/^VERSION=//p' "$decl")
+    [ -n "$decl_versao" ] &&
+        [ "$(printf '%s\n' "$decl_versao" | wc -l)" -eq 1 ] || {
+        echo "erro: newspeak/$pacote/fontes-correspondentes precisa declarar" >&2
+        echo "      exatamente uma linha VERSION=<versão da receita>" >&2
+        exit 1
+    }
+    [ "$decl_versao" = "$versao" ] || {
+        echo "erro: newspeak/$pacote/fontes-correspondentes declara a fonte da versão" >&2
+        echo "      $decl_versao, mas a receita distribui a $versao; refaça a fonte" >&2
+        echo "      correspondente da versão distribuída" >&2
+        exit 1
+    }
     while read -r chash corigem; do
-        case "$chash" in ''|\#*) continue ;; esac
+        case "$chash" in ''|\#*|VERSION=*) continue ;; esac
         [ -n "$corigem" ] || continue
         if [ -f "$FONTES/$chash" ]; then
             if promove_objeto_cache "$chash" "$FONTES/$chash" \

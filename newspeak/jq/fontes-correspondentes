@@ -21,6 +21,11 @@
 # O sha256 foi conferido contra o `sha256sum.txt` que a própria release publica,
 # antes de o arquivo entrar no cache.
 #
-# FORMATO: linhas de '<sha256>  <url>'. Comentários com '#'. Os arquivos
+# FORMATO: uma linha VERSION=<a versão da receita> e linhas de
+# '<sha256>  <url>'. Comentários com '#'. O bundle recusa o arquivo cuja
+# VERSION não seja a da receita: a fonte correspondente é a da versão
+# distribuída, e é assim que uma subida de versão que esqueça este arquivo
+# deixa de passar em silêncio — a do rust para a 1.98.1 passou. Os arquivos
 # precisam estar no cache de fontes do rootfs para entrarem no bundle.
+VERSION=1.8.2
 71b8d6e8f5fe81f6c6d0d110e3892251f6ce76ed095abd315e26e6e1193af3af  https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-1.8.2.tar.gz
