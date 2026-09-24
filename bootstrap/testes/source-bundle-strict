@@ -20,12 +20,14 @@ mkdir -p "$FIXTURE/bootstrap/live" "$FIXTURE/newspeak/fonte" \
     "$FIXTURE/newspeak/root-bin" "$FIXTURE/newspeak/cache-source" \
     "$FIXTURE/newspeak/top-meta" "$FIXTURE/newspeak/go" \
     "$FIXTURE/newspeak/ripgrep" "$FIXTURE/newspeak/rust" \
+    "$FIXTURE/newspeak/linux-firmware-wifi" \
+    "$FIXTURE/newspeak/linux-firmware-radeon" \
     "$FIXTURE/profiles/official" "$FIXTURE/profiles/custom" \
     "$FIXTURE/profiles/release" "$ROOT/usr/bin" \
     "$TMP/produtor" \
     "$ROOT/var/lib/minitrue/records" \
     "$ROOT/var/cache/minitrue" "$CACHE/channels/oficial" "$TMP/bin" \
-    "$TMP/util-src/util-linux-9.9"
+    "$TMP/util-src/util-linux-9.9" "$TMP/fw-src/linux-firmware-20990101"
 cp "$REPO/bootstrap/source-bundle" "$FIXTURE/bootstrap/source-bundle"
 
 printf '%s\n' 'fonte disponível' > "$TMP/fonte-real"
@@ -198,13 +200,18 @@ printf '%s\n' 'objeto transportado pelo índice do cache' > "$TMP/cache-transpor
 cache_transport_sha=$(sha256sum "$TMP/cache-transport" | cut -d' ' -f1)
 cp "$TMP/cache-transport" "$CACHE/$cache_transport_sha"
 
+# A versão do record e a do índice vêm da receita da fixture: o gate confere
+# que o índice oferece exatamente a versão que a receita efetiva exige.
+versao_fixture() {
+    sed -n 's/^VERSION=//p' "$FIXTURE/newspeak/$1/recipe"
+}
 grava_record() { # PACOTE FINGERPRINT
     record_pacote=$1
     record_fp=$2
     mkdir -p "$ROOT/var/lib/minitrue/records/$record_pacote"
     cat > "$ROOT/var/lib/minitrue/records/$record_pacote/meta" <<EOF
 NAME=$record_pacote
-VERSION=1
+VERSION=$(versao_fixture "$record_pacote")
 KIND=source
 FINGERPRINT=$record_fp
 ARTIFACT_HASH=$two64
@@ -220,9 +227,10 @@ grava_indice_cache() {
         printf '%s\n' 'CHANNEL_INDEX_FORMAT=4' 'RELEASE_ROOT=no'
         for pacote do
             case "$pacote" in fonte) indice_fp=$one64 ;; *) indice_fp=$zero64 ;; esac
-            printf '%s 1 x86_64 %s pool/%s-1-x86_64.tar.zst %s %s %s\n' \
-                "$pacote" "$indice_fp" "$pacote" "$cache_transport_sha" "$two64" \
-                "$producer_plan_sha"
+            indice_versao=$(versao_fixture "$pacote")
+            printf '%s %s x86_64 %s pool/%s-%s-x86_64.tar.zst %s %s %s\n' \
+                "$pacote" "$indice_versao" "$indice_fp" "$pacote" "$indice_versao" \
+                "$cache_transport_sha" "$two64" "$producer_plan_sha"
         done | sort
     } > "$CACHE/channels/oficial/index"
 }
@@ -234,11 +242,34 @@ printf '%s\n' 'licença realista do upstream' > \
     "$TMP/util-src/util-linux-9.9/README.licensing"
 tar -cJf "$TMP/arquivo-content-addressed" -C "$TMP/util-src" util-linux-9.9
 util_sha=$(sha256sum "$TMP/arquivo-content-addressed" | cut -d' ' -f1)
+# O FIRMWARE VIVO. O kernel do EFI embute blobs do tarball linux-firmware, o
+# mesmo que o linux-firmware-wifi materializa como fonte; o gate afirma que os
+# três pinos concordam (build-efi e as duas receitas) e que o tarball chegou
+# ao bundle. Sem isto na fixture, todo caso estrito com contexto vivo morria
+# no pino ausente antes de chegar ao que o caso queria provar.
+printf '%s\n' 'WHENCE realista do upstream' > \
+    "$TMP/fw-src/linux-firmware-20990101/WHENCE"
+tar -cJf "$TMP/firmware-real" -C "$TMP/fw-src" linux-firmware-20990101
+fw_sha=$(sha256sum "$TMP/firmware-real" | cut -d' ' -f1)
+cp "$TMP/firmware-real" "$ROOT/var/cache/minitrue/$fw_sha"
+for fw_pacote in linux-firmware-wifi linux-firmware-radeon; do
+    cat > "$FIXTURE/newspeak/$fw_pacote/recipe" <<EOF
+VERSION=20990101
+KIND=source
+LICENSE="linux-firmware (ver WHENCE; blobs proprietários redistribuíveis)"
+SRC="https://example.invalid/linux-firmware-\$VERSION.tar.xz"
+SHA256="$fw_sha"
+EOF
+done
+grava_record linux-firmware-wifi "$zero64"
 cat > "$FIXTURE/bootstrap/live/build-efi" <<EOF
 #!/bin/sh
 UTIL_LINUX_VERSION=9.9
 UTIL_LINUX_URL=https://example.invalid/util-linux-\${UTIL_LINUX_VERSION}.tar.xz
 UTIL_LINUX_SHA256=$util_sha
+LINUX_FIRMWARE_VERSION=20990101
+LINUX_FIRMWARE_URL=https://example.invalid/linux-firmware-\${LINUX_FIRMWARE_VERSION}.tar.xz
+LINUX_FIRMWARE_SHA256=$fw_sha
 EOF
 
 cat > "$TMP/bin/git" <<'EOF'
@@ -292,6 +323,7 @@ quer_extra=nao
 quer_fonte=nao
 quer_ponte=nao
 quer_sem_licenca=nao
+quer_firmware=nao
 for nome do
     case "\$nome" in
         app) quer_app=sim ;;
@@ -300,6 +332,7 @@ for nome do
         fonte) quer_fonte=sim ;;
         ponte) quer_ponte=sim ;;
         sem-licenca) quer_sem_licenca=sim ;;
+        linux-firmware-wifi) quer_firmware=sim ;;
     esac
 done
 [ "\$quer_app" = nao ] || printf 'app %s\n' "$zero64"
@@ -322,6 +355,7 @@ if [ "\$quer_fonte" = sim ]; then
 fi
 [ "\$quer_ponte" = nao ] || printf 'ponte %s\n' "$zero64"
 [ "\$quer_sem_licenca" = nao ] || printf 'sem-licenca %s\n' "$zero64"
+[ "\$quer_firmware" = nao ] || printf 'linux-firmware-wifi %s\n' "$zero64"
 EOF
 cp "$TMP/produtor/minitrue" "$TMP/produtor/minitrue-b"
 printf '%s\n' '# EXECUTOR_B' >> "$TMP/produtor/minitrue-b"
@@ -986,7 +1020,7 @@ else
     falhas=$((falhas + 1))
 fi
 
-grava_indice_cache fonte
+grava_indice_cache fonte linux-firmware-wifi
 sha_media=$(sha256sum "$TMP/media.iso" | cut -d' ' -f1)
 if roda --media "$TMP/media.iso" --output "$TMP/legado" --cache "$CACHE" \
     --minitrue-root "$ROOT" --live-kernel-config "$TMP/config-live" \
@@ -1188,6 +1222,41 @@ else
     echo '  FALHOU  materialização estrita do util-linux vivo'
     falhas=$((falhas + 1))
 fi
+if cmp -s "$TMP/firmware-real" "$TMP/strict-live-ok/upstream/$fw_sha" &&
+   awk -F '\t' -v hash="$fw_sha" '
+       $1 == "linux-firmware-live" && $2 == "20990101" && $3 == "LIVE" &&
+       $5 == hash &&
+       $6 == "https://example.invalid/linux-firmware-20990101.tar.xz" &&
+       $7 == "upstream/" hash && $8 == "insumo-live" { encontrados++ }
+       END { exit !(encontrados == 1) }
+   ' "$TMP/strict-live-ok/INVENTARIO"; then
+    echo '  ok      firmware embutido no EFI entra uma vez, pelo tarball do wifi'
+else
+    echo '  FALHOU  linha do firmware vivo ausente ou errada no inventário'
+    falhas=$((falhas + 1))
+fi
+
+# Os TRÊS pinos do firmware precisam concordar: uma receita que suba de versão
+# sem o build-efi acompanhar faria o bundle declarar, como fonte do blob
+# embutido, um tarball que não é o que o kernel embutiu.
+cp "$FIXTURE/newspeak/linux-firmware-radeon/recipe" "$TMP/radeon-recipe.orig"
+sed -i "s/^SHA256=.*/SHA256=\"$one64\"/" \
+    "$FIXTURE/newspeak/linux-firmware-radeon/recipe"
+if roda --media "$TMP/media.iso" --output "$TMP/strict-fw-diverge" \
+    --cache "$CACHE" --minitrue-root "$ROOT" \
+    --live-kernel-config "$TMP/config-live" \
+    --live-util-linux-tar "$TMP/arquivo-content-addressed" --strict \
+    > "$TMP/strict-fw-diverge.log" 2>&1; then
+    echo '  FALHOU  pino do firmware divergente entre receita e build-efi aceito'
+    falhas=$((falhas + 1))
+elif grep -q 'pino do linux-firmware diverge entre build-efi e newspeak/linux-firmware-radeon/recipe' \
+    "$TMP/strict-fw-diverge.log"; then
+    echo '  ok      pinos do firmware vivo concordam entre build-efi e receitas'
+else
+    echo '  FALHOU  divergência do pino do firmware sem diagnóstico útil'
+    falhas=$((falhas + 1))
+fi
+cp "$TMP/radeon-recipe.orig" "$FIXTURE/newspeak/linux-firmware-radeon/recipe"
 
 # O canal público pode ser maior que o cache offline da mídia. O bundle preso
 # ao índice público deriva o inventário do próprio artefato, e não pode omitir

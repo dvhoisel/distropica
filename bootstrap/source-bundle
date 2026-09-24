@@ -438,6 +438,37 @@ carrega_pinos_util_linux() {
     esac
 }
 
+# Os pinos do linux-firmware, lidos com a MESMA disciplina dos do util-linux.
+# A URL do build-efi é escrita com ${LINUX_FIRMWARE_VERSION}, e até a 0.16 ela
+# ia assim, com a variável literal, para a linha linux-firmware-live do
+# INVENTARIO publicado: quem abrisse o arquivo para saber de onde veio o
+# firmware embutido no kernel achava um endereço que não existe.
+LINUX_FIRMWARE_VERSION_PIN=
+LINUX_FIRMWARE_URL_PIN=
+LINUX_FIRMWARE_SHA256_PIN=
+carrega_pinos_firmware() {
+    [ -f "$BUILD_EFI" ] || return 1
+    LINUX_FIRMWARE_VERSION_PIN=$(pin_build_efi LINUX_FIRMWARE_VERSION) || return 1
+    firmware_url_raw=$(pin_build_efi LINUX_FIRMWARE_URL) || return 1
+    LINUX_FIRMWARE_SHA256_PIN=$(pin_build_efi LINUX_FIRMWARE_SHA256) || return 1
+    case "$LINUX_FIRMWARE_VERSION_PIN" in
+        *[!A-Za-z0-9._+-]*|'') return 1 ;;
+    esac
+    case "$LINUX_FIRMWARE_SHA256_PIN" in
+        *[!0-9a-f]*|'') return 1 ;;
+    esac
+    [ "${#LINUX_FIRMWARE_SHA256_PIN}" -eq 64 ] || return 1
+    LINUX_FIRMWARE_URL_PIN=$(printf '%s\n' "$firmware_url_raw" |
+        sed "s/\${LINUX_FIRMWARE_VERSION}/$LINUX_FIRMWARE_VERSION_PIN/g")
+    case "$LINUX_FIRMWARE_URL_PIN" in
+        https://*) ;;
+        *) return 1 ;;
+    esac
+    case "$LINUX_FIRMWARE_URL_PIN" in
+        *'$'*|*' '*|*"	"*) return 1 ;;
+    esac
+}
+
 LIVE_CONTEXT=no
 if [ "$LEGACY_MEDIA" = yes ] || [ -n "$LIVE_CONFIG" ]; then
     LIVE_CONTEXT=yes
@@ -1697,16 +1728,14 @@ fi
 # que declaram o pino concordam — build-efi e as duas receitas — e o tarball
 # está no bundle. Se um dia o perfil sair sem o wifi, esta guarda é quem vai
 # gritar, e a solução será materializar por aqui, pela via do util-linux.
-LINUX_FIRMWARE_SHA256_PIN=$(pin_build_efi LINUX_FIRMWARE_SHA256) || LINUX_FIRMWARE_SHA256_PIN=
-LINUX_FIRMWARE_VERSION_PIN=$(pin_build_efi LINUX_FIRMWARE_VERSION) || LINUX_FIRMWARE_VERSION_PIN=
-LINUX_FIRMWARE_URL_PIN=$(pin_build_efi LINUX_FIRMWARE_URL) || LINUX_FIRMWARE_URL_PIN=
 if [ "$LIVE_CONTEXT" = yes ]; then
-    if [ -z "$LINUX_FIRMWARE_SHA256_PIN" ]; then
+    if ! carrega_pinos_firmware; then
         if [ "$STRICT" = yes ]; then
-            echo "erro: pino LINUX_FIRMWARE_SHA256 ausente/duplicado em $BUILD_EFI" >&2
+            echo "erro: pinos LINUX_FIRMWARE_VERSION/URL/SHA256 ausentes, duplicados" >&2
+            echo "      ou malformados em $BUILD_EFI" >&2
             exit 1
         fi
-        echo "aviso: build-efi sem pino de linux-firmware; sem linha viva no inventário" >&2
+        echo "aviso: build-efi sem pinos válidos de linux-firmware; sem linha viva no inventário" >&2
     else
         for fw_rec in newspeak/linux-firmware-wifi/recipe newspeak/linux-firmware-radeon/recipe; do
             fw_rsha=$(awk -F'"' '/^SHA256=/{print $2}' "$REPO/$fw_rec")
