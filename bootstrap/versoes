@@ -35,6 +35,33 @@
 # A RESSALVA MORA FORA DA RECEITA pelo mesmo motivo do `fontes-correspondentes`:
 # o FINGERPRINT cobre o texto do recipe, e acrescentar um campo lá recompilaria
 # o pacote e tudo o que depende dele sem que uma linha de código mudasse.
+#
+# A RESSALVA VENCE, e isso é o conserto de 2026-09-24. Até ali bastavam motivo e
+# data, e o pino valia para sempre. Três caíram em silêncio: o do WebKitGTK
+# justificava a 2.52 dizendo que a série nova era de desenvolvimento, e a 2.54.0
+# estável saiu; o do libdisplay-info se apoiava no Weston, que deixou a árvore
+# na 0.13; o do libxslt dependia de uma libxml2 que o próprio conferidor
+# escondia. Um pino agora declara o que o sustenta, em linhas que a ferramenta
+# lê — e ele só vale enquanto tudo o que declara continua verdade:
+#
+#   CONTRA=X        o estável mais novo do upstream quando o pino foi escrito.
+#                   O upstream publicou outra coisa desde então: reavaliar.
+#   PREMISSA=P V    a receita P desta árvore está na versão V. Serve ao pino
+#                   que existe por causa de outro pacote (o GIMP que recusa a
+#                   gexiv2 nova, o Inkscape preso ao gtkmm-3). P saiu da árvore
+#                   ou mudou de versão: reavaliar. Pode repetir.
+#   SERIE=S         o pino segura uma SÉRIE, não uma versão: a receita tem de
+#                   estar no topo estável de S, e só a mudança de série é que
+#                   fica ressalvada. É o GTK 3 ao lado do GTK 4.
+#
+# Um pino precisa de CONTRA ou de PREMISSA: sem gatilho, nada o faz vencer, e
+# é esse o defeito que se está consertando.
+#
+# NENHUMA SÉRIE FICA ESCONDIDA POR DEFAULT. O tratador do GNOME confinava toda
+# receita à série que aparece no caminho da URL — /sources/libxml2/2.13/ —, e
+# isso fazia a série estável seguinte nunca aparecer: a libxml2 ficou na 2.13
+# com a 2.15 publicada, a glib na 2.88 com a 2.90, o Epiphany no 49 com o 51, e
+# todas saíam "atual". Confinamento é exceção, e exceção se declara (SERIE=).
 set -u
 umask 022
 LC_ALL=C
@@ -45,6 +72,10 @@ TSV=
 SO_PROBLEMAS=no
 CACHE=${VERSOES_CACHE:-${TMPDIR:-/tmp}/distropica-versoes-cache}
 ESPERA=25
+# Minutos que uma resposta do upstream vale no cache. O cache não tinha prazo, e
+# este script é portão de publicação: uma consulta de uma semana atrás que
+# respondesse "atual" deixaria passar a release de ontem.
+VALIDADE=${VERSOES_VALIDADE_MIN:-360}
 
 usage() {
     cat <<'EOF'
@@ -58,7 +89,12 @@ Sai 0 quando tudo está atual ou pinado com motivo; 1 quando há atrasado sem
 ressalva; 2 quando algo não pôde ser conferido. O maior vence.
 
 O cache de respostas vive em $TMPDIR/distropica-versoes-cache e evita repetir
-consulta na mesma sessão. Apague-o para forçar releitura.
+consulta na mesma sessão. Cada resposta vale VERSOES_VALIDADE_MIN minutos
+(default: 360); apague o diretório para forçar releitura antes disso.
+
+Uma ressalva newspeak/<pkg>/versao-pinada precisa de motivo, data ISO e ao
+menos um gatilho de vencimento: CONTRA=<versão>, PREMISSA=<pacote> <versão>
+(repetível) e, para quem segura uma série paralela, SERIE=<série>.
 EOF
 }
 
@@ -158,16 +194,60 @@ fontes_conferiveis() {  # pacote versao "fontes"
     done
 }
 
+# Os valores de uma chave do pino (CONTRA, PREMISSA, SERIE), um por linha.
+# Linha comentada não conta: o texto explicativo pode citar "CONTRA=" à vontade.
+pino_valor() {  # arquivo chave
+    sed -n "s/^$2=[[:space:]]*//p" "$1" | sed 's/[[:space:]]*$//'
+}
+
 # A ressalva da P7 é governança auditável, não apenas a existência de um
-# arquivo-sentinela. Exija motivo e uma data ISO em qualquer linha do arquivo;
-# assim um pino esquecido não permanece verde indefinidamente.
+# arquivo-sentinela. Exija motivo, uma data ISO e um GATILHO de vencimento;
+# sem o gatilho, um pino esquecido permanece verde indefinidamente — que foi
+# exatamente o que aconteceu com o do WebKitGTK.
 ressalva_pinada() {  # arquivo
     [ -f "$1" ] || return 1
-    rp_motivo=$(grep -v '^#' "$1" | grep -v '^[[:space:]]*$' | head -1)
+    rp_motivo=$(grep -v '^#' "$1" | grep -v '^[[:space:]]*$' |
+        grep -Ev '^(CONTRA|PREMISSA|SERIE)=' | head -1)
     [ -n "$rp_motivo" ] || return 1
     grep -Eq '(^|[^0-9])[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])([^0-9]|$)' "$1" ||
         return 1
+    [ -n "$(pino_valor "$1" CONTRA)$(pino_valor "$1" PREMISSA)" ] || return 1
     printf '%s\n' "$rp_motivo"
+}
+
+# Diz POR QUE um pino venceu, ou nada se ele ainda vale. O chamador já sabe que
+# o upstream tem versão mais nova que a pinada; aqui se confere se o que
+# justificava segurá-la continua verdade.
+pino_vencido() {  # arquivo nova
+    pv_contra=$(pino_valor "$1" CONTRA)
+    if [ -n "$pv_contra" ] && [ "$pv_contra" != "$2" ]; then
+        printf 'pino vencido: escrito contra %s, o upstream agora publica %s\n' \
+            "$pv_contra" "$2"
+        return 0
+    fi
+    pino_valor "$1" PREMISSA | while read -r pv_pacote pv_versao; do
+        [ -n "$pv_pacote" ] || continue
+        pv_receita=$REPO/newspeak/$pv_pacote/recipe
+        if [ ! -f "$pv_receita" ]; then
+            printf 'pino vencido: a premissa %s %s saiu da árvore\n' \
+                "$pv_pacote" "$pv_versao"
+            return 0
+        fi
+        pv_atual=$(grep -m1 '^VERSION=' "$pv_receita" | cut -d= -f2- | tr -d '"')
+        # A versão da premissa casa por PREFIXO de componentes: "gimp 3.2"
+        # vale para 3.2.4 e 3.2.6 — o GTK 3 é premissa da série inteira do
+        # GIMP 3.2 —, e "gimp 3.2.4" só para ela. Quem escreve o pino escolhe
+        # a granularidade do que o sustenta.
+        case "$pv_atual" in
+            "$pv_versao"|"$pv_versao".*) pv_casa=sim ;;
+            *) pv_casa=nao ;;
+        esac
+        if [ "$pv_casa" = nao ]; then
+            printf 'pino vencido: a premissa era %s %s e a árvore tem %s\n' \
+                "$pv_pacote" "$pv_versao" "$pv_atual"
+            return 0
+        fi
+    done
 }
 
 # Busca com cache. A chave é o sha256 da URL — nomes de arquivo derivados da URL
@@ -175,7 +255,8 @@ ressalva_pinada() {  # arquivo
 busca() {
     url=$1
     chave=$(printf '%s' "$url" | sha256sum | cut -d' ' -f1)
-    if [ -f "$CACHE/$chave" ]; then
+    if [ -f "$CACHE/$chave" ] &&
+       [ -n "$(find "$CACHE/$chave" -mmin -"$VALIDADE" 2>/dev/null)" ]; then
         cat "$CACHE/$chave"
         return 0
     fi
@@ -347,15 +428,14 @@ serie_da_url() {  # url
     printf '%s' "$1" | sed -n 's|.*/sources/[^/]*/\([0-9][0-9.]*\)/.*|\1|p'
 }
 
-de_gnome() {    # url, versao pinada, todas_as_series [sim|nao]
+de_gnome() {    # url, versao pinada, [série a que se restringir]
     pkg=$(printf '%s' "$1" | sed -n 's|.*/sources/\([^/]*\)/.*|\1|p')
     [ -n "$pkg" ] || return 1
-    serie=$(serie_da_url "$1")
-    # Uma ressalva `versao-pinada` só tem valor se for comparada com o topo
-    # estável real. gexiv2 0.14.7, por exemplo, fica em /0.14/ porque o GIMP
-    # recusa >=0.15, enquanto o upstream já está em 0.16.2. Sem abrir as séries
-    # nesse caso, o gate chamava o pino conhecido de "atual".
-    [ "${3:-nao}" = sim ] && serie=
+    # TODAS AS SÉRIES por default. A série do caminho da URL (/2.13/) diz onde o
+    # tarball pinado mora, não até onde a árvore pode ir; confinar a consulta a
+    # ela escondeu da P7 uma série estável inteira em cada pacote do GNOME. Só
+    # quem declara SERIE= no pino é consultado dentro da série.
+    serie=${3:-}
     busca "https://download.gnome.org/sources/$pkg/cache.json" |
         tr ',' '\n' | grep -oE '"[0-9]+(\.[0-9]+)*"' | tr -d '"' |
         awk -v serie="$serie" \
@@ -411,7 +491,7 @@ de_cpan() {  # url, versao pinada
         filtra_candidatos "$2" sim | maior
 }
 
-de_listagem() {  # url
+de_listagem() {  # url, [versao pinada], [série], [par]
     dir=${1%/*}/
     base=$(basename "$1")
     # o nome do pacote é tudo antes do primeiro '-<dígito>'
@@ -420,6 +500,9 @@ de_listagem() {  # url
     busca "$dir" |
         grep -oE "$nome-[0-9][0-9A-Za-z.]*\.(tar\.[a-z0-9]+|tgz|zip)" |
         sed "s/^$nome-//; s/\.\(tar\..*\|tgz\|zip\)$//" |
+        awk -v serie="${3:-}" \
+            'serie == "" || $0 == serie || index($0, serie ".") == 1' |
+        if [ "${4:-}" = par ]; then filtra_candidatos "$2" sim; else cat; fi |
         maior
 }
 
@@ -535,13 +618,49 @@ de_mozilla_firefox() {
         head -1
 }
 
-upstream_de() {  # url, versao pinada
+# MINOR ÍMPAR = DESENVOLVIMENTO também fora do GNOME, em três hosts cujos
+# projetos o declaram: o WebKitGTK (2.53.x é a série que caminha para a 2.54),
+# o GStreamer (1.29.x para a 1.30) e os do cairographics — cairo, cairomm,
+# pixman —, que só publicam estável em minor par. Antes disto o WebKitGTK e o
+# GStreamer precisavam de um pino cada para não serem mandados para a série de
+# desenvolvimento, e os três gst-plugins-* irmãos, sem pino, apareciam
+# "atrasados" para a 1.29.2. Regra de família resolve a família; pino por
+# pacote resolvia um de cada vez e esquecia os irmãos.
+familia_par() {  # url
+    case "$1" in
+        *webkitgtk.org/releases/*|*gstreamer.freedesktop.org/src/*|\
+        *cairographics.org/releases/*) return 0 ;;
+    esac
+    return 1
+}
+
+upstream_de() {  # url, versao pinada, [série a que se restringir]
+    # Só três tratadores sabem restringir a consulta a uma série. Um pino com
+    # SERIE= sobre um upstream que outro tratador atende sai "não conferido" —
+    # responder com o topo global fingiria uma conferência que não houve.
+    if [ -n "${3:-}" ]; then
+        case "$1" in
+            *download.gnome.org/*) de_gnome "$1" "$2" "$3" ;;
+            *github.com/*|*gitlab.*|*salsa.debian.org/*|*mozilla.*|\
+            *sourceware.org/elfutils/*|*pypi.org/*|*files.pythonhosted.org/*|\
+            *kernel.org/pub/linux/kernel/*|*dl.google.com/*|*ziglang.org/*|\
+            *static.rust-lang.org/*|*sourceforge.net/*|*codeberg.org/*|\
+            *sqlite.org/*|*git.sr.ht/*|*git.zx2c4.com/*|*curl.se/ca/*|\
+            *busybox.net/*|*cpan.org/*) return 1 ;;
+            *) if familia_par "$1"; then
+                   de_listagem "$1" "$2" "$3" par
+               else
+                   de_listagem "$1" "$2" "$3"
+               fi ;;
+        esac
+        return
+    fi
     case "$1" in
         *mozilla.net/pub/firefox/releases/*|*mozilla.org/pub/firefox/releases/*)
                                       de_mozilla_firefox ;;
         *sourceware.org/elfutils/ftp/*) de_elfutils ;;
         *github.com/*)               de_github "$1" "$2" ;;
-        *download.gnome.org/*)       de_gnome "$1" "$2" "${3:-nao}" ;;
+        *download.gnome.org/*)       de_gnome "$1" "$2" ;;
         *pypi.org/*|*files.pythonhosted.org/*) de_pypi "$1" ;;
         *gitlab.*|*salsa.debian.org/*) de_gitlab "$1" "$2" ;;
         *kernel.org/*)               de_kernel_org "$1" ;;
@@ -556,7 +675,11 @@ upstream_de() {  # url, versao pinada
         *curl.se/ca/*)               de_curl_ca ;;
         *busybox.net/downloads/binaries/*) de_busybox_bin ;;
         *cpan.org/src/*)             de_cpan "$1" "$2" ;;
-        *)                           de_listagem "$1" ;;
+        *) if familia_par "$1"; then
+               de_listagem "$1" "$2" "" par
+           else
+               de_listagem "$1"
+           fi ;;
     esac
 }
 
@@ -595,9 +718,7 @@ for receita in "$REPO"/newspeak/*/recipe; do
             naoconferidos="$naoconferidos $rotulo"
         else
             : > "$FALHAS"
-            todas_series=nao
-            [ -f "$decl" ] && todas_series=sim
-            nova=$(upstream_de "$url" "$versao" "$todas_series" 2>/dev/null | head -1)
+            nova=$(upstream_de "$url" "$versao" 2>/dev/null | head -1)
             if [ -z "$nova" ]; then
                 # A falha só vale quando o handler NÃO produziu resposta. O
                 # `de_github` tenta releases/latest e cai nas tags: em projeto
@@ -613,18 +734,47 @@ for receita in "$REPO"/newspeak/*/recipe; do
             elif [ "$nova" = "$versao" ]; then
                 veredito=atual
                 atuais=$((atuais + 1))
+                # Não reprova: só aponta o arquivo que já não segura nada.
+                [ -f "$decl" ] && motivo='ressalva sobrando: o pinado já é o mais novo'
             elif [ "$(printf '%s\n%s\n' "$versao" "$nova" | sort -V | tail -1)" = "$versao" ]; then
                 # Pinado maior que o índice: índice incompleto ou nome inferido
                 # errado. Não é legítimo promover isso a "atual".
                 veredito='?'
                 naoconferidos="$naoconferidos $rotulo"
             elif motivo=$(ressalva_pinada "$decl"); then
-                veredito=pinado
-                pinados="$pinados $rotulo"
+                # A ressalva está bem FORMADA. Falta saber se ainda vale: o
+                # upstream pode ter andado, a premissa pode ter saído da
+                # árvore, e quem segura uma série ainda tem de estar no topo
+                # dela.
+                serie=$(pino_valor "$decl" SERIE | head -1)
+                vencido=$(pino_vencido "$decl" "$nova")
+                if [ -n "$vencido" ]; then
+                    veredito=atrasado
+                    motivo=$vencido
+                    atrasados="$atrasados $rotulo"
+                elif [ -n "$serie" ]; then
+                    nova_serie=$(upstream_de "$url" "$versao" "$serie" 2>/dev/null | head -1)
+                    if [ -z "$nova_serie" ]; then
+                        veredito='?'
+                        motivo="SERIE=$serie: o tratador deste upstream não sabe restringir série"
+                        naoconferidos="$naoconferidos $rotulo"
+                    elif [ "$nova_serie" != "$versao" ]; then
+                        veredito=atrasado
+                        motivo="atrás dentro da própria série $serie (fora dela: $nova)"
+                        nova=$nova_serie
+                        atrasados="$atrasados $rotulo"
+                    else
+                        veredito=pinado
+                        pinados="$pinados $rotulo"
+                    fi
+                else
+                    veredito=pinado
+                    pinados="$pinados $rotulo"
+                fi
             else
                 veredito=atrasado
                 if [ -f "$decl" ]; then
-                    motivo='ressalva sem motivo ou data ISO válida'
+                    motivo='ressalva sem motivo, data ISO ou gatilho (CONTRA=/PREMISSA=)'
                 fi
                 atrasados="$atrasados $rotulo"
             fi

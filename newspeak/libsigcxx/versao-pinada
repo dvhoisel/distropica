@@ -1,0 +1,20 @@
+# Série paralela, e não atraso: a receita segue o topo estável de UMA série
+# que convive com outra mais nova no mesmo upstream (SPEC-0011 §7.1, P7).
+#
+# A família mm tem uma série de API por geração do GTK: o gtkmm-3 é construído
+# sobre glibmm-2.4, cairomm-1.0, pangomm-1.4, atkmm-1.6 e sigc++-2.0, e o gtkmm-4
+# sobre as séries seguintes, que não são intercambiáveis.
+#
+# Quem a exige, lido no tarball pinado: o CMake do Inkscape 1.4.4
+# (CMakeScripts/DefineDependsandFlags.cmake) pede glibmm-2.4>=2.58, gtkmm-3.0>=3.24
+# e sigc++-2.0. O Inkscape é o único consumidor da família nesta árvore; quando ele
+# for para o GTK 4, estas receitas mudam de série juntas.
+#
+# FORMATO: a primeira linha não-comentário e não-chave é o motivo que o
+# relatório mostra. As chaves são lidas pelo bootstrap/versoes: SERIE= diz
+# em que série a receita tem de estar no topo; PREMISSA= diz quem a exige,
+# e o pino vence sozinho quando essa premissa deixa de valer.
+# Verificado em 2026-09-24.
+sigc++-2.0 (série 2.12) da API do gtkmm-3; a 3.x é a API sigc++-3.0
+SERIE=2.12
+PREMISSA=inkscape 1.4

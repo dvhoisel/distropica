@@ -9,3 +9,6 @@
 # de segurança publicadas até março de 2025. Rever quando a base puder migrar
 # para uma série libxml2 >= 2.15 sem quebrar ABI.
 libxslt 1.1.44+ exige libxml2 2.15.1; 1.1.43 é a última compatível com a libxml2 2.13.9 da base
+# GATILHOS (2026-09-24). A razão é a libxml2 da árvore: subiu, o pino cai.
+PREMISSA=libxml2 2.13.9
+CONTRA=1.1.45

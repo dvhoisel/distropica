@@ -11,7 +11,7 @@
 set -u
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 TMP=${TMPDIR:-/tmp}/distropica-teste-versoes.$$
-trap 'rm -f "$TMP" "$TMP.pin-ok" "$TMP.pin-sem-data"' EXIT
+trap 'rm -rf "$TMP" "$TMP.pin-ok" "$TMP.pin-sem-data" "$TMP.pin-sem-gatilho" "$TMP.arvore"' EXIT
 
 sed -n '/^filtra_candidatos()/,/^}/p' "$REPO/bootstrap/versoes"  > "$TMP"
 sed -n '/^maior()/,/^}/p'             "$REPO/bootstrap/versoes" >> "$TMP"
@@ -24,7 +24,11 @@ sed -n '/^serie_da_url()/,/^}/p'         "$REPO/bootstrap/versoes" >> "$TMP"
 sed -n '/^de_gnome()/,/^}/p'             "$REPO/bootstrap/versoes" >> "$TMP"
 sed -n '/^de_elfutils()/,/^}/p'           "$REPO/bootstrap/versoes" >> "$TMP"
 sed -n '/^de_mozilla_firefox()/,/^}/p'    "$REPO/bootstrap/versoes" >> "$TMP"
+sed -n '/^pino_valor()/,/^}/p'             "$REPO/bootstrap/versoes" >> "$TMP"
 sed -n '/^ressalva_pinada()/,/^}/p'        "$REPO/bootstrap/versoes" >> "$TMP"
+sed -n '/^pino_vencido()/,/^}/p'           "$REPO/bootstrap/versoes" >> "$TMP"
+sed -n '/^de_listagem()/,/^}/p'            "$REPO/bootstrap/versoes" >> "$TMP"
+sed -n '/^familia_par()/,/^}/p'            "$REPO/bootstrap/versoes" >> "$TMP"
 . "$TMP"
 
 falhas=0
@@ -75,17 +79,80 @@ teste firmware   20260622 nao 20260622 20260622 20260519 20260405
 # um pacote que estava atual.
 teste tmux       3.7b     nao 3.7b     3.7 3.7b 3.7a 3.6 3.6b 3.5a
 
-# Um pino só fecha a P7 com motivo e data; um arquivo-sentinela sem data não
-# pode manter o gate verde para sempre.
-printf '%s\n' '# Verificado em 2026-08-11.' 'motivo factual' > "$TMP.pin-ok"
-printf '%s\n' 'motivo sem data' > "$TMP.pin-sem-data"
+# Um pino só fecha a P7 com motivo, data e um GATILHO de vencimento. O
+# arquivo-sentinela sem data não pode manter o gate verde para sempre, e o
+# datado sem gatilho também não: foi assim que o pino do WebKitGTK continuou
+# verde depois de a 2.54.0 estável sair. As linhas de chave não contam como
+# motivo, mesmo vindo primeiro.
+printf '%s\n' '# Verificado em 2026-08-11.' 'CONTRA=5.4.1' 'motivo factual' > "$TMP.pin-ok"
+printf '%s\n' 'motivo sem data' 'CONTRA=5.4.1' > "$TMP.pin-sem-data"
+printf '%s\n' '# 2026-08-11' 'motivo sem gatilho' > "$TMP.pin-sem-gatilho"
 got=$(ressalva_pinada "$TMP.pin-ok")
-if [ "$got" = 'motivo factual' ] && ! ressalva_pinada "$TMP.pin-sem-data" >/dev/null; then
-    echo '  ok      ressalva datada           -> motivo/data exigidos'
+if [ "$got" = 'motivo factual' ] &&
+   ! ressalva_pinada "$TMP.pin-sem-data" >/dev/null &&
+   ! ressalva_pinada "$TMP.pin-sem-gatilho" >/dev/null; then
+    echo '  ok      ressalva datada           -> motivo/data/gatilho exigidos'
 else
     echo '  FALHOU  ressalva datada           -> aceitação incorreta'
     falhas=$((falhas + 1))
 fi
+
+# O vencimento, contra uma árvore de mentira: o pino só vale enquanto o
+# upstream publica o que ele declarou em CONTRA e cada PREMISSA casa com a
+# receita da árvore — por prefixo de componentes, para que "gimp 3.2" valha
+# para a série inteira. O caso real que motivou: o libdisplay-info se apoiava
+# no Weston, que saiu da árvore na 0.13.
+vence() {  # nome esperado(vale|vence) nova linhas-do-pino...
+    v_nome=$1; v_esperado=$2; v_nova=$3; shift 3
+    printf '%s\n' '# 2026-09-24' 'motivo' "$@" > "$TMP.pin-ok"
+    v_motivo=$(REPO=$TMP.arvore pino_vencido "$TMP.pin-ok" "$v_nova")
+    if [ -z "$v_motivo" ]; then v_got=vale; else v_got=vence; fi
+    if [ "$v_got" = "$v_esperado" ]; then
+        printf '  ok      pino %-20s -> %s %s\n' "$v_nome" "$v_got" "$v_motivo"
+    else
+        printf '  FALHOU  pino %-20s -> %s (esperava %s)\n' "$v_nome" "$v_got" "$v_esperado"
+        falhas=$((falhas + 1))
+    fi
+}
+mkdir -p "$TMP.arvore/newspeak/gimp" "$TMP.arvore/newspeak/wlroots"
+printf 'VERSION=3.2.6\n' > "$TMP.arvore/newspeak/gimp/recipe"
+printf 'VERSION=0.20.2\n' > "$TMP.arvore/newspeak/wlroots/recipe"
+vence contra-igual       vale  5.4.1  'CONTRA=5.4.1'
+vence contra-andou       vence 5.4.2  'CONTRA=5.4.1'
+vence premissa-serie     vale  0.16.2 'PREMISSA=gimp 3.2'
+vence premissa-exata     vence 0.16.2 'PREMISSA=gimp 3.2.4'
+vence premissa-sumiu     vence 0.4.0  'PREMISSA=weston 16.0.0'
+vence premissa-dupla     vence 0.4.0  'PREMISSA=wlroots 0.20' 'PREMISSA=weston 16'
+vence tudo-vale          vale  0.4.0  'CONTRA=0.4.0' 'PREMISSA=wlroots 0.20'
+
+# MINOR ÍMPAR como família fora do GNOME. O WebKitGTK 2.53.90 é
+# desenvolvimento e a 2.54.0 é a estável que o pino antigo escondia; os
+# gst-plugins-* não tinham pino e eram mandados para a 1.29.2. A regra mora
+# no host, e o genérico sem ela continua pegando o maior.
+busca() {
+    case "$1" in
+        *webkitgtk.org*) printf '%s\n' \
+            '<a href="webkitgtk-2.52.5.tar.xz">' '<a href="webkitgtk-2.53.90.tar.xz">' \
+            '<a href="webkitgtk-2.54.0.tar.xz">' ;;
+        *gstreamer.freedesktop.org*) printf '%s\n' \
+            '<a href="gst-plugins-good-1.28.6.tar.xz">' \
+            '<a href="gst-plugins-good-1.29.2.tar.xz">' ;;
+        *) printf '%s\n' '<a href="foo-1.28.6.tar.xz">' '<a href="foo-1.29.2.tar.xz">' ;;
+    esac
+}
+par() {  # nome url pin esperado
+    if familia_par "$2"; then p_got=$(de_listagem "$2" "$3" "" par)
+    else p_got=$(de_listagem "$2"); fi
+    if [ "$p_got" = "$4" ]; then
+        printf '  ok      família %-18s -> %s\n' "$1" "$p_got"
+    else
+        printf '  FALHOU  família %-18s -> %s (esperava %s)\n' "$1" "${p_got:-vazio}" "$4"
+        falhas=$((falhas + 1))
+    fi
+}
+par webkitgtk  https://webkitgtk.org/releases/webkitgtk-2.52.5.tar.xz 2.52.5 2.54.0
+par gst-good   https://gstreamer.freedesktop.org/src/gst-plugins-good/gst-plugins-good-1.28.6.tar.xz 1.28.6 1.28.6
+par generico   https://example.org/pub/foo-1.28.6.tar.xz 1.28.6 1.29.2
 
 # ---------------------------------------------------------------------------
 # Receitas compostas. O gate histórico lia só a primeira URL e por isso viu o
@@ -207,22 +274,34 @@ else
     falhas=$((falhas + 1))
 fi
 
-# Uma receita de série paralela (GTK 3, por exemplo) fica confinada à série da
-# URL. Uma receita com `versao-pinada`, porém, precisa mostrar o topo global que
-# justifica a ressalva: gexiv2 0.14.7 é mantido porque o GIMP recusa 0.16.2.
+# O default é o topo GLOBAL, e a série só restringe quando pedida (o SERIE= de
+# um pino, que é como o GTK 3 se declara ao lado do GTK 4). Até 2026-09-24 era
+# o contrário: toda receita do GNOME ficava confinada à série do caminho da
+# URL, e a libxml2 saía "atual" na 2.13.9 com a 2.14 estável publicada.
 busca() {
     printf '%s\n' '{"gexiv2": ["0.14", "0.14.7", "0.16", "0.16.2"]}'
 }
 got_serie=$(de_gnome \
     'https://download.gnome.org/sources/gexiv2/0.14/gexiv2-0.14.7.tar.xz' \
-    0.14.7 nao)
-got_pin=$(de_gnome \
+    0.14.7 0.14)
+got_global=$(de_gnome \
     'https://download.gnome.org/sources/gexiv2/0.14/gexiv2-0.14.7.tar.xz' \
-    0.14.7 sim)
-if [ "$got_serie" = 0.14.7 ] && [ "$got_pin" = 0.16.2 ]; then
-    echo '  ok      gnome pino global          -> 0.14.7/0.16.2'
+    0.14.7)
+if [ "$got_serie" = 0.14.7 ] && [ "$got_global" = 0.16.2 ]; then
+    echo '  ok      gnome série × global       -> 0.14.7/0.16.2'
 else
-    echo "  FALHOU  gnome pino global          -> ${got_serie:-vazio}/${got_pin:-vazio} (esperava 0.14.7/0.16.2)"
+    echo "  FALHOU  gnome série × global       -> ${got_serie:-vazio}/${got_global:-vazio} (esperava 0.14.7/0.16.2)"
+    falhas=$((falhas + 1))
+fi
+busca() {
+    printf '%s\n' '{"libxml2": ["2.13", "2.13.9", "2.14", "2.14.6", "2.15", "2.15.1"]}'
+}
+got=$(de_gnome \
+    'https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.9.tar.xz' 2.13.9)
+if [ "$got" = 2.15.1 ]; then
+    echo '  ok      gnome série seguinte       -> 2.15.1'
+else
+    echo "  FALHOU  gnome série seguinte       -> ${got:-vazio} (esperava 2.15.1)"
     falhas=$((falhas + 1))
 fi
 

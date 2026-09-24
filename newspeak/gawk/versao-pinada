@@ -18,3 +18,7 @@
 # FORMATO: a primeira linha não-comentário é o motivo que o relatório mostra.
 # Verificado em 2026-08-11.
 5.4.1 regride e quebra a compilacao do gcc (SPEC-0005); revisar a cada 5.4.x
+# GATILHO (2026-09-24): o pino vence quando o upstream publicar outra coisa
+# que não a 5.4.1 — é o "revisar a cada 5.4.x" deste arquivo, agora lido pela
+# ferramenta em vez de dependente de alguém lembrar.
+CONTRA=5.4.1

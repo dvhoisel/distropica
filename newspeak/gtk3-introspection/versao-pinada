@@ -1,0 +1,20 @@
+# Série paralela, e não atraso: a receita segue o topo estável de UMA série
+# que convive com outra mais nova no mesmo upstream (SPEC-0011 §7.1, P7).
+#
+# O GTK 3 e o GTK 4 saem do mesmo módulo `gtk` do GNOME, e nesta árvore são
+# receitas distintas. Esta é a série 3.24, mantida pelo upstream em paralelo.
+#
+# Quem a exige, lido nos tarballs pinados: o meson.build do GIMP 3.2.4 pede
+# dependency('gtk+-3.0', version: '>=3.24.0'), e o Inkscape 1.4.4 pede
+# gtkmm-3.0>=3.24, que é construído sobre o GTK 3. Quando os dois saírem do
+# GTK 3, esta receita sai da árvore — não sobe para a 4.
+#
+# FORMATO: a primeira linha não-comentário e não-chave é o motivo que o
+# relatório mostra. As chaves são lidas pelo bootstrap/versoes: SERIE= diz
+# em que série a receita tem de estar no topo; PREMISSA= diz quem a exige,
+# e o pino vence sozinho quando essa premissa deixa de valer.
+# Verificado em 2026-09-24.
+série 3.24 paralela ao GTK 4; mesma fonte e mesmos consumidores do gtk3
+SERIE=3.24
+PREMISSA=gimp 3.2
+PREMISSA=inkscape 1.4
