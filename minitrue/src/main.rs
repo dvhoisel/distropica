@@ -154,7 +154,7 @@ const USO_CORPO: &str = "\
                         coteja a pública antes de assinar, escreve e confere
                         <arquivo>.minisig
 
-chegam no Marco 0.2: rectify --sync, rollback e unperson.";
+chegam no Marco 0.2: rollback e unperson.";
 
 fn imprime_uso() {
     println!("{USO_CABECALHO}\n{USO_SINOPSE}\n\n{USO_CORPO}");
