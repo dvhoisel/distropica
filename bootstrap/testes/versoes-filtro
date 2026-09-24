@@ -61,6 +61,10 @@ teste glib       2.88.2   sim 2.88.3   2.89.3 2.89.0 2.88.3 2.88.2
 # aparecer no índice.
 teste librsvg    2.62.3   sim 2.62.3   2.62.90 2.62.3 2.62.2
 
+# Minor >= 90 no GNOME é a prévia da próxima maior: o pango 1.90.0 é o anúncio
+# do pango2, de 2022, e a estável é a 1.58.2.
+teste pango      1.57.1   sim 1.58.2   1.90.0 1.58.2 1.58.0 1.57.1
+
 # Minor ímpar que NÃO é desenvolvimento. Deduzir a convenção dos números
 # descartava o 2.11.1, que é release.
 teste minicom    2.10     nao 2.11.1   2.11.1 2.11 2.10 2.9

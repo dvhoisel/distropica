@@ -349,6 +349,11 @@ filtra_candidatos() {  # versao_pinada [gnome]
                 # inferência só vale quando existe minor acima no mesmo major.
                 if (v[3] != "" && v[3] + 0 >= 90 && \
                     (gnome == "sim" || maior_minor[v[1]] + 0 > v[2] + 0)) continue
+                # E o MINOR >= 90 também, no GNOME: é a prévia da próxima
+                # versão maior (o GTK 3.90 antes do 4.0, o pango 1.90 que
+                # anunciava o pango2). O pango 1.57.1 era mandado para a 1.90.0,
+                # de 2022, com a 1.58.2 estável publicada.
+                if (gnome == "sim" && v[2] != "" && v[2] + 0 >= 90) continue
                 print linha[i]
             }
         }'
