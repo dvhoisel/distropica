@@ -98,6 +98,31 @@ fn persist_executor(snapshot: &ExecutableSnapshot, target: &Path, name: &str) ->
             }
             return Ok(());
         }
+        // O PACOTE forneceu o executor: desde a 0.17 o minitrue e o minipax são
+        // pacotes de Mundo A no target.world, e o link em /usr/bin é deles.
+        // Não se sobrescreve — o record do pacote o reivindica —, e o que se
+        // exige é o que este arquivo sempre exigiu: os bytes em /usr/bin são os
+        // MESMOS que executaram a instalação. Um pacote com outro minitrue
+        // reprova aqui, antes do marcador de instalação completa.
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let raiz = fs::canonicalize(target)?;
+            let resolvido = fs::canonicalize(&destination).with_context(|| {
+                format!("o link do executor {} não resolve", destination.display())
+            })?;
+            if !resolvido.starts_with(&raiz) || !fs::metadata(&resolvido)?.is_file() {
+                bail!(
+                    "o link do executor {} não aponta para arquivo dentro do alvo",
+                    destination.display()
+                );
+            }
+            if sha256_file(&resolvido)? != sha256_file(&snapshot.path())? {
+                bail!(
+                    "o pacote {name} instalou um executor diferente do que executou a instalação: {}",
+                    destination.display()
+                );
+            }
+            return Ok(());
+        }
         Ok(_) => bail!(
             "executor instalado diverge ou não é arquivo regular sem hardlinks: {}",
             destination.display()
@@ -756,6 +781,39 @@ mod tests {
     use super::*;
     use crate::profile::ProfileOverrides;
     use std::os::unix::fs::PermissionsExt;
+
+    /// Com o executor vindo do PACOTE, o link fica e os bytes são conferidos:
+    /// iguais ao que executou a instalação passam; diferentes reprovam.
+    #[test]
+    fn persist_executor_aceita_o_link_do_pacote_so_com_os_mesmos_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("executor-source");
+        fs::write(&source, b"minitrue medido\n").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).unwrap();
+        let (snapshot, _) = snapshot_executable(&source).unwrap();
+
+        for (conteudo, deve_passar) in [(&b"minitrue medido\n"[..], true), (&b"outro\n"[..], false)]
+        {
+            let target = temp.path().join(format!("alvo-{deve_passar}"));
+            let versao = target.join("opt/minitrue/0.17/bin");
+            fs::create_dir_all(&versao).unwrap();
+            fs::create_dir_all(target.join("usr/bin")).unwrap();
+            fs::write(versao.join("minitrue"), conteudo).unwrap();
+            std::os::unix::fs::symlink("0.17", target.join("opt/minitrue/current")).unwrap();
+            std::os::unix::fs::symlink(
+                "../../opt/minitrue/current/bin/minitrue",
+                target.join("usr/bin/minitrue"),
+            )
+            .unwrap();
+            let resultado = persist_executor(&snapshot, &target, "minitrue");
+            assert_eq!(resultado.is_ok(), deve_passar, "{resultado:?}");
+            // O link do pacote nunca é substituído por arquivo.
+            assert!(fs::symlink_metadata(target.join("usr/bin/minitrue"))
+                .unwrap()
+                .file_type()
+                .is_symlink());
+        }
+    }
 
     #[test]
     fn persist_executor_restaura_modo_executavel_no_fast_path() {
