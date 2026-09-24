@@ -111,6 +111,9 @@ const USO_SINOPSE: &str = "uso: minitrue [--root DIR] [--offline] [--tofu] [--no
 const USO_CORPO: &str = "\
   rectify   <pacote>…   instala/atualiza; acrescenta ao world
   rectify   newspeak    busca e troca atomicamente a árvore oficial assinada
+  rectify   --sync      converge o world inteiro à árvore corrente; aponta,
+                        sem remover, o que ficou fora da closure. Atualizar o
+                        sistema é: rectify newspeak, depois rectify --sync
   plan      <pacote>…   resolve e imprime PLAN_LOCK_FORMAT=1 sem persistir
   plan --sync            compara o world com records íntegros; apenas relata ORPHAN
   plan --media --world ARQ [--cache-world ARQ] [--output ARQ]

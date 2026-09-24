@@ -1015,10 +1015,20 @@ impl Catalog {
                 continue;
             };
             if entry.recipe_fingerprint != fingerprint {
+                // A RECUSA FICA, e o texto passa a dizer o caso comum. Numa
+                // máquina instalada, receita e canal divergem quase sempre
+                // porque o canal publicou a árvore seguinte e a máquina ficou
+                // com a da mídia: medido contra os índices publicados, dez
+                // pacotes de uma instalação 0.15 caíam aqui com o canal da
+                // 0.16, sete com o payload byte-idêntico. O que não se faz é
+                // aceitar o artefato — a identidade é a prova (P6).
                 return fail(
                     8,
                     format!(
-                        "crimestop (identidade): canal {} oferece {} {} para fingerprint {}, mas a receita efetiva exige {}",
+                        "crimestop (identidade): canal {} oferece {} {} para fingerprint {}, mas a receita efetiva exige {}. \
+                         Receita local e canal descrevem pacotes diferentes para a mesma versão; o caso comum é a \
+                         árvore local estar atrás do canal — `minitrue rectify newspeak` traz a árvore publicada e \
+                         `minitrue rectify --sync` converge o sistema a ela",
                         snapshot.config.name,
                         recipe.name,
                         recipe.version,
