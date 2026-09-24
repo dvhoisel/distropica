@@ -1,3 +1,4 @@
+pub mod boot_update;
 pub mod disco;
 pub mod efi_boot;
 pub mod install;

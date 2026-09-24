@@ -12,7 +12,9 @@ crc32fast = "1"
 fatfs = "0.3.6"
 hex = "0.4"
 # termios entra pela TUI do instalador: modo cru sem crate nova. Ver src/tui.rs.
-rustix = { version = "1", features = ["fs", "termios"] }
+# mount entra pelo boot-update: a ESP do sistema instalado só é montada durante
+# a rotação do EFI, pelo vfat do próprio kernel. Ver src/boot_update.rs.
+rustix = { version = "1", features = ["fs", "termios", "mount"] }
 sha2 = "0.10"
 tar = "0.4"
 tempfile = "3"

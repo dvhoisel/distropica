@@ -229,6 +229,89 @@ fn rotulo_de(opcao: &[u8]) -> Option<String> {
     None
 }
 
+/// Uma `Boot####` lida de volta: o rótulo, o GUID único da partição do nó HD()
+/// e o caminho do nó File(), quando existem. É o leitor simétrico do
+/// `load_option`, e existe para o sistema instalado saber de ONDE arrancou —
+/// sem isso a rotação do EFI não teria como não apagar o que está rodando.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpcaoLida {
+    pub rotulo: String,
+    pub guid: Option<[u8; 16]>,
+    pub arquivo: Option<String>,
+}
+
+/// Lê um `EFI_LOAD_OPTION` nu (sem o prefixo de atributos do efivarfs).
+/// Devolve `None` para estrutura truncada ou incoerente: opção de firmware
+/// que não se sabe ler não vira palpite.
+pub fn le_opcao(opcao: &[u8]) -> Option<OpcaoLida> {
+    if opcao.len() < 6 {
+        return None;
+    }
+    let tamanho_caminho = u16::from_le_bytes([opcao[4], opcao[5]]) as usize;
+    let rotulo = rotulo_de(opcao)?;
+    // O rótulo ocupa (caracteres + terminador) unidades de 2 bytes.
+    let inicio = 6 + (rotulo.encode_utf16().count() + 1) * 2;
+    let caminho = opcao.get(inicio..inicio.checked_add(tamanho_caminho)?)?;
+    let mut guid = None;
+    let mut arquivo = None;
+    let mut i = 0;
+    while i + 4 <= caminho.len() {
+        let tipo = caminho[i];
+        let subtipo = caminho[i + 1];
+        let tamanho = u16::from_le_bytes([caminho[i + 2], caminho[i + 3]]) as usize;
+        if tamanho < 4 || i + tamanho > caminho.len() {
+            return None;
+        }
+        let no = &caminho[i..i + tamanho];
+        match (tipo, subtipo) {
+            (0x7f, 0xff) => break,
+            (0x04, 0x01) if tamanho >= 42 => {
+                let mut valor = [0u8; 16];
+                valor.copy_from_slice(&no[24..40]);
+                guid = Some(valor);
+            }
+            (0x04, 0x04) => {
+                let unidades: Vec<u16> = no[4..]
+                    .chunks_exact(2)
+                    .map(|par| u16::from_le_bytes([par[0], par[1]]))
+                    .take_while(|unidade| *unidade != 0)
+                    .collect();
+                arquivo = Some(String::from_utf16(&unidades).ok()?);
+            }
+            _ => {}
+        }
+        i += tamanho;
+    }
+    Some(OpcaoLida {
+        rotulo,
+        guid,
+        arquivo,
+    })
+}
+
+/// A `Boot####` de onde a máquina arrancou nesta vez, segundo o próprio
+/// firmware (`BootCurrent`). `None` quando a máquina não expõe o dado.
+pub fn opcao_corrente(efivars: &Path) -> Option<OpcaoLida> {
+    let corrente = le_variavel(efivars, "BootCurrent")?;
+    let numero = u16::from_le_bytes([*corrente.get(4)?, *corrente.get(5)?]);
+    let opcao = le_variavel(efivars, &format!("Boot{numero:04X}"))?;
+    le_opcao(opcao.get(4..)?)
+}
+
+/// A primeira `Boot####` com este rótulo, lida.
+pub fn opcao_com_rotulo(efivars: &Path, rotulo: &str) -> Result<Option<OpcaoLida>> {
+    for numero in ocupados(efivars)? {
+        if let Some(bruta) = le_variavel(efivars, &format!("Boot{numero:04X}")) {
+            if let Some(lida) = bruta.get(4..).and_then(le_opcao) {
+                if lida.rotulo == rotulo {
+                    return Ok(Some(lida));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
 fn nome_variavel(nome: &str) -> String {
     format!("{nome}-{GLOBAL_GUID}")
 }
@@ -522,7 +605,11 @@ mod tests {
             .chunks_exact(2)
             .map(|par| u16::from_le_bytes([par[0], par[1]]))
             .collect();
-        assert_eq!(numeros, vec![1, 0], "o nosso na frente, o alheio preservado");
+        assert_eq!(
+            numeros,
+            vec![1, 0],
+            "o nosso na frente, o alheio preservado"
+        );
     }
 
     #[test]
@@ -588,14 +675,10 @@ mod tests {
         fs::write(sysfs.join("nvme0n1/nvme0n1p2/partition"), "2\n").unwrap();
         // O sysfs de verdade tem a partição como filha do disco; o link do
         // topo é o que este código percorre.
-        std::os::unix::fs::symlink(
-            sysfs.join("nvme0n1/nvme0n1p2"),
-            sysfs.join("nvme0n1p2"),
-        )
-        .unwrap();
+        std::os::unix::fs::symlink(sysfs.join("nvme0n1/nvme0n1p2"), sysfs.join("nvme0n1p2"))
+            .unwrap();
 
-        let (disco, numero) =
-            disco_da_particao(sysfs, Path::new("/dev/nvme0n1p2")).unwrap();
+        let (disco, numero) = disco_da_particao(sysfs, Path::new("/dev/nvme0n1p2")).unwrap();
         assert_eq!(numero, 2);
         assert_eq!(disco, PathBuf::from("/dev/nvme0n1"));
     }

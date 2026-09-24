@@ -17,6 +17,8 @@ uso:
       [--logical-sector N]
   minipax efi-boot --esp DISPOSITIVO [--rotulo TEXTO] [--carregador CAMINHO]
       [--sysfs DIR] [--efivars DIR]
+  minipax boot-update [--efi ARQ] [--efivars DIR] [--sysfs DIR] [--dev DIR]
+      [--esp-dir DIR]
   minipax install-disk --saida ARQ [--sysfs DIR] [--midia DISPOSITIVO]
       [--efi-bytes N] [--esp-mib N] [--raiz-minima-bytes N] [--cfdisk ARQ]
   minipax media build --profile DIR --mode online|offline \
@@ -56,6 +58,19 @@ opções de efi-boot (registra o arranque na NVRAM do firmware):
 O caminho de reserva EFI/BOOT/BOOTX64.EFI continua obrigatório e é gravado
 pelo instalador; esta entrada existe porque firmware de disco fixo não é
 obrigado a procurar por ele.
+
+opções de boot-update (leva o EFI do pacote distropica-efi para a ESP):
+  --efi ARQ          default: /opt/distropica-efi/current/BOOTX64.EFI
+  --efivars DIR      default: /sys/firmware/efi/efivars
+  --sysfs DIR        default: /sys/class/block
+  --dev DIR          default: /dev
+  --esp-dir DIR      opera sobre DIR como se fosse a ESP montada, sem
+                     descobrir, montar nem tocar a NVRAM
+
+O atual fica em EFI/BOOT/BOOTX64.EFI e o que arrancou antes dele em
+EFI/distropica/anterior.efi, com as entradas "Distrópica" e "Distrópica
+(anterior)" na NVRAM. O EFI em execução nunca é apagado: se a máquina subiu
+pela reserva, só o atual é trocado.
 
 opções de instalação:
   --minitrue ARQ    binário minitrue (ou MINITRUE)
@@ -113,6 +128,7 @@ fn run() -> Result<()> {
         // decisão num arquivo, e quem apaga continua sendo o caminho auditado.
         "install-disk" => run_install_disk(args),
         "efi-boot" => run_efi_boot(args),
+        "boot-update" => run_boot_update(args),
         other => bail!("comando desconhecido {other:?}\n\n{USAGE}"),
     }
 }
@@ -341,6 +357,49 @@ fn run_media(args: Vec<String>) -> Result<()> {
 /// falha de instalação: o caminho de reserva já está no disco, e há máquina
 /// em que ele basta. Abortar uma instalação inteira por causa da NVRAM seria
 /// pior que avisar.
+/// `minipax boot-update`: o EFI do pacote `distropica-efi` vira o atual da
+/// ESP, e o que arrancou antes dele vira a reserva. Ver src/boot_update.rs.
+fn run_boot_update(args: Vec<String>) -> Result<()> {
+    use minipax::boot_update;
+    let mut opcoes = boot_update::Opcoes {
+        efi: PathBuf::from(boot_update::EFI_DO_PACOTE),
+        efivars: PathBuf::from(minipax::efi_boot::EFIVARS),
+        sysfs: PathBuf::from("/sys/class/block"),
+        dev: PathBuf::from("/dev"),
+        esp_dir: None,
+    };
+    let mut index = 0;
+    while index < args.len() {
+        let option = args[index].clone();
+        match option.as_str() {
+            "--efi" => opcoes.efi = take_value(&args, &mut index, &option)?.into(),
+            "--efivars" => opcoes.efivars = take_value(&args, &mut index, &option)?.into(),
+            "--sysfs" => opcoes.sysfs = take_value(&args, &mut index, &option)?.into(),
+            "--dev" => opcoes.dev = take_value(&args, &mut index, &option)?.into(),
+            "--esp-dir" => opcoes.esp_dir = Some(take_value(&args, &mut index, &option)?.into()),
+            other => bail!("opção desconhecida {other:?}"),
+        }
+        index += 1;
+    }
+    let relatorio = boot_update::executa(&opcoes)?;
+    println!("BOOT_UPDATE={}", relatorio.acao.rotulo());
+    println!(
+        "BOOT_RUNNING={}",
+        match relatorio.rodando {
+            boot_update::Rodando::Atual => "atual",
+            boot_update::Rodando::Anterior => "anterior",
+            boot_update::Rodando::Desconhecido => "desconhecido",
+        }
+    );
+    println!("ESP={}", relatorio.esp);
+    if let Some(erro) = relatorio.nvram {
+        // A ESP está certa; o que falhou foi só a NVRAM. O atual continua
+        // arrancável pelo caminho de reserva, e por isso é aviso.
+        eprintln!("aviso: a ESP foi atualizada, mas a NVRAM não: {erro}");
+    }
+    Ok(())
+}
+
 fn run_efi_boot(args: Vec<String>) -> Result<()> {
     let mut esp: Option<PathBuf> = None;
     let mut rotulo = "Distrópica".to_string();
