@@ -1,13 +1,13 @@
 NAME=luajit
-VERSION=2.1.1787165859
+VERSION=2.1.1788856981
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc gcc-pass2"
 BUILD_DEPS="gcc-pass2 binutils-glibc make busybox findutils"
-ABOUT="O interpretador Lua com JIT que o swayimg 5 exige por nome (dependency('luajit') no meson dele, obrigatório, sem alternativa em Lua puro). A VERSÃO PEDE EXPLICAÇÃO: o LuaJIT faz rolling release e o próprio site diz que não há tarball de versão — o que se pina aqui é um COMMIT do ramo v2.1 (1ee778a4e37122d8ca7d5733c590a47dafd6b15c, de 19/08/2026) via arquivo do GitHub, e o número 2.1.1787165859 é o que o upstream imprime: o sufixo é o carimbo de tempo do .relver que viaja no arquivo, lido pelo Makefile quando não há .git (src/Makefile, regra GIT_RELVER). Compilado como amalgamação (make amalg), que é o modo que o upstream recomenda. Só a biblioteca compartilhada e o executável; a estática sai. O gcc-pass2 está em DEPS porque o interpretador e a biblioteca exigem a libgcc_s para desenrolar pilha — fato de link cobrado pela auditoria de fechamento, não suposição."
+ABOUT="O interpretador Lua com JIT que o swayimg 5 exige por nome (dependency('luajit') no meson dele, obrigatório, sem alternativa em Lua puro). A VERSÃO PEDE EXPLICAÇÃO: o LuaJIT faz rolling release e o próprio site diz que não há tarball de versão — o que se pina aqui é um COMMIT do ramo v2.1 (c6ffc141a8762b41703f9287d63d93622a13dd8f, de 08/09/2026) via arquivo do GitHub, e o número 2.1.1788856981 é o que o upstream imprime: o sufixo é o carimbo de tempo do .relver que viaja no arquivo, lido pelo Makefile quando não há .git (src/Makefile, regra GIT_RELVER). Compilado como amalgamação (make amalg), que é o modo que o upstream recomenda. Só a biblioteca compartilhada e o executável; a estática sai. O gcc-pass2 está em DEPS porque o interpretador e a biblioteca exigem a libgcc_s para desenrolar pilha — fato de link cobrado pela auditoria de fechamento, não suposição."
 LICENSE=MIT
-SRC="https://github.com/LuaJIT/LuaJIT/archive/1ee778a4e37122d8ca7d5733c590a47dafd6b15c.tar.gz"
-SHA256=512cdb23dafa39c6247763ae15f29341734b1596067b067db0c0387bbebc7c55
+SRC="https://github.com/LuaJIT/LuaJIT/archive/c6ffc141a8762b41703f9287d63d93622a13dd8f.tar.gz"
+SHA256=6e5fec07750add912e7c3eae0c194d24cd6d023714e1f04a0298a5b4819e4457
 
 build() {
     tar -xzf "$DL" --strip-components=1
