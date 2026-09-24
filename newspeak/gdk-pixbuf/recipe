@@ -12,6 +12,12 @@ SHA256="919f529512961a12e81cd4b4b466a48c3933469e7f9a310c6513cd4fb252ba3c"
 build() {
     tar -xJf "$DL" --strip-components=1
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # A 2.44 trocou docs/gtk_doc por documentation e trouxe três opções 'auto'
+    # — glycin (carregadores em processo confinado, pela biblioteca glycin, que
+    # esta árvore não tem), android e thumbnailer. Todas vão fixadas: em auto
+    # o pacote mudaria conforme a raiz de build tivesse ou não a dependência.
+    # O thumbnailer fica LIGADO porque a 2.42 o compilava sempre e o
+    # gdk-pixbuf-thumbnailer já é payload publicado; o XPM legado segue fora.
     meson setup build \
         --prefix=/usr \
         --libdir=lib \
@@ -23,9 +29,12 @@ build() {
         -Dothers=disabled \
         -Dbuiltin_loaders=png,gif \
         -Dintrospection=disabled \
-        -Dgtk_doc=false \
-        -Ddocs=false \
+        -Ddocumentation=false \
         -Dman=false \
+        -Dglycin=disabled \
+        -Dandroid=disabled \
+        -Dthumbnailer=enabled \
+        -Dlegacy_xpm=disabled \
         -Dtests=false \
         -Dinstalled_tests=false \
         -Drelocatable=false \

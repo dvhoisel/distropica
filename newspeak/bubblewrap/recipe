@@ -19,7 +19,6 @@ build() {
         -Dman=disabled \
         -Dtests=false \
         -Dselinux=disabled \
-        -Dsupport_setuid=false \
         -Dbash_completion=disabled \
         -Dzsh_completion=disabled
     ninja -C build -j"$JOBS"
@@ -29,8 +28,9 @@ build() {
         exit 1
     }
     # Setuid aqui seria o oposto do propósito: o confinamento vale porque NÃO
-    # exige privilégio. Se um dia o upstream voltar a instalar setuid por
-    # padrão, esta guarda para o build em vez de embarcar o bit.
+    # exige privilégio. A 0.13 tirou do upstream o suporte a setuid inteiro
+    # (e com ele a opção -Dsupport_setuid, que esta receita passava); a guarda
+    # fica, para o dia em que alguém o reintroduzir.
     if find "$STAGE" -type f -perm -4000 | grep -q .; then
         echo "bubblewrap: o bwrap saiu setuid; esta árvore usa CONFIG_USER_NS" >&2
         exit 1

@@ -2,13 +2,13 @@ NAME=yambar
 VERSION=1.11.0
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc fcft pixman wayland libyaml"
+DEPS="glibc fcft pixman wayland libyaml eudev"
 # flex e bison: a condição do particle map ("state == \"up\" && ...") não é
 # string comparada na unha, é gramática de verdade — map.l e map.y na fonte,
 # find_program(required: true) no particles/meson.build. A view sem eles morre
 # no setup, medido na primeira tentativa desta receita.
 BUILD_DEPS="gcc-pass2 binutils-glibc meson ninja pkgconf busybox tllist wayland-protocols flex bison findutils"
-ABOUT="A BARRA DE TAREFAS. Entrou por decisão, depois de a sessão rodar sem ela e cobrar o preço: janela minimizada simplesmente desaparece — não há lista de janelas em canto nenhum da tela, e o caminho de volta é saber de cor que Alt+Tab existe. Relógio e estado da rede sumiram junto com o painel do weston e não tinham voltado. O yambar é do mesmo autor do foot e da mesma matéria: C sem toolkit, desenha com o fcft e o pixman que esta árvore já paga, fala wlr-layer-shell para reservar a faixa da tela e wlr-foreign-toplevel-management para enxergar as janelas dos outros — os dois protocolos que o labwc implementa. A alternativa era o waybar, que é GTK e arrastaria gtk-layer-shell e mais uma camada inteira para desenhar texto numa faixa de 28 pixels; o custo marginal daqui foi UMA receita, porque fcft, tllist, pixman e libyaml já estavam pagos. Os módulos compilam DENTRO do binário (core-plugins-as-shared-libraries=false, o padrão), e só entram os que a configuração desta árvore usa mais os de custo zero: clock, foreign-toplevel e network SÃO a barra; label e script são os pontos de extensão — qualquer coisa que um shell script imprima vira conteúdo da barra sem recompilar nada. Fora, cada um por seu motivo: backend e módulos X11 (xkb, xwindow), numa árvore sem X11; dwl, river, i3 e sway-xkb, que falam IPC de compositores que não são o labwc; mpd, pulse e pipewire, cujas bibliotecas não existem aqui; alsa, que espera o áudio ser resolvido de verdade (#52) em vez de exibir um volume que o boot deixou mudo; battery, backlight e removables, hardware que as VMs desta fase não têm; cpu, mem e disk-io, que são mobília de monitor e não tarefa. A configuração NÃO mora aqui: é política de sessão e mora na receita desktop, em /etc/xdg/yambar — este pacote entrega o programa."
+ABOUT="A BARRA DE TAREFAS. Entrou por decisão, depois de a sessão rodar sem ela e cobrar o preço: janela minimizada simplesmente desaparece — não há lista de janelas em canto nenhum da tela, e o caminho de volta é saber de cor que Alt+Tab existe. Relógio e estado da rede sumiram junto com o painel do weston e não tinham voltado. O yambar é do mesmo autor do foot e da mesma matéria: C sem toolkit, desenha com o fcft e o pixman que esta árvore já paga, fala wlr-layer-shell para reservar a faixa da tela e wlr-foreign-toplevel-management para enxergar as janelas dos outros — os dois protocolos que o labwc implementa. A alternativa era o waybar, que é GTK e arrastaria gtk-layer-shell e mais uma camada inteira para desenhar texto numa faixa de 28 pixels; o custo marginal daqui foi UMA receita, porque fcft, tllist, pixman e libyaml já estavam pagos. Os módulos compilam DENTRO do binário (core-plugins-as-shared-libraries=false, o padrão), e só entram os que a configuração desta árvore usa mais os de custo zero: clock, foreign-toplevel e network SÃO a barra; battery entra na 0.17, pela libudev do eudev, e o autostart do desktop só põe o bloco dele na configuração quando a máquina tem bateria; label e script são os pontos de extensão — qualquer coisa que um shell script imprima vira conteúdo da barra sem recompilar nada. Fora, cada um por seu motivo: backend e módulos X11 (xkb, xwindow), numa árvore sem X11; dwl, river, i3 e sway-xkb, que falam IPC de compositores que não são o labwc; mpd, pulse e pipewire, cujas bibliotecas não existem aqui; alsa, que espera o áudio ser resolvido de verdade (#52) em vez de exibir um volume que o boot deixou mudo; backlight e removables, que a sessão resolve por outro caminho (o brilho é tecla, pelo brightnessctl); cpu, mem e disk-io, que são mobília de monitor e não tarefa. A configuração NÃO mora aqui: é política de sessão e mora na receita desktop, em /etc/xdg/yambar — este pacote entrega o programa."
 LICENSE=MIT
 SRC="https://codeberg.org/dnkl/yambar/releases/download/$VERSION/yambar-$VERSION.tar.gz"
 SHA256="9859ef16ba16069c3442283d76607712c0b7bc602b6fadf41b2c3d97a754d5f9"
@@ -72,7 +72,7 @@ build() {
         -Dplugin-script=enabled \
         -Dplugin-alsa=disabled \
         -Dplugin-backlight=disabled \
-        -Dplugin-battery=disabled \
+        -Dplugin-battery=enabled \
         -Dplugin-cpu=disabled \
         -Dplugin-disk-io=disabled \
         -Dplugin-dwl=disabled \
@@ -91,6 +91,13 @@ build() {
 
     [ -x "$STAGE/usr/bin/yambar" ] || {
         echo "yambar: o binário não foi produzido" >&2
+        exit 1
+    }
+    # O módulo battery só existe se a libudev foi achada; com ele DESLIGADO a
+    # configuração que o desktop gera num notebook faria o yambar recusar o
+    # arquivo inteiro, e a barra sumiria justamente onde há bateria.
+    readelf -d "$STAGE/usr/bin/yambar" | grep -q 'libudev\.so\.1' || {
+        echo "yambar: sem libudev no NEEDED; o módulo battery não foi compilado" >&2
         exit 1
     }
     # Cabeçalhos de desenvolvimento de plugin: esta árvore não compila plugin
@@ -112,7 +119,7 @@ build() {
     # é obrigatório: sem ele o readelf TRUNCA o nome na largura da coluna, e
     # module_foreign_toplevel_iface (29 caracteres) reprovou um binário que o
     # continha — dois builds corretos mortos por instrumento, um por guarda.
-    for modulo in clock foreign_toplevel network label script; do
+    for modulo in clock foreign_toplevel network label script battery; do
         readelf -sW "$STAGE/usr/bin/yambar" | grep -q "module_${modulo}_iface" || {
             echo "yambar: o módulo '$modulo' não foi compilado no binário" >&2
             readelf -sW "$STAGE/usr/bin/yambar" | grep -c 'module_.*_iface' >&2

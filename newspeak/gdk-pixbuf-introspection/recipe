@@ -16,7 +16,9 @@ build() {
     meson setup build --prefix=/usr --libdir=lib --buildtype=release \
         -Dpng=enabled -Dgif=enabled -Djpeg=disabled -Dtiff=disabled \
         -Dothers=disabled -Dbuiltin_loaders=png,gif \
-        -Dintrospection=enabled -Dgtk_doc=false -Ddocs=false -Dman=false \
+        -Dintrospection=enabled -Ddocumentation=false -Dman=false \
+        -Dglycin=disabled -Dandroid=disabled -Dthumbnailer=enabled \
+        -Dlegacy_xpm=disabled \
         -Dtests=false -Dinstalled_tests=false -Drelocatable=false \
         -Dgio_sniffing=false
     ninja -C build -j"$JOBS" \
