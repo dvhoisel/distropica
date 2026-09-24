@@ -24,8 +24,15 @@ build() {
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
     [ -x "$STAGE/usr/bin/xsltproc" ] || { echo "libxslt: xsltproc ausente" >&2; exit 1; }
-    [ -e "$STAGE/usr/lib/libxslt.so.1.1.43" ] || { echo "libxslt: libxslt.so.1.1.43 ausente" >&2; exit 1; }
-    [ -e "$STAGE/usr/lib/libexslt.so.0.8.24" ] || { echo "libxslt: libexslt.so.0.8.24 ausente" >&2; exit 1; }
+    # As guardas olham o SONAME, que é o contrato com quem liga: libxslt.so.1 e
+    # libexslt.so.0. Os nomes reais embutiam a versão (libxslt.so.1.1.43,
+    # libexslt.so.0.8.24) e a subida para a 1.1.45 os deixou para trás; o da
+    # libexslt ainda anda por conta própria (LIBEXSLT_MICRO_VERSION no
+    # configure.ac). O da libxslt é o da própria versão, e isso se confere.
+    [ -e "$STAGE/usr/lib/libxslt.so.1" ] || { echo "libxslt: libxslt.so.1 ausente" >&2; exit 1; }
+    [ "$(readlink "$STAGE/usr/lib/libxslt.so.1")" = "libxslt.so.$VERSION" ] || {
+        echo "libxslt: libxslt.so.1 não aponta para libxslt.so.$VERSION" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/libexslt.so.0" ] || { echo "libxslt: libexslt.so.0 ausente" >&2; exit 1; }
     [ -e "$STAGE/usr/lib/pkgconfig/libxslt.pc" ] || { echo "libxslt: libxslt.pc ausente" >&2; exit 1; }
     [ -e "$STAGE/usr/lib/pkgconfig/libexslt.pc" ] || { echo "libxslt: libexslt.pc ausente" >&2; exit 1; }
     readelf -d "$STAGE/usr/bin/xsltproc" | grep -Fq 'Shared library: [libxslt.so.1]' || {

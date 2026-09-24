@@ -21,8 +21,8 @@ SHA256="fd5cc6b77ad6773cac93cb3f415f9318ac3b3455eecf801f6b4a742c4f6c7209"
 # Certificado extraído do GPG-KEY versionado no repositório oficial:
 # https://sourceware.org/cgit/elfutils/plain/GPG-KEY; signer observado e
 # primária 6C2B631563B8D330578D3CB474FD3FA2779E7073.
-SIG_1="https://sourceware.org/elfutils/ftp/0.195/elfutils-0.195.tar.bz2.sig"
-SIG_EPOCH_1=1786460504
+SIG_1="https://sourceware.org/elfutils/ftp/0.196/elfutils-0.196.tar.bz2.sig"
+SIG_EPOCH_1=1790270098
 SIGKEY_1="files/upstream-release.asc"
 SIGKEY_FP_1=6C2B631563B8D330578D3CB474FD3FA2779E7073
 

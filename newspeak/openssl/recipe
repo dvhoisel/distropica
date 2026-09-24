@@ -8,12 +8,18 @@ ABOUT="Toolkit TLS/cripto: libcrypto + libssl. Mundo B (o openssl é distribuíd
 LICENSE="Apache-2.0"
 SRC="https://github.com/openssl/openssl/releases/download/openssl-$VERSION/openssl-$VERSION.tar.gz"
 SHA256="736b467530f916737b7031310ccb21d8218c6229e61e8e160cd1d3458cd543a8"
-# Chave extraída de https://www.openssl-library.org/source/pubkeys.asc;
-# signer observado e primária BA5473A2B0587B07FB27CF2D216094DFD0CB81EF.
-SIG_1="https://github.com/openssl/openssl/releases/download/openssl-4.0.1/openssl-4.0.1.tar.gz.asc"
-SIG_EPOCH_1=1786460504
+# Certificado extraído de https://openssl-library.org/source/pubkeys.asc: o
+# "OpenSSL <openssl@openssl.org>" de primária B146647E45A7B33947AB226B2A2C87D161692D40,
+# que assina as releases desde a 4.0.2 pela subchave C46ED3F2CBEFDA1FDAADA44264ED7B1DCCE71CB2.
+# A TROCA DE CHAVE FOI CONFERIDA PELA ANTIGA, e não pelo site: a primária
+# BA5473A2B0587B07FB27CF2D216094DFD0CB81EF, que esta receita fixava até a 4.0.1,
+# certifica a nova desde 2026-06-01 (gpg --check-sigs: sig! de 216094DFD0CB81EF),
+# e essa certificação viaja no arquivo. É o caminho que o próprio upstream
+# indica a quem já confiava na antiga.
+SIG_1="https://github.com/openssl/openssl/releases/download/openssl-$VERSION/openssl-$VERSION.tar.gz.asc"
+SIG_EPOCH_1=1790270098
 SIGKEY_1="files/upstream-release.asc"
-SIGKEY_FP_1=BA5473A2B0587B07FB27CF2D216094DFD0CB81EF
+SIGKEY_FP_1=B146647E45A7B33947AB226B2A2C87D161692D40
 
 build() {
     tar -xzf "$DL" --strip-components=1

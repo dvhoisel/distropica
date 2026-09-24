@@ -5,7 +5,7 @@ ABOUT="O ACELERADOR DO CAMINHO GCC. Cache de compilacao: indexa cada unidade de 
 LICENSE="GPL-3.0-or-later AND MIT AND CC0-1.0 AND (CC0-1.0 OR Apache-2.0) AND BSD-2-Clause AND BSD-3-Clause"
 SRC="https://github.com/ccache/ccache/releases/download/v$VERSION/ccache-$VERSION-linux-x86_64-musl-static.tar.xz"
 SHA256="888eaf9697919d6eba77be797e9d9c9e40e734d11d67d25a79b075c3f79f6c77"
-SIG="https://github.com/ccache/ccache/releases/download/v4.13.6/ccache-4.13.6-linux-x86_64-musl-static.tar.xz.minisig"
+SIG="https://github.com/ccache/ccache/releases/download/v$VERSION/ccache-$VERSION-linux-x86_64-musl-static.tar.xz.minisig"
 SIGKEY="RWQX7yXbBedVfI4PNx6FLdFXu9GHUFsr28s4BVGxm4BeybtnX3P06saF"
 LINKS="ccache=ccache"
 

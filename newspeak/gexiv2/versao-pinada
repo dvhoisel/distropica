@@ -1,12 +1,9 @@
-GIMP 3.2.4 exige gexiv2 >= 0.14 e < 0.15 no meson.build. A série estável
-upstream atual é 0.16.2, mas ela é recusada pelo próprio consumidor. Mantemos
-0.14.7 até que uma versão estável do GIMP aceite a ABI nova. Verificado em
-2026-08-10.
-# GATILHOS (2026-09-24). A restrição vem do meson.build do GIMP 3.2.4 pinado,
-# lido no tarball: gexiv2_maxver = '0.15.0'. Ela é da VERSÃO do GIMP, não da
-# série: a subida para a 3.2.6 tem de reler o meson.build dela, então a
-# premissa é exata.
-# Reconferido em 2026-09-24 contra o GIMP 3.2.6: o meson.build dele mantém
-# gexiv2_maxver = '0.15.0'. A premissa sobe junto com o GIMP.
+GIMP 3.2.6 exige gexiv2 >= 0.14 e < 0.15 no meson.build (gexiv2_maxver =
+'0.15.0', lido no tarball pinado). A série estável upstream atual é 0.16.2,
+mas ela é recusada pelo próprio consumidor. Mantemos 0.14.7 até que uma
+versão estável do GIMP aceite a ABI nova. Verificado em 2026-08-10 contra a
+3.2.4 e relido em 2026-09-24 contra a 3.2.6.
+# GATILHOS (2026-09-24). A restrição é da VERSÃO do GIMP, não da série: cada
+# subida dele tem de reler o meson.build, então a premissa é exata.
 PREMISSA=gimp 3.2.6
 CONTRA=0.16.2

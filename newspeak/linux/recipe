@@ -29,7 +29,7 @@ SHA256="4ac34c47db2540ffb2713943f8d891ff1702e0ba6934525a493b7d1cad43145a"
 # https://kernel.org/.well-known/openpgpkey/hu/ew8uiogxwri7d3fuioqgt7u1d5sngorx?l=autosigner
 # signer observado e primária B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1.
 SIGSUMS="https://cdn.kernel.org/pub/linux/kernel/v7.x/sha256sums.asc"
-SIGSUMS_EPOCH=1786460504
+SIGSUMS_EPOCH=1790270098
 SIGKEY_1="files/upstream-release.asc"
 SIGKEY_FP_1=B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1
 
