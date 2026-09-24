@@ -17,6 +17,14 @@
 #     servidor. A chave continua a pinada, e a assinatura é conferida do mesmo
 #     jeito: muda de onde os bytes vêm, não quem responde por eles.
 #
+# A NVRAM NASCE VAZIA, e isso é cenário, não atalho: o disco da versão
+# anterior foi instalado arrancando o kernel direto, sem firmware, e o
+# instalador terminou avisando que não registrou a entrada — o mesmo estado
+# de uma máquina cuja NVRAM não aceitou o registro ou foi zerada. Quem acha a
+# ESP no primeiro boot é o boot-update, pelo kernel que ela traz; quem prova
+# que ele registrou as entradas é o segundo boot, que tem de arrancar pela
+# "Distrópica" com a "Distrópica (anterior)" logo atrás.
+#
 # O roteiro dentro do convidado é o da ponte, que é o que o site vai mandar
 # quem instalou até a 0.16 digitar:
 #   minitrue rectify newspeak
@@ -25,8 +33,9 @@
 #   minitrue rectify --sync
 #   minitrue memoryhole minitrue-ponte
 # e depois dele reinicia e exige: kernel novo no uname, o EFI do pacote como
-# atual da ESP com o que arrancou antes guardado como anterior, e o
-# boot-update dizendo que quem arrancou foi o atual.
+# atual da ESP com o que arrancou antes guardado como anterior, o
+# boot-update dizendo que quem arrancou foi o atual, e a NVRAM com as duas
+# entradas, a atual na frente e sendo a que o firmware seguiu.
 set -eu
 umask 022
 LC_ALL=C
@@ -340,6 +349,49 @@ if kernel != kernel_esperado:
 saida = g.exige("minipax boot-update")
 if campo(saida, "BOOT_UPDATE") != "ja-atual" or campo(saida, "BOOT_RUNNING") != "atual":
     raise SystemExit("depois do reboot quem arrancou devia ser o atual, sem nada a escrever")
+
+# A REDE DO A/B É A NVRAM, e o BOOT_RUNNING=atual acima não a prova: o
+# caminho de reserva também dá "atual". A NVRAM deste aceite nasceu vazia, e
+# quem a preencheu foi o boot-update do primeiro boot; aqui se cobra que o
+# firmware ARRANCOU pela entrada "Distrópica" e que a "Distrópica (anterior)"
+# vem logo atrás na BootOrder. Lido cru do efivarfs: rótulo em UTF-16LE a
+# partir do byte 10 (4 de atributos do efivarfs + 4 do EFI_LOAD_OPTION + 2 do
+# tamanho do caminho), BootCurrent e BootOrder em u16 little-endian.
+hx_atual = ("Distrópica".encode("utf-16-le") + b"\0\0").hex()
+hx_anterior = ("Distrópica (anterior)".encode("utf-16-le") + b"\0\0").hex()
+n = len(hx_anterior) // 2
+saida = g.exige(
+    "E=/sys/firmware/efi/efivars; G=8be4df61-93ca-11d2-aa0d-00e098032b8c; "
+    "grep -q \" $E efivarfs \" /proc/mounts || mount -t efivarfs efivarfs $E; "
+    "for f in $E/Boot[0-9A-F][0-9A-F][0-9A-F][0-9A-F]-$G; do "
+    f"echo \"OPCAO ${{f##*/Boot}} $(od -An -tx1 -v -j10 -N{n} $f | tr -d ' \\n')\"; done; "
+    "echo \"CORRENTE $(od -An -tx1 -v -j4 -N2 $E/BootCurrent-$G | tr -d ' \\n')\"; "
+    "echo \"ORDEM $(od -An -tx1 -v -j4 $E/BootOrder-$G | tr -d ' \\n')\"")
+rotulos = {}
+for linha in saida.splitlines():
+    partes = linha.split()
+    if len(partes) == 3 and partes[0] == "OPCAO":
+        numero = int(partes[1][:4], 16)
+        if partes[2].startswith(hx_atual):
+            rotulos[numero] = "atual"
+        elif partes[2].startswith(hx_anterior):
+            rotulos[numero] = "anterior"
+
+
+def u16s(hexa):
+    return [int(hexa[i + 2:i + 4] + hexa[i:i + 2], 16) for i in range(0, len(hexa) - 3, 4)]
+
+
+corrente = u16s(re.search(r"^CORRENTE ?(\S*)", saida, re.M).group(1))
+ordem = u16s(re.search(r"^ORDEM ?(\S*)", saida, re.M).group(1))
+if sorted(rotulos.values()) != ["anterior", "atual"]:
+    raise SystemExit(f"a NVRAM devia ter uma entrada de cada, e tem {rotulos}")
+if len(corrente) != 1 or rotulos.get(corrente[0]) != "atual":
+    raise SystemExit(f"o firmware não arrancou pela entrada \"Distrópica\" (BootCurrent {corrente})")
+if [rotulos.get(numero) for numero in ordem[:2]] != ["atual", "anterior"]:
+    raise SystemExit(f"a BootOrder não começa por atual e anterior: {ordem} {rotulos}")
+diz(f"NVRAM: arrancou pela \"Distrópica\" (Boot{corrente[0]:04X}), "
+    f"BootOrder {' '.join(f'{x:04X}' for x in ordem)}")
 g.exige("minitrue verify")
 diz(f"segundo boot: kernel {kernel}, EFI atual, nada pendente")
 g.encerra("poweroff")
