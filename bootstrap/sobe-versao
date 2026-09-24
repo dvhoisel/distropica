@@ -337,6 +337,52 @@ for alvo in $alvos; do
     mv "$tmp" "$CACHE/$obtido"
     chmod 644 "$CACHE/$obtido"
 
+    # AS OPÇÕES DO MESON TÊM DE EXISTIR NA VERSÃO NOVA. O meson 1.12 recusa
+    # opção desconhecida, e uma subida que a upstream renomeou ou tirou
+    # (docs virou documentation no gdk-pixbuf 2.44; svg-support saiu do
+    # appstream 1.2) só aparecia horas depois, quando a cadeia chegava na
+    # receita. Aqui a conferência é contra o meson.options do tarball novo, que
+    # já está no cache.
+    if grep -q 'meson setup' "$receita"; then
+        if ! desconhecidas=$(python3 - "$receita" "$CACHE/$obtido" <<'PYOPCOES'
+import re, sys, tarfile
+receita, tarball = sys.argv[1], sys.argv[2]
+texto = re.sub(r"(?m)^\s*#.*$", "", open(receita, encoding="utf-8").read())
+usadas = {u for u in re.findall(r"-D([A-Za-z0-9_.-]+)=", texto)}
+definidas = set()
+achou = False
+with tarfile.open(tarball) as t:
+    for m in t.getmembers():
+        partes = [x for x in m.name.split("/") if x not in ("", ".")]
+        if len(partes) == 2 and partes[1] in ("meson_options.txt", "meson.options"):
+            achou = True
+            opcoes = re.sub(r"(?m)#.*$", "", t.extractfile(m).read().decode("utf-8", "replace"))
+            for pedaco in re.split(r"\boption\s*\(", opcoes)[1:]:
+                nome = re.match(r"\s*['\"]([^'\"]+)['\"]", pedaco)
+                if nome:
+                    definidas.add(nome.group(1))
+if not achou:
+    sys.exit(0)
+# Opções embutidas do próprio meson não moram no meson.options.
+embutidas = {"buildtype", "prefix", "libdir", "default_library", "b_lto", "b_ndebug",
+             "wrap_mode", "auto_features", "sysconfdir", "localstatedir", "bindir",
+             "datadir", "mandir", "b_pie", "werror", "strip", "c_std", "cpp_std",
+             "optimization", "debug", "b_sanitize", "b_staticpic", "unity", "backend",
+             "warning_level", "pkg_config_path", "includedir", "libexecdir", "sbindir",
+             "localedir", "b_coverage", "b_pch", "python.install_env"}
+print(" ".join(sorted(u for u in usadas if u not in definidas and u not in embutidas)))
+PYOPCOES
+        ); then
+            printf '  ERRO    %-20s não li as opções do meson no tarball novo\n' "$pacote"
+            falhos="$falhos $pacote"; continue
+        fi
+        if [ -n "$desconhecidas" ]; then
+            printf '  ERRO    %-20s a versão %s não tem as opções do meson: %s; receita intacta\n' \
+                "$pacote" "$nova" "$desconhecidas"
+            falhos="$falhos $pacote"; continue
+        fi
+    fi
+
     # As duas linhas mudam JUNTAS ou nenhuma muda. Escreve-se ao lado e
     # publica-se por rename: uma queda no meio não pode deixar VERSION nova com
     # SHA256 velho, que é uma receita que recusa o próprio download.
