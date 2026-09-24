@@ -25,6 +25,17 @@
 //! a string de versão embutida no cabeçalho do bzImage é comparada com a do
 //! kernel em execução. Se a máquina arrancou pela reserva porque o atual não
 //! arrancava, o atual é substituído e a reserva fica onde está.
+//!
+//! QUAL ESP. A da entrada "Distrópica" da NVRAM, que é de onde o firmware
+//! arranca. Mas há sistema instalado sem ela, e não por defeito: o instalador
+//! trata a falha de registrá-la como AVISO, porque o caminho de reserva basta
+//! em muita máquina, e toda instalação sem firmware UEFI de verdade (a de
+//! aceite, que arranca o kernel direto) termina assim. Recusar esse sistema
+//! era deixá-lo para sempre no kernel da ISO de onde nasceu — o defeito que
+//! este módulo existe para acabar. Sem a entrada, a ESP é reconhecida pelo
+//! conteúdo: a ÚNICA cujo EFI atual ou anterior traz, no cabeçalho, a string
+//! de versão do kernel desta sessão. Não é palpite — aquele arquivo é o kernel
+//! que está rodando. Nenhuma ou mais de uma, e nada se escreve.
 
 use anyhow::{bail, Context, Result};
 use std::fs;
@@ -285,6 +296,30 @@ pub fn registra_entradas(efivars: &Path, esp: &efi_boot::Esp, tem_anterior: bool
     Ok(())
 }
 
+/// Toda partição do sysfs que o GPT do disco dela diz ser uma ESP, com o nó de
+/// dispositivo e a entrada lida.
+fn esps(sysfs: &Path, dev: &Path) -> Result<Vec<(PathBuf, efi_boot::Esp)>> {
+    let mut entradas: Vec<String> = fs::read_dir(sysfs)
+        .with_context(|| format!("listando {}", sysfs.display()))?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|nome| sysfs.join(nome).join("partition").is_file())
+        .collect();
+    entradas.sort();
+    let mut saida = Vec::new();
+    for nome in entradas {
+        let particao = dev.join(&nome);
+        let Ok((disco, numero)) = efi_boot::disco_da_particao(sysfs, &particao) else {
+            continue;
+        };
+        let setor = efi_boot::setor_logico(sysfs, &disco);
+        if let Ok(esp) = efi_boot::le_esp(&disco, numero, setor) {
+            saida.push((particao, esp));
+        }
+    }
+    Ok(saida)
+}
+
 /// Acha, entre as partições do sysfs, a ESP cujo GUID único é `guid`. É o GUID
 /// que a entrada "Distrópica" da NVRAM carrega — a ESP de onde o firmware de
 /// fato arranca, e não a primeira que tiver o rótulo certo: numa rota manual a
@@ -294,26 +329,76 @@ pub fn particao_com_guid(
     dev: &Path,
     guid: &[u8; 16],
 ) -> Result<(PathBuf, efi_boot::Esp)> {
-    let mut entradas: Vec<String> = fs::read_dir(sysfs)
-        .with_context(|| format!("listando {}", sysfs.display()))?
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .filter(|nome| sysfs.join(nome).join("partition").is_file())
-        .collect();
-    entradas.sort();
-    for nome in entradas {
-        let particao = dev.join(&nome);
-        let Ok((disco, numero)) = efi_boot::disco_da_particao(sysfs, &particao) else {
+    esps(sysfs, dev)?
+        .into_iter()
+        .find(|(_, esp)| &esp.guid == guid)
+        .context("nenhuma partição do sysfs tem o GUID da ESP registrada na NVRAM")
+}
+
+/// `efi` traz, no cabeçalho do bzImage, exatamente o kernel `rodando` —
+/// release e versão de build, que carrega a data da compilação.
+fn traz_o_kernel(rodando: &(String, String), efi: Option<&[u8]>) -> bool {
+    efi.and_then(versao_do_bzimage)
+        .and_then(|texto| release_e_versao(&texto))
+        .as_ref()
+        == Some(rodando)
+}
+
+/// Das ESPs que trazem o kernel desta sessão, a única. Separada da sondagem
+/// para o teste cobrar a decisão sem montar nada.
+fn unica_com_o_kernel(
+    mut achadas: Vec<(PathBuf, efi_boot::Esp)>,
+) -> Result<(PathBuf, efi_boot::Esp)> {
+    match achadas.len() {
+        1 => Ok(achadas.remove(0)),
+        0 => bail!(
+            "a NVRAM não tem a entrada \"{ROTULO_ATUAL}\" que diz qual é a ESP, e nenhuma \
+             ESP desta máquina traz o EFI do kernel que está rodando; registre-a com \
+             `minipax efi-boot --esp <partição>` e repita"
+        ),
+        _ => bail!(
+            "a NVRAM não tem a entrada \"{ROTULO_ATUAL}\", e {} ESPs trazem o EFI do kernel \
+             que está rodando ({}) — uma mídia de instalação conectada faz isso; remova-a, \
+             ou registre a certa com `minipax efi-boot --esp <partição>`, e repita",
+            achadas.len(),
+            achadas
+                .iter()
+                .map(|(particao, _)| particao.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+/// A ESP reconhecida pelo conteúdo, para o sistema sem a entrada na NVRAM (ver
+/// o cabeçalho do módulo). Cada ESP é montada SÓ PARA LEITURA durante a
+/// sondagem: uma ESP alheia não ganha nem o bit de sujo do FAT por ter sido
+/// olhada.
+fn esp_do_kernel(
+    sysfs: &Path,
+    dev: &Path,
+    proc_version: Option<&str>,
+) -> Result<(PathBuf, efi_boot::Esp)> {
+    let rodando = proc_version.and_then(release_e_versao).context(
+        "sem a entrada da NVRAM e sem /proc/version legível, não há como reconhecer a ESP",
+    )?;
+    let mut achadas = Vec::new();
+    for (particao, esp) in esps(sysfs, dev)? {
+        let Ok(montagem) = Montagem::abre(&particao, true) else {
             continue;
         };
-        let setor = efi_boot::setor_logico(sysfs, &disco);
-        if let Ok(esp) = efi_boot::le_esp(&disco, numero, setor) {
-            if &esp.guid == guid {
-                return Ok((particao, esp));
-            }
+        let casa = [ATUAL, ANTERIOR].iter().any(|relativo| {
+            traz_o_kernel(
+                &rodando,
+                fs::read(montagem.raiz.join(relativo)).ok().as_deref(),
+            )
+        });
+        drop(montagem);
+        if casa {
+            achadas.push((particao, esp));
         }
     }
-    bail!("nenhuma partição do sysfs tem o GUID da ESP registrada na NVRAM")
+    unica_com_o_kernel(achadas)
 }
 
 /// Onde a partição já está montada, se estiver, pelo `maj:min` do
@@ -343,7 +428,7 @@ struct Montagem {
 }
 
 impl Montagem {
-    fn abre(particao: &Path) -> Result<Self> {
+    fn abre(particao: &Path, somente_leitura: bool) -> Result<Self> {
         if let Some(raiz) = ja_montada(particao) {
             return Ok(Montagem { raiz, nossa: false });
         }
@@ -351,16 +436,14 @@ impl Montagem {
         fs::create_dir_all(&raiz).with_context(|| format!("criando {}", raiz.display()))?;
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&raiz, fs::Permissions::from_mode(0o700))?;
-        rustix::mount::mount(
-            particao,
-            &raiz,
-            "vfat",
-            rustix::mount::MountFlags::NOSUID
-                | rustix::mount::MountFlags::NODEV
-                | rustix::mount::MountFlags::NOEXEC,
-            None::<&std::ffi::CStr>,
-        )
-        .with_context(|| format!("montando {} em {}", particao.display(), raiz.display()))?;
+        let mut flags = rustix::mount::MountFlags::NOSUID
+            | rustix::mount::MountFlags::NODEV
+            | rustix::mount::MountFlags::NOEXEC;
+        if somente_leitura {
+            flags |= rustix::mount::MountFlags::RDONLY;
+        }
+        rustix::mount::mount(particao, &raiz, "vfat", flags, None::<&std::ffi::CStr>)
+            .with_context(|| format!("montando {} em {}", particao.display(), raiz.display()))?;
         Ok(Montagem { raiz, nossa: true })
     }
 }
@@ -459,20 +542,22 @@ pub fn executa(opcoes: &Opcoes) -> Result<Relatorio> {
 
     let _efivars = Efivars::abre(&opcoes.efivars);
     // A ESP é a da entrada "Distrópica" da NVRAM: é dela que o firmware
-    // arranca. Sem essa entrada (firmware sem runtime, NVRAM zerada) não há
-    // como saber qual partição é a nossa sem adivinhar, e adivinhar partição
-    // para escrever kernel não se faz.
-    let nossa = efi_boot::opcao_com_rotulo(&opcoes.efivars, ROTULO_ATUAL)?.with_context(|| {
-        format!(
-            "a NVRAM não tem a entrada \"{ROTULO_ATUAL}\" que diz qual é a ESP; \
-                 registre-a com `minipax efi-boot --esp <partição>` e repita"
-        )
-    })?;
-    let guid = nossa
-        .guid
-        .context("a entrada \"Distrópica\" da NVRAM não aponta partição GPT")?;
-    let (particao, esp) = particao_com_guid(&opcoes.sysfs, &opcoes.dev, &guid)?;
-    let montagem = Montagem::abre(&particao)?;
+    // arranca. Sem a entrada — ou com uma que não aponta partição desta
+    // máquina, ou com a NVRAM ilegível —, nada ali descreve de onde esta
+    // sessão arrancou, e a ESP é reconhecida pelo kernel que traz (ver o
+    // cabeçalho do módulo). Adivinhar partição para escrever kernel continua
+    // sem se fazer.
+    let pela_nvram = efi_boot::opcao_com_rotulo(&opcoes.efivars, ROTULO_ATUAL)
+        .ok()
+        .flatten()
+        .and_then(|nossa| nossa.guid)
+        .and_then(|guid| particao_com_guid(&opcoes.sysfs, &opcoes.dev, &guid).ok());
+    let (particao, esp) = match pela_nvram {
+        Some(achada) => achada,
+        None => esp_do_kernel(&opcoes.sysfs, &opcoes.dev, proc_version.as_deref())?,
+    };
+    let guid = esp.guid;
+    let montagem = Montagem::abre(&particao, false)?;
     let corrente = efi_boot::opcao_corrente(&opcoes.efivars);
     let rodando = qual_rodando(
         corrente.as_ref(),
@@ -649,6 +734,45 @@ mod tests {
             ),
             Rodando::Desconhecido
         );
+    }
+
+    #[test]
+    fn sem_nvram_a_esp_e_a_que_traz_o_kernel_desta_sessao() {
+        let rodando = release_e_versao(
+            "Linux version 7.1.8-distropica-live (d@h) (gcc (GCC) 15.3.0) #1 SMP A\n",
+        )
+        .unwrap();
+        let o_mesmo = bzimage("7.1.8-distropica-live (d@h) #1 SMP A");
+        // Mesmo release, outra compilação: a data no #1 é o que distingue.
+        let outro_build = bzimage("7.1.8-distropica-live (d@h) #1 SMP B");
+        assert!(traz_o_kernel(&rodando, Some(&o_mesmo)));
+        assert!(!traz_o_kernel(&rodando, Some(&outro_build)));
+        assert!(!traz_o_kernel(&rodando, Some(b"nao e um bzimage")));
+        assert!(!traz_o_kernel(&rodando, None));
+    }
+
+    #[test]
+    fn so_uma_esp_com_o_kernel_e_aceita() {
+        let esp = |guid: u8| efi_boot::Esp {
+            numero: 1,
+            primeiro_lba: 2048,
+            setores: 131_072,
+            guid: [guid; 16],
+        };
+        let (particao, achada) =
+            unica_com_o_kernel(vec![(PathBuf::from("/dev/vda1"), esp(5))]).unwrap();
+        assert_eq!(particao, PathBuf::from("/dev/vda1"));
+        assert_eq!(achada.guid, [5u8; 16]);
+        let nenhuma = unica_com_o_kernel(Vec::new()).unwrap_err().to_string();
+        assert!(nenhuma.contains("minipax efi-boot --esp"), "{nenhuma}");
+        // A mídia de instalação ainda conectada traz o mesmo kernel.
+        let duas = unica_com_o_kernel(vec![
+            (PathBuf::from("/dev/vda1"), esp(5)),
+            (PathBuf::from("/dev/sdb1"), esp(6)),
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(duas.contains("/dev/vda1, /dev/sdb1"), "{duas}");
     }
 
     #[test]

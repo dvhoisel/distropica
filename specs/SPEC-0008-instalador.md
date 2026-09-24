@@ -557,6 +557,12 @@ implementada: `minipax boot-update` leva o EFI do pacote a
 `EFI/distropica/anterior.efi`, confere espaço antes de escrever e grava por
 temporário + `rename`, e mantém as duas entradas na NVRAM; se a máquina
 arrancou pela reserva, só o atual é trocado. Nunca remove o EFI em execução.
+A ESP é a da entrada "Distrópica" da NVRAM. Sem ela — o instalador trata a
+falha de registrá-la como aviso, e a NVRAM também se perde numa atualização de
+firmware —, é a ÚNICA ESP cujo EFI atual ou anterior traz, no cabeçalho do
+bzImage, a string de versão do kernel em execução; o `boot-update` registra as
+entradas em seguida. Nenhuma ESP assim, ou mais de uma (a mídia de instalação
+conectada traz o mesmo kernel), e ele recusa sem escrever.
 O minitrue o chama ao retificar o pacote, e o drop-in `07-efi.sh` do base, a
 cada boot. Rescue continua fora do núcleo implementado.
 
