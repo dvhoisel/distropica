@@ -36,7 +36,7 @@ SHA256="0014c7886930454fe8bd4228665b51af55eeae560ea135c9c4cd33f55b2591d9"
 # Certificado publicado pela página oficial https://tukaani.org/xz/ em
 # https://tukaani.org/misc/lasse_collin_pubkey.txt; signer observado e
 # primária 3690C240CE51B4670D30AD1C38EE757D69184620.
-SIG_1="https://github.com/tukaani-project/xz/releases/download/v$VERSION/xz-$VERSION.tar.gz.sig"
+SIG_1="https://github.com/tukaani-project/xz/releases/download/v5.8.4/xz-5.8.4.tar.gz.sig"
 SIG_EPOCH_1=1790270098
 SIGKEY_1="files/upstream-release.asc"
 SIGKEY_FP_1=3690C240CE51B4670D30AD1C38EE757D69184620

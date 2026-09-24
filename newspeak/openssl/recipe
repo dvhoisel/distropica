@@ -16,7 +16,7 @@ SHA256="736b467530f916737b7031310ccb21d8218c6229e61e8e160cd1d3458cd543a8"
 # certifica a nova desde 2026-06-01 (gpg --check-sigs: sig! de 216094DFD0CB81EF),
 # e essa certificação viaja no arquivo. É o caminho que o próprio upstream
 # indica a quem já confiava na antiga.
-SIG_1="https://github.com/openssl/openssl/releases/download/openssl-$VERSION/openssl-$VERSION.tar.gz.asc"
+SIG_1="https://github.com/openssl/openssl/releases/download/openssl-4.0.2/openssl-4.0.2.tar.gz.asc"
 SIG_EPOCH_1=1790270098
 SIGKEY_1="files/upstream-release.asc"
 SIGKEY_FP_1=B146647E45A7B33947AB226B2A2C87D161692D40

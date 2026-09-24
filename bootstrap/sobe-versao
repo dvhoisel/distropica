@@ -294,7 +294,8 @@ for alvo in $alvos; do
     # razão. A rodada da 0.17 subiu elfutils, openssl, xz e ccache por aqui e
     # os quatro ficaram com a assinatura da versão velha — o openssl, ainda,
     # com chave nova. Suba à mão: baixe a assinatura, confira com a chave
-    # pinada (ou com a antiga certificando a nova) e mova o instante.
+    # pinada (ou com a antiga certificando a nova), mova o instante e escreva
+    # a URL da assinatura LITERAL — o schema do minitrue recusa \$VERSION ali.
     if grep -qE '^(SIG|SIG_[0-9]+|SIGSUMS)=' "$receita"; then
         printf '  PULA    %-20s receita assinada: suba à mão, conferindo a assinatura nova
 ' \
