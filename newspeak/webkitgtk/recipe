@@ -38,8 +38,7 @@ build() {
     #     modo quando alguém pedia uma fábrica de camadas;
     #  2. RenderLayerCompositor::updateCompositingLayers() liga o modo composto
     #     ao ver um page overlay, sem olhar se há aceleração, e a raiz que ele
-    #     anexa chega a setRootCompositingLayer() → enterAcceleratedCompositingMode(),
-    #     que no GTK é irreversível (m_alwaysUseCompositing).
+    #     anexa chega a setRootCompositingLayer() → enterAcceleratedCompositingMode().
     # Nos dois casos o LayerTreeHost compõe uma árvore VAZIA e a página fica
     # branca do carregamento em diante, recarregar incluído; com o env
     # WEBKIT_DISABLE_COMPOSITING_MODE, que deixa o backing store do UI nulo, a
@@ -49,9 +48,20 @@ build() {
     # a porta 2 no WebCore (overlay não liga composição sem aceleração) e, por
     # garantia, a própria enterAcceleratedCompositingMode() recusa sob never.
     # Sem a política never nada muda: o WebKitSettings padrão segue em always.
+    # NA 2.54 o patch foi PORTADO, não reaplicado: a enterAcceleratedCompositingMode()
+    # perdeu o bloco do GTK que tornava a entrada irreversível (o que forçava
+    # forceCompositingMode ao entrar), e a guarda passou a ser a primeira linha
+    # dela. As duas portas continuam lá na 2.54.0, conferidas no fonte do
+    # tarball; o modo composto agora pode sair por timer quando a raiz some, mas
+    # um overlay a mantém anexada, e a página continuaria branca enquanto ele
+    # existir. Os três chamadores da função convivem com o LayerTreeHost nulo
+    # que a guarda deixa: a fábrica devolve nula, o setRootCompositingLayer()
+    # volta a tentar na próxima raiz e recusa de novo, e o
+    # enterAcceleratedCompositingModeIfNeeded() nem a chama sob never, porque
+    # m_alwaysUseCompositing exige a composição acelerada ligada.
     # O sha do patch fica aqui para que a impressão digital da receita mude
     # com ele — a impressão vem do texto da receita, não de files/.
-    echo "26619849dca1754276d09fc68def06f3876c31cb7dcbba05e03f6f6d45d1aca8  $WORK/nao-compor-sem-aceleracao.patch" \
+    echo "86111162f5fb5486879d44ba297a76fd43348a2380b0102e01fb6ca61c2c6802  $WORK/nao-compor-sem-aceleracao.patch" \
         | sha256sum -c > /dev/null || { echo "webkitgtk: o patch nao e o esperado" >&2; exit 1; }
     patch -p1 < "$WORK/nao-compor-sem-aceleracao.patch"
     [ "$(grep -c 'corePage()->settings().acceleratedCompositingEnabled())$' \

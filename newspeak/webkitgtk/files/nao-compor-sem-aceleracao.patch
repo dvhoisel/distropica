@@ -1,6 +1,6 @@
---- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp	2026-08-29 20:09:40.668352658 -0300
-+++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp	2026-08-29 20:09:40.688194042 -0300
-@@ -314,6 +314,15 @@
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp	2026-07-24 05:02:56.198356000 -0300
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp	2026-09-24 11:25:28.725385894 -0300
+@@ -277,6 +277,15 @@
  
  GraphicsLayerFactory* DrawingAreaCoordinatedGraphics::graphicsLayerFactory()
  {
@@ -16,26 +16,27 @@
      if (!m_layerTreeHost)
          enterAcceleratedCompositingMode(nullptr);
      return m_layerTreeHost ? m_layerTreeHost->graphicsLayerFactory() : nullptr;
-@@ -563,6 +572,16 @@
+@@ -440,6 +449,17 @@
  
  void DrawingAreaCoordinatedGraphics::enterAcceleratedCompositingMode(GraphicsLayer* graphicsLayer)
  {
 +    // Distropica: the hardware-acceleration policy 'never' disables accelerated
 +    // compositing in the settings, and every caller of this function must obey
-+    // it. On GTK entering the mode is irreversible (m_alwaysUseCompositing,
-+    // below), and the LayerTreeHost would then composite a tree WebCore never
++    // it. Otherwise the LayerTreeHost would composite a tree WebCore never
 +    // populates: the UI process leaves the software path and the page goes
-+    // blank for good, reload included. The root layer WebCore attached (for a
-+    // page overlay, measured on youtube.com) stays a standalone layer; the page
-+    // keeps painting through the bitmap path.
++    // blank, reload included. The root layer WebCore attached (for a page
++    // overlay, measured on youtube.com) stays a standalone layer; the page
++    // keeps painting through the bitmap path. Every caller copes with a null
++    // m_layerTreeHost afterwards: setRootCompositingLayer() returns, and
++    // graphicsLayerFactory() hands out no factory.
 +    if (!m_webPage->corePage()->settings().acceleratedCompositingEnabled())
 +        return;
- #if PLATFORM(GTK)
-     if (!m_alwaysUseCompositing) {
-         m_webPage->corePage()->settings().setForceCompositingMode(true);
---- a/Source/WebCore/rendering/RenderLayerCompositor.cpp	2026-08-29 20:09:40.676391461 -0300
-+++ b/Source/WebCore/rendering/RenderLayerCompositor.cpp	2026-08-29 20:09:40.688757812 -0300
-@@ -1083,7 +1083,12 @@
+     m_exitCompositingTimer.stop();
+     m_wantsToExitAcceleratedCompositingMode = false;
+ 
+--- a/Source/WebCore/rendering/RenderLayerCompositor.cpp	2026-08-06 08:51:46.954171200 -0300
++++ b/Source/WebCore/rendering/RenderLayerCompositor.cpp	2026-09-24 11:25:28.708505244 -0300
+@@ -1069,7 +1069,12 @@
          return false;
      }
  
@@ -48,4 +49,4 @@
 +    if (!m_compositing && m_hasAcceleratedCompositing && (m_forceCompositingMode || (isRootFrameCompositor() && page().pageOverlayController().overlayCount())))
          enableCompositingMode(true);
  
-     bool isPageScroll = !updateRoot || updateRoot == &rootRenderLayer();
+     bool isPageScroll = !updateRootArg || updateRootArg == &rootRenderLayer();
