@@ -568,11 +568,30 @@ de_sourceforge() {  # url
         grep -oE '/[0-9]+(\.[0-9]+)+/' | tr -d '/' | maior
 }
 
-de_sourcehut() {  # url
+# O LUAJIT NÃO FAZ RELEASE. O rolling release é o topo do ramo v2.1, e o
+# número que o próprio executável imprime é 2.1.<carimbo do committer>, que o
+# Makefile lê do .relver do arquivo. A consulta pede o último commit do ramo
+# e monta o mesmo número — sem isto o luajit saía "consulta falhou" (404 do
+# releases/latest de um projeto sem releases) em toda rodada.
+de_luajit() {
+    data=$(busca "https://api.github.com/repos/LuaJIT/LuaJIT/commits/v2.1" |
+        python3 -c 'import json, sys; print(json.load(sys.stdin)["commit"]["committer"]["date"])' \
+        2>/dev/null) || return 1
+    carimbo=$(date -u -d "$data" +%s 2>/dev/null) || return 1
+    printf '2.1.%s' "$carimbo"
+}
+
+de_sourcehut() {  # url, versao pinada
     caminho=$(printf '%s' "$1" | sed -n 's|^https\?://git\.sr\.ht/\(~[^/]*/[^/]*\)/.*|\1|p')
     [ -n "$caminho" ] || return 1
-    busca "https://git.sr.ht/$caminho/refs" |
-        grep -oE 'refs/[0-9]+(\.[0-9]+)+' | sed 's|refs/||' | maior
+    # PELO RSS, e não pela página. A página de refs do sr.ht deixou de ter
+    # links refs/<tag> — o nome da tag virou texto solto num <h4> —, e o
+    # wlrctl saía "não conferido" em toda rodada. O refs/rss.xml traz uma
+    # <title> por tag, que é a forma que o próprio sr.ht oferece para ser lida
+    # por máquina; o normalizador tira o v do v0.2.2.
+    busca "https://git.sr.ht/$caminho/refs/rss.xml" |
+        grep -oE '<title>[^<]*</title>' | sed 's|<title>||; s|</title>||' |
+        normaliza_tag | filtra_candidatos "${2:-}" | maior
 }
 
 # Codeberg roda Gitea, e a API de releases dele tem a mesma forma da do GitHub
@@ -670,7 +689,8 @@ upstream_de() {  # url, versao pinada, [série a que se restringir]
             *kernel.org/pub/linux/kernel/*|*dl.google.com/*|*ziglang.org/*|\
             *static.rust-lang.org/*|*sourceforge.net/*|*codeberg.org/*|\
             *sqlite.org/*|*git.sr.ht/*|*git.zx2c4.com/*|*curl.se/ca/*|\
-            *busybox.net/*|*cpan.org/*) return 1 ;;
+            *busybox.net/*|*cpan.org/*|*archives.boost.io/*|\
+            *media.inkscape.org/*|*downloads.webmproject.org/*) return 1 ;;
             *) if familia_par "$1"; then
                    de_listagem "$1" "$2" "$3" par
                else
@@ -682,6 +702,20 @@ upstream_de() {  # url, versao pinada, [série a que se restringir]
     case "$1" in
         *mozilla.net/pub/firefox/releases/*|*mozilla.org/pub/firefox/releases/*)
                                       de_mozilla_firefox ;;
+        # ONDE O TARBALL MORA NÃO É ONDE A VERSÃO SE ANUNCIA. Estes quatro
+        # saíam "não conferidos": o arquivo vem de um espelho sem índice
+        # legível, e a lista de versões mora no repositório do projeto. A
+        # consulta vai ao repositório declarado aqui, por nome, e o filtro de
+        # tags é o mesmo de sempre (boost-1.92.0.beta1 e INKSCAPE_1_4_4_RC
+        # não passam por ele).
+        *github.com/LuaJIT/LuaJIT/archive/*) de_luajit ;;
+        *archives.boost.io/*)        de_github https://github.com/boostorg/boost/ "$2" ;;
+        *media.inkscape.org/*)       de_gitlab https://gitlab.com/inkscape/inkscape/ "$2" ;;
+        *downloads.webmproject.org/releases/webp/*)
+                                      de_github https://github.com/webmproject/libwebp/ "$2" ;;
+        # O site do potrace é um subdomínio do SourceForge; o projeto de
+        # arquivos, que é quem o de_sourceforge sabe ler, é outro endereço.
+        *potrace.sourceforge.net/*)  de_sourceforge https://sourceforge.net/projects/potrace/files/ ;;
         *sourceware.org/elfutils/ftp/*) de_elfutils ;;
         *github.com/*)               de_github "$1" "$2" ;;
         *download.gnome.org/*)       de_gnome "$1" "$2" ;;
@@ -694,7 +728,7 @@ upstream_de() {  # url, versao pinada, [série a que se restringir]
         *sourceforge.net/*)          de_sourceforge "$1" ;;
         *codeberg.org/*)             de_codeberg "$1" ;;
         *sqlite.org/*)               de_sqlite ;;
-        *git.sr.ht/*)                de_sourcehut "$1" ;;
+        *git.sr.ht/*)                de_sourcehut "$1" "$2" ;;
         *git.zx2c4.com/*)            de_cgit "$1" ;;
         *curl.se/ca/*)               de_curl_ca ;;
         *busybox.net/downloads/binaries/*) de_busybox_bin ;;
