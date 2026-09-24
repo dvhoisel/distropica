@@ -1,0 +1,348 @@
+#!/bin/sh
+# Aceite da atualização N-1 → N: um sistema instalado pela versão anterior se
+# atualiza pelo canal, como o dono dele faria, e volta a bootar no kernel novo.
+#
+# POR QUE ISTO EXISTE. A 0.17 é a versão cujo tema é "o sistema instalado se
+# atualiza", e nenhum aceite anterior provava isso: todos instalavam do zero.
+# Um sistema da 0.16 tem um minitrue que não conhece ADOPTS, um EFI que nenhum
+# pacote possuía e uma ESP sem reserva; a travessia passa pela ponte
+# (minitrue-ponte) e só é verdade se acontecer num disco que a 0.16 instalou.
+#
+# O QUE O ACEITE MUDA NO SISTEMA, e só isto:
+#   · o disco é uma CÓPIA; o original nunca é aberto para escrita;
+#   · a conta root ganha uma senha de teste escrita por debugfs com a
+#     partição desmontada — o aceite do instalador deixa o root bloqueado
+#     (distropica.test=1), e sem root não há como rodar o rectify;
+#   · as URLs do canal e da árvore apontam os caminhos de TESTE do mesmo
+#     servidor. A chave continua a pinada, e a assinatura é conferida do mesmo
+#     jeito: muda de onde os bytes vêm, não quem responde por eles.
+#
+# O roteiro dentro do convidado é o da ponte, que é o que o site vai mandar
+# quem instalou até a 0.16 digitar:
+#   minitrue rectify newspeak
+#   minitrue rectify minitrue-ponte
+#   minitrue-ponte rectify minitrue minipax distropica-efi
+#   minitrue rectify --sync
+#   minitrue memoryhole minitrue-ponte
+# e depois dele reinicia e exige: kernel novo no uname, o EFI do pacote como
+# atual da ESP com o que arrancou antes guardado como anterior, e o
+# boot-update dizendo que quem arrancou foi o atual.
+set -eu
+umask 022
+LC_ALL=C
+export LC_ALL
+
+DISCO=
+LOG_DIR=
+CANAL=
+NEWSPEAK=
+EFI_ESPERADO=
+KERNEL_ESPERADO=
+OVMF_CODE=${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE_4M.fd}
+OVMF_VARS=${OVMF_VARS:-/usr/share/OVMF/OVMF_VARS_4M.fd}
+QEMU=${QEMU_SYSTEM_X86_64:-qemu-system-x86_64}
+MEMORIA=4096
+ACCEL=kvm
+TETO_COMANDO=5400
+
+uso() {
+    cat <<'EOF'
+uso: bootstrap/live/accept-upgrade --disk ANTERIOR.raw --log-dir NOVO-DIR \
+       --canal URL --newspeak URL --efi-esperado ARQ --kernel-esperado VERSAO
+
+  --disk ARQ            disco instalado pela versão anterior; é COPIADO
+  --log-dir DIR         diretório novo: a cópia do disco, os logs do serial,
+                        a NVRAM e o relatório
+  --canal URL           canal a usar no lugar do oficial (o de teste)
+  --newspeak URL        origem da árvore no lugar da oficial (a de teste)
+  --efi-esperado ARQ    o EFI que o pacote distropica-efi deve pôr na ESP
+  --kernel-esperado V   o uname -r do segundo boot
+  --memory-mib N        default: 4096
+  --accel kvm|tcg       default: kvm
+  --teto N              segundos por comando no convidado (default: 5400)
+EOF
+}
+
+falha() { echo "accept-upgrade: erro: $*" >&2; exit 1; }
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --disk) DISCO=${2:?}; shift 2 ;;
+        --log-dir) LOG_DIR=${2:?}; shift 2 ;;
+        --canal) CANAL=${2:?}; shift 2 ;;
+        --newspeak) NEWSPEAK=${2:?}; shift 2 ;;
+        --efi-esperado) EFI_ESPERADO=${2:?}; shift 2 ;;
+        --kernel-esperado) KERNEL_ESPERADO=${2:?}; shift 2 ;;
+        --memory-mib) MEMORIA=${2:?}; shift 2 ;;
+        --accel) ACCEL=${2:?}; shift 2 ;;
+        --teto) TETO_COMANDO=${2:?}; shift 2 ;;
+        -h|--help) uso; exit 0 ;;
+        *) uso >&2; falha "opção desconhecida: $1" ;;
+    esac
+done
+for obrigatorio in "$DISCO" "$LOG_DIR" "$CANAL" "$NEWSPEAK" "$EFI_ESPERADO" "$KERNEL_ESPERADO"; do
+    [ -n "$obrigatorio" ] || { uso >&2; falha "faltam argumentos obrigatórios"; }
+done
+[ -f "$DISCO" ] || falha "disco não existe: $DISCO"
+[ -f "$EFI_ESPERADO" ] || falha "EFI esperado não existe: $EFI_ESPERADO"
+[ ! -e "$LOG_DIR" ] || falha "log-dir já existe: $LOG_DIR"
+case "$CANAL$NEWSPEAK" in *"'"*|*' '*) falha "URL com aspas ou espaço" ;; esac
+case "$CANAL" in https://*/) ;; *) falha "--canal precisa ser https:// e terminar em /" ;; esac
+case "$NEWSPEAK" in https://*/) ;; *) falha "--newspeak precisa ser https:// e terminar em /" ;; esac
+case "$ACCEL" in kvm|tcg) ;; *) falha "--accel inválido" ;; esac
+[ "$ACCEL" != kvm ] || [ -r /dev/kvm ] || falha "--accel kvm exige /dev/kvm legível"
+for ferramenta in "$QEMU" python3 debugfs sfdisk openssl; do
+    command -v "$ferramenta" >/dev/null 2>&1 || falha "$ferramenta ausente"
+done
+
+mkdir -p "$LOG_DIR"
+LOG_DIR=$(CDPATH= cd -- "$LOG_DIR" && pwd -P)
+COPIA=$LOG_DIR/disco.raw
+echo "accept-upgrade: 1/3 cópia do disco anterior"
+cp --sparse=always "$DISCO" "$COPIA"
+
+# A raiz é a partição Linux da GPT; o offset sai da própria tabela.
+OFF=$(sfdisk -J "$COPIA" | python3 -c '
+import json, sys
+t = json.load(sys.stdin)["partitiontable"]
+raiz = [p for p in t["partitions"] if p["type"].upper() == "0FC63DAF-8483-4772-8E79-3D69D8477DE4"]
+if len(raiz) != 1:
+    raise SystemExit("esperava exatamente uma partição Linux")
+print(raiz[0]["start"] * t.get("sectorsize", 512))
+') || falha "não achei a partição raiz na GPT"
+
+# JOURNAL LIMPO antes de qualquer escrita: o debugfs não replaya journal, e
+# escrever sobre um needs_recovery produz o disco que o boot seguinte
+# "conserta" apagando a escrita.
+python3 - "$COPIA" "$OFF" <<'PY' || falha "o disco anterior não está limpo"
+import struct, sys
+disco, off = sys.argv[1], int(sys.argv[2])
+with open(disco, "rb") as f:
+    f.seek(off + 1024)
+    sb = f.read(1024)
+if struct.unpack_from("<H", sb, 56)[0] != 0xEF53:
+    raise SystemExit("sem ext4 na partição raiz")
+if struct.unpack_from("<I", sb, 0x60)[0] & 0x4:
+    raise SystemExit("journal com needs_recovery")
+PY
+
+echo "accept-upgrade: 2/3 senha de teste da conta root (debugfs, partição desmontada)"
+SENHA=teste-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
+HASH=$(printf '%s' "$SENHA" | openssl passwd -6 -stdin) || falha "openssl passwd falhou"
+DFS="$COPIA?offset=$OFF"
+debugfs -R 'dump /etc/shadow '"$LOG_DIR/shadow.original" "$DFS" >/dev/null 2>&1 ||
+    falha "não li o /etc/shadow do disco"
+modo=$(debugfs -R 'stat /etc/shadow' "$DFS" 2>/dev/null | sed -n 's/.*Mode: *\(0[0-7]*\).*/\1/p' | head -1)
+[ -n "$modo" ] || falha "não li o modo do /etc/shadow"
+awk -F: -v OFS=: -v h="$HASH" '$1 == "root" { $2 = h; achou = 1 } { print } END { if (!achou) exit 1 }' \
+    "$LOG_DIR/shadow.original" > "$LOG_DIR/shadow.teste" || falha "o shadow do disco não tem a conta root"
+cat > "$LOG_DIR/shadow.debugfs" <<EOF
+rm /etc/shadow
+write $LOG_DIR/shadow.teste /etc/shadow
+sif /etc/shadow mode 0100${modo#0}
+sif /etc/shadow uid 0
+sif /etc/shadow gid 0
+EOF
+debugfs -w -f "$LOG_DIR/shadow.debugfs" "$DFS" >/dev/null 2>&1 ||
+    falha "debugfs não gravou o /etc/shadow"
+debugfs -R 'cat /etc/shadow' "$DFS" 2>/dev/null | grep -q "^root:\\\$6\\\$" ||
+    falha "a senha de teste não ficou no /etc/shadow"
+rm -f "$LOG_DIR/shadow.original" "$LOG_DIR/shadow.teste" "$LOG_DIR/shadow.debugfs"
+
+cp "$OVMF_VARS" "$LOG_DIR/OVMF_VARS.fd"
+chmod u+w "$LOG_DIR/OVMF_VARS.fd"
+EFI_NOVO=$(sha256sum "$EFI_ESPERADO" | cut -d' ' -f1)
+
+echo "accept-upgrade: 3/3 a travessia, dentro do convidado"
+SENHA=$SENHA python3 - "$QEMU" "$ACCEL" "$MEMORIA" "$OVMF_CODE" "$LOG_DIR" \
+    "$CANAL" "$NEWSPEAK" "$EFI_NOVO" "$KERNEL_ESPERADO" "$TETO_COMANDO" <<'PY'
+import atexit, os, re, socket, subprocess, sys, time
+
+(qemu, accel, memoria, ovmf_code, log_dir, canal, newspeak, efi_novo,
+ kernel_esperado, teto) = sys.argv[1:]
+teto = int(teto)
+senha = os.environ["SENHA"]
+relatorio = open(os.path.join(log_dir, "relatorio.txt"), "w", encoding="utf-8")
+
+# Um QEMU órfão segura o /dev/kvm e o disco da prova. Qualquer saída — a
+# falha de um comando no convidado inclusive — derruba o que estiver de pé; o
+# disco fica como estava, para o diagnóstico.
+vivos = []
+
+
+def mata_vivos():
+    for proc in vivos:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
+atexit.register(mata_vivos)
+
+
+def diz(texto):
+    print(f"accept-upgrade:   {texto}", flush=True)
+    relatorio.write(texto + "\n")
+    relatorio.flush()
+
+
+class Convidado:
+    """Um boot do disco, dirigido pelo serial como um console de verdade."""
+
+    def __init__(self, rodada):
+        self.sock_path = os.path.join(log_dir, f"serial-{rodada}.sock")
+        self.log = open(os.path.join(log_dir, f"serial-{rodada}.log"), "wb")
+        self.buf = b""
+        cmd = [qemu, "-machine", f"q35,accel={accel}", "-m", memoria, "-smp", "2",
+               "-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
+               "-drive", f"if=pflash,format=raw,file={log_dir}/OVMF_VARS.fd",
+               # writethrough: o que o convidado escreveu chega ao arquivo antes
+               # do write retornar — o disco que sobra é o que o sistema fez.
+               "-drive", f"file={log_dir}/disco.raw,format=raw,if=none,id=d,cache=writethrough",
+               "-device", "virtio-blk-pci,drive=d,bootindex=1",
+               "-nic", "user,model=virtio-net-pci",
+               "-display", "none",
+               "-serial", f"unix:{self.sock_path},server=on,wait=on",
+               "-monitor", "none", "-no-reboot"]
+        self.proc = subprocess.Popen(cmd, stdout=open(os.path.join(log_dir, f"qemu-{rodada}.log"), "wb"),
+                                     stderr=subprocess.STDOUT)
+        vivos.append(self.proc)
+        for _ in range(200):
+            if os.path.exists(self.sock_path):
+                break
+            time.sleep(0.05)
+        self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.s.connect(self.sock_path)
+        self.s.settimeout(1.0)
+
+    def espera(self, padrao, teto_s):
+        rx = re.compile(padrao)
+        fim = time.time() + teto_s
+        while True:
+            m = rx.search(self.buf)
+            if m:
+                antes = self.buf[:m.start()]
+                self.buf = self.buf[m.end():]
+                return antes, m
+            if time.time() > fim:
+                raise SystemExit(f"o convidado não mostrou {padrao!r} em {teto_s}s")
+            if self.proc.poll() is not None:
+                raise SystemExit(f"o QEMU saiu esperando {padrao!r}")
+            try:
+                dado = self.s.recv(65536)
+            except socket.timeout:
+                continue
+            if not dado:
+                raise SystemExit(f"o serial fechou esperando {padrao!r}")
+            self.log.write(dado)
+            self.log.flush()
+            self.buf += dado
+
+    def manda(self, texto):
+        self.s.sendall(texto.encode())
+
+    def login(self):
+        self.espera(rb"distropica login: ", 600)
+        self.manda("root\n")
+        self.espera(rb"Password: ", 60)
+        self.manda(senha + "\n")
+        # Um shell NÃO interativo, com o eco do tty desligado: sem prompt, sem
+        # editor de linha redesenhando comandos longos, a saída de cada
+        # comando chega sozinha. O marcador é montado pelo shell, então nem o
+        # eco desta linha — a última que o editor ainda ecoa — casa com ele.
+        self.manda("stty -echo; exec /bin/sh -s\n")
+        self.manda("echo PRON''TO\n")
+        self.espera(rb"PRONTO\r?\n", 60)
+
+    def roda(self, comando, teto_s=teto):
+        """Roda um comando e devolve (código, saída). O código vem do shell."""
+        self.manda(f"{comando}; echo \"__F\"\"IM__ $?\"\n")
+        antes, m = self.espera(rb"__FIM__ (\d+)\r?\n", teto_s)
+        return int(m.group(1)), antes.decode("utf-8", "replace").replace("\r", "")
+
+    def exige(self, comando, teto_s=teto):
+        codigo, saida = self.roda(comando, teto_s)
+        diz(f"$ {comando}  ->  {codigo}")
+        if codigo != 0:
+            for linha in saida.strip().splitlines()[-25:]:
+                diz(f"    {linha}")
+            raise SystemExit(f"falhou no convidado: {comando}")
+        return saida
+
+    def encerra(self, comando):
+        self.manda(comando + "\n")
+        try:
+            self.proc.wait(timeout=300)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            raise SystemExit(f"o convidado não encerrou depois de {comando}")
+        self.s.close()
+
+
+def sha(saida):
+    m = re.search(r"\b[0-9a-f]{64}\b", saida)
+    if not m:
+        raise SystemExit(f"esperava um sha256 em: {saida!r}")
+    return m.group(0)
+
+
+def campo(saida, nome):
+    m = re.search(rf"^{nome}=(\S+)", saida, re.M)
+    return m.group(1) if m else ""
+
+
+# ---- primeiro boot: o sistema da versão anterior, como está ----------------
+g = Convidado(1)
+g.login()
+diz("login de root no sistema anterior")
+g.exige("uname -r")
+# A rede do QEMU vem por DHCP no rcS; o rectify não pode começar antes dela.
+g.exige("i=0; until nslookup distropica.com.br >/dev/null 2>&1; do "
+        "i=$((i+1)); [ $i -lt 90 ] || exit 1; sleep 2; done")
+g.exige("mkdir -p /run/aceite-esp && mount /dev/vda1 /run/aceite-esp")
+efi_anterior = sha(g.exige("sha256sum /run/aceite-esp/EFI/BOOT/BOOTX64.EFI"))
+g.exige("umount /run/aceite-esp")
+diz(f"EFI anterior na ESP: {efi_anterior}")
+
+# As URLs de teste. A chave pinada fica onde está.
+g.exige(f"sed -i 's|^URL=.*|URL={canal}|' /var/cache/minitrue/channel-config/oficial")
+g.exige(f"sed -i 's|^URL=.*|URL={newspeak}|' /var/cache/minitrue/newspeak-origem")
+
+for comando in ("minitrue rectify newspeak",
+                "minitrue rectify minitrue-ponte",
+                "minitrue-ponte rectify minitrue minipax distropica-efi",
+                "minitrue rectify --sync",
+                "minitrue memoryhole minitrue-ponte",
+                "minitrue verify"):
+    g.exige(comando)
+
+g.exige(f"sha256sum /opt/distropica-efi/current/BOOTX64.EFI | grep -q '^{efi_novo} '")
+saida = g.exige("minipax boot-update")
+if campo(saida, "BOOT_UPDATE") != "ja-atual" or campo(saida, "BOOT_RUNNING") != "anterior":
+    raise SystemExit("antes do reboot a ESP devia estar rotacionada, com o anterior rodando")
+g.exige("mount /dev/vda1 /run/aceite-esp")
+atual = sha(g.exige("sha256sum /run/aceite-esp/EFI/BOOT/BOOTX64.EFI"))
+reserva = sha(g.exige("sha256sum /run/aceite-esp/EFI/distropica/anterior.efi"))
+g.exige("umount /run/aceite-esp")
+if atual != efi_novo:
+    raise SystemExit(f"o atual da ESP é {atual}, e não o EFI do pacote")
+if reserva != efi_anterior:
+    raise SystemExit(f"a reserva da ESP é {reserva}, e não o EFI que arrancou antes")
+diz("ESP rotacionada: o EFI do pacote é o atual, o anterior ficou de reserva")
+g.encerra("reboot")
+
+# ---- segundo boot: o kernel novo, pelo EFI novo ----------------------------
+g = Convidado(2)
+g.login()
+kernel = g.exige("uname -r").strip().splitlines()[-1].strip()
+if kernel != kernel_esperado:
+    raise SystemExit(f"o segundo boot rodou o kernel {kernel}, e não o {kernel_esperado}")
+saida = g.exige("minipax boot-update")
+if campo(saida, "BOOT_UPDATE") != "ja-atual" or campo(saida, "BOOT_RUNNING") != "atual":
+    raise SystemExit("depois do reboot quem arrancou devia ser o atual, sem nada a escrever")
+g.exige("minitrue verify")
+diz(f"segundo boot: kernel {kernel}, EFI atual, nada pendente")
+g.encerra("poweroff")
+diz("PASS")
+PY
+echo "accept-upgrade: PASS — relatório em $LOG_DIR/relatorio.txt"
