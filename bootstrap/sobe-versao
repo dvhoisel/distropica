@@ -288,6 +288,21 @@ for alvo in $alvos; do
         continue
     fi
 
+    # RECEITA ASSINADA NÃO SOBE AQUI. A assinatura é outro arquivo, de outra
+    # URL, e o instante de verificação (SIG_EPOCH, SIGSUMS_EPOCH) é uma revisão
+    # humana: a assinatura nova é criada DEPOIS dele e o motor a recusa, com
+    # razão. A rodada da 0.17 subiu elfutils, openssl, xz e ccache por aqui e
+    # os quatro ficaram com a assinatura da versão velha — o openssl, ainda,
+    # com chave nova. Suba à mão: baixe a assinatura, confira com a chave
+    # pinada (ou com a antiga certificando a nova) e mova o instante.
+    if grep -qE '^(SIG|SIG_[0-9]+|SIGSUMS)=' "$receita"; then
+        printf '  PULA    %-20s receita assinada: suba à mão, conferindo a assinatura nova
+' \
+            "$pacote"
+        falhos="$falhos $pacote"
+        continue
+    fi
+
     case "$src" in
         *'$VERSION'*|*'${VERSION}'*|*"$velha"*) ;;
         *) rolantes="$rolantes $pacote" ;;
@@ -341,6 +356,18 @@ for alvo in $alvos; do
        ! grep -q "^SRC=\"$fonte_nova\"$" "$novo_recipe" ||
        ! grep -q "^SHA256=\"$obtido\"$" "$novo_recipe"; then
         printf '  ERRO    %-20s a reescrita não pegou; receita intacta\n' "$pacote"
+        rm -f "$novo_recipe"; falhos="$falhos $pacote"; continue
+    fi
+    # A VERSÃO VELHA NÃO PODE SOBRAR FORA DOS TRÊS CAMPOS. Uma guarda que
+    # confere o nome real da biblioteca (libxslt.so.1.1.43) sobe junto com a
+    # receita e derruba o build da versão nova — a cadeia da 0.17 teria morrido
+    # nela. Comentário e ABOUT podem citar a história; código não.
+    sobras=$(grep -nF -- "$velha" "$novo_recipe" |
+        grep -vE '^[0-9]+:[[:space:]]*#' |
+        grep -vE '^[0-9]+:(ABOUT|VERSION|SRC|SHA256)=' | cut -d: -f1 | tr '\n' ' ')
+    if [ -n "$sobras" ]; then
+        printf '  ERRO    %-20s a versão velha %s sobra nas linhas %s; receita intacta\n' \
+            "$pacote" "$velha" "$sobras"
         rm -f "$novo_recipe"; falhos="$falhos $pacote"; continue
     fi
     chmod 644 "$novo_recipe"
