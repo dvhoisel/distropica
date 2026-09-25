@@ -2,7 +2,11 @@ NAME=epiphany
 VERSION=51.0
 KIND=source
 TOOLCHAIN=native
-DEPS="glibc glib gtk4 libadwaita webkitgtk libsoup libsecret gcr json-glib libarchive libportal libxml2 sqlite3 nettle iso-codes gsettings-desktop-schemas gstreamer cairo pango gdk-pixbuf hicolor-icon-theme mathlibs-glibc"
+DEPS="glibc glib gtk4 libadwaita webkitgtk libsoup libsecret gcr json-glib libarchive libportal libxml2 sqlite3 nettle iso-codes gsettings-desktop-schemas gstreamer cairo pango gdk-pixbuf hicolor-icon-theme mathlibs-glibc libpwquality"
+# libpwquality: o Epiphany 51 tornou dependency('pwquality') obrigatória
+# (meson.build:108, sem opção), e a extensão do WebProcess a liga para gerar a
+# senha forte que sugere em formulário de cadastro — pwquality_generate() com
+# 128 bits. Receita nova nesta árvore, sem cracklib: ver o ABOUT dela.
 # mathlibs-glibc: a lib/sync/libephysync.so liga libgmp.so.10 DIRETAMENTE, e não
 # por engano — o código de sincronização com a conta Firefox chama a hogweed da
 # nettle, que é a metade de chave pública e é justamente a que usa GMP. Medido
@@ -36,7 +40,7 @@ DEPS="glibc glib gtk4 libadwaita webkitgtk libsoup libsecret gcr json-glib libar
 # harfbuzz-introspection por conta própria. Ferramentas de build, como o
 # compilador: nenhuma vai para a superfície.
 BUILD_DEPS="make gcc-pass2 binutils-glibc meson ninja pkgconf busybox python-glibc gettext blueprint-compiler gtk4-introspection libadwaita-introspection findutils"
-ABOUT="O NAVEGADOR. GNOME Web, o cliente canonico da API webkitgtk-6.0 e o unico navegador maduro cuja interface e GTK4 nativa — todo o resto ou e GTK3, ou e Qt, ou linka X11 duro. Substitui o Firefox nesta arvore, e a troca e de UM pacote por um: medido, tirar o Firefox da closure da base remove exatamente ele mesmo, porque tudo que ele puxava e compartilhado com a pilha grafica. O que muda de verdade e a natureza do que fica: C e C++ auditaveis por NEEDED, em vez de um binario upstream opaco. Traz sincronizacao com conta Firefox (favoritos, senhas e historico), bloqueio de conteudo embutido pelos content blockers do WebKit, e nada de WebExtensions — nao ha uBlock aqui, o filtro nativo cobre parte. SEM VIDEO, herdado do WebKit construido sem decodificador nenhum: e posicao declarada, nao surpresa. O gstreamer aparece em DEPS mesmo assim porque o meson deste pacote faz dependency('gstreamer-1.0') sem 'required:' — e dependencia dura do proprio navegador, independente do motor. Sem granite (integracao com elementary OS), sem testes e sem man-pages, que exigiriam rst2man."
+ABOUT="O NAVEGADOR. GNOME Web, o cliente canonico da API webkitgtk-6.0 e o unico navegador maduro cuja interface e GTK4 nativa — todo o resto ou e GTK3, ou e Qt, ou linka X11 duro. Substitui o Firefox nesta arvore, e a troca e de UM pacote por um: medido, tirar o Firefox da closure da base remove exatamente ele mesmo, porque tudo que ele puxava e compartilhado com a pilha grafica. O que muda de verdade e a natureza do que fica: C e C++ auditaveis por NEEDED, em vez de um binario upstream opaco. Traz sincronizacao com conta Firefox (favoritos, senhas e historico), bloqueio de conteudo embutido pelos content blockers do WebKit, e nada de WebExtensions — nao ha uBlock aqui, o filtro nativo cobre parte. O VIDEO e o do WebKit: WebM com VP9 e Opus desde a 0.14, e H.264 e AAC fora por escolha de licenciamento — ver a receita do webkitgtk. O gstreamer aparece em DEPS tambem por conta propria, porque o meson deste pacote faz dependency('gstreamer-1.0') sem 'required:' — e dependencia dura do proprio navegador, independente do motor. Sem granite (integracao com elementary OS), sem testes e sem man-pages, que exigiriam rst2man."
 LICENSE=GPL-3.0-or-later
 SRC="https://download.gnome.org/sources/epiphany/51/epiphany-$VERSION.tar.xz"
 SHA256="abaf33576462030c65bb963a56300a7786e7d75834f1c90a9dffda873835c33d"

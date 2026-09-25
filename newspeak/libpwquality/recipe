@@ -1,0 +1,40 @@
+NAME=libpwquality
+VERSION=1.4.5
+KIND=source
+TOOLCHAIN=native
+DEPS="glibc"
+# gawk e findutils: o configure usa awk, e as conferências abaixo usam find — os
+# dois applets do BusyBox saem de cena quando os pacotes reais são construídos
+# no mesmo plano.
+BUILD_DEPS="gcc-pass2 binutils-glibc make gawk busybox findutils"
+ABOUT="A biblioteca de qualidade de senha, e ela entra por UM consumidor: o Epiphany 51 tornou dependency('pwquality') obrigatória, e o que ele faz com ela é gerar senha — pwquality_generate() com 128 bits de /dev/urandom, na extensão do WebProcess, para sugerir senha forte em formulário de cadastro. Construída SEM a cracklib (--disable-cracklib-check): o dicionário só serve para reprovar senha escolhida por gente, e senha sorteada de 128 bits não é palavra de dicionário nenhuma; o pwquality_check segue aplicando as regras de tamanho e de classes de caractere, e a checagem de dicionário sai inteira no #ifdef HAVE_CRACK_H do check.c. A cracklib traria duas receitas, a da biblioteca e a do dicionário, para nada. Sem módulo PAM (a árvore não tem PAM), sem bindings de Python e sem NLS. Ficam a libpwquality.so.1, o pwquality.pc, o /etc/security/pwquality.conf de exemplo, e o pwmake e o pwscore, que geram e avaliam senha na linha de comando."
+LICENSE="BSD-3-Clause OR GPL-2.0-or-later"
+SRC="https://github.com/libpwquality/libpwquality/releases/download/libpwquality-$VERSION/libpwquality-$VERSION.tar.bz2"
+SHA256=6fcf18b75d305d99d04d2e42982ed5b787a081af2842220ed63287a2d6a10988
+
+build() {
+    tar -xjf "$DL" --strip-components=1
+    export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    ./configure --prefix=/usr --libdir=/usr/lib --sysconfdir=/etc --disable-static \
+        --disable-cracklib-check --disable-pam --disable-python-bindings --disable-nls
+    make -j"$JOBS"
+    make install DESTDIR="$STAGE"
+    [ -e "$STAGE/usr/lib/libpwquality.so.1" ] || {
+        echo "libpwquality: libpwquality.so.1 não foi produzida" >&2; exit 1; }
+    [ -e "$STAGE/usr/lib/pkgconfig/pwquality.pc" ] || {
+        echo "libpwquality: pwquality.pc não foi instalado — o meson do Epiphany o procura" >&2
+        exit 1
+    }
+    # As três ausências são promessa do ABOUT, e opção de configure que o
+    # autoconf não reconhece passa calada: o que prova é o ELF e o STAGE.
+    if readelf -d "$STAGE/usr/lib/libpwquality.so.1" | grep -q 'libcrack'; then
+        echo "libpwquality: ligou a cracklib, que deveria estar fora" >&2
+        exit 1
+    fi
+    [ -z "$(find "$STAGE" -path '*/security/pam_pwquality*')" ] || {
+        echo "libpwquality: o módulo PAM veio mesmo assim" >&2; exit 1; }
+    [ -z "$(find "$STAGE" -name '*.py' -o -name 'pwquality*.so' -path '*python*')" ] || {
+        echo "libpwquality: os bindings de Python vieram mesmo assim" >&2; exit 1; }
+    find "$STAGE" -name '*.la' -delete
+    find "$STAGE" -type d -empty -delete
+}
