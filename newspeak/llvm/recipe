@@ -12,7 +12,19 @@ SHA256="c98bbef08a2b4c2613cd50e9aa9ae7b69b1fe6c16b2c40373bc0ab6116fdf78a"
 build() {
     tar -xJf "$DL" --strip-components=1
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # LLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF, e o motivo é o RPATH. Desde o 23,
+    # o llvm_setup_rpath() do AddLLVM.cmake acrescenta $ORIGIN/../lib/<triplo> ao
+    # RPATH de toda biblioteca e ferramenta quando a opção está ligada — e ela
+    # nasce ligada no Linux. É o diretório por alvo dos RUNTIMES (compiler-rt,
+    # libc++), que esta receita não constrói; resolvido, aponta
+    # /usr/lib/x86_64-unknown-linux-gnu, que pacote nenhum fornece. A auditoria
+    # de fechamento acusou a fuga nos quatro objetos com RPATH (libLLVM, libLTO,
+    # libRemarks e llvm-config), a ABI do llvm ficou pendente e a cadeia da 0.17
+    # o recompilou a cada retomada; o fechamento estrito o recusaria. Nesta
+    # árvore a opção não tem outro consumidor além do RPATH — conferido no
+    # fonte pinado.
     cmake -S llvm -B build -G Ninja \
+        -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr \
         -DLLVM_TARGETS_TO_BUILD=X86 \
@@ -55,6 +67,19 @@ build() {
         echo "llvm: componente mcjit ausente — o llvmpipe não vai lincar" >&2; exit 1; }
     sobras=$(find "$STAGE/usr/lib" -name '*.a' | wc -l)
     [ "$sobras" -eq 0 ] || { echo "llvm: $sobras estática(s) sobraram" >&2; exit 1; }
+    # O RPATH SÓ PODE SER $ORIGIN/../lib, que resolve em /usr/lib: é por ele
+    # que o llvm-config acima achou a libLLVM do STAGE, e a auditoria o aceita
+    # porque cai num diretório padrão. Qualquer outra entrada — a por alvo que
+    # o LLVM 23 trouxe, ou a de uma opção nova que venha depois — foge da
+    # closure, e aqui ela para o build em vez de pendurar a ABI na cadeia.
+    for elf in $(find "$STAGE/usr/bin" "$STAGE/usr/lib" -maxdepth 1 -type f); do
+        readelf -h "$elf" >/dev/null 2>&1 || continue
+        caminhos=$(readelf -d "$elf" | sed -n 's/.*(R\(UN\)\{0,1\}PATH).*\[\(.*\)\]$/\2/p')
+        [ -z "$caminhos" ] || [ "$caminhos" = '$ORIGIN/../lib' ] || {
+            echo "llvm: ${elf#"$STAGE"} tem RPATH '$caminhos'; só \$ORIGIN/../lib fica na closure" >&2
+            exit 1
+        }
+    done
     # O recorte deixa diretórios vazios (usr/share, depois do opt-viewer), e
     # diretório NU no manifesto colide com os compartilhados de outros
     # pacotes — o doublethink do /usr/share contra o hicolor foi medido na
