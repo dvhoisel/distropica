@@ -74,6 +74,34 @@ build() {
         echo "webkitgtk: o patch nao-compor-sem-aceleracao nao aplicou no RenderLayerCompositor" >&2
         exit 1
     }
+    # DMA-BUF DE VÍDEO SÓ COM GSTREAMER GL. A 2.54.0 não compila com
+    # USE_GSTREAMER_GL=OFF e USE_GBM=ON, que é esta árvore — medido: "'DMABuf'
+    # is not a member of MemoryType" no passo 8207 de 8917, duas horas de build
+    # adentro. A refatoração que levou a montagem do DMA-BUF de vídeo para
+    # VideoFrameGStreamer::getDMABuf() (b91b12de555b no upstream) a deixou só
+    # sob USE(GBM), e ela usa MemoryType::DMABuf e o gstdmabuf.h, que o mesmo
+    # arquivo só define e inclui com GStreamer GL. O main do upstream tem o
+    # mesmo defeito (conferido em 24/09/2026). O patch alinha com a guarda do
+    # enum as do getDMABuf(), do único chamador dele
+    # (CoordinatedPlatformLayerBufferVideo::createBufferFromDMABufMemory) e da
+    # videoFormatToDRMFourcc, que sem eles ficaria sem uso; nada mais muda.
+    # Sem GStreamer GL, um quadro em memória DMA-BUF segue o caminho de mapear
+    # e copiar, e nenhum decodificador desta árvore produz DMA-BUF: o vpxdec do
+    # VP9 entrega memória comum e o v4l2 do gst-plugins-good está desligado. O
+    # vídeo que a árvore toca passa pelo mesmo caminho da 2.52. Uma varredura
+    # do fonte inteiro atrás de símbolo do GStreamer GL fora de guarda GL achou
+    # só esta família.
+    echo "10606cd594c49de9baeea60ba63da81c911896b341653f23a8c4906d9661df17  $WORK/dmabuf-sem-gstreamer-gl.patch" \
+        | sha256sum -c > /dev/null || { echo "webkitgtk: o patch dmabuf-sem-gstreamer-gl nao e o esperado" >&2; exit 1; }
+    patch -p1 < "$WORK/dmabuf-sem-gstreamer-gl.patch"
+    [ "$(cat Source/WebCore/platform/graphics/gstreamer/VideoFrameGStreamer.h \
+            Source/WebCore/platform/graphics/gstreamer/VideoFrameGStreamer.cpp \
+            Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayerBufferVideo.h \
+            Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayerBufferVideo.cpp |
+        grep -c '^#if USE(GSTREAMER_GL) && USE(GBM) && GST_CHECK_VERSION(1, 24, 0)$')" = 4 ] || {
+        echo "webkitgtk: o patch dmabuf-sem-gstreamer-gl nao aplicou" >&2
+        exit 1
+    }
     # GL E MPEG-TS SÓ QUANDO LIGADOS. O Source/cmake/GStreamerChecks.cmake pede
     # os componentes mpegts e gl para TODO ENABLE_VIDEO, e até a 2.52 o pedido
     # não valia nada: o FindGStreamer.cmake passava ao
@@ -212,9 +240,9 @@ build() {
             exit 1
         }
     done
-    # As duas promessas centrais desta receita, conferidas no ELF e nao na linha
-    # de comando: nada de GStreamer (nao ha decodificador nenhum na arvore) e
-    # nada de X11 (o alvo e Wayland puro).
+    # A promessa do alvo, conferida no ELF e nao na linha de comando: nada de
+    # X11 (o alvo e Wayland puro). A do GStreamer vem logo abaixo, e mudou de
+    # sinal.
     SO=$(ls "$STAGE"/usr/lib/libwebkitgtk-6.0.so* 2>/dev/null | head -1)
     [ -n "$SO" ] || {
         echo "webkitgtk: libwebkitgtk-6.0.so nao foi produzida" >&2
@@ -240,8 +268,8 @@ build() {
         }
     done
     unset lib
-    # GL do GStreamer fora: a arvore compoe por software, e o caminho GL
-    # exigiria EGL/GLES que o wlroots e a Mesa daqui nao oferecem.
+    # GL do GStreamer fora, pela razao do ABOUT: o video sobe pelo caminho sem
+    # GL, que e o medido. A guarda confere no ELF o que a opcao promete.
     if readelf -d "$SO" | grep -q 'libgstgl'; then
         echo "webkitgtk: ligou o GStreamer GL, que esta arvore nao tem" >&2
         exit 1

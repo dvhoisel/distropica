@@ -1,0 +1,69 @@
+--- a/Source/WebCore/platform/graphics/gstreamer/VideoFrameGStreamer.cpp
++++ b/Source/WebCore/platform/graphics/gstreamer/VideoFrameGStreamer.cpp
+@@ -72,7 +72,8 @@
+     });
+ }
+ 
+-#if USE(GBM)
++// Distropica: used by getDMABuf() and by the pre-1.24 path of infoFromCaps().
++#if USE(GBM) && (USE(GSTREAMER_GL) || !GST_CHECK_VERSION(1, 24, 0))
+ static std::optional<uint32_t> videoFormatToDRMFourcc(GstVideoFormat format)
+ {
+     switch (format) {
+@@ -812,7 +813,7 @@
+     m_memoryType = MemoryType::System;
+ }
+ 
+-#if USE(GBM) && GST_CHECK_VERSION(1, 24, 0)
++#if USE(GSTREAMER_GL) && USE(GBM) && GST_CHECK_VERSION(1, 24, 0)
+ RefPtr<DMABufBuffer> VideoFrameGStreamer::getDMABuf()
+ {
+     if (m_memoryType != MemoryType::DMABuf)
+--- a/Source/WebCore/platform/graphics/gstreamer/VideoFrameGStreamer.h
++++ b/Source/WebCore/platform/graphics/gstreamer/VideoFrameGStreamer.h
+@@ -103,7 +103,10 @@
+     };
+     MemoryType memoryType() const { return m_memoryType; }
+ 
+-#if USE(GBM) && GST_CHECK_VERSION(1, 24, 0)
++    // Distropica: getDMABuf() needs MemoryType::DMABuf, which the enum above
++    // only defines with GStreamer GL. With USE_GSTREAMER_GL=OFF and USE_GBM=ON
++    // the 2.54.0 release did not build.
++#if USE(GSTREAMER_GL) && USE(GBM) && GST_CHECK_VERSION(1, 24, 0)
+     RefPtr<DMABufBuffer> getDMABuf();
+ #endif
+     const GstVideoInfo& info() const LIFETIME_BOUND { return m_info.info; }
+--- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayerBufferVideo.cpp
++++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayerBufferVideo.cpp
+@@ -127,7 +127,10 @@
+         return CoordinatedPlatformLayerBufferExternalOES::create(GRefPtr(buffer), dmabufFormat->first, yuvColorSpace, sampleRange, m_size, m_flags);
+     }
+ 
+-#if GST_CHECK_VERSION(1, 24, 0)
++    // Distropica: the DMA-BUF import goes through VideoFrameGStreamer::getDMABuf(),
++    // which only exists with GStreamer GL. Without it a frame in DMA-BUF memory
++    // takes the mapped-frame path below.
++#if USE(GSTREAMER_GL) && GST_CHECK_VERSION(1, 24, 0)
+     if (gst_is_dmabuf_memory(memory))
+         return createBufferFromDMABufMemory();
+ #endif // GST_CHECK_VERSION(1, 24, 0)
+@@ -156,7 +159,7 @@
+     return nullptr;
+ }
+ 
+-#if USE(GBM) && GST_CHECK_VERSION(1, 24, 0)
++#if USE(GSTREAMER_GL) && USE(GBM) && GST_CHECK_VERSION(1, 24, 0)
+ std::unique_ptr<CoordinatedPlatformLayerBuffer> CoordinatedPlatformLayerBufferVideo::createBufferFromDMABufMemory()
+ {
+     auto videoInfo = m_videoFrame->info();
+--- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayerBufferVideo.h
++++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayerBufferVideo.h
+@@ -50,7 +50,7 @@
+ #endif
+ 
+     std::unique_ptr<CoordinatedPlatformLayerBuffer> createBufferIfNeeded(bool gstGLEnabled);
+-#if USE(GBM) && GST_CHECK_VERSION(1, 24, 0)
++#if USE(GSTREAMER_GL) && USE(GBM) && GST_CHECK_VERSION(1, 24, 0)
+     std::unique_ptr<CoordinatedPlatformLayerBuffer> createBufferFromDMABufMemory();
+ #endif
+ #if USE(GSTREAMER_GL)

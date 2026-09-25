@@ -884,24 +884,28 @@ XKB_DEFAULT_LAYOUT=br
 # variavel o sistema instalava, bootava e travava; com ela, a mesma imagem
 # desenhou a sessao no mesmo VirtualBox. Atribuicao limpa: um knob, duas
 # fotos. No QEMU/virtio-gpu funciona com e sem — o custo de desligar o cursor
-# de hardware em todo lugar e o cursor viajar composto no frame, que numa
-# arvore de renderizacao por software ja e o regime de tudo o mais.
+# de hardware em todo lugar e o cursor viajar composto no frame, junto com
+# tudo o mais que o compositor desenha.
 WLR_NO_HARDWARE_CURSORS=1
 
-# O GTK4 DESENHA PELO CAIRO, e nao pelo OpenGL. A razao esta na propria
-# receita da Mesa: esta arvore constroi so o softpipe, com llvm=disabled, e o
-# softpipe INTERPRETA os shaders em vez de compila-los. Deixar o GTK4 no
-# renderizador OpenGL faz cada quadro da interface — inclusive cada tecla
-# digitada na barra de enderecos do Epiphany — atravessar uma implementacao de
-# GL interpretada na CPU.
+# O GTK4 DESENHA PELO CAIRO, e nao pelo OpenGL. A razao nasceu na 0.14, quando
+# a Mesa desta arvore era so o softpipe, com llvm=disabled, e o softpipe
+# INTERPRETA os shaders em vez de compila-los: deixar o GTK4 no renderizador
+# OpenGL fazia cada quadro da interface — inclusive cada tecla digitada na
+# barra de enderecos do Epiphany — atravessar um GL interpretado na CPU.
 #
 # O argumento nao e meu, e do GTK. O libgtk-4.so desta arvore carrega a
 # mensagem "Not using GL: renderer is llvmpipe": ele JA recusa o caminho GL
 # quando detecta rasterizacao por software, porque GL na CPU sai mais caro que
-# desenhar direto. So que a deteccao e por NOME, e o nosso rasterizador se
-# anuncia como "softpipe" — conferido nas strings do libgallium. A protecao
-# existe e passa ao largo por uma diferenca de string; nomear o renderizador
-# aqui faz o que o GTK faria sozinho se reconhecesse este caso.
+# desenhar direto. So que a deteccao e por NOME, e o softpipe se anuncia como
+# "softpipe" — conferido nas strings do libgallium —, entao a protecao passava
+# ao largo; nomear o renderizador aqui faz o que o GTK faria sozinho.
+#
+# DESDE A 0.15 a Mesa traz llvmpipe e r600, e o softpipe fica de reserva. A
+# linha continua, e o motivo agora e a medida: no llvmpipe o proprio GTK
+# chegaria ao mesmo cairo pela recusa acima, e no r600 a sessao que o beta
+# tester confirmou na Radeon dele foi esta, com a casca no cairo. Levar a
+# casca ao GL do r600 e mudanca que ninguem mediu aqui.
 #
 # `cairo` e um nome que o GTK 4.22 aceita e tem compilado: o proprio
 # GSK_RENDERER=help lista "cairo - Use the Cairo fallback renderer", enquanto
@@ -925,16 +929,23 @@ GSK_RENDERER=cairo
 #
 # Com WEBKIT_SKIA_ENABLE_CPU_RENDERING=1 o proprio upstream troca o pool:
 # Skia raster puro, SIMD, com metade dos nucleos ate o teto de 8
-# (numberOfCPUPaintingThreads, mesma fonte). Numa arvore SEM driver de GPU
-# nenhum — softpipe e a unica Mesa que existe aqui —, o caminho "acelerado"
-# nunca acelera nada; ele so esconde a CPU atras de uma API de GPU.
+# (numberOfCPUPaintingThreads, mesma fonte). Com o softpipe como unica Mesa,
+# que era a arvore da 0.14, o caminho "acelerado" nunca acelerava nada; so
+# escondia a CPU atras de uma API de GPU.
+#
+# DESDE A 0.15 a composicao voltou a ser por GL — llvmpipe, ou o r600 onde ha
+# Radeon; ver o override do Epiphany —, e a PINTURA continua aqui em CPU: foi
+# essa combinacao que a 0.15 mediu (rAF ~60/s com video tocando em janela) e
+# que o beta tester confirmou no r600. Pintar pelo Ganesh sobre o r600 seria
+# outra mudanca, nao medida.
 WEBKIT_SKIA_ENABLE_CPU_RENDERING=1
 
-# E A COMPOSICAO ACELERADA SAI, que e a terceira e ultima camada em que uma
-# API de GPU escondia a CPU nesta arvore. As duas variaveis acima consertam a
-# PINTURA — casca e conteudo —, mas um elemento <video> nao e pintado: ele
-# vira camada composta, e o quadro decodificado sobe pelo caminho acelerado.
-# Sobre softpipe isso custa o mundo.
+# A COMPOSICAO ACELERADA SAIU NA 0.14 E VOLTOU NA 0.15, e a historia fica aqui
+# porque explica o que NAO pode voltar a este arquivo. Na 0.14 ela era a
+# terceira e ultima camada em que uma API de GPU escondia a CPU nesta arvore.
+# As duas variaveis acima consertam a PINTURA — casca e conteudo —, mas um
+# elemento <video> nao e pintado: ele vira camada composta, e o quadro
+# decodificado sobe pelo caminho acelerado. Sobre softpipe isso custava o mundo.
 #
 # MEDIDO, nao suposto. Prova A/B/C em QEMU (4 vCPUs, mesma imagem instalada,
 # uma linha de diferenca), com um VP9/Opus de 150s servido ao vivo e a pagina
@@ -979,6 +990,11 @@ WEBKIT_SKIA_ENABLE_CPU_RENDERING=1
 # diz): com a politica, o WebProcess nem
 # entra em modo composto; e se alguma view escapar, o backing store EXISTE e
 # o pior caso volta a ser lentidao, nunca queda.
+#
+# NA 0.15 A COMPOSICAO VOLTOU, pela mesma politica: com llvmpipe e r600 na
+# Mesa, o override do Epiphany passou a 'always' — ele conta as datas e o rAF
+# medido. A variavel do compositing mode nao volta a este arquivo: a guarda do
+# build a recusa, pelo segfault acima.
 ENVIRONMENT
     chmod 0644 "$STAGE/etc/xdg/labwc/environment"
 
@@ -1353,13 +1369,13 @@ THEMERC
         exit 1
     }
     grep -q '^GSK_RENDERER=cairo$' "$STAGE/etc/xdg/labwc/environment" || {
-        echo "desktop: o environment nao poe o GTK4 no cairo; com a Mesa em" \
-             "softpipe a interface inteira desenha por GL interpretado na CPU" >&2
+        echo "desktop: o environment nao poe o GTK4 no cairo, que e a casca" \
+             "medida e confirmada no r600 (ver o comentario do GSK_RENDERER)" >&2
         exit 1
     }
     grep -q '^WEBKIT_SKIA_ENABLE_CPU_RENDERING=1$' "$STAGE/etc/xdg/labwc/environment" || {
-        echo "desktop: o environment nao poe o Skia do WebKit em CPU; a pagina" \
-             "inteira pintaria por Ganesh sobre o GL interpretado do softpipe" >&2
+        echo "desktop: o environment nao poe o Skia do WebKit em CPU, que e a" \
+             "pintura medida e confirmada no r600 (ver o comentario da variavel)" >&2
         exit 1
     }
     ! grep -q '^WEBKIT_DISABLE_COMPOSITING_MODE' "$STAGE/etc/xdg/labwc/environment" || {
