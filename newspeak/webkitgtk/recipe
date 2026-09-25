@@ -102,6 +102,26 @@ build() {
         echo "webkitgtk: o patch dmabuf-sem-gstreamer-gl nao aplicou" >&2
         exit 1
     }
+    # O WEBDRIVER SEM LOG DE RELEASE. No port GTK o log de release vem do
+    # journald (ENABLE_JOURNALD_LOG, que exige libsystemd ou libelogind); esta
+    # árvore não tem systemd, então RELEASE_LOG_DISABLED vale 1 e os canais de
+    # log do WebDriver não são declarados. A 2.54.0 usa um deles sem guarda em
+    # WebDriverService::handleRequest(), e o build parou no passo 8851 de 8917
+    # — medido, com a libwebkitgtk-6.0 já ligada. É o conserto do upstream,
+    # verbatim nas linhas que acrescenta: 0181cdc42aac (321686@main, bug
+    # 324949, de 23/09/2026, a partir de um patch do Chimera Linux, outra
+    # distro sem systemd). Sem log, o bloco guardado não fazia nada além de
+    # embrulhar a resposta para medir o tempo. O WebKitWebDriver continua no
+    # payload, como na 0.16.
+    echo "8d6e847f14b6f691f9a55f88b39f1be85b75250ddaad660515dc6b9228334751  $WORK/webdriver-sem-log.patch" \
+        | sha256sum -c > /dev/null || { echo "webkitgtk: o patch webdriver-sem-log nao e o esperado" >&2; exit 1; }
+    patch -p1 < "$WORK/webdriver-sem-log.patch"
+    uso=$(grep -n 'if (LOG_CHANNEL(WebDriverClassic).state' Source/WebDriver/WebDriverService.cpp)
+    [ -n "$uso" ] && [ "$(sed -n "$((${uso%%:*} - 1))p" Source/WebDriver/WebDriverService.cpp)" = \
+        '#if !RELEASE_LOG_DISABLED' ] || {
+        echo "webkitgtk: o patch webdriver-sem-log nao aplicou" >&2
+        exit 1
+    }
     # GL E MPEG-TS SÓ QUANDO LIGADOS. O Source/cmake/GStreamerChecks.cmake pede
     # os componentes mpegts e gl para TODO ENABLE_VIDEO, e até a 2.52 o pedido
     # não valia nada: o FindGStreamer.cmake passava ao
