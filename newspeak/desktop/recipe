@@ -1299,11 +1299,14 @@ THEMERC
     # Todo comando do menu e do rc.xml tem de EXISTIR na arvore instalada. Era
     # o que faltava quando os icones do painel apontavam para PNG inexistente:
     # o arquivo dizia uma coisa e o sistema tinha outra, e ninguem sabia por que.
+    # Ou no proprio STAGE, quando o comando e DESTA receita: o
+    # distropica-captura do Print so existe depois que este pacote instala, e a
+    # primeira cadeia a chegar aqui depois dele (a da 0.17) parou nesta guarda.
     for comando in $(grep -oE 'command="[a-z0-9-]+"' \
                        "$STAGE/etc/xdg/labwc/menu.xml" \
                        "$STAGE/etc/xdg/labwc/rc.xml" \
                      | sed 's/.*command="//; s/"//' | sort -u); do
-        [ -x "/usr/bin/$comando" ] || {
+        [ -x "/usr/bin/$comando" ] || [ -x "$STAGE/usr/bin/$comando" ] || {
             echo "desktop: o menu chama '$comando', que nao esta em /usr/bin" >&2
             exit 1
         }
