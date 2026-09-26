@@ -8,13 +8,27 @@ DEPS="glibc"
 # dois applets do BusyBox saem de cena quando os pacotes reais são construídos
 # no mesmo plano.
 BUILD_DEPS="gcc-pass2 binutils-glibc make perl gawk busybox findutils"
-ABOUT="A função crypt() do sistema, que a glibc deixou de ter: a 2.39 removeu a libcrypt, e esta árvore usa a 2.42. Entra por UM consumidor, o swaylock, que sem PAM confere a senha de quem bloqueou a tela comparando o hash do /etc/shadow com crypt() — e o hash que ele encontra é o \$6\$ (sha512crypt) que o cryptpw do BusyBox gera no instalador. Construída só com os algoritmos que o próprio upstream marca como fortes (--enable-hashes=strong: yescrypt, as variantes do bcrypt, scrypt e o sha512crypt), então um hash DES ou MD5 antigo no shadow simplesmente não confere. Sem a API obsoleta (--enable-obsolete-api=no): entrega a libcrypt.so.2 e o crypt.h, e não a libcrypt.so.1 de compatibilidade binária com a glibc antiga, que nada nesta árvore pede."
+ABOUT="A função crypt() do sistema, que a glibc deixou de ter: a 2.39 removeu a libcrypt, e esta árvore usa a 2.44. Entra por UM consumidor, o swaylock, que sem PAM confere a senha de quem bloqueou a tela comparando o hash do /etc/shadow com crypt() — e o hash que ele encontra é o \$6\$ (sha512crypt) que o cryptpw do BusyBox gera no instalador. Construída só com os algoritmos que o próprio upstream marca como fortes (--enable-hashes=strong, lido no lib/hashes.conf: yescrypt e as variantes gost-yescrypt e sm3-yescrypt, scrypt, três variantes do bcrypt e o sha512crypt), então um hash DES ou MD5 antigo no shadow simplesmente não confere. Sem a API obsoleta (--enable-obsolete-api=no): entrega a libcrypt.so.2 e o crypt.h, e não a libcrypt.so.1 de compatibilidade binária com a glibc antiga, que nada nesta árvore pede."
 LICENSE="LGPL-2.1-or-later AND BSD-3-Clause AND BSD-2-Clause AND 0BSD AND Public-Domain"
 SRC="https://github.com/besser82/libxcrypt/releases/download/v$VERSION/libxcrypt-$VERSION.tar.xz"
 SHA256=71513a31c01a428bccd5367a32fd95f115d6dac50fb5b60c779d5c7942aec071
 
 build() {
     tar -xJf "$DL" --strip-components=1
+    # O STRCHR QUE PRESERVA CONST. Em C23 — o padrão do GCC 15 — a glibc 2.43+
+    # devolve const char * do strchr quando recebe const char *, e dois módulos
+    # do grupo strong (gost-yescrypt e sm3-yescrypt) guardam esse retorno num
+    # char *; o -Werror que o próprio configure liga fez disso erro, e a cadeia
+    # da 0.17 parou aqui. É o conserto do upstream, verbatim: 174c24d6e87a, de
+    # 10/12/2025, ainda sem release — a 4.5.2 segue a estável mais nova. O
+    # retval é um buffer gravável do próprio módulo; o cast para const era o
+    # que estava sobrando. Varrido o lib/ inteiro: são as duas únicas linhas.
+    echo "8d5c506791b6fe0808a44658b3de5d21c0e5e539c072d750995607e0a47f8b80  $WORK/strchr-const-c23.patch" \
+        | sha256sum -c > /dev/null || { echo "libxcrypt: o patch strchr-const-c23 nao e o esperado" >&2; exit 1; }
+    patch -p1 < "$WORK/strchr-const-c23.patch"
+    [ "$(cat lib/crypt-gost-yescrypt.c lib/crypt-sm3-yescrypt.c |
+        grep -F -c 'char *hptr = strchr ((char *) intbuf->retval + 3,')" = 2 ] || {
+        echo "libxcrypt: o patch strchr-const-c23 nao aplicou" >&2; exit 1; }
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
     ./configure --prefix=/usr --libdir=/usr/lib --disable-static \
         --enable-hashes=strong --enable-obsolete-api=no
