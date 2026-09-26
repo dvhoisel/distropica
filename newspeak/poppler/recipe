@@ -11,7 +11,7 @@ DEPS="glibc gcc-pass2 freetype fontconfig zlib libpng libjpeg-turbo lcms2 cairo 
 # cairo e o meson conclui que o cairo NÃO existe — indo tentar baixar um
 # subprojeto. Conferido nos .pc instalados, não suposto.
 BUILD_DEPS="gcc-pass2 binutils-glibc cmake ninja pkgconf freetype fontconfig zlib libpng libjpeg-turbo lcms2 cairo glib poppler-data findutils"
-ABOUT="Renderizador PDF, com três consumidores e duas portas. O importador PDF do GIMP e o plugin zathura-pdf-poppler falam com o wrapper GLib/Cairo (poppler-glib). O Inkscape, não: importa PDF pela API C++ interna (poppler/*.h), que o upstream chama de instável e só instala com ENABLE_UNSTABLE_API_ABI_HEADERS=ON — ligado aqui desde a 0.16 por ele, com a consequência dita: essa API muda a cada versão da poppler, e cada bump dela tem de ser provado contra o Inkscape (a transição de API do 1.4.4 conhece até a 26.2; a 26.08 daqui foi provada na compilação). Mantém JPEG, PNG, ICC e dados CJK; Qt, a API C++ pública (poppler-cpp), utilitários, TIFF, OpenJPEG, Boost, rede e assinaturas são componentes opcionais desligados."
+ABOUT="Renderizador PDF, com três consumidores e duas portas. O importador PDF do GIMP e o plugin zathura-pdf-poppler falam com o wrapper GLib/Cairo (poppler-glib). O Inkscape, não: importa PDF pela API C++ interna (poppler/*.h), que o upstream chama de instável e só instala com ENABLE_UNSTABLE_API_ABI_HEADERS=ON — ligado aqui desde a 0.16 por ele, com a consequência dita: essa API muda a cada versão da poppler, e cada bump dela tem de ser provado contra o Inkscape (a transição de API do 1.4.4 conhece até a 26.2; a 26.08 foi provada na compilação da 0.16, e a 26.09 conferida cabeçalho a cabeçalho contra o patch dele na 0.17). Mantém JPEG, PNG, ICC e dados CJK; Qt, a API C++ pública (poppler-cpp), utilitários, TIFF, OpenJPEG, Boost, rede, assinaturas e o subconjunto de fontes pela HarfBuzz são componentes opcionais desligados — o último nasceu na 26.09, ligado por padrão, e só serve a quem CRIA anotação de texto ou preenche formulário e salva o PDF (AnnotFreeText e AnnotWidget::subsetFonts); os três consumidores daqui só leem."
 LICENSE=GPL-2.0-or-later
 SRC="https://poppler.freedesktop.org/poppler-$VERSION.tar.xz"
 SHA256="8059eadb6805340768f138c465b57f8164c92b4a0773c37ef031ea6c0d987b2e"
@@ -19,6 +19,12 @@ SHA256="8059eadb6805340768f138c465b57f8164c92b4a0773c37ef031ea6c0d987b2e"
 build() {
     tar -xJf "$DL" --strip-components=1
     export LDFLAGS="-Wl,-rpath-link,/usr/lib"
+    # ENABLE_HARFBUZZ=OFF: a 26.09 tornou a HarfBuzz "soft mandatory" — ligada
+    # por padrão, e o configure PARA se ela faltar —, e a cadeia da 0.17 parou
+    # aqui. Ela serve só ao FontSubsetter, que as anotações de texto e os campos
+    # de formulário chamam ao salvar; sem ele o PDF salvo leva a fonte inteira
+    # em vez do subconjunto. Nada que lê PDF passa por lá. Conferido no
+    # CMakeLists.txt e no Annot.cc da 26.09: é a única opção nova.
     cmake -S . -B build -G Ninja \
         -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib \
         -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
@@ -31,12 +37,16 @@ build() {
         -DBUILD_QT5_TESTS=OFF -DBUILD_QT6_TESTS=OFF \
         -DBUILD_CPP_TESTS=OFF -DBUILD_MANUAL_TESTS=OFF \
         -DINSTALL_GLIB_DEMO=OFF -DRUN_GPERF_IF_PRESENT=OFF \
-        -DENABLE_UNSTABLE_API_ABI_HEADERS=ON
+        -DENABLE_UNSTABLE_API_ABI_HEADERS=ON -DENABLE_HARFBUZZ=OFF
     ninja -C build -j"$JOBS"
     DESTDIR="$STAGE" ninja -C build install
     [ -e "$STAGE/usr/lib/pkgconfig/poppler-glib.pc" ] || { echo "poppler: poppler-glib.pc ausente" >&2; exit 1; }
     [ -e "$STAGE/usr/lib/libpoppler-glib.so" ] || { echo "poppler: wrapper GLib ausente" >&2; exit 1; }
     # A porta do Inkscape: os cabeçalhos internos têm de estar instalados.
     [ -e "$STAGE/usr/include/poppler/PDFDoc.h" ] || { echo "poppler: cabeçalhos da API interna ausentes (ENABLE_UNSTABLE_API_ABI_HEADERS)" >&2; exit 1; }
+    # O subconjunto de fontes desligado é promessa do ABOUT, e o que prova é o ELF.
+    if readelf -d "$STAGE"/usr/lib/libpoppler.so.* | grep -q 'libharfbuzz'; then
+        echo "poppler: ligou a HarfBuzz, que deveria estar fora" >&2; exit 1
+    fi
     find "$STAGE" -type d -empty -delete
 }
