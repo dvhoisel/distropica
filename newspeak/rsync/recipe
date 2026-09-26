@@ -7,7 +7,7 @@ DEPS="glibc zlib openssl xxhash bash busybox"
 # shebang /usr/bin/env — os dois entram por requisito observado, não por gosto.
 # gawk: o ./configure chama awk (a mesma classe do curl e do libarchive).
 BUILD_DEPS="gcc-pass2 binutils-glibc make gawk busybox findutils"
-ABOUT="Transferência e espelhamento de árvores de arquivos, por delta. O openssh já mora aqui, e rsync sobre ssh é o par natural para levar e trazer uma home ou um backup. A 3.5.0 é release de segurança (33 correções, 13/08/2026), e por isso a versão não é negociável. Checksums: MD5 pela OpenSSL da árvore e xxHash (xxh3, xxh64) pela libxxhash, que a 0.16 traz para o zathura — o rsync a aproveita em vez de ficar sem a opção mais rápida. zstd e lz4 desligados por nome porque não moram aqui; ACL desligado porque não há libacl; xattr fica, que é chamada da própria glibc. popt vai EMBUTIDO (--with-included-popt): é uma biblioteca de opções de linha de comando sem outro consumidor na árvore, e um pacote só para ela seria peso sem leitor — daí o MIT na licença. As páginas de manual vêm PRONTAS no tarball, e por isso a geração (md2man, que pede módulos Python de markdown) está desligada."
+ABOUT="Transferência e espelhamento de árvores de arquivos, por delta. O openssh já mora aqui, e rsync sobre ssh é o par natural para levar e trazer uma home ou um backup. A 3.5.0 é release de segurança (33 correções, 13/08/2026), e por isso a versão não é negociável. Checksums: MD5 pela OpenSSL da árvore e xxHash (xxh3, xxh64) pela libxxhash, que a 0.16 traz para o zathura — o rsync a aproveita em vez de ficar sem a opção mais rápida. zstd e lz4 desligados por nome porque não moram aqui; IDN também (--disable-idn, opção nova da 3.5.1, que aborta o configure sem a libidn2): ela converte nome de host Unicode para a forma ASCII ao falar com um daemon rsync, e o uso daqui — rsync sobre ssh — entrega o host ao ssh sem tocá-lo; quem precisar de daemon com nome internacionalizado digita a forma punycode. ACL desligado porque não há libacl; xattr fica, que é chamada da própria glibc. popt vai EMBUTIDO (--with-included-popt): é uma biblioteca de opções de linha de comando sem outro consumidor na árvore, e um pacote só para ela seria peso sem leitor — daí o MIT na licença. As páginas de manual vêm PRONTAS no tarball, e por isso a geração (md2man, que pede módulos Python de markdown) está desligada."
 LICENSE="GPL-3.0-or-later AND MIT"
 SRC="https://download.samba.org/pub/rsync/src/rsync-$VERSION.tar.gz"
 SHA256="c55f9c9dc10fb8bec397b399a0fdded53cc9a2d8e30891bb0d63724d25c37bef"
@@ -24,6 +24,7 @@ build() {
         --enable-xxhash \
         --disable-zstd \
         --disable-lz4 \
+        --disable-idn \
         --disable-acl-support
     make -j"$JOBS"
     make install DESTDIR="$STAGE"
