@@ -1526,10 +1526,14 @@ THEMERC
         echo "desktop: o autostart chama yambar, que nao esta em /usr/bin" >&2
         exit 1
     }
-    # (b) o recuo do -c aponta para um arquivo que ESTA receita instala. E o
-    # par log-da-sessao de novo: dois pontos do mesmo caminho, so que aqui os
-    # dois saem do mesmo heredoc — a guarda existe para quando deixarem de sair.
-    barra_recuo=$(sed -n 's/^\[ -e "\$barra" \] || barra=\(\/etc\/[^ ]*\)$/\1/p' \
+    # (b) o recuo do -c aponta para arquivos que ESTA receita instala. E o par
+    # log-da-sessao de novo: dois pontos do mesmo caminho, so que aqui os dois
+    # saem do mesmo heredoc — a guarda existe para quando deixarem de sair.
+    # Desde a 0.17 o recuo tem DUAS fontes: a barra de /etc/xdg, sem bateria, e
+    # o gabarito de onde o autostart gera a barra com a bateria da maquina. A
+    # forma antiga desta guarda procurava a linha "[ -e $barra ] || barra=",
+    # que a 0.17 trocou por um if; a primeira cadeia depois dela parou aqui.
+    barra_recuo=$(sed -n 's/^[[:space:]]*barra=\(\/etc\/[^ ]*\)$/\1/p' \
         "$STAGE/etc/xdg/labwc/autostart")
     [ -n "$barra_recuo" ] || {
         echo "desktop: o autostart nao declara recuo de configuracao em /etc" >&2
@@ -1537,6 +1541,12 @@ THEMERC
     }
     [ -e "$STAGE$barra_recuo" ] || {
         echo "desktop: o autostart aponta $barra_recuo, que esta receita nao instala" >&2
+        exit 1
+    }
+    barra_gabarito=$(sed -n 's|^[[:space:]]*\(/usr/share/distropica/[^ ]*\) > "\$gerada" && barra=\$gerada$|\1|p' \
+        "$STAGE/etc/xdg/labwc/autostart")
+    [ -n "$barra_gabarito" ] && [ -e "$STAGE$barra_gabarito" ] || {
+        echo "desktop: o autostart gera a barra de um gabarito que esta receita nao instala" >&2
         exit 1
     }
     # (c) a config PASSA NO PARSER QUE VAI LE-LA: yambar --validate carrega o
@@ -1555,8 +1565,30 @@ THEMERC
         cat ./barra-validate.err >&2
         exit 1
     }
-    rm -f ./barra-validate.err
-    unset barra_recuo
+    # E a barra COM BATERIA, que e a que um notebook de verdade recebe: gerada
+    # do gabarito pela MESMA transformacao do autostart — conferida no texto
+    # dele logo abaixo —, com um nome de bateria qualquer. O --validate so le a
+    # configuracao; o modulo battery abre o sysfs no initialize(), que o run()
+    # chama e o -C nunca alcanca (conferido no fonte pinado do yambar). Sem
+    # esta passagem a barra do notebook morria calada, que e exatamente o caso
+    # que o paragrafo acima diz nao ter outra guarda.
+    grep -qF -- "-e '/# >>> bateria/d' -e '/# <<< bateria/d'" "$STAGE/etc/xdg/labwc/autostart" || {
+        echo "desktop: o autostart deixou de gerar a barra como esta guarda gera" >&2
+        exit 1
+    }
+    sed -e "s/@BATERIA@/BAT0/" -e '/# >>> bateria/d' -e '/# <<< bateria/d' \
+        "$STAGE$barra_gabarito" > ./barra-bateria.yml
+    grep -q 'battery:' ./barra-bateria.yml || {
+        echo "desktop: a barra gerada do gabarito saiu sem o bloco da bateria" >&2
+        exit 1
+    }
+    /usr/bin/yambar -C -c ./barra-bateria.yml -s 2>./barra-validate.err || {
+        echo "desktop: a barra com bateria nao passa no yambar --validate:" >&2
+        cat ./barra-validate.err >&2
+        exit 1
+    }
+    rm -f ./barra-validate.err ./barra-bateria.yml
+    unset barra_recuo barra_gabarito
     # (d) todo on-click da barra aponta para executavel INSTALADO. O clique
     # nao passa por shell nem por PATH; um caminho errado e um clique que
     # morre em silencio, o mesmo defeito do menu com PNG inexistente. So o
