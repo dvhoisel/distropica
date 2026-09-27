@@ -329,9 +329,18 @@ preparar() {
 
     m "3/12 EFI: kernel $(pino_efi LINUX_VERSION), embutindo os dois executores"
     install -d -m 0700 "$L/efi-out"
+    # O KERNEL VIVO SE COMPILA DENTRO DA RAIZ (--rootfs), por bwrap, com o flex,
+    # o bison e a libelf da Distrópica — sem isso o build-efi os procura no
+    # hospedeiro, que não é obrigado a tê-los: o primeiro preparo da 0.17 parou
+    # em "flex ausente". E em development o WORK mora SOB a raiz, porque o
+    # segundo bwrap só enxerga o que está nela; foi assim que a 0.15 o
+    # construiu (target/ferramentas-prova/r600-media.sh). Sobra de um preparo
+    # anterior não é apagada aqui: o preparo não sobrescreve nada.
+    EFI_WORK=$RAIZ/efi-work-$V
+    [ ! -e "$EFI_WORK" ] || morre "$EFI_WORK já existe (sobra de outro preparo); remova-o à mão"
     ZIG=$RAIZ/opt/zig/current/zig nice -n 5 bootstrap/live/build-efi \
-        --mode development --output "$L/efi-out/BOOTX64.EFI" \
-        --work "$L/efi-work" --keep-work \
+        --mode development --rootfs "$RAIZ" --output "$L/efi-out/BOOTX64.EFI" \
+        --work "$EFI_WORK" --keep-work \
         --linux-tar "$(objeto "$(pino_efi LINUX_SHA256)")" \
         --busybox-tar "$(objeto "$(pino_efi BUSYBOX_SHA256)")" \
         --e2fsprogs-tar "$(objeto "$(pino_efi E2FSPROGS_SHA256)")" \
@@ -346,7 +355,7 @@ preparar() {
     for sc in live-components live-lock live-runner-proof; do
         cp "$L/efi-out/BOOTX64.EFI.$sc" "$EFI.$sc" || morre "sem o sidecar $sc do EFI"
     done
-    cp "$L/efi-work/linux-source/.config" "$L/live-kernel-config-$VC" || morre "sem o .config vivo"
+    cp "$EFI_WORK/linux-source/.config" "$L/live-kernel-config-$VC" || morre "sem o .config vivo"
     # O EFI embute EXATAMENTE os executores que as receitas vão fixar.
     for par in "minitrue-static:$sha_minitrue" "minipax-static:$sha_minipax"; do
         grep -q "^ENTRY=${par%%:*}|.*|binary:${par#*:}|" "$EFI.live-components" ||
