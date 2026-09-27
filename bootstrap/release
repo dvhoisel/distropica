@@ -112,6 +112,13 @@ para_o_cache() { # arquivo diretorio-de-cache
         morre "não copiei $1 para $2"
 }
 
+# As raízes da cadeia e da mídia: target.world, cache.world e o gimp, que o
+# canal oferece sem a mídia instalar.
+raizes_da_midia() {
+    { grep -v '^#' "$PERFIL/target.world"; grep -v '^#' "$PERFIL/cache.world"; echo gimp; } |
+        awk 'NF { print $1 }' | sort -u
+}
+
 # Os pacotes-fonte do fechamento da mídia: o que o canal emite. É o mesmo
 # fechamento (DEPS e BUILD_DEPS, transitivo) que a cadeia retificou.
 fechamento_mundo_b() {
@@ -289,6 +296,22 @@ preparar() {
         [ -f "$RAIZ/var/lib/minitrue/records/$p/meta" ] || faltam="$faltam $p"
     done
     [ -z "$faltam" ] || morre "a cadeia não construiu:$faltam"
+    # EXISTIR NÃO BASTA. Uma receita editada depois que a cadeia a compilou —
+    # o vim da 0.17 subiu de versão com a cadeia rodando — deixa o registro de
+    # pé com o fingerprint velho. O `channel emit` recusa isso, mas só no passo
+    # 7, depois do commit R1 e com $L criado, que o preparo não reaproveita.
+    # O plano da mesma closure, com --no-binary como a cadeia, tem de sair com
+    # todo pacote-fonte em keep — são eles que o canal emite; os binários de
+    # upstream não saem desta raiz. A saída vai para arquivo antes do awk: num
+    # pipe o status seria o do awk, e um plan que falhasse passaria calado
+    # como "nada defasado".
+    NEWSPEAK_PATH=$REPO/newspeak "$MT_CADEIA" --root "$RAIZ" --no-binary plan \
+        $(raizes_da_midia) > "$L/plano-da-raiz" 2>&3 ||
+        morre "minitrue plan falhou sobre a raiz (ver $L/preparo.log)"
+    grep -q '^NODE	' "$L/plano-da-raiz" || morre "o plano da raiz saiu sem nó nenhum"
+    defasados=$(awk -F'\t' '$1 == "NODE" && $4 == "source" && $6 != "keep" { printf " %s(%s)", $2, $6 }' \
+        "$L/plano-da-raiz")
+    [ -z "$defasados" ] || morre "registro que não bate com a receita da árvore:$defasados"
 
     m "2/12 executores: minitrue e minipax estáticos, reprodutíveis"
     mkdir -p "$L/executores"
