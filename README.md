@@ -3,23 +3,25 @@
 > Uma distribuição Linux distópica. Não instala pacotes: **retifica registros**.
 
 **[Site oficial](https://distropica.com.br/)** ·
-**[Baixar a ISO 0.16 (1568 MB)](https://distropica.com.br/releases/distropica-0.16-x86_64.iso)** ·
-**[SHA-256](https://distropica.com.br/releases/distropica-0.16-x86_64.iso.sha256)** ·
-**[Manifesto](https://distropica.com.br/releases/distropica-0.16-x86_64.iso.manifest)** ·
-**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.16-corresponding-sources.tar.zst)** ·
-**[SHA das fontes](https://distropica.com.br/releases/distropica-0.16-corresponding-sources.tar.zst.sha256)** ·
-**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.16-sources.tsv)** ·
-**[Índice de licenças](https://distropica.com.br/releases/distropica-0.16-licencas.tsv)**
+**[Baixar a ISO 0.17 (1599 MB)](https://distropica.com.br/releases/distropica-0.17-x86_64.iso)** ·
+**[SHA-256](https://distropica.com.br/releases/distropica-0.17-x86_64.iso.sha256)** ·
+**[Manifesto](https://distropica.com.br/releases/distropica-0.17-x86_64.iso.manifest)** ·
+**[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.17-corresponding-sources.tar.zst)** ·
+**[SHA das fontes](https://distropica.com.br/releases/distropica-0.17-corresponding-sources.tar.zst.sha256)** ·
+**[Inventário das fontes](https://distropica.com.br/releases/distropica-0.17-sources.tsv)** ·
+**[Índice de licenças](https://distropica.com.br/releases/distropica-0.17-licencas.tsv)**
 
-> **Atenção:** a `0.16` é uma **pré-release de desenvolvimento** para VM UEFI
+> **Atenção:** a `0.17` é uma **pré-release de desenvolvimento** para VM UEFI
 > **64 bits**, e a própria mídia declara isso de si: `PROFILE_CLASS=custom`.
 > O instalador apaga integralmente o dispositivo escolhido. Use um disco virtual
 > descartável e confira o SHA-256 antes do boot
-> (`0d7b549d5678523c5088adc51af6dd7ed8340006b2f9834086ea82d841622b24`).
+> (`8dd1d63fe21037296e2da5e7ff255bed05db1aae4e57c566eba0a6eae20ddbb8`).
 >
-> Ela pede a **senha de root antes do caminho do disco**: toda a interação
-> acontece antes de qualquer escrita, e a partir do disco escolhido a
-> instalação corre sozinha.
+> As **senhas são as últimas perguntas** — a de root e, desde a `0.17`, a da
+> conta `distropica` —, logo depois da escolha do disco e antes da primeira
+> escrita: nenhum `mkfs` roda enquanto houver algo a perguntar, e depois delas
+> a instalação corre sozinha. No sistema instalado a **tty1 pede login**, e a
+> sessão gráfica sobe depois dele, como a conta comum.
 >
 > **Problema conhecido — VirtualBox:** a janela do navegador pode piscar ou
 > congelar no primeiro quadro (testado no 7.2.6, com VMSVGA e com VBoxSVGA; o
@@ -38,8 +40,8 @@
 > instalação, o cache **vive no disco alvo ao mesmo tempo** que a árvore cresce,
 > e o pico é a soma dos dois, não o maior deles; o fator quatro em si saiu de
 > medição (um cache de 664 MiB produziu uma árvore de 2096 MiB, razão 3,16) e o
-> resto é margem. O `cache.tar` da `0.16` tem 1475 MiB, o que dá cerca de
-> **7,7 GiB** de raiz mínima.
+> resto é margem. O `cache.tar` da `0.17` tem 1506 MiB, o que dá cerca de
+> **7,9 GiB** de raiz mínima.
 
 A Distrópica parte de uma observação desconfortável sobre o mundo atual: os
 projetos novos (Zig, Go, Rust, os aplicativos das corporações) distribuem
@@ -170,15 +172,34 @@ Um **protótipo sério de engenharia de sistemas** — ainda um laboratório, n�
 uma distribuição pronta para usuários. A matriz precisa do que está feito,
 testado e futuro vive em **[STATUS.md](STATUS.md)**.
 
-A `0.16` está **publicada** em <https://distropica.com.br/> (2026-09-02): ISO
-instalável, canal binário assinado com 229 pacotes e bundle de fontes
+A `0.17` é a versão corrente em <https://distropica.com.br/>: ISO
+instalável, canal binário assinado com 236 pacotes e bundle de fontes
 correspondentes aprovado no gate estrito. O sistema instalado sobe em modo
 gráfico — compositor **labwc**, navegador **Epiphany** com **vídeo livre**
 (WebM/VP9/Opus), terminal **foot**, barra de tarefas **yambar**, lançador
 **fuzzel** — e instala software do canal pela rede: o **GIMP 3.2** entra assim,
 com `minitrue rectify gimp`.
 
-O que a `0.16` acrescenta é o que faltava para a sessão **servir**, e cada peça
+A `0.17` não traz aplicativo novo, e o tema dela é **o sistema instalado se
+atualiza** — até a `0.16` ele não se atualizava. A árvore de receitas nunca
+tinha sido publicada; o kernel era o do EFI que o instalador gravou na ESP, e
+nada mais escrevia ali; e a seed do canal que a instalação deixava no alvo era
+a da `0.13`. Agora atualizar é `minitrue rectify newspeak` seguido de
+`minitrue rectify --sync` (ver [Atualizar](#atualizar)). O **kernel chega pelo
+canal**: o EFI de boot é o pacote `distropica-efi`, e o `minipax boot-update`
+o leva à ESP guardando o que arrancou antes em `EFI/distropica/anterior.efi`,
+com as duas entradas na NVRAM — kernel novo que não bota se resolve
+escolhendo "Distrópica (anterior)" no menu do firmware. O próprio **minitrue
+e o minipax são pacotes do canal**, compilados pelo projeto, estáticos e
+reprodutíveis. A conta da sessão ganhou senha, a **tty1 pede login**, e fechar
+a tampa tranca a sessão com o `swaylock` antes de suspender; no notebook,
+brilho, volume, `Print` para capturar a tela e a bateria na barra. As versões
+acompanham o upstream: kernel **7.2.8**, GNOME 51 (GTK 4.24, libadwaita 1.10,
+Epiphany 51), WebKitGTK 2.54, LLVM 23, Mesa 26.2, GIMP 3.2.6. O detalhe — e o
+que a cadeia do zero desta versão ensinou — está no [STATUS.md](STATUS.md).
+
+O que a `0.16` (publicada em 2026-09-02) acrescentou foi o que faltava para a
+sessão **servir**, e cada peça
 saiu de uma falta observada, não de lista de desejos. O **Inkscape 1.4.4** e o
 **Zathura** fecham as duas maiores lacunas do desktop — desenhar vetores e ler
 PDF. O **swayimg** mostra uma imagem sem abrir um editor de centenas de
@@ -467,8 +488,9 @@ partir de nada além de binários upstream — foi **demonstrada**:
 Ainda não fechados: reemissão dos payloads do canal oficial para a árvore
 atual, publicação de um bundle estático assinado, reprodução independente da
 mídia, cobertura de hardware UEFI real,
-runit, `--sync` e o rollback
-retido do mundo B entre versões ou de uma sincronização inteira. O Journal
+runit e o rollback
+retido do mundo B entre versões ou de uma sincronização inteira (o `--sync`
+existe desde a `0.17`; o que não existe é desfazê-lo). O Journal
 ainda usa caminhos entre validação e mutação e, portanto, não promete resistir
 a um processo hostil concorrente alterando o mesmo rootfs; migrá-lo integralmente
 para operações fd-relative é gate de release. O mundo A ainda não tem transação
@@ -477,6 +499,38 @@ dívida). Ver
 [STATUS.md](STATUS.md).
 
 Alvo inicial: **x86_64**.
+
+## Atualizar
+
+Um sistema instalado pela `0.17` em diante se atualiza com dois comandos, como
+root:
+
+```sh
+minitrue rectify newspeak   # a árvore de receitas assinada mais nova
+minitrue rectify --sync     # o sistema inteiro converge para ela
+```
+
+O primeiro busca a árvore em `https://distropica.com.br/newspeak/`, confere a
+assinatura pela chave pinada no sistema e troca a árvore local de uma vez; o
+segundo instala o que mudou — pelo canal binário, sem compilar — e aponta,
+sem remover, o que saiu da árvore. Um kernel novo chega assim: o pacote
+`distropica-efi` muda, o `minipax boot-update` o leva à ESP guardando o
+anterior, e ele vale a partir do próximo boot. Se não bootar, escolha
+"Distrópica (anterior)" no menu de boot do firmware.
+
+Quem instalou a `0.16` atravessa uma vez por uma **ponte**, porque o minitrue
+daquela versão não sabe adotar o próprio executável:
+
+```sh
+minitrue rectify newspeak
+minitrue rectify minitrue-ponte
+minitrue-ponte rectify minitrue minipax distropica-efi
+minitrue rectify --sync
+minitrue memoryhole minitrue-ponte
+```
+
+e reinicia; daí em diante vale o caminho curto acima. A travessia provada é a
+da `0.16`; instalações mais antigas devem reinstalar.
 
 ## Um perfil, três entradas
 
@@ -797,10 +851,12 @@ diretório estiver vazio, nenhum canal é carregado e a seed do cache não é
 reativada. O modo `offline` exige o cache completo e leva seus objetos na mídia;
 a instalação direta equivalente usa `--offline --cache DIR`.
 
-O endpoint, a chave e o índice do canal estão publicados. Para a árvore
-Newspeak, o perfil já pina a origem e a mesma chave, mas, na auditoria desta
-revisão, `newspeak.tar` e `newspeak.tar.minisig` ainda retornavam 404 nesse
-endpoint; portanto não há E2E oficial de `rectify newspeak`.
+O endpoint, a chave e o índice do canal estão publicados, e a árvore
+Newspeak também, desde a `0.17`: `newspeak.tar` e `newspeak.tar.minisig` em
+`https://distropica.com.br/newspeak/`, assinados pela mesma chave que o perfil
+pina. Até a `0.16` os dois davam 404, e não havia E2E de `rectify newspeak`; o
+aceite da atualização (`bootstrap/live/accept-upgrade`) o exercita de ponta a
+ponta num sistema instalado pela versão anterior.
 
 Fora de uma instalação, `minitrue channel refresh [canal]...` faz a atualização
 administrativa: baixa e autentica todos os índices selecionados, imprime
