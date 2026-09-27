@@ -447,9 +447,14 @@ de_github() {   # url, versao pinada
     # nenhuma trouxe a 0.9.6 estável, e o veredito saía '?', defeito desta
     # ferramenta. A API de tags custa cota, por isso só aqui, onde faltou
     # candidato; se ela falhar, a falha fica em $FALHAS e o veredito é '!'.
+    # A resposta vem COMPACTA, numa linha só, para o User-Agent desta
+    # ferramenta (indentada só para o do curl nu): um sed de linha pegaria
+    # apenas o último nome — o upstream/0.7.3 da libfyaml, que o filtro
+    # descarta —, e foi assim que a primeira versão deste ramo deixou a
+    # libfyaml em '?' de novo. Os nomes saem um por um, como no GitLab.
     if [ -z "$v" ]; then
         v=$(busca "https://api.github.com/repos/$caminho/tags?per_page=100" |
-            sed -n 's/.*"name": *"\([^"]*\)".*/\1/p' |
+            grep -oE '"name": *"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' |
             normaliza_tag | filtra_candidatos "$2" | maior)
     fi
     printf '%s' "$v"
