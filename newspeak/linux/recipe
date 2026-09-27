@@ -60,8 +60,8 @@ build() {
     # kernel antes de os .ko existirem, e o manifesto prende hash unsigned + CMS
     # de cada modulo. A chave RSA usada uma vez para gerar o bundle foi criada
     # fora do worktree/rootfs e destruida antes da publicacao destes arquivos.
-    module_cert_sha256=935d49c7e9012fc92c13f19ca99862dd118589afd27cdbc19e6ca82c3e2834ed
-    module_manifest_sha256=28ac1d1c263e99fde6d40c7d2e3d698d85c8dee08b1696b8ace2dbdd8585b02e
+    module_cert_sha256=5c011203fc8b5b8b5db2de33e21e33b257dc8cc88ddf22a585d0d7cb5085a931
+    module_manifest_sha256=d89780927eea2dd6e35ceec4b7a608bf200b1c608dd36477a0601f0eb7a50dbb
     module_bundle=../module-signing/bundle
     module_apply=../module-signing/apply-signatures
     # SEM `awk`, e pelo mesmo motivo que o dbus e o meson já registraram: a view
