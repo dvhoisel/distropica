@@ -6,7 +6,7 @@ preparo; da seção "Licenciamento e publicação" em diante o texto é o da
 revisão de 2026-08-24, no dia em que a `0.14` foi **publicada**, com as seções
 de evidência de cada versão posterior acrescentadas por cima da anterior.
 
-## Estado atual — `0.17`, em preparo (não publicada)
+## Estado atual — `0.17`, preparada e aceita localmente (não publicada)
 
 A `0.17` não traz aplicativo novo. O tema é **o sistema instalado se
 atualiza**, e a reavaliação de 24/09 mostrou que ele não se atualizava: a árvore
@@ -15,12 +15,24 @@ escrito pelo instalador, a seed do canal que a instalação grava no alvo estava
 parada na `0.13`, e nenhum aceite exercitava uma atualização — todos
 instalavam do zero.
 
+**Os artefatos** (`target/release-0.17/`, preparados em 27/09 pelo
+`bootstrap/release preparar`, a partir da revisão `154d480`):
+
+```text
+ISO_SHA256=8dd1d63fe21037296e2da5e7ff255bed05db1aae4e57c566eba0a6eae20ddbb8  (1599 MiB)
+EFI_SHA256=1f2914e1e3454d10f4eaf69cb199d2cafcd70ff8266f572751daecc5fc4cd0ef  (kernel 7.2.8-distropica-live)
+BUNDLE_SHA256=36b3fedffc2749a3589f0e28f8e0231ba3ffa98a1b09c6a138ddd2cebad5f6ec  (3046 MiB, gate estrito)
+CANAL: canal-017, 236 pacotes; a seed do perfil passa a ser ele (c97df64)
+RAIZ_MINIMA: 7,9 GiB (cache.tar de 1506 MiB × 5 + 512 MiB)
+```
+
 O que a `0.17` implementa, commitado e com testes:
 
 - **Atualizar é `minitrue rectify newspeak` seguido de `minitrue rectify
   --sync`.** O `--sync` converge o world inteiro à árvore corrente e aponta,
   sem remover, o que ficou fora; o receipt global passa a declarar os órfãos
-  (`APPLIED_PLAN_RECEIPT_FORMAT=2`).
+  quando há algum (`APPLIED_PLAN_RECEIPT_FORMAT=2`; sem órfão ele continua
+  sendo o formato 1, byte a byte).
 - **Os executores e o EFI são pacotes do canal**: `minitrue`, `minipax` e
   `distropica-efi` (Mundo A, compilados pelo projeto, estáticos e
   reprodutíveis — o mesmo binário sai de qualquer diretório, medido). Os dois
@@ -29,27 +41,69 @@ O que a `0.17` implementa, commitado e com testes:
   (`minitrue-ponte`), porque o minitrue antigo não conhece a adoção.
 - **Boot A/B**: o `minipax boot-update` leva o EFI do pacote à ESP, guarda o
   que arrancou antes em `EFI/distropica/anterior.efi` e mantém as duas
-  entradas na NVRAM; o drop-in `07-efi.sh` refaz a conta a cada boot.
+  entradas na NVRAM; o drop-in `07-efi.sh` refaz a conta a cada boot. Sem a
+  entrada "Distrópica" na NVRAM — o instalador trata a falha de registrá-la
+  como aviso, e toda instalação sem firmware UEFI de verdade termina assim —,
+  a ESP é a ÚNICA cujo EFI traz o kernel em execução, e as entradas são
+  registradas em seguida.
 - **Acesso**: o instalador pede a senha da conta `distropica`, a tty1 pede
   login antes da sessão gráfica, e fechar a tampa tranca a sessão com o
   `swaylock` antes de suspender (suspensão religada no kernel vivo).
 - **Notebook**: brilho (`brightnessctl`, sem setuid, pela regra de udev),
   volume, `Print`/`Shift+Print` para o `distropica-captura`, e a bateria na
-  barra quando a máquina tem uma.
+  barra quando a máquina tem uma — a barra gerada com a bateria passa agora no
+  `yambar --validate` no build, e não só a de `/etc/xdg`.
 - **Segurança**: rustls 0.23.45 (RUSTSEC-2026-0285) e o `cargo audit` como
   portão; microcódigo AMD embutido no kernel; o BusyBox do ambiente vivo sai da
   1.35.0, de 2022, para a 1.38.0; o OpenSSL troca de chave de assinatura e a
   troca é conferida pela chave antiga, que certifica a nova.
-- **Versões (P7)**: kernel 7.2.8 (os cabeçalhos ficam na 7.2.7, pinados: o `make headers` das duas difere só no número de versão e num cabeçalho de RDMA sem leitor aqui, e subir recompilaria a árvore inteira), a pilha do GNOME 51 (glib 2.90, GTK 4.24,
+- **Versões (P7)**: kernel 7.2.8, a pilha do GNOME 51 (glib 2.90, GTK 4.24,
   libadwaita 1.10, Epiphany 51), LLVM 23, Mesa 26.2.3, WebKitGTK 2.54, OpenSSL
-  4.0.2, GIMP 3.2.6, poppler 26.09. O conferidor sai com 0: 238 atuais e 10
-  pinados com motivo — e passou a conferir os insumos do EFI, que nenhuma
-  rodada lia.
+  4.0.2, GIMP 3.2.6, poppler 26.09. O conferidor fecha com 239 atuais e 12
+  pinados com motivo, e passou a conferir os insumos do EFI, que nenhuma
+  rodada lia. Dois pinos novos, os dois com a medida no `versao-pinada`: o
+  `linux-headers` fica na 7.2.7 (o `make headers` das duas versões difere só
+  no `version.h` e num cabeçalho da ABI de um driver RDMA que nada aqui inclui;
+  subir recompilaria 226 pacotes), e o `ca-certificates` fica na loja de 13/08
+  (a de 25/09 tem as mesmas 121 raízes, byte a byte; só o cabeçalho muda).
 - **Release**: `bootstrap/release` (conferir, preparar, aceitar, subir-teste,
   aceitar-atualizacao, publicar) substitui os roteiros de scratchpad; o
+  preparo recusa registro-fonte que não bate com a receita já no passo 1, e
+  compila o EFI dentro da raiz, com as ferramentas dela. O
   `bootstrap/live/accept-upgrade` atualiza um disco instalado pela versão
-  anterior contra o canal de teste, reinicia e exige o kernel novo e o EFI
-  novo como atual.
+  anterior contra o canal de teste, reinicia e exige o kernel novo, o EFI novo
+  como atual e as duas entradas na NVRAM, arrancando pela atual.
+
+**Provado localmente:** o instalador de texto nas duas rotas (mídia atrasada
+com disco inteiro, e cfdisk manual), com a senha do usuário digitada no
+prompt real; o login na tty1 e a sessão gráfica nos dois discos, conferidos
+na foto; e a importação de PDF do Inkscape contra a poppler 26.09, com um PDF
+gerado dentro da distro voltando como SVG com preenchimento, traço e texto
+(`target/ferramentas-prova/prova-017-inkscape.sh`).
+
+A cadeia do zero desta versão, e o que ela ensinou — defeitos que nenhuma
+cadeia anterior tinha exercitado, cada um consertado na causa:
+
+- **WebKitGTK 2.54, três defeitos de build do upstream** com as opções desta
+  árvore (sem GStreamer GL, sem journald): o `FindGStreamer` corrigido passou a
+  exigir `gl` e `mpegts` que o `GStreamerChecks` pede para todo vídeo; o
+  `getDMABuf()` ficou fora da guarda do GStreamer GL que o enum dele tem; e o
+  WebDriver usava um canal de log sem guarda. O último já tem conserto no
+  upstream (0181cdc42aac, a partir de um patch do Chimera Linux), trazido
+  verbatim; os outros dois o `main` ainda tem.
+- **LLVM 23**: o RPATH ganhou `$ORIGIN/../lib/<triplo>`, que foge da closure;
+  a ABI dele ficava pendente e a cadeia o recompilava a cada retomada.
+- **libxcrypt**: em C23 a glibc 2.43+ preserva o `const` do `strchr`, e dois
+  módulos não compilavam com o `-Werror` dela (conserto do upstream, ainda sem
+  release).
+- **Epiphany 51** passou a exigir a `libpwquality` — receita nova, sem
+  cracklib, porque o uso é só gerar senha sorteada. **poppler 26.09** criou a
+  HarfBuzz obrigatória para subconjunto de fontes ao salvar anotação, e
+  **rsync 3.5.1** o IDN pela libidn2: os dois ficam desligados, porque nada
+  aqui os usa.
+- **O desktop da 0.17 nunca tinha sido construído**: duas guardas dele
+  olhavam o formato antigo do autostart e o `/usr/bin` da view em vez do
+  próprio STAGE.
 
 Defeitos achados no caminho que atingiam o que JÁ está publicado:
 
@@ -66,10 +120,12 @@ receitas só funcionavam pela ordem de construção. Todas declaram agora o
 provedor (as nove do fechamento do próprio `findutils` chamam `busybox find`),
 e o lint da árvore não acusa mais nenhuma aresta faltante.
 
-O que ainda NÃO está provado: a cadeia do zero da `0.17` está em construção;
-o EFI, a ISO, o canal e o bundle da versão não foram gerados; os aceites do
-instalador, do login e da atualização da `0.16` ainda não rodaram contra eles;
-e o pacote `linux` espera a cerimônia de assinatura dos módulos da 7.2.8.
+**O que ainda NÃO está provado**: a atualização de um sistema instalado pela
+`0.16` contra o canal da `0.17` — o `aceitar-atualizacao` exige o canal e a
+árvore no ar, em caminhos de teste, e a subida espera a decisão do
+mantenedor; nada disto rodou em hardware físico; e o pacote `linux` segue
+existindo sem nunca ter bootado (os módulos são assinados e instalados, mas o
+kernel que arranca é o do EFI — decisão aberta, SPEC-0011 §9).
 
 ## A revisão da `0.14` (2026-08-24)
 
