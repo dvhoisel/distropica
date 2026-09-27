@@ -1,0 +1,13 @@
+NAME=distropica-efi
+VERSION=0.17
+KIND=binary
+ABOUT="O EFI de boot do sistema instalado: o kernel 7.2.8 e o initramfs vivo num binário só, o mesmo que a mídia desta versão boota. Instalar ou atualizar este pacote faz o minitrue chamar o minipax boot-update, que o põe em EFI/BOOT/BOOTX64.EFI e guarda o que arrancou antes em EFI/distropica/anterior.efi, com as duas entradas na NVRAM; o drop-in 07-efi.sh do base refaz a conta a cada boot."
+LICENSE="GPL-2.0-only AND GPL-3.0-or-later AND LGPL-2.0-only AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-1-Clause AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND CDLA-Permissive-2.0 AND ISC AND MIT AND Apache-2.0 AND (Apache-2.0 WITH LLVM-exception) AND 0BSD AND Unicode-3.0 AND Unlicense AND Zlib AND X11-distribute-modifications-variant AND GPL-2.0-or-later AND LicenseRef-linux-firmware-redistributable"
+SRC="https://distropica.com.br/releases/BOOTX64-0.17.EFI"
+SHA256="1f2914e1e3454d10f4eaf69cb199d2cafcd70ff8266f572751daecc5fc4cd0ef"
+
+install_pkg() {
+    mkdir -p "$PREFIX"
+    cp "$DL" "$PREFIX/BOOTX64.EFI"
+    chmod 644 "$PREFIX/BOOTX64.EFI"
+}

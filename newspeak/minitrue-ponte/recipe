@@ -1,0 +1,14 @@
+NAME=minitrue-ponte
+VERSION=0.17
+KIND=binary
+ABOUT="A PONTE, para quem instalou até a 0.16 e só para isso. O minitrue daquelas versões não conhece ADOPTS e recusa, com razão, tomar o /usr/bin/minitrue sem dono; então o primeiro passo é instalar o minitrue novo com outro nome, e é ele quem adota os executores e converge o resto. É o mesmo binário do pacote minitrue, byte a byte. Depois da travessia sai com memoryhole."
+LICENSE="GPL-3.0-or-later AND MIT AND Apache-2.0 AND (Apache-2.0 WITH LLVM-exception) AND 0BSD AND BSD-1-Clause AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND CDLA-Permissive-2.0 AND ISC AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND Unicode-3.0 AND Unlicense AND Zlib"
+SRC="https://distropica.com.br/releases/minitrue-0.17-x86_64-linux-musl"
+SHA256="f3d960509e8d8e041fec624d76e231d50b6e49f332b9efd1739ae876bfb969d0"
+LINKS="minitrue-ponte=bin/minitrue-ponte"
+
+install_pkg() {
+    mkdir -p "$PREFIX/bin"
+    cp "$DL" "$PREFIX/bin/minitrue-ponte"
+    chmod 755 "$PREFIX/bin/minitrue-ponte"
+}

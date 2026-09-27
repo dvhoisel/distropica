@@ -207,3 +207,6 @@ bsdtar
 # a pede por nome e caia na DejaVu. Entram so as duas variaveis, que cobrem
 # todos os pesos em dois arquivos.
 inter-fonts
+minitrue
+minipax
+distropica-efi

@@ -1,0 +1,15 @@
+NAME=minitrue
+VERSION=0.17
+KIND=binary
+ABOUT="O Ministério da Verdade como pacote da própria distro: o gerenciador que retifica o sistema, publicado pelo projeto como binário estático musl e reprodutível (bootstrap/build-minitrue.sh --musl). ADOTA o /usr/bin/minitrue que o instalador persistiu, conferindo os bytes contra o install.manifest; é assim que o sistema instalado passa a receber o próprio gerenciador pela mesma via dos outros pacotes. São os mesmos bytes que o EFI desta versão embute."
+LICENSE="GPL-3.0-or-later AND MIT AND Apache-2.0 AND (Apache-2.0 WITH LLVM-exception) AND 0BSD AND BSD-1-Clause AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND CDLA-Permissive-2.0 AND ISC AND LGPL-2.0-or-later AND LGPL-2.1-or-later AND Unicode-3.0 AND Unlicense AND Zlib"
+SRC="https://distropica.com.br/releases/minitrue-0.17-x86_64-linux-musl"
+SHA256="f3d960509e8d8e041fec624d76e231d50b6e49f332b9efd1739ae876bfb969d0"
+LINKS="minitrue=bin/minitrue"
+ADOPTS="/usr/bin/minitrue"
+
+install_pkg() {
+    mkdir -p "$PREFIX/bin"
+    cp "$DL" "$PREFIX/bin/minitrue"
+    chmod 755 "$PREFIX/bin/minitrue"
+}

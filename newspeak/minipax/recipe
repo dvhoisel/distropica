@@ -1,0 +1,15 @@
+NAME=minipax
+VERSION=0.17
+KIND=binary
+ABOUT="O Ministério da Paz como pacote da própria distro: o instalador, o compositor de mídia e o boot-update, que leva o EFI do pacote distropica-efi para a ESP. Binário estático musl e reprodutível, publicado pelo projeto; ADOTA o /usr/bin/minipax que o instalador persistiu, conferindo os bytes contra o install.manifest. São os mesmos bytes que o EFI desta versão embute."
+LICENSE="GPL-3.0-or-later AND MIT AND Apache-2.0 AND (Apache-2.0 WITH LLVM-exception) AND Unicode-3.0 AND Unlicense AND LGPL-2.1-or-later"
+SRC="https://distropica.com.br/releases/minipax-0.17-x86_64-linux-musl"
+SHA256="84bce3ac9149e254a4bf7b5cadebe002392c5efc54b666f222c1a6e5ba90b042"
+LINKS="minipax=bin/minipax"
+ADOPTS="/usr/bin/minipax"
+
+install_pkg() {
+    mkdir -p "$PREFIX/bin"
+    cp "$DL" "$PREFIX/bin/minipax"
+    chmod 755 "$PREFIX/bin/minipax"
+}

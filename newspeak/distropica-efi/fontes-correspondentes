@@ -1,0 +1,11 @@
+# Fonte correspondente de um binário que o PROJETO compila: o snapshot
+# da árvore na revisão 154d480ea8bd1472e56d4ba1376abfdd0a798d9e, com o vendor/ das crates, publicado em
+# https://distropica.com.br/sources/distropica/. Gerado pelo bootstrap/release.
+VERSION=0.17
+f2d25c0d90fb8d3d978e95e50dbc1a2686512c3e7f91a9db4541ea1b78e35fb7  https://distropica.com.br/sources/distropica/distropica-projeto-0.17.tar.xz
+12e8d5a973d1ad7c5a5c69882e4022b131ed715db7003fdcd760ddf8c3e51941  https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.8.tar.xz
+34f9ea6ff8636f2c9241153b9114eefa9e65674a45318ae1ef95bb5f31c53bb2  https://busybox.net/downloads/busybox-1.38.0.tar.bz2
+fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b  https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v1.47.4/e2fsprogs-1.47.4.tar.xz
+355b4cbbed880b0381a04c46617b7656e362585d52e9cf84a67e2009b749ff11  https://ftp.gnu.org/gnu/ncurses/ncurses-6.6.tar.gz
+fbd62a100ab7bb8746ba0661255c3c48185b1e9021507c624da01fbc696330ec  https://mirrors.edge.kernel.org/pub/linux/utils/util-linux/v2.42/util-linux-2.42.4.tar.xz
+f80dcb757a623deda62200c08e0e1a88c76fb6b54964f31b35fa74da1c90ccc5  https://mirrors.edge.kernel.org/pub/linux/kernel/firmware/linux-firmware-20260916.tar.xz
