@@ -1,0 +1,29 @@
+# Versão pinada abaixo do estável mais novo, pela ressalva pragmática da P7.
+#
+# A loja de 2026-08-13 fica, e a razão é MEDIDA. O cacert.pem de 2026-09-25 da
+# curl.se (sha256 a41b5d35…, convertido do certdata.txt beb7e6df… do commit
+# f6dd0159 do ramo release da Mozilla) traz as MESMAS 121 raízes, byte a byte,
+# que o de 2026-08-13 pinado na receita: fora das linhas "##" do cabeçalho, o
+# diff é vazio. E a reconversão confere — o mk-ca-bundle.pl 1.33 do curl 8.22.0
+# sobre aquele certdata.txt reproduz o PEM novo.
+#
+# O que mudou na Mozilla foi uma correção de esquema do NSS: a data de
+# desconfiança de servidor do Izenpe.com (15/04/2026) saiu do objeto de
+# confiança, onde o NSS não a lê, para o objeto do certificado. O PEM não tem
+# como exprimir desconfiança parcial por data, então nas duas lojas o Izenpe
+# entra do mesmo jeito — e isso é limite do formato PEM, antes e depois.
+#
+# O PREÇO DE SUBIR seria refazer 11 pacotes — curl, git, glib-networking,
+# libsoup, webkitgtk, epiphany, gimp, libadwaita e cia., porque o fingerprint é
+# transitivo — para trocar três linhas de comentário na loja.
+#
+# Fora da receita pelo mesmo motivo do `fontes-correspondentes`: o FINGERPRINT
+# cobre o texto do recipe.
+#
+# FORMATO: a primeira linha não-comentário é o motivo que o relatório mostra.
+# Verificado em 2026-09-26.
+cacert.pem de 2026-09-25 = o de 2026-08-13 raiz a raiz (só o cabeçalho muda); subir refaz 11 pacotes
+# GATILHO: o pino vence quando a curl.se publicar outra loja que não a de
+# 2026-09-25; refazer o diff fora do cabeçalho antes de renovar, e subir se
+# alguma raiz entrar, sair ou mudar.
+CONTRA=2026-09-25
