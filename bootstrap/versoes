@@ -440,6 +440,18 @@ de_github() {   # url, versao pinada
     # `1.10.8` do latest e `1.10.8` das tags viravam `1.10.81.10.8`.
     v=$(printf '%s\n%s\n' "$v_release" "$v_tags" |
         normaliza_tag | filtra_candidatos "$2" | maior)
+    # QUANDO O CAMINHO BARATO NÃO ACHA ESTÁVEL NENHUM, a lista inteira. O feed
+    # traz só as dez tags mais novas, e o `latest` é o que o mantenedor marcou
+    # — a libfyaml marcou a v1.0.0-beta2, sem a bandeira de prévia, e as dez
+    # tags do feed eram todas prévias da 1.0: as duas consultas responderam,
+    # nenhuma trouxe a 0.9.6 estável, e o veredito saía '?', defeito desta
+    # ferramenta. A API de tags custa cota, por isso só aqui, onde faltou
+    # candidato; se ela falhar, a falha fica em $FALHAS e o veredito é '!'.
+    if [ -z "$v" ]; then
+        v=$(busca "https://api.github.com/repos/$caminho/tags?per_page=100" |
+            sed -n 's/.*"name": *"\([^"]*\)".*/\1/p' |
+            normaliza_tag | filtra_candidatos "$2" | maior)
+    fi
     printf '%s' "$v"
 }
 
