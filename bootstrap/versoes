@@ -861,6 +861,20 @@ for receita in "$REPO"/newspeak/*/recipe; do
             "$pacote" "${versao_receita:--}" "-" "$veredito" "$motivo" >> "$TSV"
         continue
     fi
+    # OS BINÁRIOS DO PRÓPRIO PROJETO — minitrue, minipax, minitrue-ponte e o
+    # EFI de boot, que o bootstrap/release compila e escreve como receitas a
+    # cada versão — não têm upstream fora dele: o SRC aponta os releases do
+    # site, e a versão é a da release por construção. Consultá-los como
+    # upstream dava '!' (o arquivo nem existe antes da subida), e o portão da
+    # versão seguinte reprovaria por isso.
+    case "$src" in
+        https://distropica.com.br/releases/*)
+            veredito='-'; nova='-'; motivo='binário do próprio projeto; a versão é a da release'
+            [ -n "$TSV" ] && printf '%s\t%s\t%s\t%s\t%s\n' \
+                "$pacote" "$versao_receita" "-" "$veredito" "$motivo" >> "$TSV"
+            continue
+            ;;
+    esac
 
     fontes=$(fontes_conferiveis "$pacote" "$versao_receita" "$src")
     while IFS='|' read -r rotulo versao url erro_fonte; do
