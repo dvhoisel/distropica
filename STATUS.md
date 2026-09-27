@@ -74,7 +74,8 @@ O que a `0.17` implementa, commitado e com testes:
   anterior contra o canal de teste, reinicia e exige o kernel novo, o EFI novo
   como atual e as duas entradas na NVRAM, arrancando pela atual.
 
-**Provado localmente:** o instalador de texto nas duas rotas (mídia atrasada
+**Provado localmente:** a ISO publicada arrancando pelo firmware UEFI (OVMF, sem
+`-kernel`) e validando a própria mídia; o instalador de texto nas duas rotas (mídia atrasada
 com disco inteiro, e cfdisk manual), com a senha do usuário digitada no
 prompt real; o login na tty1 e a sessão gráfica nos dois discos, conferidos
 na foto; e a importação de PDF do Inkscape contra a poppler 26.09, com um PDF
