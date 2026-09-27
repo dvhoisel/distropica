@@ -40,7 +40,7 @@ O que a `0.17` implementa, commitado e com testes:
   portão; microcódigo AMD embutido no kernel; o BusyBox do ambiente vivo sai da
   1.35.0, de 2022, para a 1.38.0; o OpenSSL troca de chave de assinatura e a
   troca é conferida pela chave antiga, que certifica a nova.
-- **Versões (P7)**: kernel 7.2.7, a pilha do GNOME 51 (glib 2.90, GTK 4.24,
+- **Versões (P7)**: kernel 7.2.8 (os cabeçalhos ficam na 7.2.7, pinados: o `make headers` das duas difere só no número de versão e num cabeçalho de RDMA sem leitor aqui, e subir recompilaria a árvore inteira), a pilha do GNOME 51 (glib 2.90, GTK 4.24,
   libadwaita 1.10, Epiphany 51), LLVM 23, Mesa 26.2.3, WebKitGTK 2.54, OpenSSL
   4.0.2, GIMP 3.2.6, poppler 26.09. O conferidor sai com 0: 238 atuais e 10
   pinados com motivo — e passou a conferir os insumos do EFI, que nenhuma
@@ -69,7 +69,7 @@ e o lint da árvore não acusa mais nenhuma aresta faltante.
 O que ainda NÃO está provado: a cadeia do zero da `0.17` está em construção;
 o EFI, a ISO, o canal e o bundle da versão não foram gerados; os aceites do
 instalador, do login e da atualização da `0.16` ainda não rodaram contra eles;
-e o pacote `linux` espera a cerimônia de assinatura dos módulos da 7.2.7.
+e o pacote `linux` espera a cerimônia de assinatura dos módulos da 7.2.8.
 
 ## A revisão da `0.14` (2026-08-24)
 

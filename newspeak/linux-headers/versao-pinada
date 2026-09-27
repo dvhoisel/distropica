@@ -1,0 +1,33 @@
+# Versão pinada abaixo do estável mais novo, pela ressalva pragmática da P7.
+#
+# O `linux` embarcado subiu para a 7.2.8 na 0.17; estes cabeçalhos ficam na
+# 7.2.7, e a razão é MEDIDA. Os dois tarballs passaram pelo mesmo
+# `make headers` desta receita (mesma remoção dos não-.h), e das 1025 entradas
+# de usr/include só DUAS diferem:
+#
+#   linux/version.h        LINUX_VERSION_CODE e SUBLEVEL, 7 → 8: o próprio
+#                          número de versão;
+#   rdma/bnxt_re-abi.h     um campo renomeado (umdbr → reserved2) na ABI do
+#                          driver RDMA da Broadcom, que só o rdma-core inclui —
+#                          e o rdma-core não mora nesta árvore.
+#
+# O PREÇO DE SUBIR é a árvore inteira: o linux-headers é BUILD_DEPS da glibc,
+# do gcc e do gcc-pass2, e o fingerprint é transitivo — 226 pacotes
+# recompilados, um dia de cadeia, para trocar um número e um nome de campo que
+# nada lê. Userspace compilado contra UAPI anterior roda no kernel mais novo;
+# é o regime de toda distribuição, e o que a própria receita pede dos
+# cabeçalhos (o comentário do SRC dela) é que acompanhem a SÉRIE do kernel
+# embarcado (v7.x), não o ponto.
+#
+# Fora da receita pelo mesmo motivo do `fontes-correspondentes`: o FINGERPRINT
+# cobre o texto do recipe, e mexer nele é exatamente a recompilação que este
+# pino evita.
+#
+# FORMATO: a primeira linha não-comentário é o motivo que o relatório mostra.
+# Verificado em 2026-09-26, com a 7.2.8 conferida pela assinatura do
+# sha256sums.asc da kernel.org (chave B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1).
+UAPI da 7.2.8 = 7.2.7 exceto version.h e rdma/bnxt_re-abi.h (sem leitor aqui); subir recompila 226 pacotes
+# GATILHO: o pino vence quando o upstream publicar outra coisa que não a
+# 7.2.8. Cada ponto novo do kernel exige refazer o diff do `make headers`
+# antes de renovar a ressalva — ou subir, se o diff tocar o que a árvore usa.
+CONTRA=7.2.8

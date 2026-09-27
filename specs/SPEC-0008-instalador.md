@@ -533,7 +533,7 @@ O kernel vivo fixa `CONFIG_MODULES=n` e seu initramfs não distribui módulo
 algum: todos os drivers necessários para encontrar mídia, rede e disco
 precisam estar built-in, e a guarda pós-`olddefconfig` exige `=y` para cada
 classe suportada. `LOCALVERSION=-distropica-live` faz seu release ser
-`<versão>-distropica-live` (na 0.17, `7.2.7-distropica-live`), distinto do
+`<versão>-distropica-live` (na 0.17, `7.2.8-distropica-live`), distinto do
 kernel do pacote `linux` materializado no target.
 Não há carregador de `.ko` nem busca automática depois do `switch_root`; isso
 não amplia a cobertura estreita de drivers deste marco.

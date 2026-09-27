@@ -366,8 +366,8 @@ unset TAR_OPTIONS GZIP BZIP2 BZIP XZ_DEFAULTS XZ_OPT CONFIG_SITE \
     CARGO_ENCODED_RUSTFLAGS PKG_CONFIG_PATH PKG_CONFIG_LIBDIR
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
-LINUX_VERSION=7.2.7
-LINUX_SHA256=4ac34c47db2540ffb2713943f8d891ff1702e0ba6934525a493b7d1cad43145a
+LINUX_VERSION=7.2.8
+LINUX_SHA256=12e8d5a973d1ad7c5a5c69882e4022b131ed715db7003fdcd760ddf8c3e51941
 LINUX_URL=https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${LINUX_VERSION}.tar.xz
 # O BusyBox do EFI é compilado da fonte, e anda sozinho: o do Mundo A continua
 # no binário 1.35.0 que o busybox.net publica, e este segue o estável. A 1.38.0

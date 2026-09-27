@@ -655,7 +655,7 @@ aceitar_atualizacao() {
     prova=$L/atualizacao
     [ ! -e "$prova" ] || morre "$prova já existe"
     # O uname -r do kernel vivo leva o LOCALVERSION da configuração que o EFI
-    # desta versão embutiu (7.2.7-distropica-live), e não só a versão.
+    # desta versão embutiu (7.2.8-distropica-live), e não só a versão.
     sufixo=$(sed -n 's/^CONFIG_LOCALVERSION="\(.*\)"$/\1/p' "$L/live-kernel-config-$VC")
     [ -n "$sufixo" ] || morre "a configuração viva não declara CONFIG_LOCALVERSION"
     bootstrap/live/accept-upgrade --disk "$DISCO_ANTERIOR" --log-dir "$prova" \
