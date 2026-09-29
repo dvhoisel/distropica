@@ -2199,10 +2199,12 @@ fn finalize_abi(
     // pacote do mundo como ela foi feita quando ele foi aplicado.
     //
     // Reaproveita-se a observação anterior de um pacote quando NADA que a
-    // sustenta mudou: ele não foi escrito nesta operação, é factual no lock
-    // anterior, e nenhum provider dos requisitos dele foi escrito ou saiu do
-    // mundo. Todo o resto — os escritos, os afetados por provider, os que o
-    // lock anterior não cobre — passa pela análise fresca de sempre. Não é
+    // sustenta mudou: ele não foi escrito nesta operação, é `keep` com a
+    // mesma identidade (fingerprint e payload) que o lock anterior registrou,
+    // é factual nele, e nenhum provider dos requisitos dele foi escrito, mudou
+    // de identidade ou saiu do mundo. Todo o resto — os escritos, os que ainda
+    // vão ser produzidos, os afetados por provider, os que o lock anterior não
+    // cobre — passa pela análise fresca de sempre. Não é
     // relaxamento do princípio de medir o estado final: é escopo. A medição
     // reaproveitada FOI feita, está presa por hash, e o `verify` continua
     // sendo a re-medição completa sob demanda. O portão
@@ -2218,7 +2220,7 @@ fn finalize_abi(
     };
     let reuse: BTreeSet<String> = previous
         .as_ref()
-        .map(|prev| abi_reuse_set(prev, &material_set, written_records))
+        .map(|prev| abi_reuse_set(prev, &material_set, written_records, &plan.nodes))
         .unwrap_or_default();
     if let Some(prev) = &previous {
         if !reuse.is_empty() {
@@ -2406,25 +2408,52 @@ fn load_previous_applied_plan(ctx: &Ctx) -> Option<VerifiedPlan> {
 
 /// Decide, pela evidência do plano anterior, quais pacotes materiais podem
 /// reaproveitar a observação ABI dele. Pura, para o teste cobrar cada regra:
-/// escrito nesta operação reanalisa; sem cobertura factual (ou pendente) no
-/// lock anterior reanalisa; e requerente cujo provider foi escrito OU saiu do
+/// escrito nesta operação reanalisa; outra identidade que a do lock anterior
+/// reanalisa; sem cobertura factual (ou pendente) no lock anterior reanalisa;
+/// e requerente cujo provider foi escrito, mudou de identidade OU saiu do
 /// mundo reanalisa, porque a resolução dele pode ter mudado de resposta.
+///
+/// IDENTIDADE, NÃO NOME. A observação anterior só vale para o MESMO pacote:
+/// `keep` neste plano, com o fingerprint e o payload que o lock anterior
+/// registrou. Pelo nome só, ela sobrevivia a duas coisas que a invalidam — o
+/// pacote que este plano ainda vai produzir (um `plan` com reconstrução
+/// pendente saía com ABI_PROVIDE de nó que não é `keep`, e o próprio parser o
+/// recusava: "ABI_PROVIDE referencia pacote ausente"), e o que uma execução
+/// interrompida já reconstruiu: o fechamento parcial não publica plano
+/// aplicado, então a retomada herdava a ABI da build ANTERIOR de todo pacote
+/// que ela mesma não escreveu.
 fn abi_reuse_set(
     previous: &VerifiedPlan,
     material: &BTreeSet<String>,
     written: &BTreeSet<String>,
+    current: &BTreeMap<String, PlanNode>,
 ) -> BTreeSet<String> {
+    let changed: BTreeSet<String> = material
+        .iter()
+        .filter(|package| {
+            written.contains(*package)
+                || match (previous.nodes.get(*package), current.get(*package)) {
+                    (Some(before), Some(now)) => {
+                        now.action != PlanAction::Keep
+                            || before.fingerprint != now.fingerprint
+                            || before.payload != now.payload_sha256
+                    }
+                    _ => true,
+                }
+        })
+        .cloned()
+        .collect();
     let mut affected: BTreeSet<String> = BTreeSet::new();
     for line in previous.abi_require_edges() {
         let (requirer, provider) = line;
-        if written.contains(&provider) || !material.contains(&provider) {
+        if changed.contains(&provider) || !material.contains(&provider) {
             affected.insert(requirer);
         }
     }
     material
         .iter()
         .filter(|package| {
-            !written.contains(*package)
+            !changed.contains(*package)
                 && !affected.contains(*package)
                 && previous.abi_factual_packages.contains(*package)
                 && !previous.abi_pending_packages.contains(*package)
@@ -9498,6 +9527,27 @@ mod tests {
         factual: &[&str],
         pendente: &[&str],
     ) -> VerifiedPlan {
+        let nodes = factual
+            .iter()
+            .chain(pendente)
+            .map(|name| {
+                (
+                    name.to_string(),
+                    VerifiedNode {
+                        version: "1".into(),
+                        kind: "source".into(),
+                        world: "B".into(),
+                        action: "keep".into(),
+                        origin: "fonte".into(),
+                        fingerprint: format!("fp-{name}"),
+                        role: "runtime".into(),
+                        payload: format!("pl-{name}"),
+                        license: "MIT".into(),
+                        provenance_sha256: "-".into(),
+                    },
+                )
+            })
+            .collect();
         VerifiedPlan {
             lock_sha256: "-".to_string(),
             tree_sha256: "-".to_string(),
@@ -9517,10 +9567,35 @@ mod tests {
                 })
                 .collect(),
             roots: BTreeMap::new(),
-            nodes: BTreeMap::new(),
+            nodes,
             abi_factual_packages: factual.iter().map(|s| s.to_string()).collect(),
             abi_pending_packages: pendente.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    /// O plano corrente: cada material com a MESMA identidade que o fixture
+    /// anterior lhe deu (fp-/pl-), em keep — o caso de nada ter mudado.
+    fn plano_atual_para_reuso(material: &BTreeSet<String>) -> BTreeMap<String, PlanNode> {
+        material
+            .iter()
+            .map(|name| {
+                (
+                    name.clone(),
+                    PlanNode {
+                        name: name.clone(),
+                        version: "1".to_string(),
+                        kind: Kind::Source,
+                        world: "B",
+                        action: PlanAction::Keep,
+                        origin: "fonte".to_string(),
+                        fingerprint: format!("fp-{name}"),
+                        materiality: Materiality::Runtime,
+                        payload_sha256: format!("pl-{name}"),
+                        license: "MIT".to_string(),
+                    },
+                )
+            })
+            .collect()
     }
 
     #[test]
@@ -9547,7 +9622,8 @@ mod tests {
         .map(|s| s.to_string())
         .collect();
         let escritos: BTreeSet<String> = ["gtk3".to_string(), "gimp".to_string()].into();
-        let reuso = abi_reuse_set(&anterior, &material, &escritos);
+        let atual = plano_atual_para_reuso(&material);
+        let reuso = abi_reuse_set(&anterior, &material, &escritos, &atual);
         // reaproveitam: foot (provider intocado) e fcft (sem requires).
         assert!(reuso.contains("foot"));
         assert!(reuso.contains("fcft"));
@@ -9562,7 +9638,43 @@ mod tests {
     fn reuso_abi_vazio_sem_lock_util() {
         let anterior = plano_anterior_para_reuso(&[], &[], &[]);
         let material: BTreeSet<String> = ["a".to_string()].into();
-        assert!(abi_reuse_set(&anterior, &material, &BTreeSet::new()).is_empty());
+        let atual = plano_atual_para_reuso(&material);
+        assert!(abi_reuse_set(&anterior, &material, &BTreeSet::new(), &atual).is_empty());
+    }
+
+    #[test]
+    fn reuso_abi_exige_a_mesma_identidade_nao_o_mesmo_nome() {
+        // Nada escrito nesta operação, e mesmo assim só "igual" reaproveita:
+        //  - o openssl foi refeito por uma execução interrompida (o fechamento
+        //    parcial não publica plano aplicado): outro fingerprint;
+        //  - o curl requer o openssl, então reanalisa junto;
+        //  - o pcre2 ainda vai ser produzido (um `plan` com reconstrução
+        //    pendente): não é keep, mesmo com o fingerprint antigo;
+        //  - o zlib, com outro payload sob o mesmo fingerprint, reanalisa;
+        //  - o expat, idêntico e sem nada mudado embaixo, reaproveita.
+        let anterior = plano_anterior_para_reuso(
+            &[("curl", "openssl"), ("expat", "glibc")],
+            &["openssl", "curl", "pcre2", "zlib", "expat", "glibc"],
+            &[],
+        );
+        let material: BTreeSet<String> = ["openssl", "curl", "pcre2", "zlib", "expat", "glibc"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mut atual = plano_atual_para_reuso(&material);
+        atual.get_mut("openssl").unwrap().fingerprint = "fp-openssl-4.0.3".to_string();
+        atual.get_mut("pcre2").unwrap().action = PlanAction::Source;
+        atual.get_mut("zlib").unwrap().payload_sha256 = "pl-zlib-outro".to_string();
+        let reuso = abi_reuse_set(&anterior, &material, &BTreeSet::new(), &atual);
+        for reanalisa in ["openssl", "curl", "pcre2", "zlib"] {
+            assert!(!reuso.contains(reanalisa), "{reanalisa} devia reanalisar");
+        }
+        assert!(reuso.contains("expat"));
+        assert!(reuso.contains("glibc"));
+        // Sem o nó no lock anterior não há identidade a comparar: reanalisa.
+        let mut sem_no = anterior.clone();
+        sem_no.nodes.remove("expat");
+        assert!(!abi_reuse_set(&sem_no, &material, &BTreeSet::new(), &atual).contains("expat"));
     }
 
     #[test]
