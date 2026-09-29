@@ -6255,6 +6255,24 @@ fn install_sealed_source(
     let shared_directory_claims = all_shared_directory_claims(ctx)?;
     let all_claim_index = index_manifest_claims(&claims, None);
     let external_claim_index = index_manifest_claims(&claims, Some(&r.name));
+    // Quem o D: DESTE pacote autoriza a depositar nos diretórios dele: os
+    // registros que o declaram como DEPS direta — a mesma regra que a
+    // instalação do dependente e o `verify` cobram. Só se calcula para quem
+    // declara SHARED_DIRS.
+    let mut dependentes_diretos = HashSet::new();
+    if !shared_roots.is_empty() {
+        for (owner, _, _) in &claims {
+            if owner == &r.name {
+                continue;
+            }
+            let deps = read_meta_strict(&ctx.records_dir().join(owner))?
+                .and_then(|meta| meta.get("DEPS").cloned())
+                .unwrap_or_default();
+            if deps.split_whitespace().any(|dep| dep == r.name) {
+                dependentes_diretos.insert(owner.clone());
+            }
+        }
+    }
     // Donos cujos diretórios esta receita pode tomar: provisional declarado em
     // SUPERSEDES, exatamente as mesmas duas condições que o
     // adopt_provisional_path exige para ceder um arquivo.
@@ -6382,12 +6400,25 @@ fn install_sealed_source(
                 );
             }
         }
+        // Diretório vazio no STAGE vira claim de árvore e barra o que outro
+        // pacote tem dentro — salvo quando é D:. Num SHARED_DIRS reusado de
+        // DEPS direta, o conteúdo alheio não é assunto deste pacote. No
+        // SHARED_DIRS do PRÓPRIO pacote, o D: autoriza os descendentes dos
+        // dependentes diretos, e isso não muda quando quem se refaz é o dono:
+        // sem esta exceção, refazer o hicolor-icon-theme com o gimp instalado
+        // acusava o gimp.png de sobrepor o 128x128/apps vazio. Quem pôs
+        // arquivo ali SEM declarar o dono continua sendo sobreposição.
         let overlap = if entry.is_dir() {
             indexed_claim_at_or_above(&external_claim_index, &virt, true).or_else(|| {
-                (!stage_dirs_with_children.contains(rel)
-                    && !path_is_shared(&virt, &reused_shared_roots))
-                .then(|| indexed_descendant(&external_claim_index, &virt))
-                .flatten()
+                if stage_dirs_with_children.contains(rel)
+                    || path_is_shared(&virt, &reused_shared_roots)
+                {
+                    None
+                } else if path_is_shared(&virt, &shared_roots) {
+                    indexed_descendant_except(&external_claim_index, &virt, &dependentes_diretos)
+                } else {
+                    indexed_descendant(&external_claim_index, &virt)
+                }
             })
         } else {
             indexed_claim_at_or_above(&external_claim_index, &virt, false)
@@ -10589,6 +10620,29 @@ fn indexed_descendant<'a, 'b>(
     Some((*owner, *version, claim.as_str()))
 }
 
+/// O primeiro descendente de `path` com um dono FORA de `authorized` — o
+/// `indexed_descendant` que pula quem um D: autoriza. Percorre só a faixa do
+/// prefixo no índice ordenado.
+fn indexed_descendant_except<'a, 'b>(
+    index: &'b IndexedClaims<'a>,
+    path: &str,
+    authorized: &HashSet<String>,
+) -> Option<(&'a str, &'a str, &'b str)> {
+    let prefix = format!("{path}/");
+    for (claim, owners) in index.range(prefix.clone()..) {
+        if !claim.starts_with(&prefix) {
+            break;
+        }
+        if let Some((owner, version)) = owners
+            .iter()
+            .find(|(owner, _)| !authorized.contains(*owner))
+        {
+            return Some((*owner, *version, claim.as_str()));
+        }
+    }
+    None
+}
+
 fn all_manifests(ctx: &Ctx) -> Result<Vec<(String, String, HashSet<String>)>> {
     all_manifests_for_recovery(ctx, &HashSet::new(), &HashSet::new())
 }
@@ -13718,6 +13772,7 @@ mod tests {
         write_recipe("empty", "depot", "");
         write_recipe("indirect", "middle", "");
         write_recipe("replace", "depot", "");
+        write_recipe("stray", "", "");
 
         // A fixture passa pela mesma fronteira de uma aplicação: o runner e
         // todos os fingerprints existem antes de qualquer record v3 nascer.
@@ -13746,6 +13801,7 @@ mod tests {
             "empty",
             "indirect",
             "replace",
+            "stray",
         ] {
             resolved_recipes.push(recipe::load(&ctx, name).unwrap());
         }
@@ -13913,6 +13969,32 @@ mod tests {
         .is_err());
         assert!(root.join("usr/share/depot/bucket").is_dir());
 
+        // O DONO DE SHARED_DIRS SE REFAZ COM OS DEPENDENTES DENTRO. O D: vazio
+        // do STAGE dele é o lugar onde os dependentes depositam — o icon.png
+        // do direct —, e refazê-lo (outra versão, ou a identidade mudada pela
+        // ondulação de um BUILD_DEPS) não pode acusar isso de sobreposição.
+        // Foi o que parou a cadeia da 0.17 no hicolor-icon-theme com o gimp
+        // instalado, e pararia a atualização de todo sistema que tenha um
+        // aplicativo com ícone.
+        install_stage(&depot, &depot_stage)
+            .expect("refazer o dono de SHARED_DIRS com dependente dentro");
+        assert_eq!(
+            fs::read(root.join("usr/share/depot/bucket/icon.png")).unwrap(),
+            b"icone"
+        );
+        let depot_refeito = read_manifest_strict(&ctx.records_dir().join("depot")).unwrap();
+        assert!(depot_refeito.iter().any(|line| {
+            manifest_path(line) == "/usr/share/depot/bucket"
+                && manifest_integrity(line).is_some_and(|tag| tag.starts_with("D:"))
+        }));
+        assert!(depot_refeito
+            .iter()
+            .all(|line| !manifest_path(line).starts_with("/usr/share/depot/bucket/")));
+        let direct_manifest = read_manifest_strict(&ctx.records_dir().join("direct")).unwrap();
+        assert!(direct_manifest
+            .iter()
+            .any(|line| manifest_path(line) == "/usr/share/depot/bucket/icon.png"));
+
         memoryhole(&ctx, &["direct".into()]).unwrap();
         memoryhole(&ctx, &["empty".into()]).unwrap();
         memoryhole(&ctx, &["middle".into()]).unwrap();
@@ -13921,6 +14003,27 @@ mod tests {
         assert_eq!(
             fs::read(root.join("usr/share/depot/bucket/admin")).unwrap(),
             b"preservar"
+        );
+        assert!(!ctx.records_dir().join("depot").exists());
+
+        // A EXCEÇÃO DO DONO É SÓ PARA QUEM O DECLARA. Sem o depot no sistema,
+        // um pacote que não depende dele pode deixar arquivo no bucket; quando
+        // o depot volta, o D: dele não o legitima de carona — o `verify`
+        // acusaria "sem DEPS direta", e o preflight recusa antes.
+        let stray_stage = root.join("fixtures/stray");
+        fs::create_dir_all(stray_stage.join("usr/share/depot/bucket")).unwrap();
+        fs::write(
+            stray_stage.join("usr/share/depot/bucket/stray.png"),
+            b"sem dono declarado",
+        )
+        .unwrap();
+        let stray = recipe::load(&ctx, "stray").unwrap();
+        install_stage(&stray, &stray_stage).unwrap();
+        let error = install_stage(&depot, &depot_stage)
+            .expect_err("o D: do dono não autoriza quem não o declara");
+        assert!(
+            error.to_string().contains("sobrepõe") && error.to_string().contains("stray"),
+            "{error}"
         );
         assert!(!ctx.records_dir().join("depot").exists());
         let _ = fs::remove_dir_all(root);
