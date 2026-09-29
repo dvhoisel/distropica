@@ -640,10 +640,11 @@ nano --version
 minitrue verify
 ```
 
-`yq` 4.53.2 fica no Mundo A com `ORIGIN=vendor`; GNU nano 9.1 fica no Mundo B
-com `ORIGIN=fonte` e depende da ncurses já instalada pelo Vim. As duas receitas
-foram exercitadas numa cópia do target: os hashes conferiram, as versões
-executaram e `verify` terminou limpo. Sem rede, ambas falham fechado em vez de
+`yq` fica no Mundo A com `ORIGIN=vendor`; GNU nano fica no Mundo B com
+`ORIGIN=fonte` e depende da ncurses já instalada pelo Vim. As duas receitas
+foram exercitadas numa cópia do target quando entraram na árvore, em julho de
+2026 (yq 4.53.2 e nano 9.1): os hashes conferiram, as versões executaram e
+`verify` terminou limpo. Sem rede, ambas falham fechado em vez de
 consumir o cache da mídia.
 
 A composição `target/distropica-rede-v3.iso` incorpora essas receitas e

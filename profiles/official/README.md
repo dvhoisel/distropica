@@ -95,8 +95,8 @@ em `target.world`; por isso `/usr/bin/rg`, `/usr/bin/vim`, `/usr/bin/vi`, Make e
 a toolchain final devem existir desde o primeiro boot. Ncurses existe como
 dependência de Vim, não como intenção top-level.
 
-As receitas `yq` 4.53.2 e `nano` 9.1 também fazem parte da árvore, mas não de
-nenhum dos três worlds. São provas online-only: `minitrue rectify yq` baixa o
+As receitas `yq` e `nano` também fazem parte da árvore, mas não de nenhum dos
+três worlds. São provas online-only: `minitrue rectify yq` baixa o
 binário estático oficial e registra `ORIGIN=vendor`; `minitrue rectify nano`
 baixa o tarball oficial e compila com a toolchain nativa, registrando
 `ORIGIN=fonte`. Nenhum dos dois payloads está no cache da mídia. A composição
