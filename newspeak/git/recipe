@@ -1,5 +1,5 @@
 NAME=git
-VERSION=2.55.0
+VERSION=2.56.0
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc curl openssl zlib expat pcre2 perl busybox"
@@ -17,7 +17,7 @@ BUILD_DEPS="gcc-pass2 binutils-glibc make gettext gawk findutils"
 ABOUT="Controle de versão. Faltava, e a falta era gritante: esta distro se apresenta como pronta para compilar, embarca gcc, make, vim e ripgrep, e o site convida a examinar o código — sem nenhuma forma de obter esse código versionado ou registrar uma alteração. A libcurl em DEPS é o que torna clone por https:// possível; sem ela sobrariam ssh:// e git://, e o primeiro repositório que alguém tentasse buscar falharia. O expat é para push por HTTP; o pcre2 dá ao git grep as mesmas expressões que o ripgrep desta árvore já usa, em vez de duas sintaxes diferentes na mesma máquina. Perl entra porque partes do git são scripts Perl e sem ele add -p, rebase -i e send-email não funcionam — não é opcional, é o que o upstream assume. Sem Tcl/Tk: gitk e git-gui exigiriam uma terceira pilha gráfica numa árvore que já carrega GTK3 pelo GIMP e pelo Inkscape e GTK4 como toolkit próprio."
 LICENSE="GPL-2.0-only AND LGPL-2.1-or-later AND BSD-3-Clause AND MIT"
 SRC="https://mirrors.edge.kernel.org/pub/software/scm/git/git-$VERSION.tar.xz"
-SHA256=457fdb04dc8728e007d4688695e6912e6f680727920f2a40bf11eacc17505357
+SHA256="26c56c296b38c0695b26fa95f475f1d01704d2d38e73465ca30b0b2f5dc789d3"
 
 build() {
     tar -xJf "$DL" --strip-components=1
@@ -29,14 +29,14 @@ build() {
         --with-openssl \
         --without-tcltk \
         --without-iconv
-    # NO_RUST=1 É O QUE FAZ ESTE PACOTE EXISTIR NESTA ÁRVORE. O git 2.55 tem um
+    # NO_RUST=1 É O QUE FAZ ESTE PACOTE EXISTIR NESTA ÁRVORE. O git 2.56 tem um
     # subsistema em Rust — a libgitcore.a, construída com cargo — e sem esta
     # variável o build morre com '/bin/sh: cargo: not found' depois de compilar
     # o resto inteiro. Esta distro não tem toolchain Rust por decisão registrada
     # (ver mesa e adwaita-icon-theme); o ripgrep, o único Rust presente, entra
     # como binário musl estático do upstream e não é compilado aqui.
     #
-    # E não se perde funcionalidade: o Cargo.toml do git 2.55 NÃO TEM
+    # E não se perde funcionalidade: o Cargo.toml do git 2.56 NÃO TEM
     # DEPENDÊNCIA NENHUMA, e os cinco fontes Rust (csum_file, hash, lib, loose,
     # varint) são reimplementação de código C que continua no repositório. Com
     # NO_RUST o Makefile simplesmente volta a compilar varint.o e companhia — é
@@ -67,7 +67,7 @@ build() {
     # para bindir), o que sobrevive ao DESTDIR e ao rootfs de instalacao.
     # SKIP_DASHED_BUILT_INS existe e apagaria os nomes em vez de liga-los; nao
     # foi usado porque script antigo ainda chama git-cat-file diretamente.
-    # O Makefile 2.55 declara COCCI_GOALS como uma expressao recursiva e em
+    # O Makefile 2.56 declara COCCI_GOALS como uma expressao recursiva e em
     # seguida a testa com `ifdef`. Mesmo sem pedir coccicheck, o GNU make trata
     # o texto cru da expressao como nao vazio e materializa a matriz completa
     # regra x fonte. No make desta arvore (libc do Zig) isso ficou preso por

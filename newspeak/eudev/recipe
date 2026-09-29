@@ -1,5 +1,5 @@
 NAME=eudev
-VERSION=3.2.14
+VERSION=3.2.15
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc"
@@ -13,7 +13,7 @@ BUILD_DEPS="make gcc-pass2 binutils-glibc pkgconf gperf gawk findutils"
 ABOUT="Gerenciador de dispositivos e a libudev. Entra porque o libinput descobre teclado, mouse e touchpad perguntando ao udev quais dispositivos existem e que capacidades têm — sem isso o compositor não encontra entrada nenhuma. É o eudev, fork independente mantido pelo Gentoo, e não o udev do systemd: esta distro não tem systemd nem pretende ter, e o udev de lá não se desacopla. O mdev do BusyBox, que hoje cria os nós de dispositivo no boot, resolve o /dev mas não oferece a libudev que o libinput consulta. Precisa de gperf, como o fontconfig."
 LICENSE="GPL-2.0-or-later AND LGPL-2.1-or-later"
 SRC="https://github.com/eudev-project/eudev/releases/download/v$VERSION/eudev-$VERSION.tar.gz"
-SHA256=8da4319102f24abbf7fff5ce9c416af848df163b29590e666d334cc1927f006f
+SHA256="eb69809fc0d1187f2463ab2149c53aa9f42a78e59f14ebea68eae6cb6b4fc1c3"
 
 build() {
     tar -xzf "$DL" --strip-components=1

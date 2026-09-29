@@ -1,5 +1,5 @@
 NAME=pcre2
-VERSION=10.48
+VERSION=10.49
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc busybox"
@@ -13,7 +13,7 @@ BUILD_DEPS="make gcc-pass2 binutils-glibc gawk findutils"
 ABOUT="Expressões regulares compatíveis com Perl, segunda geração. Entra por causa da glib: o GRegex é uma casca fina sobre a PCRE2, e a glib não constrói sem ela. Só a variante de 8 bits — a de 16 e a de 32 existem para quem trabalha com UTF-16/UTF-32, e nada nesta árvore o faz. Com JIT, que a própria glib procura: sem ele toda expressão regular do GTK e do GLib passa a ser interpretada. Sem as ferramentas de linha de comando pcre2grep e pcre2test, que são superfície que ninguém pediu."
 LICENSE=BSD-3-Clause
 SRC="https://github.com/PCRE2Project/pcre2/releases/download/pcre2-$VERSION/pcre2-$VERSION.tar.bz2"
-SHA256="b6c68fdf6f3ac31388b50aa89ff0fc49c00c987c16e7b5146491d12003f2c8ed"
+SHA256="53c156e1ba416a20da8e65395daa132da0d80e76910424caca3fcdae7831d384"
 
 build() {
     # bzip2 por um cano, como em libmnl e ndisc6: não se presume tar com bz2.

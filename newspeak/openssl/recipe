@@ -1,13 +1,13 @@
 NAME=openssl
-VERSION=4.0.2
+VERSION=4.0.3
 KIND=source
 TOOLCHAIN=native
 DEPS="glibc zlib"
 BUILD_DEPS="gcc-pass2 binutils-glibc perl make"
-ABOUT="Toolkit TLS/cripto: libcrypto + libssl. Mundo B (o openssl é distribuído como fonte). É a base de confiança da Distrópica: a libcrypto destrava os módulos de kernel ASSINADOS (o SYSTEM_TRUSTED_KEYRING que o E3 teve de desligar por falta de openssl — ver newspeak/linux) e a criptografia de attestation/federação (proveniência do minitrue). O Configure é perl, destravado no E3. Edge (P7): 4.0.1, o major mais recente do openssl.org; a linha LTS é a 3.5.x. Licença Apache-2.0 (relicenciada a partir do 3.0, fim do dual OpenSSL/SSLeay)."
+ABOUT="Toolkit TLS/cripto: libcrypto + libssl. Mundo B (o openssl é distribuído como fonte). É a base de confiança da Distrópica: a libcrypto destrava os módulos de kernel ASSINADOS (o SYSTEM_TRUSTED_KEYRING que o E3 teve de desligar por falta de openssl — ver newspeak/linux) e a criptografia de attestation/federação (proveniência do minitrue). O Configure é perl, destravado no E3. Edge (P7): a série 4.0, o major mais recente do openssl.org; a linha LTS é a 3.5.x. Licença Apache-2.0 (relicenciada a partir do 3.0, fim do dual OpenSSL/SSLeay)."
 LICENSE="Apache-2.0"
 SRC="https://github.com/openssl/openssl/releases/download/openssl-$VERSION/openssl-$VERSION.tar.gz"
-SHA256="736b467530f916737b7031310ccb21d8218c6229e61e8e160cd1d3458cd543a8"
+SHA256="325b5c806167c13b40b1ffeadfe0248197c00eccc4cf123ec1e28d2d2fd216d9"
 # Certificado extraído de https://openssl-library.org/source/pubkeys.asc: o
 # "OpenSSL <openssl@openssl.org>" de primária B146647E45A7B33947AB226B2A2C87D161692D40,
 # que assina as releases desde a 4.0.2 pela subchave C46ED3F2CBEFDA1FDAADA44264ED7B1DCCE71CB2.
@@ -16,8 +16,8 @@ SHA256="736b467530f916737b7031310ccb21d8218c6229e61e8e160cd1d3458cd543a8"
 # certifica a nova desde 2026-06-01 (gpg --check-sigs: sig! de 216094DFD0CB81EF),
 # e essa certificação viaja no arquivo. É o caminho que o próprio upstream
 # indica a quem já confiava na antiga.
-SIG_1="https://github.com/openssl/openssl/releases/download/openssl-4.0.2/openssl-4.0.2.tar.gz.asc"
-SIG_EPOCH_1=1790270098
+SIG_1="https://github.com/openssl/openssl/releases/download/openssl-4.0.3/openssl-4.0.3.tar.gz.asc"
+SIG_EPOCH_1=1790696818
 SIGKEY_1="files/upstream-release.asc"
 SIGKEY_FP_1=B146647E45A7B33947AB226B2A2C87D161692D40
 
