@@ -586,24 +586,43 @@ aceitar() {
 # Subida conferida: o arquivo vai com nome provisório, troca por rename, e o
 # sha256 é medido NO SERVIDOR. A prova é o que está no ar, não o que o scp
 # disse ter enviado.
+#
+# E A SUBIDA É RETOMÁVEL. A de 30/09 caiu depois de 5 GB no ar e conferidos;
+# repeti-la não pode custar o upload de novo nem esbarrar no que ela mesma
+# deixou. O que já está no ar com a soma certa fica; o resto sobe. A prova
+# continua sendo a mesma: a soma medida no servidor.
 # ---------------------------------------------------------------------------
 sobe_conferido() { # local remoto
+    soma=$(sha256sum "$1" | cut -d' ' -f1)
+    [ "$(ssh "$SERVIDOR" "sha256sum '$2' 2>/dev/null | cut -d' ' -f1")" != "$soma" ] || return 0
     ssh "$SERVIDOR" "mkdir -p '$(dirname "$2")'" || morre "não criei $(dirname "$2")"
     scp -q "$1" "$SERVIDOR:$2.novo" || morre "upload de $1 falhou"
     ssh "$SERVIDOR" "chown debian:debian '$2.novo' && chmod 0644 '$2.novo' && mv '$2.novo' '$2'" ||
         morre "não publiquei $2"
-    [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$(ssh "$SERVIDOR" "sha256sum '$2' | cut -d' ' -f1")" ] ||
+    [ "$soma" = "$(ssh "$SERVIDOR" "sha256sum '$2' | cut -d' ' -f1")" ] ||
         morre "$2 no ar diverge do local"
 }
 
-sobe_diretorio() { # local remoto (que não pode existir)
-    ssh "$SERVIDOR" "[ ! -e '$2' ]" || morre "$2 já existe no servidor"
-    scp -qr "$1" "$SERVIDOR:$2" || morre "upload de $1 falhou"
+# As somas de um diretório, na ORDEM DE BYTES dos dois lados. O servidor força
+# LC_ALL=en_US.UTF-8 em todo comando, e ali o sort ignora pontuação: as mesmas
+# linhas saíam em outra ordem, e a comparação acusava divergência num canal
+# idêntico arquivo a arquivo — foi o que parou a subida de 30/09.
+SOMAS_DO_DIRETORIO='find . -type f -exec sha256sum {} + | LC_ALL=C sort -k2'
+
+sobe_diretorio() { # local remoto
+    local_somas=$(cd "$1" && sh -c "$SOMAS_DO_DIRETORIO")
+    # Já no ar serve se for IDÊNTICO; qualquer outra coisa ali é estado que o
+    # script não conhece, e ele não apaga o que não conhece.
+    if ssh "$SERVIDOR" "[ -e '$2' ]"; then
+        [ "$local_somas" = "$(ssh "$SERVIDOR" "cd '$2' && $SOMAS_DO_DIRETORIO")" ] ||
+            morre "$2 já existe no servidor e difere do local"
+    else
+        scp -qr "$1" "$SERVIDOR:$2" || morre "upload de $1 falhou"
+    fi
     ssh "$SERVIDOR" "chown -R debian:debian '$2' &&
         find '$2' -type d -exec chmod 0755 {} + && find '$2' -type f -exec chmod 0644 {} +" ||
         morre "não ajustei $2"
-    local_somas=$(cd "$1" && find . -type f -exec sha256sum {} + | sort -k2)
-    remoto_somas=$(ssh "$SERVIDOR" "cd '$2' && find . -type f -exec sha256sum {} + | sort -k2")
+    remoto_somas=$(ssh "$SERVIDOR" "cd '$2' && $SOMAS_DO_DIRETORIO")
     [ "$local_somas" = "$remoto_somas" ] || morre "$2 no ar diverge do local"
 }
 
