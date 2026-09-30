@@ -6,7 +6,7 @@ preparo; da seção "Licenciamento e publicação" em diante o texto é o da
 revisão de 2026-08-24, no dia em que a `0.14` foi **publicada**, com as seções
 de evidência de cada versão posterior acrescentadas por cima da anterior.
 
-## Estado atual — `0.17`, preparada e aceita localmente (não publicada)
+## Estado atual — `0.17`, publicada em 30/09/2026
 
 A `0.17` não traz aplicativo novo. O tema é **o sistema instalado se
 atualiza**, e a reavaliação de 24/09 mostrou que ele não se atualizava: a árvore
