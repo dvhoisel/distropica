@@ -273,6 +273,14 @@ class Convidado:
         self.manda("stty -echo; exec /bin/sh -s\n")
         self.manda("echo PRON''TO\n")
         self.espera(rb"PRONTO\r?\n", 60)
+        # O CONSOLE É O MESMO TERMINAL: sem isto, uma mensagem do kernel cai no
+        # meio da saída de um comando — a quarta rodada leu
+        # "BOOT_UPDATE=ja-a[ 1595.8…] minipax (4208) used greatest stack
+        # depth" e reprovou um convidado certo. Só o que é crítico continua no
+        # console; o dmesg guarda o resto.
+        codigo, _ = self.roda("echo 1 > /proc/sys/kernel/printk")
+        if codigo != 0:
+            raise SystemExit("não calei o kernel no console do convidado")
 
     def roda(self, comando, teto_s=teto):
         """Roda um comando e devolve (código, saída). O código vem do shell, e
