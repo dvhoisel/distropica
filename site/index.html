@@ -132,7 +132,7 @@
     /* Atualizar ocupa a linha inteira: os comandos da ponte da 0.16 cabem sem
        rolagem, e as duas colunas de cima ficam com alturas parecidas. */
     .download > .largo { grid-column: 1 / -1; }
-    .download > .largo p { max-width: 78ch; }
+    .download > .largo p { max-width: none; }
     code, pre { font-family: inherit; font-size: .86rem; }
     pre {
       overflow-x: auto; margin: 1rem 0 0; padding: 1rem;
@@ -143,9 +143,9 @@
       margin-top: 1rem; padding: 1rem 1.5rem; border: 1px solid #705329;
       color: #e8c98f; background: #211b11;
     }
-    /* O aviso é a caixa, e a caixa se alinha à grade de cima; o texto dentro
-       dela guarda a medida de leitura, como no Atualizar. */
-    .warning p { margin: 0; max-width: 78ch; }
+    /* O aviso é a caixa, e a caixa se alinha à grade de cima; o texto a
+       acompanha até a borda, como no Atualizar. */
+    .warning p { margin: 0; max-width: none; }
     .credo {
       margin: 1.6rem 0 2.2rem; padding: 1.1rem 1.4rem;
       border-left: 3px solid var(--red-dark); background: var(--panel);
