@@ -221,8 +221,9 @@ dependências. Herança direta do `/etc/apk/world` do Alpine.
      outro arquivo, ou os mesmos caminhos com outros bytes, segue recusado.
      É assim que o sistema instalado passa a receber o próprio gerenciador
      pelo canal. Um minitrue anterior à 0.17 não conhece `ADOPTS` e, com
-     razão, recusa a colisão: a travessia passa pelo pacote `minitrue-ponte`,
-     o mesmo binário com outro nome (SPEC-0011 §3.2).
+     razão, recusa a colisão: a travessia passa pelo executável da 0.17,
+     conferido pela árvore assinada, que faz o sync e a adoção (SPEC-0011
+     §3.2).
    - **Mundo B** (`KIND=source`): antes de compilar consulta os canais binários
      (SPEC-0009) por um artefato da identidade exata da receita. Havendo um
      aceitável, instala-o **como mundo B pré-buildado** — tarball passivo já

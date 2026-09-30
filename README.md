@@ -519,15 +519,22 @@ sem remover, o que saiu da árvore. Um kernel novo chega assim: o pacote
 anterior, e ele vale a partir do próximo boot. Se não bootar, escolha
 "Distrópica (anterior)" no menu de boot do firmware.
 
-Quem instalou a `0.16` atravessa uma vez por uma **ponte**, porque o minitrue
-daquela versão não sabe adotar o próprio executável:
+Quem instalou a `0.16` atravessa uma vez por uma **ponte**: o minitrue daquela
+versão traz a árvore nova, e o resto é feito pelo minitrue da `0.17`, baixado e
+conferido pelo SHA256 que a receita `minitrue` dessa mesma árvore assinada
+fixa. O antigo não serve para o resto — não sabe adotar o próprio executável
+nem refazer o tema de ícones com os ícones dos aplicativos dentro:
 
 ```sh
 minitrue rectify newspeak
-minitrue rectify minitrue-ponte
-minitrue-ponte rectify minitrue minipax distropica-efi
-minitrue rectify --sync
-minitrue memoryhole minitrue-ponte
+sed -n 's|^SRC="\(.*\)"$|\1|p' /var/lib/minitrue/newspeak/minitrue/recipe > /root/ponte.url
+sed -n 's|^SHA256="\(.*\)"$|\1  /root/minitrue-0.17|p' /var/lib/minitrue/newspeak/minitrue/recipe > /root/ponte.sha256
+curl -fsSLo /root/minitrue-0.17 "$(cat /root/ponte.url)"
+sha256sum -c /root/ponte.sha256
+chmod 0755 /root/minitrue-0.17
+/root/minitrue-0.17 rectify --sync
+/root/minitrue-0.17 rectify minitrue minipax distropica-efi
+rm /root/minitrue-0.17 /root/ponte.url /root/ponte.sha256
 ```
 
 e reinicia; daí em diante vale o caminho curto acima. A travessia provada é a

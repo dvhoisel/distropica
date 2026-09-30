@@ -37,8 +37,9 @@ O que a `0.17` implementa, commitado e com testes:
   `distropica-efi` (Mundo A, compilados pelo projeto, estáticos e
   reprodutíveis — o mesmo binário sai de qualquer diretório, medido). Os dois
   primeiros ADOTAM o executor que o instalador persistiu, só se os bytes forem
-  os do `install.manifest`. Quem vem da `0.16` atravessa por uma ponte
-  (`minitrue-ponte`), porque o minitrue antigo não conhece a adoção.
+  os do `install.manifest`. Quem vem da `0.16` atravessa por uma ponte: o
+  minitrue antigo traz a árvore nova, e o executável da `0.17`, conferido pelo
+  SHA256 que a receita `minitrue` dela fixa, faz o sync e a adoção.
 - **Boot A/B**: o `minipax boot-update` leva o EFI do pacote à ESP, guarda o
   que arrancou antes em `EFI/distropica/anterior.efi` e mantém as duas
   entradas na NVRAM; o drop-in `07-efi.sh` refaz a conta a cada boot. Sem a

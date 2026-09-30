@@ -116,16 +116,30 @@ boot são pacotes do canal (`minitrue`, `minipax`, `distropica-efi`, Mundo A,
 compilados e publicados pelo projeto), e os dois primeiros ADOTAM os
 `/usr/bin/minitrue` e `/usr/bin/minipax` que o instalador persistiu
 (SPEC-0003 §3). Quem instalou até a 0.16 tem um minitrue que não conhece a
-adoção, e por isso a primeira travessia passa por uma ponte — o mesmo binário
-novo, instalado com outro nome, que adota os executores e converge o resto:
+adoção, e por isso a primeira travessia passa por uma ponte: o minitrue antigo
+traz a árvore nova, e o executável da versão nova — baixado e conferido pelo
+SHA256 que a receita `minitrue` dessa árvore assinada fixa — converge o mundo
+e só então adota os executores:
 
 ```sh
 minitrue rectify newspeak
-minitrue rectify minitrue-ponte
-minitrue-ponte rectify minitrue minipax distropica-efi
-minitrue rectify --sync
-minitrue memoryhole minitrue-ponte
+sed -n 's|^SRC="\(.*\)"$|\1|p' /var/lib/minitrue/newspeak/minitrue/recipe > /root/ponte.url
+sed -n 's|^SHA256="\(.*\)"$|\1  /root/minitrue-0.17|p' /var/lib/minitrue/newspeak/minitrue/recipe > /root/ponte.sha256
+curl -fsSLo /root/minitrue-0.17 "$(cat /root/ponte.url)"
+sha256sum -c /root/ponte.sha256
+chmod 0755 /root/minitrue-0.17
+/root/minitrue-0.17 rectify --sync
+/root/minitrue-0.17 rectify minitrue minipax distropica-efi
+rm /root/minitrue-0.17 /root/ponte.url /root/ponte.sha256
 ```
+
+A ponte NÃO pode ser um pacote instalado pelo minitrue antigo. O fechamento de
+um rectify completo é sobre o world inteiro, e logo depois da árvore nova
+o world inteiro está defasado: nenhum rectify parcial fecha antes do sync. A
+primeira versão desta travessia instalava um pacote `minitrue-ponte` assim, e
+o aceite a reprovou com a saída 5 do fechamento; o pacote fica no canal da 0.17
+sem uso e sai na seguinte. E o sync tem de ser do minitrue novo, porque o velho
+não refaz o dono de um `SHARED_DIRS` com o conteúdo dos dependentes dentro.
 
 É esta a sequência que o aceite da atualização (`bootstrap/live/accept-upgrade`)
 executa num disco instalado pela versão anterior, contra o canal de teste,

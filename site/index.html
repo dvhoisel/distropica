@@ -349,12 +349,16 @@ minitrue verify</code></pre>
             <p>Como root, dois comandos: a árvore de receitas assinada mais nova, e o sistema inteiro convergindo para ela. Um kernel novo vale a partir do próximo boot; se ele não bootar, escolha <strong>Distrópica (anterior)</strong> no menu de boot do firmware.</p>
             <pre><code>minitrue rectify newspeak
 minitrue rectify --sync</code></pre>
-            <p>Quem instalou a <strong>0.16</strong> atravessa uma vez por uma ponte, porque o gerenciador daquela versão não sabe adotar o próprio executável; depois, reinicia, e daí em diante valem os dois comandos acima. Instalações mais antigas devem reinstalar.</p>
+            <p>Quem instalou a <strong>0.16</strong> atravessa uma vez por uma ponte: o gerenciador daquela versão traz a árvore nova, e o resto é feito pelo da 0.17, baixado e conferido pelo SHA-256 que a própria árvore assinada fixa. Depois, reinicia, e daí em diante valem os dois comandos acima. Instalações mais antigas devem reinstalar.</p>
             <pre><code>minitrue rectify newspeak
-minitrue rectify minitrue-ponte
-minitrue-ponte rectify minitrue minipax distropica-efi
-minitrue rectify --sync
-minitrue memoryhole minitrue-ponte</code></pre>
+sed -n 's|^SRC="\(.*\)"$|\1|p' /var/lib/minitrue/newspeak/minitrue/recipe &gt; /root/ponte.url
+sed -n 's|^SHA256="\(.*\)"$|\1  /root/minitrue-0.17|p' /var/lib/minitrue/newspeak/minitrue/recipe &gt; /root/ponte.sha256
+curl -fsSLo /root/minitrue-0.17 "$(cat /root/ponte.url)"
+sha256sum -c /root/ponte.sha256
+chmod 0755 /root/minitrue-0.17
+/root/minitrue-0.17 rectify --sync
+/root/minitrue-0.17 rectify minitrue minipax distropica-efi
+rm /root/minitrue-0.17 /root/ponte.url /root/ponte.sha256</code></pre>
           </div>
         </div>
         <p class="warning"><strong>Aviso:</strong> esta é uma pré-release de desenvolvimento, não um release estável — e a própria mídia declara isso de si: <code>PROFILE_CLASS=custom</code>. O instalador apaga integralmente o dispositivo escolhido.</p>
