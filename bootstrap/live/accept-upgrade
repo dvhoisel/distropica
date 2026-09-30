@@ -264,19 +264,30 @@ class Convidado:
         self.manda("root\n")
         self.espera(rb"Password: ", 60)
         self.manda(senha + "\n")
-        # Um shell NÃO interativo, com o eco do tty desligado: sem prompt, sem
-        # editor de linha redesenhando comandos longos, a saída de cada
-        # comando chega sozinha. O marcador é montado pelo shell, então nem o
-        # eco desta linha — a última que o editor ainda ecoa — casa com ele.
+        # Um shell sem editor de linha, com o eco do tty desligado: nada
+        # redesenha comandos longos. Ele NÃO fica sem prompt — com o terminal
+        # como entrada o ash é interativo mesmo com -s, e imprime o PS1 antes
+        # de cada linha lida; quem corta o prompt é o marcador de início do
+        # `roda`. Os marcadores são montados pelo shell, então nem o eco desta
+        # linha — a última que o editor ainda ecoa — casa com eles.
         self.manda("stty -echo; exec /bin/sh -s\n")
         self.manda("echo PRON''TO\n")
         self.espera(rb"PRONTO\r?\n", 60)
 
     def roda(self, comando, teto_s=teto):
-        """Roda um comando e devolve (código, saída). O código vem do shell."""
-        self.manda(f"{comando}; echo \"__F\"\"IM__ $?\"\n")
+        """Roda um comando e devolve (código, saída). O código vem do shell, e
+        a saída é SÓ a do comando: tudo antes do marcador de início — o prompt
+        que o ash imprime antes de cada linha — fica de fora. Sem isso a
+        primeira linha chegava como "root@distropica:~# BOOT_UPDATE=ja-atual",
+        e toda leitura ancorada no começo da linha reprovava um convidado
+        certo."""
+        self.manda(f"echo \"__I\"\"NI__\"; {comando}; echo \"__F\"\"IM__ $?\"\n")
         antes, m = self.espera(rb"__FIM__ (\d+)\r?\n", teto_s)
-        return int(m.group(1)), antes.decode("utf-8", "replace").replace("\r", "")
+        texto = antes.decode("utf-8", "replace").replace("\r", "")
+        _, achou, saida = texto.partition("__INI__\n")
+        if not achou:
+            raise SystemExit(f"o marcador de início não voltou do convidado: {comando}")
+        return int(m.group(1)), saida
 
     def exige(self, comando, teto_s=teto):
         codigo, saida = self.roda(comando, teto_s)
