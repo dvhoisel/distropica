@@ -381,25 +381,28 @@ if campo(saida, "BOOT_UPDATE") != "ja-atual" or campo(saida, "BOOT_RUNNING") != 
 # firmware ARRANCOU pela entrada "Distrópica" e que a "Distrópica (anterior)"
 # vem logo atrás na BootOrder. Lido cru do efivarfs: rótulo em UTF-16LE a
 # partir do byte 10 (4 de atributos do efivarfs + 4 do EFI_LOAD_OPTION + 2 do
-# tamanho do caminho), BootCurrent e BootOrder em u16 little-endian.
+# tamanho do caminho), BootCurrent e BootOrder em u16 little-endian depois dos
+# 4 de atributos. O ARQUIVO VEM INTEIRO e o corte é feito aqui: o `od -j` do
+# BusyBox não pula nada no efivarfs, e a primeira rodada leu os atributos como
+# se fossem o rótulo — com a NVRAM certa.
 hx_atual = ("Distrópica".encode("utf-16-le") + b"\0\0").hex()
 hx_anterior = ("Distrópica (anterior)".encode("utf-16-le") + b"\0\0").hex()
-n = len(hx_anterior) // 2
 saida = g.exige(
     "E=/sys/firmware/efi/efivars; G=8be4df61-93ca-11d2-aa0d-00e098032b8c; "
     "grep -q \" $E efivarfs \" /proc/mounts || mount -t efivarfs efivarfs $E; "
     "for f in $E/Boot[0-9A-F][0-9A-F][0-9A-F][0-9A-F]-$G; do "
-    f"echo \"OPCAO ${{f##*/Boot}} $(od -An -tx1 -v -j10 -N{n} $f | tr -d ' \\n')\"; done; "
-    "echo \"CORRENTE $(od -An -tx1 -v -j4 -N2 $E/BootCurrent-$G | tr -d ' \\n')\"; "
-    "echo \"ORDEM $(od -An -tx1 -v -j4 $E/BootOrder-$G | tr -d ' \\n')\"")
+    "echo \"OPCAO ${f##*/Boot} $(od -An -tx1 -v $f | tr -d ' \\n')\"; done; "
+    "echo \"CORRENTE $(od -An -tx1 -v $E/BootCurrent-$G | tr -d ' \\n')\"; "
+    "echo \"ORDEM $(od -An -tx1 -v $E/BootOrder-$G | tr -d ' \\n')\"")
 rotulos = {}
 for linha in saida.splitlines():
     partes = linha.split()
     if len(partes) == 3 and partes[0] == "OPCAO":
         numero = int(partes[1][:4], 16)
-        if partes[2].startswith(hx_atual):
+        rotulo = partes[2][20:]
+        if rotulo.startswith(hx_atual):
             rotulos[numero] = "atual"
-        elif partes[2].startswith(hx_anterior):
+        elif rotulo.startswith(hx_anterior):
             rotulos[numero] = "anterior"
 
 
@@ -407,8 +410,8 @@ def u16s(hexa):
     return [int(hexa[i + 2:i + 4] + hexa[i:i + 2], 16) for i in range(0, len(hexa) - 3, 4)]
 
 
-corrente = u16s(re.search(r"^CORRENTE ?(\S*)", saida, re.M).group(1))
-ordem = u16s(re.search(r"^ORDEM ?(\S*)", saida, re.M).group(1))
+corrente = u16s(re.search(r"^CORRENTE ?(\S*)", saida, re.M).group(1)[8:12])
+ordem = u16s(re.search(r"^ORDEM ?(\S*)", saida, re.M).group(1)[8:])
 if sorted(rotulos.values()) != ["anterior", "atual"]:
     raise SystemExit(f"a NVRAM devia ter uma entrada de cada, e tem {rotulos}")
 if len(corrente) != 1 or rotulos.get(corrente[0]) != "atual":
