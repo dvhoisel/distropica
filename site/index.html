@@ -132,7 +132,9 @@
     /* Atualizar ocupa a linha inteira: os comandos da ponte da 0.16 cabem sem
        rolagem, e as duas colunas de cima ficam com alturas parecidas. */
     .download > .largo { grid-column: 1 / -1; }
-    .download > .largo p { max-width: none; }
+    /* Texto dentro de caixa acompanha a caixa até o recuo da borda; o
+       p { max-width: 70ch } vale para texto solto. */
+    .download > div p { max-width: none; }
     code, pre { font-family: inherit; font-size: .86rem; }
     pre {
       overflow-x: auto; margin: 1rem 0 0; padding: 1rem;
@@ -150,7 +152,7 @@
       margin: 1.6rem 0 2.2rem; padding: 1.1rem 1.4rem;
       border-left: 3px solid var(--red-dark); background: var(--panel);
     }
-    .credo p { margin: 0 0 .55rem; max-width: 62ch; }
+    .credo p { margin: 0 0 .55rem; max-width: none; }
     .credo p:last-child { margin-bottom: 0; }
     .credo b { color: var(--ink); }
     .warning.compact {
