@@ -84,7 +84,12 @@ com disco inteiro, e cfdisk manual), com a senha do usuário digitada no
 prompt real; o login na tty1 e a sessão gráfica nos dois discos, conferidos
 na foto; e a importação de PDF do Inkscape contra a poppler 26.09, com um PDF
 gerado dentro da distro voltando como SVG com preenchimento, traço e texto
-(`target/ferramentas-prova/prova-017-inkscape.sh`).
+(`target/ferramentas-prova/prova-017-inkscape.sh`). E a atualização no caminho
+que ela vai ter: um disco instalado pela `0.16` atualizou-se pela rede contra o
+canal e a árvore desta versão, em caminhos de teste do servidor, pela ponte, e
+voltou a arrancar no kernel 7.2.8 — o EFI do pacote como atual, o que arrancou
+antes guardado de reserva e as duas entradas na NVRAM, com o firmware seguindo
+a atual (`bootstrap/release aceitar-atualizacao`).
 
 A cadeia do zero desta versão, e o que ela ensinou — defeitos que nenhuma
 cadeia anterior tinha exercitado, cada um consertado na causa:
@@ -142,16 +147,25 @@ teriam parado a atualização de um sistema da `0.16`:
   fingerprint e o mesmo payload (`ddc6419`), e a raiz desta versão fechou com
   a ABI inteira re-observada.
 
+E o aceite da atualização, que nunca tinha rodado, reprovou a travessia como
+estava escrita: o minitrue da `0.16` instalava o pacote `minitrue-ponte` e
+saía 5, porque o fechamento de um rectify completo é sobre o world inteiro, e
+logo depois da árvore nova o world inteiro está defasado. A ponte passou a ser
+o executável da `0.17` conferido pela árvore assinada, que faz o sync e só
+então a adoção (`6e52d12`); o pacote `minitrue-ponte` fica no canal desta
+versão sem uso e sai na seguinte. A primeira subida de teste também caiu, na
+conferência do canal no ar: o `sort` do servidor ordenava num locale e o local
+em outro, e um canal idêntico parecia divergente (`28e1597`, que também torna
+a subida retomável).
+
 A cadeia foi retomada, e não recomeçada do zero, porque o binário dela se
 provou idêntico à fonte do HEAD — reproduzido byte a byte — e o conserto do
 `hicolor` só relaxa uma recusa que acontecia antes de qualquer escrita.
 
-**O que ainda NÃO está provado**: a atualização de um sistema instalado pela
-`0.16` contra o canal da `0.17` — o `aceitar-atualizacao` exige o canal e a
-árvore no ar, em caminhos de teste, e a subida espera a decisão do
-mantenedor; nada disto rodou em hardware físico; e o pacote `linux` segue
-existindo sem nunca ter bootado (os módulos são assinados e instalados, mas o
-kernel que arranca é o do EFI — decisão aberta, SPEC-0011 §9).
+**O que ainda NÃO está provado**: nada disto rodou em hardware físico; e o
+pacote `linux` segue existindo sem nunca ter bootado (os módulos são assinados
+e instalados, mas o kernel que arranca é o do EFI — decisão aberta, SPEC-0011
+§9).
 
 ## A revisão da `0.14` (2026-08-24)
 
