@@ -124,7 +124,15 @@
     .card p { color: var(--muted); }
     .number { display: block; margin-bottom: 2.5rem; color: var(--red); font-weight: 900; }
     .download { display: grid; grid-template-columns: 1.2fr .8fr; gap: 1rem; }
-    .download > div { padding: 1.5rem; border: 1px solid var(--line); background: var(--panel); }
+    /* min-width: 0 porque item de grade não encolhe abaixo do conteúdo: sem
+       isto, a linha mais longa de um <pre> (os comandos da ponte da 0.16)
+       vira a largura mínima da coluna, espreme a outra numa tira, e o
+       overflow-x do <pre> nunca chega a agir. */
+    .download > div { min-width: 0; padding: 1.5rem; border: 1px solid var(--line); background: var(--panel); }
+    /* Atualizar ocupa a linha inteira: os comandos da ponte da 0.16 cabem sem
+       rolagem, e as duas colunas de cima ficam com alturas parecidas. */
+    .download > .largo { grid-column: 1 / -1; }
+    .download > .largo p { max-width: 78ch; }
     code, pre { font-family: inherit; font-size: .86rem; }
     pre {
       overflow-x: auto; margin: 1rem 0 0; padding: 1rem;
@@ -345,6 +353,8 @@
             </ol>
             <pre><code>minitrue archives
 minitrue verify</code></pre>
+          </div>
+          <div class="largo">
             <h3>Atualizar</h3>
             <p>Como root, dois comandos: a árvore de receitas assinada mais nova, e o sistema inteiro convergindo para ela. Um kernel novo vale a partir do próximo boot; se ele não bootar, escolha <strong>Distrópica (anterior)</strong> no menu de boot do firmware.</p>
             <pre><code>minitrue rectify newspeak
