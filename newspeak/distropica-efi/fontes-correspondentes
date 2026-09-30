@@ -1,8 +1,8 @@
 # Fonte correspondente de um binário que o PROJETO compila: o snapshot
-# da árvore na revisão 154d480ea8bd1472e56d4ba1376abfdd0a798d9e, com o vendor/ das crates, publicado em
+# da árvore na revisão b7bca454226d9f6258d3c3daacfc56e4b336f408, com o vendor/ das crates, publicado em
 # https://distropica.com.br/sources/distropica/. Gerado pelo bootstrap/release.
 VERSION=0.17
-f2d25c0d90fb8d3d978e95e50dbc1a2686512c3e7f91a9db4541ea1b78e35fb7  https://distropica.com.br/sources/distropica/distropica-projeto-0.17.tar.xz
+b2f784d304110720daa4b9b75554b7ca4dea2f9e1903e7a11a2a4e51c5097532  https://distropica.com.br/sources/distropica/distropica-projeto-0.17.tar.xz
 12e8d5a973d1ad7c5a5c69882e4022b131ed715db7003fdcd760ddf8c3e51941  https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.8.tar.xz
 34f9ea6ff8636f2c9241153b9114eefa9e65674a45318ae1ef95bb5f31c53bb2  https://busybox.net/downloads/busybox-1.38.0.tar.bz2
 fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b  https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v1.47.4/e2fsprogs-1.47.4.tar.xz

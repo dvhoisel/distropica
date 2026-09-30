@@ -1,5 +1,5 @@
 # Fonte correspondente de um binário que o PROJETO compila: o snapshot
-# da árvore na revisão 154d480ea8bd1472e56d4ba1376abfdd0a798d9e, com o vendor/ das crates, publicado em
+# da árvore na revisão b7bca454226d9f6258d3c3daacfc56e4b336f408, com o vendor/ das crates, publicado em
 # https://distropica.com.br/sources/distropica/. Gerado pelo bootstrap/release.
 VERSION=0.17
-f2d25c0d90fb8d3d978e95e50dbc1a2686512c3e7f91a9db4541ea1b78e35fb7  https://distropica.com.br/sources/distropica/distropica-projeto-0.17.tar.xz
+b2f784d304110720daa4b9b75554b7ca4dea2f9e1903e7a11a2a4e51c5097532  https://distropica.com.br/sources/distropica/distropica-projeto-0.17.tar.xz
