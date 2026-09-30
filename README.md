@@ -3,7 +3,7 @@
 > Uma distribuição Linux distópica. Não instala pacotes: **retifica registros**.
 
 **[Site oficial](https://distropica.com.br/)** ·
-**[Baixar a ISO 0.17 (1599 MB)](https://distropica.com.br/releases/distropica-0.17-x86_64.iso)** ·
+**[Baixar a ISO 0.17 (1600 MB)](https://distropica.com.br/releases/distropica-0.17-x86_64.iso)** ·
 **[SHA-256](https://distropica.com.br/releases/distropica-0.17-x86_64.iso.sha256)** ·
 **[Manifesto](https://distropica.com.br/releases/distropica-0.17-x86_64.iso.manifest)** ·
 **[Fontes correspondentes](https://distropica.com.br/releases/distropica-0.17-corresponding-sources.tar.zst)** ·
@@ -15,7 +15,7 @@
 > **64 bits**, e a própria mídia declara isso de si: `PROFILE_CLASS=custom`.
 > O instalador apaga integralmente o dispositivo escolhido. Use um disco virtual
 > descartável e confira o SHA-256 antes do boot
-> (`8dd1d63fe21037296e2da5e7ff255bed05db1aae4e57c566eba0a6eae20ddbb8`).
+> (`32bff29020e18f9e346bba39b2a02ab3909e4f1e76e1852e1cba24f8a0b110c4`).
 >
 > As **senhas são as últimas perguntas** — a de root e, desde a `0.17`, a da
 > conta `distropica` —, logo depois da escolha do disco e antes da primeira
@@ -40,7 +40,7 @@
 > instalação, o cache **vive no disco alvo ao mesmo tempo** que a árvore cresce,
 > e o pico é a soma dos dois, não o maior deles; o fator quatro em si saiu de
 > medição (um cache de 664 MiB produziu uma árvore de 2096 MiB, razão 3,16) e o
-> resto é margem. O `cache.tar` da `0.17` tem 1506 MiB, o que dá cerca de
+> resto é margem. O `cache.tar` da `0.17` tem 1507 MiB, o que dá cerca de
 > **7,9 GiB** de raiz mínima.
 
 A Distrópica parte de uma observação desconfortável sobre o mundo atual: os
@@ -195,7 +195,8 @@ reprodutíveis. A conta da sessão ganhou senha, a **tty1 pede login**, e fechar
 a tampa tranca a sessão com o `swaylock` antes de suspender; no notebook,
 brilho, volume, `Print` para capturar a tela e a bateria na barra. As versões
 acompanham o upstream: kernel **7.2.8**, GNOME 51 (GTK 4.24, libadwaita 1.10,
-Epiphany 51), WebKitGTK 2.54, LLVM 23, Mesa 26.2, GIMP 3.2.6. O detalhe — e o
+Epiphany 51), WebKitGTK 2.54, LLVM 23, Mesa 26.2, GIMP 3.2.6, e o OpenSSL
+4.0.3, correção de segurança lançada na véspera da publicação. O detalhe — e o
 que a cadeia do zero desta versão ensinou — está no [STATUS.md](STATUS.md).
 
 O que a `0.16` (publicada em 2026-09-02) acrescentou foi o que faltava para a

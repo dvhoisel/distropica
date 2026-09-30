@@ -189,7 +189,7 @@
             width="1280" height="341" fetchpriority="high" decoding="async"></h1>
         <p class="lead">Uma distribuição Linux distópica em que <strong>instalar é provar</strong>. Todo programa é conferido contra a impressão digital que o próprio autor publicou, todo arquivo do sistema tem dono declarado, e nada entra sem passar. Quando algo não bate, ela recusa — em vez de fingir que deu certo.</p>
         <div class="actions">
-          <a class="button primary" href="/releases/distropica-0.17-x86_64.iso">Baixar ISO · 1568 MB</a>
+          <a class="button primary" href="/releases/distropica-0.17-x86_64.iso">Baixar ISO · 1600 MB</a>
           <a class="button" href="/releases/distropica-0.17-corresponding-sources.tar.zst">Fontes correspondentes</a>
           <a class="button" href="https://github.com/dvhoisel/distropica">Examinar o código</a>
         </div>
@@ -316,7 +316,7 @@
         <div class="download">
           <div>
             <h3>ISO UEFI para VirtualBox</h3>
-            <p><strong>A 0.17 é a versão em que o sistema instalado se atualiza.</strong> Até a 0.16 ele não se atualizava: a árvore de receitas não estava publicada, e o kernel era para sempre o da ISO de onde a máquina nasceu. Agora dois comandos trazem tudo o que mudou, <strong>kernel incluído</strong> — o EFI de boot é um pacote do canal, levado à ESP com o anterior guardado de reserva e as duas entradas no menu do firmware, e o próprio gerenciador de pacotes também vem pelo canal. A sessão passou a pedir <strong>login</strong>, a conta tem senha, e fechar a tampa do notebook tranca a tela antes de suspender; brilho, volume e a tecla <code>Print</code> funcionam, e a barra mostra a bateria. Kernel <strong>7.2.8</strong>, GNOME 51, WebKitGTK 2.54. Não há aplicativo novo nesta versão.</p>
+            <p><strong>A 0.17 é a versão em que o sistema instalado se atualiza.</strong> Até a 0.16 ele não se atualizava: a árvore de receitas não estava publicada, e o kernel era para sempre o da ISO de onde a máquina nasceu. Agora dois comandos trazem tudo o que mudou, <strong>kernel incluído</strong> — o EFI de boot é um pacote do canal, levado à ESP com o anterior guardado de reserva e as duas entradas no menu do firmware, e o próprio gerenciador de pacotes também vem pelo canal. A sessão passou a pedir <strong>login</strong>, a conta tem senha, e fechar a tampa do notebook tranca a tela antes de suspender; brilho, volume e a tecla <code>Print</code> funcionam, e a barra mostra a bateria. Kernel <strong>7.2.8</strong>, GNOME 51, WebKitGTK 2.54, e o OpenSSL 4.0.3, correção de segurança lançada na véspera da publicação. Não há aplicativo novo nesta versão.</p>
             <p>A imagem instala um sistema com <strong>modo gráfico</strong>: compositor <strong>labwc</strong> sobre wlroots, navegador <strong>Epiphany</strong> sobre WebKitGTK em português, terminal <strong>foot</strong>, barra de tarefas (<strong>yambar</strong>: janelas abertas, rede e relógio), lançador por teclado (<strong>fuzzel</strong>, W-d), notificações e papel de parede. A rede fica a cargo do <strong>ConnMan</strong>, que assume cabo e Wi-Fi, e quem o opera é o <strong>miniluv</strong>, a interface gráfica escrita para esta distro. O navegador <strong>reproduz vídeo livre</strong> — WebM com VP9 e Opus, com Media Source; H.264 e AAC ficam de fora, e uma página que só os ofereça continua muda: é escolha de licenciamento, dita no LICENSING.md, não limitação técnica. Vêm junto o <strong>Inkscape</strong>, o <strong>Zathura</strong> para PDF, o <strong>swayimg</strong>, <strong>grim</strong> e <strong>slurp</strong> para capturar a tela, o <strong>mandoc</strong>, <strong>lspci</strong> e <strong>lsusb</strong> de verdade, Git, OpenSSH, rsync, htop, tmux, strace, Vim, ripgrep, GCC/G++, Go, Rust e o perfil de rede (nftables, WireGuard, nmap, mtr, tcpdump). O <strong>GIMP 3.2</strong> não vem na mídia: entra depois, <strong>pela rede</strong>, com <code>minitrue rectify gimp</code>. A raiz é ext4 em tabela GPT, e a instalação é <strong>offline</strong>: a mídia carrega os 236 pacotes do canal e não busca nada na rede.</p>
             <div class="actions">
               <a class="button primary" href="/releases/distropica-0.17-x86_64.iso">Baixar a ISO</a>
@@ -327,8 +327,8 @@
               <a class="button" href="/releases/distropica-0.17-sources.tsv">Inventário</a>
               <a class="button" href="/releases/distropica-0.17-licencas.tsv">Licenças</a>
             </div>
-            <p class="hash"><strong>SHA-256</strong><br>8dd1d63fe21037296e2da5e7ff255bed05db1aae4e57c566eba0a6eae20ddbb8</p>
-            <p class="hash"><strong>SHA-256 das fontes</strong><br>36b3fedffc2749a3589f0e28f8e0231ba3ffa98a1b09c6a138ddd2cebad5f6ec</p>
+            <p class="hash"><strong>SHA-256</strong><br>32bff29020e18f9e346bba39b2a02ab3909e4f1e76e1852e1cba24f8a0b110c4</p>
+            <p class="hash"><strong>SHA-256 das fontes</strong><br>a13996ae6ec3d12fb017a2cb39afe6c004be3151806150691824e23630fe200b</p>
           </div>
           <div>
             <h3>Primeiro boot</h3>

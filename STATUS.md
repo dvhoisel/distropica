@@ -15,15 +15,15 @@ escrito pelo instalador, a seed do canal que a instalação grava no alvo estava
 parada na `0.13`, e nenhum aceite exercitava uma atualização — todos
 instalavam do zero.
 
-**Os artefatos** (`target/release-0.17/`, preparados em 27/09 pelo
-`bootstrap/release preparar`, a partir da revisão `154d480`):
+**Os artefatos** (`target/release-0.17/`, preparados em 30/09 pelo
+`bootstrap/release preparar`, a partir da revisão `b7bca45`):
 
 ```text
-ISO_SHA256=8dd1d63fe21037296e2da5e7ff255bed05db1aae4e57c566eba0a6eae20ddbb8  (1599 MiB)
-EFI_SHA256=1f2914e1e3454d10f4eaf69cb199d2cafcd70ff8266f572751daecc5fc4cd0ef  (kernel 7.2.8-distropica-live)
-BUNDLE_SHA256=36b3fedffc2749a3589f0e28f8e0231ba3ffa98a1b09c6a138ddd2cebad5f6ec  (3046 MiB, gate estrito)
-CANAL: canal-017, 236 pacotes; a seed do perfil passa a ser ele (c97df64)
-RAIZ_MINIMA: 7,9 GiB (cache.tar de 1506 MiB × 5 + 512 MiB)
+ISO_SHA256=32bff29020e18f9e346bba39b2a02ab3909e4f1e76e1852e1cba24f8a0b110c4  (1600 MiB)
+EFI_SHA256=0a90d21e75c6063ed06dd18cf8ff1569e698a336f85a198a469d4f30c078f53f  (kernel 7.2.8-distropica-live)
+BUNDLE_SHA256=a13996ae6ec3d12fb017a2cb39afe6c004be3151806150691824e23630fe200b  (3046 MiB, gate estrito)
+CANAL: canal-017, 236 pacotes; a seed do perfil passa a ser ele (a072bdb)
+RAIZ_MINIMA: 7,9 GiB (cache.tar de 1507 MiB × 5 + 512 MiB)
 ```
 
 O que a `0.17` implementa, commitado e com testes:
@@ -56,10 +56,13 @@ O que a `0.17` implementa, commitado e com testes:
 - **Segurança**: rustls 0.23.45 (RUSTSEC-2026-0285) e o `cargo audit` como
   portão; microcódigo AMD embutido no kernel; o BusyBox do ambiente vivo sai da
   1.35.0, de 2022, para a 1.38.0; o OpenSSL troca de chave de assinatura e a
-  troca é conferida pela chave antiga, que certifica a nova.
+  troca é conferida pela chave antiga, que certifica a nova. E, às vésperas da
+  publicação, o OpenSSL 4.0.3 (quinze CVEs, o mais grave High) e o PCRE2 10.49
+  (escrita fora dos limites na pilha JIT expansível): o preparo foi refeito com
+  eles.
 - **Versões (P7)**: kernel 7.2.8, a pilha do GNOME 51 (glib 2.90, GTK 4.24,
   libadwaita 1.10, Epiphany 51), LLVM 23, Mesa 26.2.3, WebKitGTK 2.54, OpenSSL
-  4.0.2, GIMP 3.2.6, poppler 26.09. O conferidor fecha com 239 atuais e 12
+  4.0.3, GIMP 3.2.6, poppler 26.09. O conferidor fecha com 239 atuais e 12
   pinados com motivo, e passou a conferir os insumos do EFI, que nenhuma
   rodada lia. Dois pinos novos, os dois com a medida no `versao-pinada`: o
   `linux-headers` fica na 7.2.7 (o `make headers` das duas versões difere só
@@ -120,6 +123,27 @@ E uma classe fechada: o `findutils` supersede o `find` do BusyBox, e ~120
 receitas só funcionavam pela ordem de construção. Todas declaram agora o
 provedor (as nove do fechamento do próprio `findutils` chamam `busybox find`),
 e o lint da árvore não acusa mais nenhuma aresta faltante.
+
+**O re-preparo de 29/09**, pelas duas correções de segurança, achou dois
+defeitos do minitrue que nenhuma instalação do zero exercita — e os dois
+teriam parado a atualização de um sistema da `0.16`:
+
+- o `hicolor-icon-theme`, dono do `SHARED_DIRS` em que os aplicativos põem
+  ícones, não se reinstalava com um aplicativo instalado: o diretório vazio do
+  STAGE dele era acusado de sobrepor o `gimp.png`. Numa cadeia do zero ele vem
+  antes de quem deposita ícone; numa atualização, sempre depois. A exceção
+  nova vale só para quem o declara como DEPS direta, a mesma regra que o
+  `verify` cobra (`5e9bc81`);
+- a observação de ABI reaproveitada do plano anterior era escolhida pelo NOME
+  do pacote, não pela identidade: um `minitrue plan` com reconstrução
+  pendente saía inválido, e uma retomada herdava a ABI da build anterior de
+  todo pacote que ela mesma não escreveu. O reuso passa a exigir o mesmo
+  fingerprint e o mesmo payload (`ddc6419`), e a raiz desta versão fechou com
+  a ABI inteira re-observada.
+
+A cadeia foi retomada, e não recomeçada do zero, porque o binário dela se
+provou idêntico à fonte do HEAD — reproduzido byte a byte — e o conserto do
+`hicolor` só relaxa uma recusa que acontecia antes de qualquer escrita.
 
 **O que ainda NÃO está provado**: a atualização de um sistema instalado pela
 `0.16` contra o canal da `0.17` — o `aceitar-atualizacao` exige o canal e a
