@@ -28,10 +28,19 @@
 # O roteiro dentro do convidado é o da ponte, que é o que o site vai mandar
 # quem instalou até a 0.16 digitar:
 #   minitrue rectify newspeak
-#   minitrue rectify minitrue-ponte
-#   minitrue-ponte rectify minitrue minipax distropica-efi
-#   minitrue rectify --sync
-#   minitrue memoryhole minitrue-ponte
+#   (baixar o minitrue da 0.17 e conferi-lo pelo SHA256 que a receita
+#    `minitrue` da árvore recém-chegada fixa)
+#   /root/minitrue-0.17 rectify --sync
+#   /root/minitrue-0.17 rectify minitrue minipax distropica-efi
+#
+# A PONTE NÃO É UM PACOTE, e já foi: `minitrue rectify minitrue-ponte` com o
+# minitrue da 0.16 instalava a ponte e saía 5, porque o fechamento de um
+# rectify completo é sobre o world INTEIRO, e logo depois da árvore nova o
+# mundo inteiro está defasado. Nenhum rectify parcial fecha antes do sync; e o
+# sync tem de ser do minitrue novo, que é o que sabe refazer o dono de um
+# SHARED_DIRS com os ícones dos aplicativos dentro. A ordem é essa: executável
+# novo conferido pela árvore assinada, sync, e só então a adoção.
+#
 # e depois dele reinicia e exige: kernel novo no uname, o EFI do pacote como
 # atual da ESP com o que arrancou antes guardado como anterior, o
 # boot-update dizendo que quem arrancou foi o atual, e a NVRAM com as duas
@@ -317,11 +326,16 @@ diz(f"EFI anterior na ESP: {efi_anterior}")
 g.exige(f"sed -i 's|^URL=.*|URL={canal}|' /var/cache/minitrue/channel-config/oficial")
 g.exige(f"sed -i 's|^URL=.*|URL={newspeak}|' /var/cache/minitrue/newspeak-origem")
 
+receita = "/var/lib/minitrue/newspeak/minitrue/recipe"
 for comando in ("minitrue rectify newspeak",
-                "minitrue rectify minitrue-ponte",
-                "minitrue-ponte rectify minitrue minipax distropica-efi",
-                "minitrue rectify --sync",
-                "minitrue memoryhole minitrue-ponte",
+                f"sed -n 's|^SRC=\"\\(.*\\)\"$|\\1|p' {receita} > /root/ponte.url",
+                f"sed -n 's|^SHA256=\"\\(.*\\)\"$|\\1  /root/minitrue-0.17|p' {receita} > /root/ponte.sha256",
+                "curl -fsSLo /root/minitrue-0.17 \"$(cat /root/ponte.url)\"",
+                "sha256sum -c /root/ponte.sha256",
+                "chmod 0755 /root/minitrue-0.17",
+                "/root/minitrue-0.17 rectify --sync",
+                "/root/minitrue-0.17 rectify minitrue minipax distropica-efi",
+                "rm /root/minitrue-0.17 /root/ponte.url /root/ponte.sha256",
                 "minitrue verify"):
     g.exige(comando)
 
