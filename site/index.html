@@ -86,7 +86,7 @@
     h1 { margin: 1.75rem 0 .5rem; }
     h1 img { display: block; width: min(100%, 42rem); height: auto; }
     .lead {
-      max-width: 50rem; margin: 1.75rem 0 0; color: var(--muted);
+      margin: 1.75rem 0 0; color: var(--muted);
       font-size: clamp(1rem, 2vw, 1.25rem);
     }
     .lead strong { color: var(--ink); }
@@ -115,7 +115,6 @@
       letter-spacing: -.04em;
     }
     h3 { margin-top: 0; color: var(--amber); }
-    p { max-width: 70ch; }
     .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
     .card {
       min-height: 14rem; padding: 1.35rem;
@@ -132,9 +131,6 @@
     /* Atualizar ocupa a linha inteira: os comandos da ponte da 0.16 cabem sem
        rolagem, e as duas colunas de cima ficam com alturas parecidas. */
     .download > .largo { grid-column: 1 / -1; }
-    /* Texto dentro de caixa acompanha a caixa até o recuo da borda; o
-       p { max-width: 70ch } vale para texto solto. */
-    .download > div p { max-width: none; }
     code, pre { font-family: inherit; font-size: .86rem; }
     pre {
       overflow-x: auto; margin: 1rem 0 0; padding: 1rem;
@@ -145,19 +141,18 @@
       margin-top: 1rem; padding: 1rem 1.5rem; border: 1px solid #705329;
       color: #e8c98f; background: #211b11;
     }
-    /* O aviso é a caixa, e a caixa se alinha à grade de cima; o texto a
-       acompanha até a borda, como no Atualizar. */
-    .warning p { margin: 0; max-width: none; }
+    /* Nenhum texto tem medida própria: parágrafo, solto ou em caixa, vai até a
+       borda do que o contém, alinhado com as grades e caixas da seção. */
+    .warning p { margin: 0; }
     .credo {
       margin: 1.6rem 0 2.2rem; padding: 1.1rem 1.4rem;
       border-left: 3px solid var(--red-dark); background: var(--panel);
     }
-    .credo p { margin: 0 0 .55rem; max-width: none; }
+    .credo p { margin: 0 0 .55rem; }
     .credo p:last-child { margin-bottom: 0; }
     .credo b { color: var(--ink); }
     .warning.compact {
       margin-top: .85rem; padding: .7rem .9rem; font-size: .85rem; line-height: 1.5;
-      max-width: 46rem;
     }
     .warning a { color: inherit; }
     footer {
